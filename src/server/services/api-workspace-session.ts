@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ModelMessage } from "ai";
 import { pendingPlanId } from "#/domain/agent-plan";
 import {
 	assertApiContextFits,
@@ -50,7 +51,10 @@ import { apiReasoningEffort } from "../adapters/api-reasoning-effort";
 import {
 	enqueueApiTurn,
 	inheritedApiTurnSettings,
+	previousTurnHistory,
 	previousTurnMessages,
+	type TurnBase,
+	TurnBaseChanged,
 } from "../adapters/api-turns";
 import {
 	claudeSubscriptionStatus,
@@ -340,49 +344,66 @@ export async function sendApiWorkspaceTask(
 		: held;
 	if (input.approvesPlan && !pendingPlanId(planned ?? []))
 		throw new Error("That plan was already answered.");
-	const [attachments, previous] = await Promise.all([
-		input.storedAttachments
-			? [...input.storedAttachments]
-			: storeMessageAttachments(scope.userId, session.id, input.attachments),
-		previousTurnMessages(
+	const readPrevious = () =>
+		previousTurnHistory(
 			scope.userId,
 			session.id,
 			selected.modelId,
 			connection.revision,
-		),
+		);
+	const [attachments, previous] = await Promise.all([
+		input.storedAttachments
+			? [...input.storedAttachments]
+			: storeMessageAttachments(scope.userId, session.id, input.attachments),
+		readPrevious(),
 	]);
 	const current =
 		planned ??
 		(previous ? null : await wholeTranscript(scope, session.id, held));
 	const sent = sendItems(current, input, attachments);
 	const items = sent.items;
-	let messages = nextTurnMessages({
-		previous,
-		items,
-		text: input.text,
-		runtimeText: input.runtimeText,
-		attachments,
-	});
-	if (!previous)
-		messages = reconstructedContextTransition(
-			messages,
-			failover?.route.modelId ?? selected.modelId,
+	const readHistory = () =>
+		previousTurnMessages(
+			scope.userId,
+			session.id,
+			selected.modelId,
+			connection.revision,
 		);
-	assertApiContextFits(messages);
-	await enqueueApiTurn({
-		userId: scope.userId,
-		sessionId: session.id,
-		connectionId: connection.id,
-		revision: connection.revision,
-		modelId: selected.modelId,
-		routeId: input.modelId,
-		messages,
-		...sent.write,
-		preparedTask,
-		idempotencyKey: input.idempotencyKey,
-		settings,
-		failover,
-	});
+	await enqueueContinuing(
+		previous,
+		readPrevious,
+		readHistory,
+		(history, base) => {
+			let messages = nextTurnMessages({
+				previous: history,
+				items,
+				text: input.text,
+				runtimeText: input.runtimeText,
+				attachments,
+			});
+			if (!history)
+				messages = reconstructedContextTransition(
+					messages,
+					failover?.route.modelId ?? selected.modelId,
+				);
+			assertApiContextFits(messages, base?.bytes);
+			return enqueueApiTurn({
+				userId: scope.userId,
+				sessionId: session.id,
+				connectionId: connection.id,
+				revision: connection.revision,
+				modelId: selected.modelId,
+				routeId: input.modelId,
+				messages,
+				base,
+				...sent.write,
+				preparedTask,
+				idempotencyKey: input.idempotencyKey,
+				settings,
+				failover,
+			});
+		},
+	);
 	// The sidebar shows the stored title; name the chat after its first
 	// message. A composer send already titled it when it claimed the chat, so
 	// this is a fallback and need not hold the response.
@@ -446,11 +467,13 @@ async function sendClaudeCodeTask(
 		: held;
 	if (input.approvesPlan && !pendingPlanId(planned ?? []))
 		throw new Error("That plan was already answered.");
+	const readPrevious = () =>
+		previousTurnHistory(scope.userId, session.id, modelId, revision);
 	const [attachments, previous] = await Promise.all([
 		input.storedAttachments
 			? [...input.storedAttachments]
 			: storeMessageAttachments(scope.userId, session.id, input.attachments),
-		previousTurnMessages(scope.userId, session.id, modelId, revision),
+		readPrevious(),
 	]);
 	// The model's messages continue the stored ones; only without them is the
 	// whole transcript read (they are rebuilt from it).
@@ -459,34 +482,44 @@ async function sendClaudeCodeTask(
 		(previous ? null : await wholeTranscript(scope, session.id, held));
 	const sent = sendItems(current, input, attachments);
 	const items = sent.items;
-	let messages = nextTurnMessages({
+	const readHistory = () =>
+		previousTurnMessages(scope.userId, session.id, modelId, revision);
+	await enqueueContinuing(
 		previous,
-		items,
-		text: input.text,
-		runtimeText: input.runtimeText,
-		attachments,
-	});
-	if (!previous)
-		messages = reconstructedContextTransition(
-			messages,
-			failover?.route.modelId ?? modelId,
-		);
-	assertApiContextFits(messages);
-	await enqueueApiTurn({
-		userId: scope.userId,
-		sessionId: session.id,
-		connectionId: null,
-		revision,
-		modelId,
-		routeId: input.modelId,
-		messages,
-		...sent.write,
-		preparedTask,
-		idempotencyKey: input.idempotencyKey,
-		// The chosen effort, when it is one Claude takes; anything else is dropped.
-		settings: effort ? { reasoning: effort } : {},
-		failover,
-	});
+		readPrevious,
+		readHistory,
+		(history, base) => {
+			let messages = nextTurnMessages({
+				previous: history,
+				items,
+				text: input.text,
+				runtimeText: input.runtimeText,
+				attachments,
+			});
+			if (!history)
+				messages = reconstructedContextTransition(
+					messages,
+					failover?.route.modelId ?? modelId,
+				);
+			assertApiContextFits(messages, base?.bytes);
+			return enqueueApiTurn({
+				userId: scope.userId,
+				sessionId: session.id,
+				connectionId: null,
+				revision,
+				modelId,
+				routeId: input.modelId,
+				messages,
+				base,
+				...sent.write,
+				preparedTask,
+				idempotencyKey: input.idempotencyKey,
+				// The chosen effort, when it is one Claude takes; anything else is dropped.
+				settings: effort ? { reasoning: effort } : {},
+				failover,
+			});
+		},
+	);
 	const title = () =>
 		titleUntitledAgentSession(
 			scope.userId,
@@ -495,6 +528,44 @@ async function sendClaudeCodeTask(
 		).catch(() => undefined);
 	if (!startAfterResponse(title)) await title();
 	return sentView(scope, session, sent, input.modelId, catalog);
+}
+
+type PreviousTurn = Awaited<ReturnType<typeof previousTurnHistory>>;
+
+/**
+ * Queues a send on the history it continues: a settled turn's identity when
+ * it continues unchanged (the database copies its history; the send never
+ * reads it), else the history itself. When that turn changed before the
+ * send was queued, it is planned again once, then on the history itself.
+ */
+async function enqueueContinuing(
+	previous: PreviousTurn,
+	readPrevious: () => Promise<PreviousTurn>,
+	readHistory: () => Promise<ModelMessage[] | null>,
+	enqueue: (
+		history: ModelMessage[] | null,
+		base: TurnBase | undefined,
+	) => Promise<void>,
+) {
+	let current = previous;
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await enqueue(
+				current?.base ? [] : (current?.messages ?? null),
+				current?.base,
+			);
+		} catch (error) {
+			if (!(error instanceof TurnBaseChanged) || attempt >= 2) throw error;
+			if (attempt === 0) current = await readPrevious();
+			else {
+				const messages = await readHistory();
+				current = messages ? { messages } : null;
+			}
+			// The send was planned on a history (its items appended to the stored
+			// transcript); with none now it would lose the conversation.
+			if (!current) throw error;
+		}
+	}
 }
 
 /**

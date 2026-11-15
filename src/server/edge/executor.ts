@@ -51,6 +51,7 @@ import {
 	withCodexSubscriptionEgress,
 } from "../adapters/codex-subscription-transport";
 import { withConversationProgressWake } from "../adapters/conversation-progress-wake";
+import { storeTurnMessages } from "../adapters/conversation-recovery";
 import { withConversationTurnCoordinator } from "../adapters/conversation-turn-control";
 import { database } from "../adapters/database";
 import { withDatabaseScope } from "../adapters/database-scope";
@@ -387,6 +388,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private stepping = false;
 	/** Runs after the turn released its room lease, so a waiting turn can start. */
 	private async endTurn() {
+		const ended = this.activeTurn();
 		// The last turn's transcript stays, so the next turn reads only what
 		// changed after it (seedFromChatCopy).
 		try {
@@ -394,12 +396,42 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		} catch {
 			this.history.clear();
 		}
+		if (ended) this.storeEndedHistory(ended);
 		this.ctx.storage.sql.exec("delete from turn_loop");
 		const next = this.queue.take();
 		if (next) {
 			await this.refreshWaiting([next]);
 			await this.beginTurn(next);
 		} else await this.wake("turn", null);
+	}
+	/**
+	 * The ended turn's final model history, kept in private storage: the
+	 * recovery point of the send that continues it refers to it
+	 * (turnMessagesObject) instead of the send reading it. Best effort, after
+	 * the turn: without it that point is restored from its transcript.
+	 */
+	private storeEndedHistory(ended: ActiveTurn) {
+		let copy: ReturnType<TurnHistoryCache["chatMessagesCopy"]> = null;
+		try {
+			copy = this.history.chatMessagesCopy();
+		} catch {
+			return;
+		}
+		if (!copy || copy.turnId !== ended.turnId) return;
+		const { messages, version } = copy;
+		this.ctx.waitUntil(
+			storeTurnMessages({
+				userId: ended.userId,
+				sessionId: ended.sessionId,
+				turnId: ended.turnId,
+				version,
+				messages,
+			}).catch((error) =>
+				console.warn("Turn history object was not stored.", {
+					cause: stepFailureCause(error),
+				}),
+			),
+		);
 	}
 	/** Keeps turns waiting behind the active one claimable; see refreshWaitingApiTurns. */
 	private async refreshWaiting(turns = this.queue.waiting()) {
@@ -582,19 +614,47 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			return null;
 		}
 		if (!copy) return null;
-		const row = await turnHistorySince(turnId, leaseId, copy.itemsRev);
+		// The last turn's model history too, when this turn continues it
+		// unchanged: then only the messages after it are read.
+		let messagesCopy: ReturnType<TurnHistoryCache["chatMessagesCopy"]> = null;
+		try {
+			messagesCopy = this.history.chatMessagesCopy();
+		} catch {
+			messagesCopy = null;
+		}
+		const row = await turnHistorySince(
+			turnId,
+			leaseId,
+			copy.itemsRev,
+			messagesCopy ?? undefined,
+		);
 		if (!row || row.wholeItems) return null;
 		const items = seededTranscript(copy.items, row.count, row.changed);
 		if (!items) return null;
+		const continued =
+			row.messagesAfter !== null &&
+			messagesCopy !== null &&
+			messagesCopy.messages.length === row.messagesAfter;
+		// A count that does not match: the whole history from Postgres.
+		if (row.messagesAfter !== null && !continued) return null;
 		console.info(
 			JSON.stringify({
 				event: "turn.history_seeded",
 				turnId,
 				items: row.count,
 				rowsRead: row.changed.length,
+				messagesRead: row.messages.length,
+				messagesFromCopy: continued ? messagesCopy?.messages.length : 0,
 			}),
 		);
-		return { messages: row.messages, items, items_rev: row.itemsRev };
+		return {
+			messages:
+				continued && messagesCopy
+					? [...messagesCopy.messages, ...row.messages]
+					: row.messages,
+			items,
+			items_rev: row.itemsRev,
+		};
 	}
 	/**
 	 * Runs after Postgres committed the write: a local storage failure must not

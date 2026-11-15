@@ -12,10 +12,12 @@ import {
 	expireApiTurnLeases,
 	finalizeApiTurn,
 	finishApiTurn,
+	previousTurnHistory,
 	previousTurnMessages,
 	publishApiTurnProgress,
 	releaseClaimedApiTurn,
 	renewApiTurn,
+	TurnBaseChanged,
 } from "../src/server/adapters/api-turns";
 import {
 	reserveApiTokens,
@@ -112,6 +114,7 @@ beforeAll(async () => {
 		"20261105100000_agent_session_items_rev",
 		"20261114120000_conversation_delivery_items_rev",
 		"20261115120000_turn_runner_box",
+		"20261115200000_api_turn_base",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}.sql`, "utf8"));
 	await db.exec(
@@ -1311,4 +1314,155 @@ it("hands a turn whose box stopped heartbeating to another box, a bounded number
 		[sessionId],
 	);
 	expect(await requeueInterruptedBoxTurns()).toBe(0);
+});
+
+it("continues a settled turn's history inside the database and seeds only the messages after it", async () => {
+	const { turnHistorySince } = await import(
+		"../src/server/adapters/turn-history-seed"
+	);
+	await db.exec(
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
+	);
+	await submit();
+	const first = await claimApiTurn();
+	if (!first) throw Error("missing turn");
+	const call = {
+		type: "tool-call" as const,
+		toolCallId: "call-1",
+		toolName: "run",
+		input: {},
+	};
+	const settled = [
+		{ role: "user" as const, content: "test" },
+		{ role: "assistant" as const, content: [call] },
+		{
+			role: "tool" as const,
+			content: [
+				{
+					type: "tool-result" as const,
+					toolCallId: "call-1",
+					toolName: "run",
+					output: { type: "text" as const, value: "ok" },
+				},
+			],
+		},
+		{ role: "assistant" as const, content: "done" },
+	];
+	expect(await finalizeApiTurn(first, "completed", [], settled)).toBe(
+		"completed",
+	);
+	// Same model and credentials, every call answered: only its identity.
+	const previous = await previousTurnHistory(
+		"alice",
+		sessionId,
+		"test-model",
+		revision,
+	);
+	const base = previous?.base;
+	if (!base) throw Error("expected a base");
+	expect(base).toMatchObject({ turnId: first.id, count: 4 });
+	expect(previous?.messages).toBeUndefined();
+	// Another model: the history itself (provider-neutral), as before.
+	expect(
+		(await previousTurnHistory("alice", sessionId, "other-model", revision))
+			?.messages,
+	).toHaveLength(4);
+	const tail = [{ role: "user" as const, content: "next" }];
+	const queue = () =>
+		enqueueApiTurn({
+			sessionId,
+			userId: "alice",
+			connectionId,
+			revision,
+			modelId: "test-model",
+			routeId: `api/${connectionId}/test-model`,
+			messages: tail,
+			items: [],
+			base,
+		});
+	await queue();
+	const next = (
+		await db.query<{
+			id: string;
+			messages: unknown[];
+			base_turn_id: string;
+			base_count: number;
+		}>(
+			"select id,messages,base_turn_id,base_count from api_turn where session_id=$1 and id<>$2",
+			[sessionId, first.id],
+		)
+	).rows[0];
+	expect(next?.messages).toEqual([...settled, ...tail]);
+	expect(next?.base_turn_id).toBe(first.id);
+	expect(next?.base_count).toBe(4);
+	const lease = "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c";
+	await db.query("update api_turn set lease_id=$2 where id=$1", [
+		next?.id,
+		lease,
+	]);
+	const itemsRev = (
+		await db.query<{ rev: string }>(
+			"select items_rev::text as rev from agent_session where id=$1",
+			[sessionId],
+		)
+	).rows[0]?.rev as string;
+	// The chat's copy is that turn at that version: only what follows it.
+	const seeded = await turnHistorySince(next?.id as string, lease, itemsRev, {
+		turnId: first.id,
+		version: base.version,
+	});
+	expect(seeded?.messages).toEqual(tail);
+	expect(seeded?.messagesAfter).toBe(4);
+	// A copy at another version: the whole history.
+	const stale = await turnHistorySince(next?.id as string, lease, itemsRev, {
+		turnId: first.id,
+		version: "elsewhere",
+	});
+	expect(stale?.messages).toEqual([...settled, ...tail]);
+	expect(stale?.messagesAfter).toBeNull();
+	// The base changed after the send was planned: the send is refused.
+	await db.query(
+		"update api_turn set updated_at=now()+interval '1 second' where id=$1",
+		[first.id],
+	);
+	await db.query("update agent_session set turn_status='idle' where id=$1", [
+		sessionId,
+	]);
+	await expect(queue()).rejects.toBeInstanceOf(TurnBaseChanged);
+});
+
+it("plans on the history itself when the last turn left a tool call unanswered", async () => {
+	await db.exec(
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
+	);
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw Error("missing turn");
+	const unanswered = [
+		{ role: "user" as const, content: "test" },
+		{
+			role: "assistant" as const,
+			content: [
+				{
+					type: "tool-call" as const,
+					toolCallId: "open",
+					toolName: "run",
+					input: {},
+				},
+			],
+		},
+	];
+	await finalizeApiTurn(turn, "failed", [], unanswered);
+	const previous = await previousTurnHistory(
+		"alice",
+		sessionId,
+		"test-model",
+		revision,
+	);
+	expect(previous?.base).toBeUndefined();
+	// Closed with a stand-in result, exactly as previousTurnMessages does.
+	expect(previous?.messages).toEqual(
+		await previousTurnMessages("alice", sessionId, "test-model", revision),
+	);
+	expect(previous?.messages).toHaveLength(3);
 });

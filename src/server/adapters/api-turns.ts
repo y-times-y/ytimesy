@@ -14,7 +14,7 @@ import {
 	type TurnFailoverColumn,
 	turnFailover,
 } from "#/domain/model-failover";
-import { continuedTurnHistory } from "#/domain/runtime-handoff";
+import { continuedTurnHistory, sameTransport } from "#/domain/runtime-handoff";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { settledTurnItems } from "#/domain/turn-end";
@@ -40,6 +40,7 @@ import {
 	recordConversationPoint,
 	recoveredConversation,
 	storePointMessages,
+	turnMessagesObject,
 } from "./conversation-recovery";
 import { database } from "./database";
 import {
@@ -153,6 +154,12 @@ export async function enqueueApiTurn(input: {
 	settings?: ApiTurnSettings;
 	/** The user chose to continue this turn on a fallback route from the start. */
 	failover?: TurnFailover;
+	/**
+	 * The settled turn this one continues unchanged (previousTurnHistory):
+	 * `messages` are then only what follows its history, and the database
+	 * prepends that history itself, so the send never reads it.
+	 */
+	base?: TurnBase;
 }) {
 	// Every turn is new work and waits for an exhausted usage window: one the
 	// user (or a wake-up) starts, and a subagent's task too (its parent's own
@@ -164,15 +171,19 @@ export async function enqueueApiTurn(input: {
 	const sentMessage = [...(input.appendItems ?? input.items)]
 		.reverse()
 		.find((item) => item.kind === "userMessage");
+	// Continuing a settled turn, the point's messages are that turn's final
+	// history, which its executor stored when it ended (turnMessagesObject).
 	const messagesObject =
-		input.messages.at(-1)?.role === "user"
-			? await storePointMessages({
-					userId: input.userId,
-					sessionId: input.sessionId,
-					messageId: sentMessage?.id,
-					messages: input.messages,
-				})
-			: null;
+		input.messages.at(-1)?.role !== "user"
+			? null
+			: input.base
+				? turnMessagesObject(input.userId, input.sessionId, input.base)
+				: await storePointMessages({
+						userId: input.userId,
+						sessionId: input.sessionId,
+						messageId: sentMessage?.id,
+						messages: input.messages,
+					});
 	// Where the turn runs: its chat's Durable Object, or a turn runner box
 	// (turn-executor.ts chooseTurnExecutor), decided before the chat is locked.
 	const configuredExecutor = configuredTurnExecutor(
@@ -256,7 +267,21 @@ export async function enqueueApiTurn(input: {
 			throw new Error(
 				"Finish or stop the current turn before sending another prompt.",
 			);
-		await recordConversationPoint(client, { ...input, messagesObject });
+		if (input.base) {
+			// The history it continues, unchanged since it was planned (share-locked
+			// until commit); otherwise the caller plans the send again.
+			const base = await client.query<{ count: number }>(
+				`select jsonb_array_length(messages) as count from api_turn
+				 where id=$1 and session_id=$2 and user_id=$3 and updated_at::text=$4 for share`,
+				[input.base.turnId, input.sessionId, input.userId, input.base.version],
+			);
+			if (base.rows[0]?.count !== input.base.count) throw new TurnBaseChanged();
+		}
+		await recordConversationPoint(client, {
+			...input,
+			messagesObject,
+			messagesUnknown: Boolean(input.base),
+		});
 		turnId = randomUUID();
 		const executor = chosenExecutor;
 		started = {
@@ -273,9 +298,14 @@ export async function enqueueApiTurn(input: {
 		const whole = append
 			? "coalesce((select a.items from agent_session a where a.id=$2),'[]'::jsonb)||$8::jsonb"
 			: "$8";
+		// Continuing a turn: its history (copied inside the database) and then
+		// this send's messages.
+		const messages = input.base
+			? "(select b.messages from api_turn b where b.id=$16::uuid)||$7::jsonb"
+			: "$7";
 		await client.query(
-			`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,coalesce($15::jsonb,${whole}),$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
+			`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible,base_turn_id,base_version,base_count)
+			 values($1,$2,$3,$4,$5,$6,'queued',${messages},coalesce($15::jsonb,${whole}),$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")},$16::uuid,$17::text,$18::int))
 			 update agent_session set harness=$14,listed_model_id=$13,items=${append ? "coalesce(items,'[]'::jsonb)||$8::jsonb" : "$8"},turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
 			[
 				turnId,
@@ -293,6 +323,9 @@ export async function enqueueApiTurn(input: {
 				input.routeId,
 				subscription ? "codex" : "api",
 				executor === "durable-object" ? newTurnItemsColumn(written) : null,
+				input.base?.turnId ?? null,
+				input.base?.version ?? null,
+				input.base?.count ?? null,
 			],
 		);
 		await client.query("commit");
@@ -343,6 +376,123 @@ export async function enqueueApiTurn(input: {
 		// A failed relay keeps its durable receipt for the step to deliver.
 		startAfterResponse(() => relayConversationDeliveriesOnce(input.sessionId));
 	}
+}
+
+/** The history changed between planning a send on it and queueing the send. */
+export class TurnBaseChanged extends Error {
+	constructor() {
+		super("The conversation changed while this message was being sent.");
+	}
+}
+
+/**
+ * A settled turn whose saved history the next turn continues unchanged (the
+ * same model and credentials, every tool call answered): its row version,
+ * message count and size (JSON characters).
+ */
+export type TurnBase = {
+	readonly turnId: string;
+	readonly version: string;
+	readonly count: number;
+	readonly bytes: number;
+};
+
+/**
+ * Whether a jsonb array of model messages has an assistant tool call (not
+ * provider-executed) without a tool result: closeUnansweredToolCalls would
+ * change it.
+ */
+const UNANSWERED_TOOL_CALL_SQL = (column: string) => `exists(
+ (select p->>'toolCallId' from jsonb_array_elements(${column}) m,
+   jsonb_array_elements(case when jsonb_typeof(m->'content')='array' then m->'content' else '[]'::jsonb end) p
+  where m->>'role'='assistant' and p->>'type'='tool-call' and coalesce(p->>'providerExecuted','false')<>'true')
+ except
+ (select q->>'toolCallId' from jsonb_array_elements(${column}) r,
+   jsonb_array_elements(case when jsonb_typeof(r->'content')='array' then r->'content' else '[]'::jsonb end) q
+  where r->>'role'='tool' and q->>'type'='tool-result'))`;
+
+/**
+ * What the next turn continues from, as previousTurnMessages decides it,
+ * without reading the history when it continues unchanged: then only the
+ * settled turn's identity (`base`), and the database copies its history
+ * into the new turn (enqueueApiTurn). Otherwise the history itself.
+ */
+export async function previousTurnHistory(
+	userId: string,
+	sessionId: string,
+	modelId: string,
+	revision: string,
+): Promise<
+	| { readonly base: TurnBase; readonly messages?: undefined }
+	| { readonly messages: ModelMessage[]; readonly base?: undefined }
+	| null
+> {
+	const [recovered, result] = await Promise.all([
+		recoveredConversation(userId, sessionId),
+		database().query<{
+			id: string;
+			state: ApiTurn["state"];
+			model_id: string;
+			connection_revision: string;
+			failover: unknown;
+			version: string;
+			count: number;
+			bytes: number;
+			unanswered: boolean;
+		}>(
+			`select id,state,model_id,connection_revision,failover,updated_at::text as version,
+			 case when jsonb_typeof(messages)='array' then jsonb_array_length(messages) else 0 end as count,
+			 octet_length(messages::text) as bytes,
+			 case when jsonb_typeof(messages)='array' then ${UNANSWERED_TOOL_CALL_SQL("messages")} else true end as unanswered
+			 from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1`,
+			[userId, sessionId],
+		),
+	]);
+	const previous = result.rows[0];
+	if (
+		recovered === null &&
+		previous &&
+		previous.state !== "queued" &&
+		previous.state !== "running" &&
+		previous.count > 0 &&
+		!previous.unanswered &&
+		sameTransport(
+			{
+				modelId: previous.model_id,
+				connectionRevision: previous.connection_revision,
+				failedOver: turnFailover(previous.failover) !== null,
+			},
+			{ modelId, connectionRevision: revision },
+		)
+	)
+		return {
+			base: {
+				turnId: previous.id,
+				version: previous.version,
+				count: previous.count,
+				bytes: Number(previous.bytes),
+			},
+		};
+	if (recovered !== null)
+		return {
+			messages: continuedTurnHistory(
+				{
+					messages: recovered.messages,
+					modelId: recovered.modelId,
+					connectionRevision: recovered.revision,
+					state: "completed",
+					failedOver: false,
+				},
+				{ modelId, connectionRevision: revision },
+			),
+		};
+	const messages = await previousTurnMessages(
+		userId,
+		sessionId,
+		modelId,
+		revision,
+	);
+	return messages ? { messages } : null;
 }
 
 /**
@@ -549,7 +699,7 @@ export async function checkpointApiTurn(
 	const write = planItemsWrite(turn, items, 4, "agent_session.items", 6);
 	const result = await retryDroppedConnection(() =>
 		database().query<{ version: string; previous: string; items_rev: string }>(
-			`with saved as (update api_turn set messages=$3,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
+			`with saved as (update api_turn set messages=$3,base_turn_id=null,base_version=null,base_count=null,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 		 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
@@ -656,13 +806,19 @@ export async function finalizeApiTurn(
 	// $5 is the messages, so the first item's id is $6.
 	const write = planItemsWrite(turn, items, 4, "s.items", 6);
 	const result = await database().query<
-		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow
+		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow & {
+				version: string;
+				previous: string;
+				items_rev: string;
+			}
 	>(
-		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=${write.apiTurn},messages=coalesce($5::jsonb,messages),updated_at=now()
-		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning id,session_id,state,created_at)
+		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=${write.apiTurn},messages=coalesce($5::jsonb,messages),
+		 base_turn_id=case when $5::jsonb is null then base_turn_id end,updated_at=now()
+		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning id,session_id,state,created_at,updated_at)
 		 update agent_session s set items=${write.session},turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
 		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
-		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
+		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS},
+		 saved.updated_at::text as version,${PREVIOUS_VERSION},s.items_rev::text as items_rev`,
 		[
 			turn.id,
 			turn.lease_id,
@@ -673,8 +829,21 @@ export async function finalizeApiTurn(
 		],
 	);
 	captureSettledTurns(result.rows);
-	if (result.rows[0]) await wakeConversationProgress();
-	return result.rows[0]?.state ?? null;
+	const settledRow = result.rows[0];
+	if (settledRow) {
+		// The chat's copy follows the last write too: the next turn continues
+		// from exactly this history (previousTurnHistory) and reads only what
+		// follows it when the copy is this version.
+		mirrorTurnHistory(
+			turn.id,
+			settledRow.version,
+			messages ? { messages: [...messages], items } : { items },
+			settledRow.previous,
+			settledRow.items_rev,
+		);
+		await wakeConversationProgress();
+	}
+	return settledRow?.state ?? null;
 }
 
 /** `items` with the element whose id is $2 replaced by $3 (removed when $3 is null). */
