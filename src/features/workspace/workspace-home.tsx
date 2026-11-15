@@ -84,7 +84,6 @@ import {
 	selectedProjectIdAfterDelete,
 } from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
-import type { PullRequestChat } from "./pull-request-marks";
 import {
 	latestPullRequestHandoff,
 	OPENING_PULL_REQUEST_TEXT,
@@ -294,6 +293,7 @@ import {
 	listedPullRequestSummary,
 	prefetchPullRequestDetail,
 } from "./pull-request-detail-query";
+import type { PullRequestChat } from "./pull-request-marks";
 import { chatRemoval, projectRemoval } from "./sidebar-removals";
 import { useCompactLayout } from "./use-compact-layout";
 import {
@@ -3505,6 +3505,12 @@ export function WorkspaceHome({
 							openTurnStatus={openTurnStatus}
 							hasUserMessage={hasUserMessage}
 							onSelectChat={openChat}
+							onOpenChatPullRequest={(projectId, chatId) => {
+								if (projectId && projectId !== selectedProject?.id)
+									selectProject(projectId);
+								openChat(chatId);
+								openInspector("pr");
+							}}
 							onNewChat={startNewChat}
 							onDeleteChat={deleteChat}
 							onDeleteProject={removeProject}

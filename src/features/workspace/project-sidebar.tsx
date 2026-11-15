@@ -102,6 +102,11 @@ interface ProjectSidebarProps {
 	openTurnStatus?: SessionTurnStatus;
 	hasUserMessage?: boolean;
 	onSelectChat?: (id: string) => void;
+	/** Opens the chat with its pull request in ytimesy's own review panel. */
+	onOpenChatPullRequest?: (
+		projectId: string | undefined,
+		chatId: string,
+	) => void;
 	onNewChat: (projectId?: string) => void;
 	onDeleteChat?: (id: string) => void;
 	onDeleteProject?: (id: string) => void;
@@ -139,6 +144,7 @@ export function ProjectSidebar({
 	openTurnStatus,
 	hasUserMessage = false,
 	onSelectChat,
+	onOpenChatPullRequest,
 	onNewChat,
 	onDeleteChat,
 	onDeleteProject,
@@ -466,7 +472,16 @@ export function ProjectSidebar({
 							<Archive size={14} strokeWidth={1.5} />
 						</button>
 					) : null}
-					<SidebarChatStatusMark status={shown} label={label} age={age} />
+					<SidebarChatStatusMark
+						status={shown}
+						label={label}
+						age={age}
+						onOpenPullRequest={
+							onOpenChatPullRequest
+								? () => onOpenChatPullRequest(project?.id, chat.id)
+								: undefined
+						}
+					/>
 				</div>
 			</li>
 		);
@@ -906,10 +921,12 @@ function SidebarChatStatusMark({
 	status,
 	label,
 	age,
+	onOpenPullRequest,
 }: {
 	status: SidebarChatStatus;
 	label: string | null;
 	age: string | null;
+	onOpenPullRequest?: () => void;
 }) {
 	const time = age ? <span className="sidebar-chat-age">{age}</span> : null;
 	switch (status.kind) {
@@ -947,7 +964,13 @@ function SidebarChatStatusMark({
 				</span>
 			);
 		case "pr":
-			return <SidebarChatPr pr={status.pr} label={label} />;
+			return (
+				<SidebarChatPr
+					pr={status.pr}
+					label={label}
+					onOpen={onOpenPullRequest}
+				/>
+			);
 		case "unread":
 			return (
 				<span
@@ -970,9 +993,11 @@ function SidebarChatStatusMark({
 function SidebarChatPr({
 	pr,
 	label,
+	onOpen,
 }: {
 	pr: SidebarPullRequest;
 	label: string | null;
+	onOpen?: () => void;
 }) {
 	const Icon = {
 		open: GitPullRequest,
@@ -988,7 +1013,21 @@ function SidebarChatPr({
 			target="_blank"
 			rel="noreferrer"
 			aria-label={label ?? undefined}
-			onClick={(event) => event.stopPropagation()}
+			onClick={(event) => {
+				event.stopPropagation();
+				// A plain click opens ytimesy's own review; a modified click
+				// (new tab, new window) still goes to GitHub.
+				if (
+					!onOpen ||
+					event.metaKey ||
+					event.ctrlKey ||
+					event.shiftKey ||
+					event.button !== 0
+				)
+					return;
+				event.preventDefault();
+				onOpen();
+			}}
 		>
 			<Icon size={14} strokeWidth={2} aria-hidden="true" />
 			<span aria-hidden="true">{pr.number}</span>
