@@ -1,24 +1,42 @@
 import { createContext, type ReactNode, useContext } from "react";
 
+type Region = { readonly strict: boolean; readonly analyticsOptIn: boolean };
+
 /**
- * Whether the visitor gets the EU/UK defaults, known from the server's page
- * render (the root loader), so nothing flips after hydration.
+ * The visitor's privacy region, known from the server's page render (the
+ * root loader), so nothing flips after hydration.
  */
-const StrictPrivacyRegion = createContext(false);
+const PrivacyRegion = createContext<Region>({
+	strict: false,
+	analyticsOptIn: false,
+});
 
 export function PrivacyRegionProvider(props: {
 	readonly strict: boolean;
+	/** Defaults to strict: every strict region also waits for analytics consent. */
+	readonly analyticsOptIn?: boolean;
 	readonly children: ReactNode;
 }) {
 	return (
-		<StrictPrivacyRegion.Provider value={props.strict}>
+		<PrivacyRegion.Provider
+			value={{
+				strict: props.strict,
+				analyticsOptIn: props.analyticsOptIn ?? props.strict,
+			}}
+		>
 			{props.children}
-		</StrictPrivacyRegion.Provider>
+		</PrivacyRegion.Provider>
 	);
 }
 
+/** EU, EEA, UK or Switzerland (privacy-region.ts STRICT_PRIVACY_COUNTRIES). */
 export function useStrictPrivacyRegion() {
-	return useContext(StrictPrivacyRegion);
+	return useContext(PrivacyRegion).strict;
+}
+
+/** Analytics waits for consent here: no session replay, nothing kept in the browser. */
+export function useAnalyticsOptInRegion() {
+	return useContext(PrivacyRegion).analyticsOptIn;
 }
 
 /** "Help improve ytimesy" on the first-time cards: on, except in the EU/UK. */

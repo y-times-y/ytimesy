@@ -84,7 +84,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			}),
 	);
 	useEffect(() => followOtherTabSaves(queryClient), [queryClient]);
-	const strictRegion = Route.useLoaderData()?.strict ?? false;
+	const region = Route.useLoaderData();
+	const strictRegion = region?.strict ?? false;
+	const analyticsOptIn = region?.analyticsOptIn ?? strictRegion;
 	return (
 		<html lang="en" className="dark" suppressHydrationWarning>
 			<head>
@@ -103,7 +105,10 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body>
 				<QueryClientProvider client={queryClient}>
-					<PrivacyRegionProvider strict={strictRegion}>
+					<PrivacyRegionProvider
+						strict={strictRegion}
+						analyticsOptIn={analyticsOptIn}
+					>
 						<AuthProviders>
 							<Analytics />
 							<LegalUpdateNotice />

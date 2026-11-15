@@ -1,6 +1,6 @@
 # ytimesy Privacy Policy
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-15.
 
 This policy explains what ytimesy ("ytimesy", "we") collects when you use
 ytimesy, why, who else receives it, how long we keep it, and your choices. It
@@ -23,9 +23,11 @@ signing in, you acknowledge this policy.
   as training data.** Turn it off at any time in Settings → Privacy. Today no
   training export exists; see [Training Data](./training-opt-in.md).
 - Memory is **on by default**; you can turn it off or clear it.
-- We record **masked session replays** of how the web app is used, to fix bugs
-  and improve the product. Inputs, chat content, code and secrets are masked.
-  No replays are recorded in the EU, EEA, UK or Switzerland.
+- We record **masked session replays** of how our website and web app are
+  used, including before you sign in, to fix bugs and improve the product.
+  All text and inputs are masked, and code and secrets are never recorded. No
+  replays are recorded in the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec, or when your browser sends Do Not Track or
+  Global Privacy Control. You can turn them off in **Privacy choices**.
 - We do not sell your personal information or use it for advertising.
 - You can delete chats, projects, your memory, and your whole account yourself.
 - ytimesy is for people 18 and older.
@@ -99,28 +101,33 @@ or before you sign in to a random analytics identifier, and do not contain
 prompts, code or repository names. The web app sends them to PostHog through
 our own domain. IP-based location lookup is turned off. If your browser sends "Do Not
 Track", the web app sends no analytics or session replays; server events are
-still recorded.
+still recorded. If it sends Global Privacy Control, no session replays are
+recorded.
 
 **Referral attribution.** When you first visit, the web app keeps where you
 came from (a `ref` or `utm_*` link tag, the referring site's host name and the
 page you landed on) in a first-party cookie for 90 days, and when you create an
 account we save it with your account and send it to PostHog with the "account
 created" event, so we can see which channels bring sign-ups. It is not set for
-visitors in the EU, EEA, UK or Switzerland, or under "Do Not Track" or Global
+visitors in the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec, or under "Do Not Track" or Global
 Privacy Control.
 
-**Session replays.** While you are signed in, PostHog records masked
-session replays of how you use the web app (clicks, scrolling, which screens
-you open), linked to your account id, so we can fix bugs and improve the
-product. Replays are masked in
+**Session replays.** PostHog records masked session replays of how you use
+our website and web app (clicks, scrolling, which screens you open), so we can
+fix bugs and improve the product. Before you sign in, a replay is linked to a
+random analytics identifier; once you are signed in, to your account id.
+Replays are masked in
 your browser before anything is sent: all text, including chat content, is
 masked, every input is masked, and code, diffs, terminals, file contents,
 secrets, images, previews and the desktop view are blocked. Sign-in pages, network
 traffic and console logs are not recorded. Replays are kept for 30 days and
 deleted with your account. **We do not record session replays for people in
-the EU, EEA, UK or Switzerland**, based on the country our hosting provider
-reports for your connection. To object to replays elsewhere, email us (section
-11).
+the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec**, based on the country (and, in Canada, the province) our hosting
+provider reports for your connection, nor when your browser sends Do Not Track
+or Global Privacy Control. Elsewhere you can turn replays off for your
+browser at any time in **Privacy choices**, at the top of this page and in
+Settings → Privacy; turning them off never limits what you can use. You can
+also email us (section 11).
 
 **Logs and bot checks.** Our hosting provider keeps operational logs
 (requests, errors, timings) that can include IP addresses and identifiers, for
@@ -134,8 +141,9 @@ our addresses is forwarded to a mailbox hosted by Google.
 **Cookies and browser storage.** We use a sign-in cookie, a few cookies
 that remember interface state (such as open panels) and the referral
 attribution cookie described above. The browser also stores
-unsent message drafts and the analytics identifier. We
-use no advertising cookies.
+unsent message drafts, the analytics identifier and your Privacy choices
+(none of the analytics storage in the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec). We use no
+advertising cookies.
 
 ## 2. Children
 
@@ -344,8 +352,10 @@ protection law applies, our legal bases are:
   setting;
 - **legal obligations**.
 
-For people in these regions we do not record session replays, and the
-"Help improve ytimesy" switch starts off. You have the right to access,
+For people in these regions we do not record session replays or keep an
+analytics identifier in the browser, and the "Help improve ytimesy" switch
+starts off. The same applies to session replays and analytics storage in
+Turkey, South Korea and Quebec. You have the right to access,
 correct, delete and receive a copy of your data, to restrict processing, to
 object to processing (including product analytics), and to withdraw consent at
 any time. To exercise a right, email support@ytimesy.com with "Privacy

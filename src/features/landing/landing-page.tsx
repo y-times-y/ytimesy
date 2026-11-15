@@ -522,6 +522,9 @@ export function SiteFooter() {
 				<Link to="/blog">Blog</Link>
 				<Link to="/terms">Terms</Link>
 				<Link to="/privacy">Privacy</Link>
+				<Link to="/privacy" hash="choices">
+					Privacy choices
+				</Link>
 				<a href="mailto:support@ytimesy.com">support@ytimesy.com</a>
 			</nav>
 		</footer>
