@@ -6,6 +6,10 @@ import type {
 	AgentTaskReviewState,
 	AgentTaskStatus,
 } from "#/domain/agent-task";
+import {
+	type BackgroundCommandExit,
+	backgroundCommandNoticeLine,
+} from "#/domain/background-command";
 import { callerHintFromStack } from "#/domain/caller-hint";
 import type { CodexUsage } from "#/domain/codex-usage";
 import {
@@ -444,6 +448,69 @@ export async function agentSessionItemsOfKindsForOwner(
 		else bySession.set(row.session_id, [row.item]);
 	}
 	return bySession;
+}
+
+/** An item that records a background command which has not exited (`it` is a jsonb item). */
+const OPEN_BACKGROUND_SQL = (it: string) =>
+	`${it}->>'kind'='dynamicToolCall' and ${it}->'background' is not null and (${it} #> '{background,exitCode}') is null`;
+
+/**
+ * withBackgroundCommandExits (background-command.ts) done inside the
+ * database, so a chat's transcript never leaves it: the cards of the given
+ * exits that have no exit code yet get `background.exitCode` and
+ * `background.endedAt`, and each announced exit that closed a card appends
+ * its notice line after the transcript, in card order. One UPDATE of an idle
+ * chat (as replaceIdleSessionItems: a running turn owns its timeline); the
+ * new items are computed from the row being updated, so a write that lands
+ * meanwhile is built on, not overwritten. `open` says whether the chat still
+ * records a background command that has not exited. Null when the chat is
+ * not the user's.
+ */
+export async function applyBackgroundCommandExits(
+	userId: string,
+	sessionId: string,
+	exits: readonly (BackgroundCommandExit & { readonly announced: boolean })[],
+): Promise<{ changed: boolean; open: boolean } | null> {
+	// The last exit of an id wins, as in withBackgroundCommandExits.
+	const byId = new Map(exits.map((exit) => [exit.id, exit]));
+	const records = [...byId.values()].map((exit) => ({
+		id: exit.id,
+		exitCode: exit.exitCode,
+		endedAt: exit.endedAt,
+		...(exit.announced ? { message: backgroundCommandNoticeLine(exit) } : {}),
+	}));
+	const result = await database().query<{ changed: boolean; open: boolean }>(
+		`with exits as (select x from jsonb_array_elements($3::jsonb) x),
+		 updated as (
+		  update agent_session s set items = (
+		    select jsonb_agg(case when m.x is null then e.it
+		        else jsonb_set(jsonb_set(e.it, '{background,exitCode}', coalesce(m.x->'exitCode','null'::jsonb)), '{background,endedAt}', coalesce(m.x->'endedAt','null'::jsonb)) end
+		        order by e.o)
+		      || coalesce(jsonb_agg(jsonb_build_object('kind', 'notice', 'id', (e.it->>'id') || ':background-exit',
+		           'message', m.x->'message', 'background', true) order by e.o)
+		         filter (where m.x->'message' is not null), '[]'::jsonb)
+		    from jsonb_array_elements(s.items) with ordinality e(it, o)
+		    left join lateral (select exits.x from exits
+		      where e.it->>'kind'='dynamicToolCall' and e.it->'background'->'exitCode' is null
+		        and exits.x->'id' = e.it->'background'->'id' limit 1) m on true),
+		   updated_at=now()
+		  where s.id=$1 and s.user_id=$2 and s.turn_status is distinct from 'running'
+		    and jsonb_typeof(s.items)='array'
+		    and exists (select 1 from jsonb_array_elements(s.items) e(it) join exits
+		      on exits.x->'id' = e.it->'background'->'id'
+		      where e.it->>'kind'='dynamicToolCall' and e.it->'background'->'exitCode' is null)
+		  returning s.items)
+		 select exists(select 1 from updated) as changed,
+		  case when exists(select 1 from updated)
+		   then exists(select 1 from updated u cross join jsonb_array_elements(u.items) e(it)
+		     where ${OPEN_BACKGROUND_SQL("e.it")})
+		   else exists(select 1 from agent_session_item i where i.session_id=$1
+		     and i.kind='dynamicToolCall' and ${OPEN_BACKGROUND_SQL("i.item")}) end as open
+		 from agent_session where id=$1 and user_id=$2`,
+		[sessionId, userId, jsonbText(records)],
+	);
+	const row = result.rows[0];
+	return row ? { changed: row.changed, open: row.open } : null;
 }
 
 /**

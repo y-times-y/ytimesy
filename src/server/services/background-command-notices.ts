@@ -12,15 +12,12 @@ import { posixShellQuoted as quote } from "#/domain/posix-command";
 import type { SessionItem } from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
 	agentSessionMetadataForOwner,
+	applyBackgroundCommandExits,
 	backgroundCommandItemsForOwner,
 } from "../adapters/agent-sessions";
 import { hasActiveApiTurn } from "../adapters/api-turns";
-import {
-	idleSessionsWithOpenBackgroundCommands,
-	replaceIdleSessionItems,
-} from "../adapters/background-command-sessions";
+import { idleSessionsWithOpenBackgroundCommands } from "../adapters/background-command-sessions";
 import { stageServerPeerMessage } from "../adapters/server-peer-inbox";
 import {
 	deliverParentTaskNotification,
@@ -118,41 +115,48 @@ export async function withBackgroundCommandNotices(
 	};
 }
 
-/** Dependencies of the idle-chat watcher (tests replace them). */
+type SessionMetadata = Omit<AgentSessionRecord, "items">;
+
+/**
+ * Dependencies of the idle-chat watcher (tests replace them). No dependency
+ * reads a chat's whole transcript: the check runs every minute per chat with
+ * an open command and again at each command's exit, and whole-transcript
+ * reads (megabytes on long chats) were most of the database's egress.
+ */
 export type BackgroundWatchDependencies = {
 	readonly candidates: () => Promise<readonly { userId: string; id: string }[]>;
-	readonly session: (
-		userId: string,
-		sessionId: string,
-	) => Promise<AgentSessionRecord | null>;
-	/**
-	 * The chat without its transcript, with only its background command
-	 * items. The check runs every minute per chat with an open command, so
-	 * reading the whole transcript (up to megabytes) each time made it a third
-	 * of the database's egress; `session` is read only when something exits.
-	 */
-	readonly open?: (
+	/** The chat without its transcript, with only its background command items. */
+	readonly open: (
 		userId: string,
 		sessionId: string,
 	) => Promise<{
-		session: Omit<AgentSessionRecord, "items">;
+		session: SessionMetadata;
 		items: SessionItem[];
 	} | null>;
+	/** The chat without its transcript, read again before a notice is delivered. */
+	readonly metadata: (
+		userId: string,
+		sessionId: string,
+	) => Promise<SessionMetadata | null>;
 	readonly activeTurn: (userId: string, sessionId: string) => Promise<boolean>;
 	/** Best effort, never throws (background-idle-timeout.ts); tests replace it. */
 	readonly settleIdleTimeout?: (
 		machines: WorkspaceMachines,
 		vm: WorkspaceId,
 	) => Promise<unknown>;
-	readonly replaceItems: (
+	/**
+	 * Records the exits on the stored transcript in the database (as
+	 * withBackgroundCommandExits would) unless a turn runs; `open`: the chat
+	 * still records a command that has not exited. Null: no such chat.
+	 */
+	readonly applyExits: (
 		userId: string,
 		sessionId: string,
-		expected: unknown,
-		next: readonly SessionItem[],
-	) => Promise<boolean>;
+		exits: readonly (BackgroundCommandExit & { readonly announced: boolean })[],
+	) => Promise<{ changed: boolean; open: boolean } | null>;
 	readonly notify: (
 		machines: WorkspaceMachines,
-		session: AgentSessionRecord,
+		session: SessionMetadata,
 		notificationId: string,
 		text: string,
 	) => Promise<void>;
@@ -160,7 +164,7 @@ export type BackgroundWatchDependencies = {
 
 const watchDependencies = (): BackgroundWatchDependencies => ({
 	candidates: idleSessionsWithOpenBackgroundCommands,
-	session: agentSessionForOwner,
+	metadata: agentSessionMetadataForOwner,
 	open: async (userId, sessionId) => {
 		const session = await agentSessionMetadataForOwner(userId, sessionId);
 		if (!session) return null;
@@ -171,7 +175,7 @@ const watchDependencies = (): BackgroundWatchDependencies => ({
 		};
 	},
 	activeTurn: hasActiveApiTurn,
-	replaceItems: replaceIdleSessionItems,
+	applyExits: applyBackgroundCommandExits,
 	notify: async (machines, session, notificationId, text) => {
 		try {
 			await deliverParentTaskNotification(
@@ -252,18 +256,10 @@ export async function wakeChatForBackgroundCommands(
 	dependencies: BackgroundWatchDependencies = watchDependencies(),
 ): Promise<"woken" | "busy" | "idle"> {
 	try {
-		const opened = dependencies.open
-			? await dependencies.open(candidate.userId, candidate.id)
-			: null;
-		const read = opened
-			? null
-			: await dependencies.session(candidate.userId, candidate.id);
-		const session = opened?.session ?? read;
-		if (!session?.providerRef) return "idle";
-		// The background items (or the whole transcript on the full path).
-		const stored: SessionItem[] =
-			opened?.items ??
-			(Array.isArray(read?.items) ? (read?.items as SessionItem[]) : []);
+		const opened = await dependencies.open(candidate.userId, candidate.id);
+		if (!opened) return "idle";
+		const { session, items: stored } = opened;
+		if (!session.providerRef) return "idle";
 		const open = openBackgroundCommandIds(stored);
 		if (
 			!open.length ||
@@ -300,23 +296,19 @@ export async function wakeChatForBackgroundCommands(
 			),
 		];
 		if (!exits.length) return "idle";
-		// Something exits: only now is the whole transcript read (compare-and-set).
-		const current =
-			read ?? (await dependencies.session(candidate.userId, candidate.id));
-		if (!current) return "idle";
-		const whole = Array.isArray(current.items)
-			? (current.items as SessionItem[])
-			: [];
-		const next = withBackgroundCommandExits(whole, exits);
-		if (next !== whole)
-			await dependencies.replaceItems(
-				current.userId,
-				current.id,
-				current.items,
-				next,
-			);
+		// Recorded in the database: the transcript is not read out.
+		const applied = await dependencies.applyExits(
+			session.userId,
+			session.id,
+			exits,
+		);
+		if (!applied) return "idle";
 		const fresh = exits.filter((exit) => exit.fresh);
-		if (fresh.length)
+		// Read again after the guest call: a turn may have started meanwhile.
+		const current = fresh.length
+			? await dependencies.metadata(session.userId, session.id)
+			: null;
+		if (current)
 			try {
 				await dependencies.notify(
 					machines,
@@ -332,12 +324,12 @@ export async function wakeChatForBackgroundCommands(
 		// The chat's last background command ended: its running VM goes back to
 		// the short idle timeout, unless another chat's command still runs on it
 		// (checked on the machine). A stopped VM is left alone (no resume).
-		if (running && !hasOpenBackgroundCommand(next))
+		if (running && !applied.open)
 			await (dependencies.settleIdleTimeout ?? settleBackgroundIdleTimeout)(
 				machines,
 				vm,
 			);
-		return fresh.length ? "woken" : "idle";
+		return current ? "woken" : "idle";
 	} catch (error) {
 		console.warn("A background command notice was not delivered.", {
 			sessionId: candidate.id,

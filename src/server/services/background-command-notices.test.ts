@@ -2,6 +2,10 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	hasOpenBackgroundCommand,
+	withBackgroundCommandExits,
+} from "#/domain/background-command";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
@@ -210,64 +214,94 @@ describe("background command notices at the next step", () => {
 });
 
 describe("waking a chat between turns", () => {
-	const record = (sessionId: string, items: SessionItem[]) =>
+	const metadata = (sessionId: string) =>
 		({
 			id: sessionId,
 			userId: "user",
 			providerRef: "vm",
 			turnStatus: "completed",
-			items,
 			listedModelId: "model",
 			taskPlacement: null,
 			agentRole: null,
-		}) as unknown as AgentSessionRecord;
+		}) as unknown as Omit<AgentSessionRecord, "items">;
 
-	it("delivers the notice like a subagent report and updates the stored cards", async () => {
+	/**
+	 * The watcher's dependencies over one stored chat: `applyExits` changes
+	 * the stored items as the database does (withBackgroundCommandExits), and
+	 * `open` hands out only the background command items. No dependency
+	 * returns the whole transcript.
+	 */
+	const chatDependencies = (sessionId: string, items: SessionItem[]) => {
+		const chat = { items };
+		const applyExits = vi.fn(
+			async (
+				_userId: string,
+				_sessionId: string,
+				exits: Parameters<typeof withBackgroundCommandExits>[1],
+			) => {
+				const next = withBackgroundCommandExits(chat.items, exits);
+				const changed = next !== chat.items;
+				chat.items = next;
+				return { changed, open: hasOpenBackgroundCommand(next) };
+			},
+		);
+		return {
+			chat,
+			candidates: async () => [{ userId: "user", id: sessionId }],
+			open: vi.fn(async () => ({
+				session: metadata(sessionId),
+				items: chat.items.filter(
+					(item) => item.kind === "dynamicToolCall" && item.background,
+				),
+			})),
+			metadata: vi.fn(async () => metadata(sessionId)),
+			activeTurn: async () => false,
+			applyExits,
+			notify: vi.fn(
+				async (_m: unknown, _s: unknown, _id: string, _text: string) =>
+					undefined,
+			),
+		};
+	};
+
+	it("delivers the notice like a subagent report and records the exit in the database, never reading the transcript", async () => {
 		const id = crypto.randomUUID();
 		const chat = await session([{ id, status: "2", output: "Error: boom\n" }]);
 		const machines = hostMachines();
-		const notify = vi.fn(
-			async (_m: unknown, _s: unknown, _id: string, _text: string) => undefined,
-		);
-		const replaceItems = vi.fn(async () => true);
-		const woken = await wakeChatsForBackgroundCommands(machines, {
-			candidates: async () => [{ userId: "user", id: chat.sessionId }],
-			session: async () => record(chat.sessionId, chat.items),
-			activeTurn: async () => false,
-			replaceItems,
-			notify,
-		});
+		const dependencies = chatDependencies(chat.sessionId, chat.items);
+		const woken = await wakeChatsForBackgroundCommands(machines, dependencies);
 		expect(woken).toBe(1);
-		expect(notify).toHaveBeenCalledWith(
+		expect(dependencies.notify).toHaveBeenCalledWith(
 			machines,
-			expect.objectContaining({ id: chat.sessionId }),
+			metadata(chat.sessionId),
 			backgroundNoticeId(chat.sessionId, id),
 			expect.stringContaining(
 				`Background command ${id} (sleep 2; echo done) finished with exit 2`,
 			),
 		);
-		expect(notify.mock.calls[0][3]).toContain("Error: boom");
-		expect(replaceItems).toHaveBeenCalledWith(
+		expect(dependencies.notify.mock.calls[0][1]).not.toHaveProperty("items");
+		expect(dependencies.notify.mock.calls[0][3]).toContain("Error: boom");
+		expect(dependencies.applyExits).toHaveBeenCalledWith(
 			"user",
 			chat.sessionId,
-			chat.items,
-			expect.arrayContaining([
-				expect.objectContaining({
-					background: expect.objectContaining({ exitCode: 2 }),
-				}),
-				expect.objectContaining({ kind: "notice", background: true }),
-			]),
+			[expect.objectContaining({ id, exitCode: 2, announced: true })],
 		);
+		expect(dependencies.chat.items).toEqual([
+			expect.objectContaining({
+				background: expect.objectContaining({ exitCode: 2 }),
+			}),
+			expect.objectContaining({ kind: "notice", background: true }),
+		]);
 		// Claimed once: the next tick delivers nothing again.
-		notify.mockClear();
+		dependencies.notify.mockClear();
 		await wakeChatsForBackgroundCommands(machines, {
-			candidates: async () => [{ userId: "user", id: chat.sessionId }],
-			session: async () => record(chat.sessionId, chat.items),
-			activeTurn: async () => false,
-			replaceItems,
-			notify,
+			...dependencies,
+			open: async () => ({
+				session: metadata(chat.sessionId),
+				items: chat.items,
+			}),
 		});
-		expect(notify).not.toHaveBeenCalled();
+		expect(dependencies.notify).not.toHaveBeenCalled();
 	});
 
 	it("checks chats a few at a time, not one after another, and stops starting new ones past its budget", async () => {
@@ -279,7 +313,7 @@ describe("waking a chat between turns", () => {
 			userId: "user",
 			id: `chat-${index}`,
 		}));
-		const slowSession = async (_user: string, id: string) => {
+		const slowOpen = async (_user: string, id: string) => {
 			inFlight += 1;
 			peak = Math.max(peak, inFlight);
 			checked.push(id);
@@ -289,9 +323,10 @@ describe("waking a chat between turns", () => {
 		};
 		const dependencies = {
 			candidates: async () => candidates,
-			session: slowSession,
+			open: slowOpen,
+			metadata: async () => null,
 			activeTurn: async () => false,
-			replaceItems: async () => true,
+			applyExits: async () => ({ changed: true, open: false }),
 			notify: async () => undefined,
 		};
 		const started = Date.now();
@@ -309,9 +344,9 @@ describe("waking a chat between turns", () => {
 			machines,
 			{
 				...dependencies,
-				session: async (user: string, id: string) => {
+				open: async (user: string, id: string) => {
 					clock += 1_000;
-					return slowSession(user, id);
+					return slowOpen(user, id);
 				},
 			},
 			{ concurrency: 2, budgetMs: 3_000, now: () => clock },
@@ -323,49 +358,41 @@ describe("waking a chat between turns", () => {
 	it("skips chats whose turn runs (the turn reads it at its next step) and machines that stopped", async () => {
 		const id = crypto.randomUUID();
 		const chat = await session([{ id, status: "0" }]);
-		const notify = vi.fn(async () => undefined);
-		const replaceItems = vi.fn(async () => true);
-		const dependencies = {
-			candidates: async () => [{ userId: "user", id: chat.sessionId }],
-			session: async () => record(chat.sessionId, chat.items),
-			replaceItems,
-			notify,
-		};
+		const dependencies = chatDependencies(chat.sessionId, chat.items);
 		const busy = hostMachines();
 		await wakeChatsForBackgroundCommands(busy, {
 			...dependencies,
 			activeTurn: async () => true,
 		});
 		const stopped = hostMachines(false);
-		await wakeChatsForBackgroundCommands(stopped, {
-			...dependencies,
-			activeTurn: async () => false,
-		});
+		await wakeChatsForBackgroundCommands(stopped, dependencies);
 		expect(busy.exec).not.toHaveBeenCalled();
 		expect(stopped.exec).not.toHaveBeenCalled();
-		expect(notify).not.toHaveBeenCalled();
+		expect(dependencies.notify).not.toHaveBeenCalled();
 		// The busy chat is left alone; the stopped machine's card closes as interrupted.
-		expect(replaceItems).toHaveBeenCalledTimes(1);
-		const closed = (replaceItems.mock.calls[0] as unknown[])[3] as {
-			background?: { exitCode?: unknown };
-		}[];
-		expect(closed.find((item) => item.background)?.background?.exitCode).toBe(
-			"interrupted",
+		expect(dependencies.applyExits).toHaveBeenCalledExactlyOnceWith(
+			"user",
+			chat.sessionId,
+			[
+				expect.objectContaining({
+					id,
+					exitCode: "interrupted",
+					announced: false,
+				}),
+			],
 		);
+		expect(
+			dependencies.chat.items.map((item) =>
+				item.kind === "dynamicToolCall" ? item.background?.exitCode : item.kind,
+			),
+		).toEqual(["interrupted"]);
 	});
 
 	it("a command's exit callback wakes its chat once, even racing the cron's watcher", async () => {
 		const id = crypto.randomUUID();
 		const chat = await session([{ id, status: "0" }]);
 		const machines = hostMachines();
-		const notify = vi.fn(async () => undefined);
-		const dependencies = {
-			candidates: async () => [{ userId: "user", id: chat.sessionId }],
-			session: async () => record(chat.sessionId, chat.items),
-			activeTurn: async () => false,
-			replaceItems: async () => true,
-			notify,
-		};
+		const dependencies = chatDependencies(chat.sessionId, chat.items);
 		const [callback, cron] = await Promise.all([
 			wakeChatForBackgroundCommands(
 				machines,
@@ -374,7 +401,7 @@ describe("waking a chat between turns", () => {
 			),
 			wakeChatsForBackgroundCommands(machines, dependencies),
 		]);
-		expect(notify).toHaveBeenCalledTimes(1);
+		expect(dependencies.notify).toHaveBeenCalledTimes(1);
 		expect([callback === "woken", cron === 1].filter(Boolean)).toHaveLength(1);
 	});
 
@@ -382,13 +409,9 @@ describe("waking a chat between turns", () => {
 		const id = crypto.randomUUID();
 		const chat = await session([{ id, status: "0" }]);
 		const machines = hostMachines();
-		const notify = vi.fn(async () => undefined);
 		const dependencies = {
+			...chatDependencies(chat.sessionId, chat.items),
 			candidates: async () => [],
-			session: async () => record(chat.sessionId, chat.items),
-			activeTurn: async () => false,
-			replaceItems: async () => true,
-			notify,
 		};
 		expect(
 			await wakeChatForBackgroundCommands(
@@ -412,20 +435,13 @@ describe("waking a chat between turns", () => {
 				dependencies,
 			),
 		).toBe("woken");
-		expect(notify).toHaveBeenCalledTimes(1);
+		expect(dependencies.notify).toHaveBeenCalledTimes(1);
 	});
 
 	it("settles the running VM's idle timeout once the chat's last background command exited", async () => {
 		const done = crypto.randomUUID();
 		const still = crypto.randomUUID();
 		const settleIdleTimeout = vi.fn(async () => "settled");
-		const base = {
-			candidates: async () => [],
-			activeTurn: async () => false,
-			replaceItems: async () => true,
-			notify: async () => undefined,
-			settleIdleTimeout,
-		};
 		// One of its commands still runs (its card stays open: a recent start
 		// the machine reports nothing about): the timeout stays long.
 		const busy = await session([
@@ -442,7 +458,10 @@ describe("waking a chat between turns", () => {
 			await wakeChatForBackgroundCommands(
 				hostMachines(),
 				{ userId: "user", id: busy.sessionId },
-				{ ...base, session: async () => record(busy.sessionId, busy.items) },
+				{
+					...chatDependencies(busy.sessionId, busy.items),
+					settleIdleTimeout,
+				},
 			),
 		).toBe("woken");
 		expect(settleIdleTimeout).not.toHaveBeenCalled();
@@ -454,7 +473,10 @@ describe("waking a chat between turns", () => {
 			await wakeChatForBackgroundCommands(
 				machines,
 				{ userId: "user", id: chat.sessionId, commandId: id },
-				{ ...base, session: async () => record(chat.sessionId, chat.items) },
+				{
+					...chatDependencies(chat.sessionId, chat.items),
+					settleIdleTimeout,
+				},
 			),
 		).toBe("woken");
 		expect(settleIdleTimeout).toHaveBeenCalledExactlyOnceWith(
@@ -467,55 +489,48 @@ describe("waking a chat between turns", () => {
 		await wakeChatForBackgroundCommands(
 			hostMachines(false),
 			{ userId: "user", id: gone.sessionId },
-			{ ...base, session: async () => record(gone.sessionId, gone.items) },
+			{ ...chatDependencies(gone.sessionId, gone.items), settleIdleTimeout },
 		);
 		expect(settleIdleTimeout).not.toHaveBeenCalled();
 	});
 
-	it("reads the whole transcript only when a command exited, not on every check", async () => {
+	it("writes and rereads nothing while nothing exits, and delivers no notice to a chat that is gone", async () => {
 		const id = crypto.randomUUID();
-		const exited = await session([{ id, status: "0" }]);
-		const full = vi.fn(async () => record(exited.sessionId, exited.items));
-		const replaceItems = vi.fn(async () => true);
-		const notify = vi.fn(async () => undefined);
-		const { session: whole, ...metadata } = record(
-			exited.sessionId,
-			exited.items,
-		) as unknown as { session?: unknown; items: SessionItem[] };
-		void whole;
-		const open = vi.fn(async () => ({
-			session: { ...metadata, items: undefined } as never,
-			items: exited.items,
-		}));
-		const dependencies = {
-			candidates: async () => [],
-			session: full,
-			open,
-			activeTurn: async () => false,
-			replaceItems,
-			notify,
-		};
-		// Nothing open: no full read.
-		expect(
-			await wakeChatForBackgroundCommands(
-				hostMachines(),
-				{ userId: "user", id: exited.sessionId },
-				{
-					...dependencies,
-					open: async () => ({ ...(await open()), items: [] }),
-				},
+		const chat = await session([{ id, status: null }]);
+		await rm(`${chat.root}/${id}.background`);
+		const dependencies = chatDependencies(
+			chat.sessionId,
+			chat.items.map((item) =>
+				item.kind === "dynamicToolCall" && item.background
+					? {
+							...item,
+							background: { ...item.background, startedAt: Date.now() },
+						}
+					: item,
 			),
-		).toBe("idle");
-		expect(full).not.toHaveBeenCalled();
-		// A command exited: one full read, to record it.
+		);
 		expect(
 			await wakeChatForBackgroundCommands(
 				hostMachines(),
-				{ userId: "user", id: exited.sessionId },
+				{ userId: "user", id: chat.sessionId },
 				dependencies,
 			),
-		).toBe("woken");
-		expect(full).toHaveBeenCalledTimes(1);
-		expect(replaceItems).toHaveBeenCalledTimes(1);
+		).toBe("idle");
+		expect(dependencies.applyExits).not.toHaveBeenCalled();
+		expect(dependencies.metadata).not.toHaveBeenCalled();
+		// The chat was deleted meanwhile: no notice.
+		const exited = await session([{ id: crypto.randomUUID(), status: "0" }]);
+		const deleted = {
+			...chatDependencies(exited.sessionId, exited.items),
+			applyExits: vi.fn(async () => null),
+		};
+		expect(
+			await wakeChatForBackgroundCommands(
+				hostMachines(),
+				{ userId: "user", id: exited.sessionId },
+				deleted,
+			),
+		).toBe("idle");
+		expect(deleted.notify).not.toHaveBeenCalled();
 	});
 });
