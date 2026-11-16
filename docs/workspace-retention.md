@@ -1,5 +1,19 @@
 # Workspace retention
 
+## Experiment 2026-11-16: pausing while the model thinks (off by default)
+
+`YTIMESY_PAUSE_VM_WHILE_THINKING=true` pauses a turn's VM 10 s
+(`THINKING_PAUSE_GRACE_MS`) after its last tool call returned, when nothing
+else needs it: no tool or guest operation in flight, no other running turn on
+the VM (helpers sharing it included), no background command, no attached
+desktop viewer and no open terminal. Any fact that could not be checked keeps
+it running. Every guest operation of the turn resumes it first
+(`src/server/services/thinking-pause.ts`). This covers API turns, and Claude
+Code turns only when `claude` runs on a runner box without box tools: on the
+chat's VM `claude` itself runs there, and box tools exec on the VM unseen by
+the edge. Logs: `vm.paused_thinking` (`idleMs`), `vm.resumed_for_tool`
+(`resumeMs`, `pausedMs`), `vm.pause_thinking_skipped` (`reason`).
+
 ## Decision 2026-11-12: the unused window is 30 days
 
 `PRODUCT_AUTO_DELETE_SECONDS` is 30 days (was 90). A paused large VM costs

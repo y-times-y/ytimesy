@@ -11,6 +11,7 @@ import {
 	backgroundCommandNoticeLine,
 } from "#/domain/background-command";
 import { callerHintFromStack } from "#/domain/caller-hint";
+import { CODE_MODE_TOOL } from "#/domain/code-mode";
 import type { CodexUsage } from "#/domain/codex-usage";
 import {
 	ENVIRONMENT_SETUP_TITLE,
@@ -877,11 +878,7 @@ export async function sideChatForParent(
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
-/**
- * Every session under `parentSessionId` with its whole transcript. Only a
- * caller that reads the descendants' items takes this (the review loop's
- * workers); the rest take descendantAgentSessionMetadata.
- */
+/** Full transcripts for offline evaluation/export callers; live review uses projected evidence. */
 export async function descendantAgentSessions(
 	userId: string,
 	parentSessionId: string,
@@ -906,8 +903,8 @@ export async function descendantAgentSessions(
 }
 
 /**
- * descendantAgentSessions without the transcripts (`items` is null): the
- * tree's shape and state for a caller that reads items by chat id itself.
+ * The descendant tree's shape and state without transcripts, for callers
+ * that read only the evidence or page they need by chat id.
  */
 export async function descendantAgentSessionMetadata(
 	userId: string,
@@ -935,6 +932,38 @@ export async function descendantAgentSessionMetadata(
 		const { items: _items, ...metadata } = toSession(row);
 		return metadata;
 	});
+}
+
+/**
+ * Review workers' usage and execution evidence, never complete transcripts.
+ * run_code output is retained intact because executedCommands reads its inner
+ * calls; ordinary tool outputs, user text and assistant replies are unused.
+ * These projected records are not transcripts to display or write back.
+ */
+export async function reviewWorkerEvidenceForOwner(
+	userId: string,
+	sessionIds: readonly string[],
+) {
+	if (!sessionIds.length) return new Map<string, unknown[]>();
+	const result = await database().query<{ session_id: string; item: unknown }>(
+		`select i.session_id, case when i.kind='userMessage' then
+		 jsonb_build_object('kind',i.kind,'id',i.item->'id','text','','apiUsage',i.item->'apiUsage')
+		 when i.kind='commandExecution' then
+		 jsonb_build_object('kind',i.kind,'id',i.item->'id','command',i.item->'command')
+		 else jsonb_build_object('kind',i.kind,'id',i.item->'id','tool',i.item->'tool',
+		 'input',i.item->'input','output',case when i.item->>'tool'='${CODE_MODE_TOOL}' then i.item->'output' else null end) end as item
+		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		 where i.session_id=any($2::uuid[]) and i.kind in ('userMessage','commandExecution','dynamicToolCall')
+		 order by i.session_id,i.position`,
+		[userId, [...sessionIds]],
+	);
+	const evidence = new Map<string, unknown[]>();
+	for (const row of result.rows) {
+		const items = evidence.get(row.session_id);
+		if (items) items.push(row.item);
+		else evidence.set(row.session_id, [row.item]);
+	}
+	return evidence;
 }
 
 /**

@@ -9,7 +9,10 @@
  * Keyed by turn: chat objects can share an isolate.
  */
 
-import type { ClaudeStepPause } from "#/domain/claude-parked-turn";
+import type {
+	ClaudeStepPause,
+	ClaudeTurnQuiet,
+} from "#/domain/claude-parked-turn";
 import type { ClaudeCodeFeed } from "./claude-code-runner";
 
 /** How long a quiet, unwatched turn sleeps between looks at its run. */
@@ -26,6 +29,8 @@ type TurnHooks = {
 
 const hooks = new Map<string, TurnHooks>();
 const pauses = new Map<string, ClaudeStepPause>();
+/** What a step that may pause the VM while Claude thinks saw of its quiet. */
+const quiets = new Map<string, ClaudeTurnQuiet>();
 /**
  * Each turn's redaction list as its last step left it, kept in this isolate
  * so the chat's object can redact a preview between steps
@@ -82,6 +87,24 @@ export function claudeTurnRedaction(turnId: string) {
 export function forgetClaudeTurn(turnId: string) {
 	redactions.delete(turnId);
 	pauses.delete(turnId);
+	quiets.delete(turnId);
+}
+
+/**
+ * The step ended on a run whose every tool call reaches the VM through the
+ * chat's object (thinking-pause.ts): its VM, and since when nothing used it
+ * (null: a tool call was still running). The object may pause the VM while
+ * the turn is parked (claude-parked-turn.ts).
+ */
+export function noteClaudeTurnQuiet(turnId: string, quiet: ClaudeTurnQuiet) {
+	quiets.set(turnId, quiet);
+}
+
+/** The quiet the step that just ended noted (taken once), else null. */
+export function takeClaudeTurnQuiet(turnId: string) {
+	const quiet = quiets.get(turnId) ?? null;
+	quiets.delete(turnId);
+	return quiet;
 }
 
 /** The turn's feed, when its executor offers one (claude-feed.ts). */

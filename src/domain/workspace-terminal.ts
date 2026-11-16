@@ -116,8 +116,11 @@ function workspaceGuestIdentityCommand() {
 	].join("; ");
 }
 
+/** The terminal's shell process; its presence on the VM means a terminal is open. */
+export const WORKSPACE_PTY_SHELL_ARGS = ["--noprofile", "--norc"] as const;
+
 export function workspacePtyCommand(directory: string) {
-	return `${workspaceGuestIdentityCommand()}; cd ${shellSingleQuote(directory)} && exec bash --noprofile --norc`;
+	return `${workspaceGuestIdentityCommand()}; cd ${shellSingleQuote(directory)} && exec bash ${WORKSPACE_PTY_SHELL_ARGS.join(" ")}`;
 }
 
 function shellSingleQuote(value: string) {

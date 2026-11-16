@@ -137,6 +137,38 @@ export async function hasActiveApiTurn(userId: string, sessionId: string) {
 	return result.rows[0]?.active ?? false;
 }
 
+/**
+ * Whether a running turn other than `turnId` works on this VM: its chat's
+ * own machine, or, for a helper that shares its parent's machine (a reader,
+ * or a writer placed 'shared': sharesParentMachine in subagent.ts), its
+ * parent's, up the chain. Such a turn may exec at any moment from another
+ * isolate, so the VM must not be paused under it.
+ */
+export async function otherRunningTurnOnMachine(
+	userId: string,
+	turnId: string,
+	vm: string,
+) {
+	const result = await database().query<{ shared: boolean }>(
+		`with recursive machine as (
+			select s.provider_ref, s.parent_session_id,
+				(s.agent_role is not null and (s.agent_role<>'writer' or s.task_placement='shared')) as shares,
+				0 as depth
+			from api_turn t join agent_session s on s.id=t.session_id
+			where t.user_id=$1 and t.state='running' and t.id<>$2::uuid
+			union all
+			select parent.provider_ref, parent.parent_session_id,
+				(parent.agent_role is not null and (parent.agent_role<>'writer' or parent.task_placement='shared')),
+				machine.depth + 1
+			from machine join agent_session parent on parent.id=machine.parent_session_id
+			where machine.shares and parent.user_id=$1 and machine.depth < 8
+		)
+		select exists(select 1 from machine where provider_ref=$3) as shared`,
+		[userId, turnId, vm],
+	);
+	return result.rows[0]?.shared ?? true;
+}
+
 export async function enqueueApiTurn(input: {
 	sessionId: string;
 	userId: string;
@@ -514,8 +546,13 @@ export async function previousTurnMessages(
 	// Both reads at once; the latest turn is used only without a restored point.
 	const [recovered, result] = await Promise.all([
 		recoveredConversation(userId, sessionId),
-		database().query<ApiTurn>(
-			"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
+		database().query<
+			Pick<
+				ApiTurn,
+				"messages" | "model_id" | "connection_revision" | "state" | "failover"
+			>
+		>(
+			"select messages,model_id,connection_revision,state,failover from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
 			[userId, sessionId],
 		),
 	]);

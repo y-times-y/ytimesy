@@ -331,6 +331,11 @@ it("continues saved tool history however the last turn ended", async () => {
 	expect(
 		await previousTurnMessages("owner", "chat", "model", input.revision),
 	).toEqual(previous.messages);
+	// Continuing needs model history, never the previous turn's items, settings or checkpoint.
+	expect(mocks.query).toHaveBeenCalledWith(
+		"select messages,model_id,connection_revision,state,failover from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
+		["owner", "chat"],
+	);
 	// A stopped turn keeps its native history; its unanswered call gets a stand-in.
 	mocks.query.mockResolvedValue({
 		rows: [

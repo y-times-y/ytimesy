@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import type { ToolSet } from "ai";
 import { boxCallRunsOnEdge } from "#/domain/claude-box-tools";
 import {
+	CLAUDE_CODE_TOOL_USE_ID,
 	handleMcpMessage,
 	type McpCallResult,
 	type McpToolDefinition,
@@ -80,16 +81,25 @@ export type ClaudeBoxToolsServer = {
 
 const MAX_BODY = 4 * 1024 * 1024;
 
-/** The run-once journal of the box: one process, one run, so memory is enough. */
+/** Per-process memo only: restart recovery still requires a durable journal. */
 function onceInMemory() {
-	const runs = new Map<string, Promise<unknown>>();
-	return (id: string, run: () => Promise<unknown>) => {
-		let running = runs.get(id);
-		if (!running) {
-			running = run();
-			runs.set(id, running);
-			running.catch(() => runs.delete(id));
+	const runs = new Map<
+		string,
+		{ fingerprint: string | undefined; running: Promise<unknown> }
+	>();
+	return (id: string, run: () => Promise<unknown>, fingerprint?: string) => {
+		const found = runs.get(id);
+		if (found) {
+			if (found.fingerprint !== fingerprint)
+				throw new Error(
+					"Recorded tool inputs differ; no operation was replayed.",
+				);
+			return found.running;
 		}
+		// Record before execution, including synchronous failures. A rejected call
+		// may have partial effects and must not become retryable under the same ID.
+		const running = Promise.resolve().then(run);
+		runs.set(id, { fingerprint, running });
 		return running;
 	};
 }
@@ -143,7 +153,7 @@ export function claudeBoxToolSet(
 		turnId: config.turnId,
 		toolCallPrefix: "box:",
 		signal,
-		once: (requestId, _fingerprint, run) => once(requestId, run),
+		once: (requestId, fingerprint, run) => once(requestId, run, fingerprint),
 		memo: <T>(key: string, load: () => Promise<T>) => {
 			let found = memos.get(key) as Promise<T> | undefined;
 			if (!found) {
@@ -244,10 +254,14 @@ export async function startClaudeBoxTools(input: {
 	const forward = async (
 		name: string,
 		args: Record<string, unknown>,
+		invocationId?: string,
 	): Promise<McpCallResult> => {
 		const result = (await forwardedCall(input.edge, fetcher, "tools/call", {
 			name,
 			arguments: args,
+			...(invocationId === undefined
+				? {}
+				: { _meta: { [CLAUDE_CODE_TOOL_USE_ID]: invocationId } }),
 		})) as { content?: McpCallResult["content"]; isError?: boolean };
 		return {
 			text: "",
@@ -258,23 +272,25 @@ export async function startClaudeBoxTools(input: {
 	const local = async (
 		name: string,
 		args: Record<string, unknown>,
+		invocationId?: string,
 	): Promise<McpCallResult> => {
 		const definition = tools[name];
 		const call = { ran: false, redacted: false };
 		try {
 			const ran = await calls.run(call, () =>
 				runToolForMcp(definition, name, args, {
-					toolCallId: `box-${randomUUID()}`,
+					toolCallId: `box-${invocationId ?? randomUUID()}`,
 					signal,
 				}),
 			);
 			return redact.length ? redactSecretValues(ran.reply, redact) : ran.reply;
 		} catch (error) {
 			if (error instanceof BoxMachineRefused && !call.ran)
-				return forward(name, args);
+				return forward(name, args, invocationId);
 			// Only reads ran (a write is refused before its first byte): the
 			// edge redoes the call with the real text and redacts its result.
-			if (error instanceof BoxRedactedWrite) return forward(name, args);
+			if (error instanceof BoxRedactedWrite)
+				return forward(name, args, invocationId);
 			const message =
 				error instanceof Error ? error.message : "The tool call failed.";
 			return {
@@ -296,10 +312,15 @@ export async function startClaudeBoxTools(input: {
 			if (found.length) listed = found;
 			return found;
 		},
-		call: (name: string, args: Record<string, unknown>) =>
+		call: (
+			name: string,
+			args: Record<string, unknown>,
+			invocationId?: string,
+		) =>
 			(tools[name] && !boxCallRunsOnEdge(args) ? local : forward)(
 				name,
 				args,
+				invocationId,
 			).catch(
 				(error: unknown): McpCallResult => ({
 					text:

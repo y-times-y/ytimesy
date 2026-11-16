@@ -75,6 +75,12 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261114180000_infrastructure_usage_auto_reset.sql",
+			"utf8",
+		),
+	);
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_ADMIN_USER_IDS", "admin");

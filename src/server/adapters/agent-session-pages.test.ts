@@ -13,6 +13,7 @@ import {
 import {
 	agentSessionPageForOwner,
 	listSidebarAgentSessions,
+	reviewWorkerEvidenceForOwner,
 } from "./agent-sessions";
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
@@ -37,6 +38,71 @@ beforeEach(async () => {
 	});
 });
 afterEach(() => db.close());
+
+it("reads only review evidence while preserving usage and nested executed commands", async () => {
+	const { executedCommands } = await import("#/domain/checker-evidence");
+	const { ranCommandsText } = await import("#/domain/checker-pair");
+	const { sessionTokenUsage } = await import("#/domain/subagent-usage");
+	const original = sessionItemsFromUnknown([
+		{
+			kind: "userMessage",
+			id: "request-new",
+			text: "large prompt".repeat(20000),
+			apiUsage: { inputTokens: 345, outputTokens: 67, cacheReadTokens: 12 },
+		},
+		{
+			kind: "commandExecution",
+			id: "shell-new",
+			command: "python check_alpha.py",
+			output: "large output".repeat(20000),
+			exitCode: 0,
+			status: "completed",
+		},
+		{
+			kind: "dynamicToolCall",
+			id: "read-new",
+			tool: "read",
+			input: "read config-beta.toml",
+			output: "large file".repeat(20000),
+		},
+		{
+			kind: "dynamicToolCall",
+			id: "batch-new",
+			tool: "run_code",
+			input: "return await tools.bash({command: 'node check_beta.mjs'})",
+			output: JSON.stringify({
+				ok: true,
+				calls: [
+					{
+						tool: "bash",
+						input: JSON.stringify({ command: "node check_beta.mjs" }),
+						output: "verified",
+						status: "completed",
+						ms: 1,
+					},
+				],
+			}),
+		},
+		{
+			kind: "agentMessage",
+			id: "reply-new",
+			text: "large reply".repeat(20000),
+		},
+	]);
+	const id = await chat(original);
+	const other = await chat(original, "bob");
+	const rows = await reviewWorkerEvidenceForOwner("alice", [id, other]);
+	expect(rows.has(other)).toBe(false);
+	const evidence = sessionItemsFromUnknown(rows.get(id));
+	expect(sessionTokenUsage(evidence)).toEqual(sessionTokenUsage(original));
+	expect(ranCommandsText(evidence)).toEqual(ranCommandsText(original));
+	expect(executedCommands(evidence)).toEqual(executedCommands(original));
+	expect(executedCommands(evidence)).toContain("node check_beta.mjs");
+	expect(JSON.stringify(evidence).length).toBeLessThan(
+		JSON.stringify(original).length / 100,
+	);
+	expect(await reviewWorkerEvidenceForOwner("alice", [])).toEqual(new Map());
+});
 
 /** Turn `n`: the user's message, some work, the reply; every third is a wake-up turn. */
 function turnItems(n: number): SessionItem[] {

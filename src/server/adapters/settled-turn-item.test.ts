@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { SessionItemId } from "#/domain/ids";
 import { replaceSettledTurnItem } from "./api-turns";
 
 const holder = vi.hoisted(() => ({ query: vi.fn(), wake: vi.fn() }));
@@ -27,13 +28,13 @@ afterEach(() => db.close());
 const answer = { kind: "agentMessage", id: "a", text: "Done." };
 const opening = {
 	kind: "notice",
-	id: `${done}:pull-request`,
+	id: SessionItemId(`${done}:pull-request`),
 	message: "Opening pull request…",
 	pullRequest: { state: "opening", since: 1 },
 };
 const opened = {
 	kind: "notice",
-	id: `${done}:pull-request`,
+	id: SessionItemId(`${done}:pull-request`),
 	message: "Opened draft PR #4",
 	pullRequest: {
 		state: "opened",

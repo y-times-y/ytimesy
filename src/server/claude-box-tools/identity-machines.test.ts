@@ -1,4 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { spawn } from "node:child_process";
+import {
+	chmod,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import { VM_REDACTION_FAILED } from "#/domain/vm-secret-redaction";
 import {
@@ -10,6 +25,39 @@ import {
 } from "./identity-machines";
 
 const VM = WorkspaceId("vm-1");
+const temporary: string[] = [];
+afterEach(async () => {
+	await Promise.all(
+		temporary
+			.splice(0)
+			.map((path) => rm(path, { recursive: true, force: true })),
+	);
+});
+async function directory() {
+	const path = await mkdtemp(join(tmpdir(), "box-upload-"));
+	temporary.push(path);
+	return path;
+}
+const guestShell: GuestExec = ({ command, stdin }) =>
+	new Promise((resolve, reject) => {
+		const child = spawn("sh", ["-c", command]);
+		const stdout: Buffer[] = [],
+			stderr: Buffer[] = [];
+		child.stdout.on("data", (data: Buffer) => stdout.push(data));
+		child.stderr.on("data", (data: Buffer) => stderr.push(data));
+		child.once("error", reject);
+		child.once("close", (statusCode) =>
+			resolve({
+				statusCode,
+				stdout: Buffer.concat(stdout).toString(),
+				stderr: Buffer.concat(stderr).toString(),
+			}),
+		);
+		child.stdin.on("error", () => {});
+		child.stdin.end(
+			stdin === undefined ? undefined : Buffer.from(stdin, "base64"),
+		);
+	});
 
 function machinesWith(exec: GuestExec) {
 	const ran = vi.fn();
@@ -68,17 +116,17 @@ describe("the runner box's identity machines", () => {
 	});
 
 	it("writes a file through stdin in pieces, creating its directory", async () => {
-		const exec = vi.fn<GuestExec>(async () => ({ statusCode: 0 }));
+		const exec = vi.fn<GuestExec>(guestShell);
 		const { machines } = machinesWith(exec);
 		const contents = `${"é".repeat(500_000)}end`;
-		await machines.writeTextFile(VM, "/tmp/a b/file.txt", contents);
+		const root = await directory();
+		const target = join(root, "a b", "file.txt");
+		await machines.writeTextFile(VM, target, contents);
+		expect(await readFile(target, "utf8")).toBe(contents);
 		const calls = exec.mock.calls.map(([options]) => options);
-		expect(calls[0]?.command).toBe(
-			`mkdir -p -- "$(dirname -- '/tmp/a b/file.txt')" && cat > '/tmp/a b/file.txt'`,
-		);
-		expect(
-			calls.slice(1).every((call) => call.command.startsWith("cat >> ")),
-		).toBe(true);
+		expect(calls[0]?.command).toContain("tempfile.mkdtemp");
+		expect(calls.at(-2)?.command).toContain("os.replace");
+		expect(await readdir(join(root, "a b"))).toEqual(["file.txt"]);
 		const written = Buffer.concat(
 			calls.map((call) => Buffer.from(call.stdin ?? "", "base64")),
 		).toString("utf8");
@@ -90,15 +138,53 @@ describe("the runner box's identity machines", () => {
 	});
 
 	it("writes an empty file and reads a missing one as null", async () => {
-		const exec = vi.fn<GuestExec>(async ({ command }) =>
-			command.startsWith("if [ -f")
-				? { statusCode: 3, stdout: "" }
-				: { statusCode: 0 },
-		);
+		const exec = vi.fn<GuestExec>(guestShell);
 		const { machines } = machinesWith(exec);
-		await machines.writeTextFile(VM, "/tmp/empty", "");
-		expect(exec.mock.calls[0]?.[0].stdin).toBe("");
-		expect(await machines.readTextFile(VM, "/tmp/missing")).toBeNull();
+		const root = await directory();
+		await machines.writeTextFile(VM, join(root, "empty"), "");
+		expect(await readFile(join(root, "empty"), "utf8")).toBe("");
+		expect(exec).toHaveBeenCalledOnce();
+		expect(await machines.readTextFile(VM, join(root, "missing"))).toBeNull();
+	});
+
+	it("preserves the old file if a later upload chunk fails, and removes staging", async () => {
+		const root = await directory();
+		const target = join(root, "keep.txt");
+		await writeFile(target, "original bytes");
+		const exec: GuestExec = async (options) => {
+			if (options.command.includes("cat >>"))
+				return { statusCode: 1, stderr: "injected disk failure" };
+			return guestShell(options);
+		};
+		await expect(
+			machinesWith(exec).machines.writeTextFile(
+				VM,
+				target,
+				"new".repeat(400_000),
+			),
+		).rejects.toThrow("injected disk failure");
+		expect(await readFile(target, "utf8")).toBe("original bytes");
+		expect(await readdir(root)).toEqual(["keep.txt"]);
+	});
+
+	it("preserves executable permissions and follows an existing symlink without replacing it", async () => {
+		const root = await directory();
+		const nested = join(root, "other");
+		await mkdir(nested);
+		const target = join(nested, "run.sh");
+		const link = join(root, "shortcut");
+		await writeFile(target, "old");
+		await chmod(target, 0o751);
+		await symlink(target, link);
+		await machinesWith(guestShell).machines.writeTextFile(
+			VM,
+			link,
+			"#!/bin/sh\necho hello\n",
+		);
+		expect(await readFile(target, "utf8")).toBe("#!/bin/sh\necho hello\n");
+		expect((await stat(target)).mode & 0o777).toBe(0o751);
+		expect((await lstat(link)).isSymbolicLink()).toBe(true);
+		expect(await readdir(root)).toEqual(["other", "shortcut"]);
 	});
 
 	it("with runtime secrets, wraps each command for the VM's filter and strips its marker", async () => {

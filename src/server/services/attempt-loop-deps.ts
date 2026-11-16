@@ -3,7 +3,8 @@ import type { SessionItem } from "#/domain/session-item";
 import { readerCommand } from "#/domain/subagent-reader";
 import {
 	type AgentSessionRecord,
-	descendantAgentSessions,
+	descendantAgentSessionMetadata,
+	reviewWorkerEvidenceForOwner,
 } from "../adapters/agent-sessions";
 import {
 	attemptLoopDeadline,
@@ -115,10 +116,16 @@ export function reviewLoopDeps(
 		// The loop re-runs a checker's tests with its access: as the reader user.
 		checkerExec: (checkerSessionId, command, timeoutMs) =>
 			shared.vm(readerCommand(checkerSessionId, command), timeoutMs),
-		workers: async (checkerSessionId) =>
-			(
-				await descendantAgentSessions(input.parent.userId, checkerSessionId)
-			).map((session) => ({
+		workers: async (checkerSessionId) => {
+			const sessions = await descendantAgentSessionMetadata(
+				input.parent.userId,
+				checkerSessionId,
+			);
+			const evidence = await reviewWorkerEvidenceForOwner(
+				input.parent.userId,
+				sessions.map((session) => session.id),
+			);
+			return sessions.map((session) => ({
 				sessionId: session.id,
 				...(session.listedModelId &&
 				(session.harness === "codex" || session.harness === "api")
@@ -129,7 +136,8 @@ export function reviewLoopDeps(
 							},
 						}
 					: {}),
-				items: session.items,
-			})),
+				items: evidence.get(session.id) ?? [],
+			}));
+		},
 	};
 }
