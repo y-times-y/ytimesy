@@ -32,11 +32,20 @@ export function claudeFeedEnabled(
 
 /** A runner silent this long (it beats every 20 s) is not followed: the step polls. */
 export const CLAUDE_FEED_STALE_MS = 60_000;
-/** How long the object lets non-urgent lines wait, by mode, before it wakes the turn. */
+/** How long the runner lets non-urgent lines wait before sending them, by mode. */
 export const CLAUDE_FEED_LIVE_MS = 1_000;
 export const CLAUDE_FEED_QUIET_MS = 10_000;
-/** Largest message the object takes from a runner. */
+/**
+ * How long the object lets stored, unread non-urgent lines wait before it
+ * wakes the turn's step, by mode. While someone watches, the object shows
+ * the lines' text to them itself as they arrive (claude-feed-preview.ts),
+ * so the step need not be awake for every batch.
+ */
+export const CLAUDE_FEED_WAKE_LIVE_MS = 10_000;
+export const CLAUDE_FEED_WAKE_QUIET_MS = 20_000;
+/** Most lines in one batch. */
 export const CLAUDE_FEED_MAX_ENTRIES = 10_000;
+/** Largest message the object takes from a runner. */
 export const CLAUDE_FEED_MAX_MESSAGE = 2 * 1024 * 1024;
 
 export type ClaudeFeedMode = "live" | "quiet";
@@ -55,7 +64,9 @@ export const claudeFeedMessage = z.discriminatedUnion("type", [
 		type: z.literal("lines"),
 		from: offset,
 		to: offset,
-		entries: z.array(z.tuple([offset, z.string()])).max(10_000),
+		entries: z
+			.array(z.tuple([offset, z.string()]))
+			.max(CLAUDE_FEED_MAX_ENTRIES),
 	}),
 	z.object({ type: z.literal("beat") }),
 	z.object({
@@ -157,7 +168,7 @@ export function isUrgentFeedLine(line: string) {
 /**
  * When the object wakes its sleeping turn for lines that arrived: at once
  * for urgent ones (or the run's exit), else once the oldest unread line
- * has waited the mode's cadence; never later than a wake already set.
+ * has waited the mode's wake cadence; never later than a wake already set.
  */
 export function feedWakeAt(input: {
 	readonly now: number;
@@ -173,7 +184,9 @@ export function feedWakeAt(input: {
 		: Math.max(
 				input.now,
 				input.pendingSince +
-					(input.mode === "live" ? CLAUDE_FEED_LIVE_MS : CLAUDE_FEED_QUIET_MS),
+					(input.mode === "live"
+						? CLAUDE_FEED_WAKE_LIVE_MS
+						: CLAUDE_FEED_WAKE_QUIET_MS),
 			);
 	return input.scheduledAt === null ? due : Math.min(due, input.scheduledAt);
 }

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { CLAUDE_AGENT_RUNNER_SCRIPT } from "./claude-agent-runner";
-import { CLAUDE_FEED_PROTOCOL } from "./claude-feed";
+import { CLAUDE_FEED_PROTOCOL, claudeFeedMessage } from "./claude-feed";
 import { CLAUDE_FEED_SENDER_SOURCE } from "./claude-feed-sender";
 
 type Entry = { offset: number; next: number; line: string };
@@ -101,7 +101,15 @@ it("caps short-line batches at the receiver entry limit", () => {
 	const entries = Array.from({ length: 10_005 }, (_, index) =>
 		sender.feedEntry(index * 2, "x"),
 	);
-	expect(sender.feedBatch(entries, 0, 900_000)?.entries).toHaveLength(10_000);
+	const first = sender.feedBatch(entries, 0, 900_000);
+	expect(first?.entries).toHaveLength(10_000);
+	// The receiver takes it whole, and the rest follows in the next batch.
+	expect(claudeFeedMessage.safeParse({ type: "lines", ...first }).success).toBe(
+		true,
+	);
+	expect(sender.feedBatch(entries, first?.to ?? 0, 900_000)?.entries).toEqual(
+		entries.slice(10_000).map((entry) => [entry.offset, entry.line]),
+	);
 });
 
 describe("the actual runner's feed", () => {
@@ -207,6 +215,99 @@ describe("the actual runner's feed", () => {
 			expect(received).toEqual(expected);
 			expect(receivedTo).toBe(Buffer.byteLength(stdout));
 			expect(messages.at(-1)).toEqual({ type: "exit", status: 0 });
+		} finally {
+			server.close();
+			rmSync(directory, { recursive: true, force: true });
+		}
+	}, 30_000);
+	it("writes a failed run's stack to stderr before its feed says goodbye", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "claude-feed-"));
+		const server = new WebSocketServer({
+			port: 0,
+			handleProtocols: (protocols) =>
+				protocols.has(CLAUDE_FEED_PROTOCOL) ? CLAUDE_FEED_PROTOCOL : false,
+		});
+		await new Promise((resolve) => server.once("listening", resolve));
+		let stderr = "";
+		let exited = false;
+		let exitMessage: unknown = null;
+		/** Whether the stack was on stderr while the runner still waited on the feed. */
+		let stackBeforeGoodbye: boolean | null = null;
+		server.on("connection", (socket) => {
+			let receivedTo = 0;
+			socket.on("message", async (data) => {
+				const message = JSON.parse(String(data));
+				if (message.type === "lines") receivedTo = message.to;
+				if (message.type === "exit") {
+					exitMessage = message;
+					// The runner holds its exit until this socket answers (or 5 s).
+					for (
+						let waited = 0;
+						waited < 2_000 && !stderr.includes("boom");
+						waited += 20
+					)
+						await new Promise((resolve) => setTimeout(resolve, 20));
+					stackBeforeGoodbye = stderr.includes("boom") && !exited;
+					return socket.send(JSON.stringify({ type: "stop" }));
+				}
+				socket.send(JSON.stringify({ type: "ack", receivedTo, mode: "live" }));
+			});
+		});
+		try {
+			writeFileSync(join(directory, "runner.mjs"), CLAUDE_AGENT_RUNNER_SCRIPT);
+			writeFileSync(
+				join(directory, "sdk.mjs"),
+				`export async function* query() {
+	yield { type: "system", subtype: "init", session_id: "33333333-3333-4333-8333-333333333333" };
+	throw new Error("boom");
+}`,
+			);
+			const { port } = server.address() as AddressInfo;
+			writeFileSync(
+				join(directory, "options.json"),
+				JSON.stringify({
+					model: "local-test",
+					disallowedTools: [],
+					feed: {
+						url: `ws://127.0.0.1:${port}/claude-code/feed`,
+						turnId: "22222222-2222-4222-8222-222222222222",
+						run: 1,
+					},
+				}),
+			);
+			writeFileSync(
+				join(directory, "mcp.json"),
+				JSON.stringify({
+					mcpServers: {
+						ytimesy: {
+							type: "http",
+							url: "http://127.0.0.1:9/unused",
+							headers: { Authorization: "Bearer ytcc1.body.signature" },
+						},
+					},
+				}),
+			);
+			writeFileSync(join(directory, "system"), "Local functional test.");
+			writeFileSync(join(directory, "prompt"), "Return a result.");
+			const child = spawn(process.execPath, [
+				join(directory, "runner.mjs"),
+				join(directory, "sdk.mjs"),
+				directory,
+				directory,
+			]);
+			child.stderr.on("data", (chunk) => {
+				stderr += String(chunk);
+			});
+			const code = await new Promise<number | null>((resolve) =>
+				child.on("exit", (status) => {
+					exited = true;
+					resolve(status);
+				}),
+			);
+			expect(code).toBe(1);
+			expect(exitMessage).toEqual({ type: "exit", status: 1 });
+			expect(stderr).toMatch(/Error: boom\n\s+at /);
+			expect(stackBeforeGoodbye).toBe(true);
 		} finally {
 			server.close();
 			rmSync(directory, { recursive: true, force: true });

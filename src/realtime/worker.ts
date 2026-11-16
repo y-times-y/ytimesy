@@ -421,6 +421,27 @@ export class ConversationRoom {
 			}
 		}
 	}
+	/**
+	 * Sends a frame that is not part of the chat's copy (a Claude Code
+	 * preview, claude-feed-preview.ts) to the live sockets as is: no revision,
+	 * nothing stored. True when a socket took it and no event-stream viewer
+	 * (which cannot take one) is open.
+	 */
+	preview(frame: string): boolean {
+		const now = Date.now();
+		let sent = 0;
+		for (const socket of this.viewers()) {
+			const viewer = viewerAttachment(socket);
+			if (!viewer || viewer.authorizedUntil <= now) continue;
+			try {
+				socket.send(frame);
+				sent++;
+			} catch {
+				// A socket closing meanwhile: its close handler ends it.
+			}
+		}
+		return sent > 0 && this.subscribers.size === 0;
+	}
 	/** Trusted in-process publication avoids a JSON Request/parse round trip. */
 	async publish(incoming: ConversationUpdate): Promise<Response> {
 		if (this.purged) return new Response(null, { status: 410 });
