@@ -8,7 +8,9 @@ import {
 	HUB_BUILD_CONFIRM_MS,
 	IDLE_BEFORE_RELOAD_MS,
 	isChunkLoadFailure,
+	STALE_TURN_HOLD_MS,
 	safeToReload,
+	TURN_IDLE_BEFORE_RELOAD_MS,
 } from "./new-build-reload";
 
 const away = {
@@ -29,8 +31,32 @@ it("reloads onto a new build only when the person is away and nothing is running
 		safeToReload({ ...away, hidden: false, idleMs: IDLE_BEFORE_RELOAD_MS - 1 }),
 	).toBe(false);
 	expect(safeToReload({ ...away, sending: true })).toBe(false);
-	expect(safeToReload({ ...away, turnStreaming: true })).toBe(false);
 	expect(safeToReload({ ...away, newBuild: false })).toBe(false);
+});
+
+it("lets a long working chat onto the new build once nobody is watching the turn", () => {
+	const watching = {
+		...away,
+		turnStreaming: true,
+		hidden: false,
+		idleMs: IDLE_BEFORE_RELOAD_MS,
+	};
+	// Visible and touched a few minutes ago: they may be reading the stream.
+	expect(safeToReload(watching)).toBe(false);
+	// Gone for a while: the turn runs on the server, the page picks it up.
+	expect(
+		safeToReload({ ...watching, idleMs: TURN_IDLE_BEFORE_RELOAD_MS }),
+	).toBe(true);
+	// A hidden tab is never watched.
+	expect(safeToReload({ ...watching, hidden: true, idleMs: 0 })).toBe(true);
+	// A turn held as streaming for ages is a stale view, not a stream.
+	expect(
+		safeToReload({ ...watching, turnStreamingMs: STALE_TURN_HOLD_MS }),
+	).toBe(true);
+	// Sending still always waits.
+	expect(safeToReload({ ...watching, hidden: true, sending: true })).toBe(
+		false,
+	);
 });
 
 it("turns the next new-page navigation into a full load, unless a send is in flight", () => {

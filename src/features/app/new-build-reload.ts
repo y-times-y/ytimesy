@@ -57,24 +57,51 @@ export const IDLE_BEFORE_RELOAD_MS = 60_000;
 export const CHUNK_RELOAD_GUARD_MS = 30_000;
 const CHUNK_RELOAD_AT_KEY = "ytimesy-chunk-reload-at";
 
+/**
+ * While a model turn streams in the open chat and the person is plausibly
+ * reading it (the tab is visible and they touched it within this long), the
+ * reload waits. Past it, or in a hidden tab, nobody is watching: the turn runs
+ * on the server, and the reloaded page picks its progress up.
+ */
+export const TURN_IDLE_BEFORE_RELOAD_MS = 10 * 60_000;
+/**
+ * A "turn is streaming" hold older than this is a stale one (a view that kept
+ * saying running after the turn ended): it never keeps a tab on an old build.
+ */
+export const STALE_TURN_HOLD_MS = 30 * 60_000;
+
 /** What a reload would interrupt right now. */
 type ReloadHold = "send" | "turn";
 const holds: Record<ReloadHold, number> = { send: 0, turn: 0 };
+/** When each hold last went from none to one: how long it has been continuously held. */
+const heldSince: Record<ReloadHold, number> = { send: 0, turn: 0 };
 
 /**
  * Whether the tab may reload onto the new build now: the server runs
- * another build, nothing is being sent, no model turn streams in the open
- * chat, and the person is away (tab hidden, or idle for a minute, so never
- * mid-typing).
+ * another build, nothing is being sent, and the person is away (tab hidden,
+ * or idle for a minute, so never mid-typing). A turn streaming in the open
+ * chat holds the reload only while the person is plausibly watching it (see
+ * TURN_IDLE_BEFORE_RELOAD_MS) and the hold is not stale: a long working chat
+ * must not stay on an old build for the whole session. Never a prompt: the
+ * reload happens when it cannot be noticed.
  */
 export function safeToReload(input: {
 	readonly newBuild: boolean;
 	readonly sending: boolean;
 	readonly turnStreaming: boolean;
+	/** How long the turn has been held as streaming without a break. */
+	readonly turnStreamingMs?: number;
 	readonly hidden: boolean;
 	readonly idleMs: number;
 }) {
-	if (!input.newBuild || input.sending || input.turnStreaming) return false;
+	if (!input.newBuild || input.sending) return false;
+	if (
+		input.turnStreaming &&
+		!input.hidden &&
+		input.idleMs < TURN_IDLE_BEFORE_RELOAD_MS &&
+		(input.turnStreamingMs ?? 0) < STALE_TURN_HOLD_MS
+	)
+		return false;
 	return input.hidden || input.idleMs >= IDLE_BEFORE_RELOAD_MS;
 }
 
@@ -122,6 +149,7 @@ export function chunkReloadAllowed(lastAt: string | null, nowMs: number) {
 export function useHoldNewBuildReload(hold: ReloadHold, active: boolean) {
 	useEffect(() => {
 		if (!active) return;
+		if (holds[hold] === 0) heldSince[hold] = Date.now();
 		holds[hold]++;
 		return () => {
 			holds[hold]--;
@@ -192,6 +220,7 @@ export function watchForNewBuild(router: AnyRouter) {
 				newBuild,
 				sending: holds.send > 0,
 				turnStreaming: holds.turn > 0,
+				turnStreamingMs: holds.turn > 0 ? Date.now() - heldSince.turn : 0,
 				hidden: document.visibilityState === "hidden",
 				idleMs: Date.now() - lastActiveAt,
 			})
