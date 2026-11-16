@@ -13,11 +13,16 @@ import { readBoundedRequestBody } from "../../domain/bounded-request-body";
 import {
 	CLAUDE_CODE_FEED_PATH,
 	CLAUDE_FEED_MAX_MESSAGE,
+	CLAUDE_FEED_PING,
 	CLAUDE_FEED_PROTOCOL,
 	CLAUDE_FEED_SOCKET_TAG,
 	type ClaudeFeedMode,
 	claudeFeedEnabled,
 	claudeFeedMessage,
+	claudeInboxKey,
+	type FeedTold,
+	feedLastHeard,
+	feedSyncFrames,
 	feedWakeAt,
 	isUrgentFeedLine,
 } from "../../domain/claude-feed";
@@ -30,6 +35,7 @@ import { turnControlSchema } from "../../domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../../domain/delivery-auth";
 import { environmentWorkflowRequest } from "../../domain/environment-workflow";
 import { proxyGithubGit } from "../../domain/github-git-proxy";
+import { LIVE_SOCKET_PONG } from "../../domain/live-progress-socket";
 import {
 	modelConversationName,
 	routeModelConversationStep,
@@ -204,8 +210,16 @@ async function resolveModelConversation(step: WorkflowStep) {
 const PURGE_TOMBSTONE_TABLE =
 	"create table if not exists conversation_tombstone(id integer primary key check(id=1),purged_at integer not null)";
 
-/** What a Claude Code feed socket carries: its grant's turn and, after hello, its run. */
-type FeedAttachment = { turnId: string; run: number | null };
+/**
+ * What a Claude Code feed socket carries: its grant's turn and, after hello,
+ * its run; for a runner that takes inbox frames, what it was last told.
+ */
+type FeedAttachment = {
+	turnId: string;
+	run: number | null;
+	inbox?: boolean;
+	told?: FeedTold | null;
+};
 
 /** Fresh turns use DO receipts; legacy Node turns must finish on their original executor. */
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
@@ -891,7 +905,14 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private claudeFeedHook(turnId: string) {
 		let consumed: { run: number; to: number } | null = null;
 		const feed: ClaudeCodeFeed = {
-			state: (run) => this.claudeFeed.state(turnId, run),
+			state: (run) => {
+				const state = this.claudeFeed.state(turnId, run);
+				if (!state || state.lastSeen === 0) return state;
+				return {
+					...state,
+					lastSeen: feedLastHeard(state.lastSeen, this.feedPongAt(turnId, run)),
+				};
+			},
 			lines: (run, from, limit) =>
 				this.claudeFeed.lines(turnId, run, from, limit),
 			consume: (run, to) => {
@@ -932,6 +953,57 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				);
 			},
 		};
+	}
+	/**
+	 * When the runtime last answered a ping on one of the run's feed sockets
+	 * (it does so without waking this object), null if never.
+	 */
+	private feedPongAt(turnId: string, run: number) {
+		const ctx = this.ctx as unknown as {
+			getWebSocketAutoResponseTimestamp?: (socket: WebSocket) => Date | null;
+		};
+		let latest: number | null = null;
+		try {
+			for (const socket of this.ctx.getWebSockets(turnId)) {
+				if ((socket.deserializeAttachment() as FeedAttachment)?.run !== run)
+					continue;
+				const at = ctx.getWebSocketAutoResponseTimestamp?.(socket)?.getTime();
+				if (at !== undefined && (latest === null || at > latest)) latest = at;
+			}
+		} catch {}
+		return latest;
+	}
+	/**
+	 * Brings the active turn's runners up to date (feedSyncFrames): the mode
+	 * when someone started or stopped watching, the key of the sent messages
+	 * waiting when it changed. Only runners that said they take inbox frames;
+	 * outgoing frames are free.
+	 */
+	private syncClaudeFeeds() {
+		const turnId = this.activeTurn()?.turnId;
+		if (!turnId || !claudeFeedEnabled()) return;
+		try {
+			const now: FeedTold = {
+				mode: this.feedMode(),
+				inbox: claudeInboxKey(this.room.latestItems()),
+			};
+			for (const socket of this.ctx.getWebSockets(turnId)) {
+				const attachment = socket.deserializeAttachment() as FeedAttachment;
+				if (!attachment?.inbox || attachment.run === null) continue;
+				const frames = feedSyncFrames(attachment.told ?? null, now);
+				if (!frames.length) continue;
+				for (const frame of frames) socket.send(JSON.stringify(frame));
+				socket.serializeAttachment({
+					...attachment,
+					told: now,
+				} satisfies FeedAttachment);
+			}
+		} catch (error) {
+			// The runner's hooks then keep asking over HTTP as before.
+			console.warn("Claude feed state was not sent.", {
+				cause: stepFailureCause(error),
+			});
+		}
 	}
 	/** Lines that arrived since the step started (read through a call: a step changes it). */
 	private pendingFeed() {
@@ -989,6 +1061,16 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				socket.close(1000, "stop");
 			} catch {}
 		};
+		// The runtime answers a ping without waking this object; should one
+		// still reach it, it is answered the same and counts as heard.
+		if (message === CLAUDE_FEED_PING && !this.purged && claudeFeedEnabled()) {
+			try {
+				socket.send(LIVE_SOCKET_PONG);
+			} catch {}
+			const { turnId, run } = socket.deserializeAttachment() as FeedAttachment;
+			if (run !== null) this.claudeFeed.touch(turnId, run, Date.now());
+			return;
+		}
 		if (
 			this.purged ||
 			!claudeFeedEnabled() ||
@@ -1018,8 +1100,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			socket.serializeAttachment({
 				turnId: turn,
 				run: data.run,
+				inbox: data.inbox === true,
+				told: null,
 			} satisfies FeedAttachment);
-			return reply({ type: "ack", receivedTo, mode });
+			// `ping`: this object reads the runtime's answers to pings as heard.
+			reply({ type: "ack", receivedTo, mode, ping: true });
+			// A (re)connected runner learns the mode and what is waiting now.
+			return this.syncClaudeFeeds();
 		}
 		const run = attachment.run;
 		const state = run === null ? null : this.claudeFeed.state(turn, run);
@@ -1170,7 +1257,10 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 							abortLiveTurn(control.data.turnId);
 						return response;
 					}
-					return this.room.fetch(authenticated);
+					const response = await this.room.fetch(authenticated);
+					// A new viewer: the runner sends every second from now on.
+					if (path === "/live" || path === "/stream") this.syncClaudeFeeds();
+					return response;
 				},
 			);
 		}
@@ -1246,6 +1336,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			return;
 		}
 		this.room.webSocketClose(socket, code, reason, wasClean);
+		this.syncClaudeFeeds();
 	}
 	webSocketError(socket: WebSocket, error: unknown) {
 		if (this.isClaudeFeed(socket)) return;
@@ -1261,6 +1352,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		);
 		this.steps = new SqliteConversationSteps(ctx.storage.sql);
 		this.claudeFeed = new SqliteClaudeFeed(ctx.storage.sql);
+		// A newer snapshot may list a sent message (or no longer): the runner hears it.
+		this.room.onAdopted(() => this.syncClaudeFeeds());
 		this.history = new TurnHistoryCache(ctx.storage.sql);
 		this.queue = new SqliteTurnQueue(ctx.storage.sql);
 		ctx.storage.sql.exec(

@@ -24,6 +24,7 @@ import {
 	latestTranscriptPage,
 	TRANSCRIPT_PAGE_TURNS,
 } from "#/domain/transcript-page";
+import { startAfterResponse } from "../adapters/after-response";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
@@ -57,6 +58,7 @@ import {
 	updateQueuedUserMessage,
 } from "../adapters/queued-user-messages";
 import { workspaceForProject } from "../adapters/workspaces";
+import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import { mentionNoteFor } from "./agent-mentions";
 import type { PublicCodexSession } from "./codex-workspace-session";
 import {
@@ -682,6 +684,14 @@ export function releaseQueuedComposerMessage(
 		);
 		if (outcome.status === "missing")
 			throw new Error("That message was already delivered.");
+		// Marked for the running turn: the chat's object gets the view now, not
+		// at its next step, and tells a Claude Code run's hooks to fetch it
+		// (claude-feed.ts). A failed relay keeps its receipt for the step.
+		if (outcome.status === "running") {
+			const sessionId = scope.sessionId;
+			const relay = () => relayConversationDeliveriesOnce(sessionId);
+			if (!startAfterResponse(relay)) void relay().catch(() => {});
+		}
 		if (outcome.status === "taken") {
 			const started = await deliverQueuedSend(
 				machines,

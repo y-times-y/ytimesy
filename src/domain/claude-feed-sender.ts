@@ -1,6 +1,8 @@
 import {
+	CLAUDE_FEED_BEAT_MS,
 	CLAUDE_FEED_LIVE_MS,
 	CLAUDE_FEED_MAX_ENTRIES,
+	CLAUDE_FEED_PING,
 	CLAUDE_FEED_PROTOCOL,
 	CLAUDE_FEED_QUIET_MS,
 } from "./claude-feed";
@@ -13,8 +15,14 @@ import {
  * their byte offsets in that file, to the chat's object (claude-feed.ts).
  *
  * Batches go out every second while someone watches the chat (mode "live"),
- * every 10 s otherwise ("quiet"), and at once for the run's start, a tool
- * call, its result and its exit; an idle socket beats every 20 s. Lines stay
+ * every 30 s otherwise ("quiet"), and at once for the run's start, a tool
+ * call, its result and its exit; an idle socket pings every 20 s (the
+ * object answers without waking; an older object that did not say ping
+ * in its ack gets a beat instead). The object tells the mode as it changes
+ * and the key of the sent messages waiting (inbox); inboxDue tells the
+ * run's hooks whether to ask over HTTP: only for a key they have not
+ * fetched, and always while the feed cannot tell (not connected, or an
+ * object that sends no inbox frames). Lines stay
  * buffered until acknowledged, so a reconnect (with backoff) resends from
  * what the object holds. Anything it cannot recover from (the object lost
  * lines no longer buffered, the buffer outgrew its cap, "stop") ends the
@@ -25,7 +33,8 @@ import {
 export const CLAUDE_FEED_SENDER_SOURCE = `const FEED_PROTOCOL = ${JSON.stringify(CLAUDE_FEED_PROTOCOL)};
 const FEED_LIVE_MS = ${CLAUDE_FEED_LIVE_MS};
 const FEED_QUIET_MS = ${CLAUDE_FEED_QUIET_MS};
-const FEED_BEAT_MS = 20000;
+const FEED_BEAT_MS = ${CLAUDE_FEED_BEAT_MS};
+const FEED_PING = ${JSON.stringify(CLAUDE_FEED_PING)};
 const FEED_MAX_LINE = 512 * 1024;
 const FEED_MAX_BATCH = 900000;
 const FEED_MAX_ENTRIES = ${CLAUDE_FEED_MAX_ENTRIES};
@@ -45,6 +54,9 @@ function feedFlushDelay(mode, pendingSince, urgent, now) {
 }
 function feedBeatDue(lastSentAt, now) {
 	return now - lastSentAt >= FEED_BEAT_MS;
+}
+function feedInboxDue(known, key, fetchedKey) {
+	return !known || (key !== "" && key !== fetchedKey);
 }
 function feedBackoff(attempt) {
 	return Math.min(60000, 1000 * 2 ** Math.min(attempt, 6));
@@ -79,15 +91,18 @@ function createFeed(config) {
 	let socket = null, ready = false, closed = false, attempt = 0, stalls = 0;
 	let mode = "quiet", pendingSince = null, urgent = false, lastSentAt = Date.now();
 	let exitStatus = null, exitSent = false, finished = null;
-	const send = (message) => {
+	// What the object understands (its hello's ack), and its inbox key on this connection.
+	let edgePing = false, inboxKnown = false, inboxKey = "", fetchedKey = "";
+	const sendText = (text) => {
 		try {
-			socket.send(JSON.stringify(message));
+			socket.send(text);
 			lastSentAt = Date.now();
 			return true;
 		} catch {
 			return false;
 		}
 	};
+	const send = (message) => sendText(JSON.stringify(message));
 	const end = () => {
 		closed = true;
 		clearInterval(tick);
@@ -113,6 +128,16 @@ function createFeed(config) {
 	};
 	const handle = (message) => {
 		if (message?.type === "stop") return end();
+		if (message?.type === "mode") {
+			mode = message.mode === "live" ? "live" : "quiet";
+			return;
+		}
+		if (message?.type === "inbox") {
+			if (typeof message.key !== "string") return;
+			inboxKey = message.key;
+			inboxKnown = true;
+			return;
+		}
 		if (message?.type === "need") {
 			if (!(message.from >= base && message.from <= written)) return end();
 			sentTo = message.from;
@@ -130,6 +155,7 @@ function createFeed(config) {
 		}
 		if (!ready) {
 			ready = true;
+			edgePing = message.ping === true;
 			sentTo = message.receivedTo;
 			flush();
 		}
@@ -145,9 +171,10 @@ function createFeed(config) {
 		}
 		socket = ws;
 		ready = false;
+		inboxKnown = false;
 		ws.onopen = () => {
 			attempt = 0;
-			send({ type: "hello", turnId: config.turnId, run: config.run, receivedFrom: base });
+			send({ type: "hello", turnId: config.turnId, run: config.run, receivedFrom: base, inbox: true });
 		};
 		ws.onmessage = (event) => {
 			try {
@@ -158,6 +185,7 @@ function createFeed(config) {
 			if (socket !== ws) return;
 			socket = null;
 			ready = false;
+			inboxKnown = false;
 			if (exitStatus !== null) return end();
 			// Lines the object keeps not taking (a message it refuses, say):
 			// reconnecting would only keep the feed looking alive.
@@ -170,11 +198,24 @@ function createFeed(config) {
 		if (closed) return;
 		const now = Date.now();
 		if (feedFlushDelay(mode, pendingSince, urgent, now) === 0) flush();
-		else if (ready && feedBeatDue(lastSentAt, now)) send({ type: "beat" });
+		else if (ready && feedBeatDue(lastSentAt, now)) {
+			if (edgePing) sendText(FEED_PING);
+			else send({ type: "beat" });
+		}
 	}, 250);
 	tick.unref?.();
 	connect();
 	return {
+		/** The key the hooks should fetch now, "" for nothing new, null when only HTTP can tell. */
+		inboxDue() {
+			const known = !closed && ready && inboxKnown;
+			if (!feedInboxDue(known, inboxKey, fetchedKey)) return "";
+			return known ? inboxKey : null;
+		},
+		/** The hooks fetched the messages the key named. */
+		inboxFetched(key) {
+			if (typeof key === "string") fetchedKey = key;
+		},
 		push(line, message) {
 			if (closed) return;
 			const entry = feedEntry(written, line);

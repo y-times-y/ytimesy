@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { claudeInboxKey } from "../src/domain/claude-feed";
 import { ConversationRoom, isRealtimeRoute } from "../src/realtime/worker";
 import { durableObjectState } from "./support/durable-object-state";
 
@@ -116,4 +117,31 @@ it("a viewer takes a delta only against the snapshot it was last sent", async ()
 	await room.publish(delta("13"));
 	expect(await viewer.next()).toContain("event: delta");
 	await viewer.close();
+});
+
+it("tells its host of each newer snapshot, whose queued messages give the Claude inbox key", async () => {
+	const room = new ConversationRoom(durableObjectState().ctx as never);
+	const keys: string[] = [];
+	room.onAdopted(() => keys.push(claudeInboxKey(room.latestItems())));
+	expect(room.latestItems()).toEqual([]);
+	await room.publish(full("10"));
+	const sent = {
+		kind: "userMessage",
+		id: "m1",
+		text: "also this",
+		queued: true,
+		released: true,
+	};
+	const waiting = {
+		kind: "userMessage",
+		id: "m2",
+		text: "later",
+		queued: true,
+	};
+	expect(
+		(await room.publish({ ...delta("11"), queued: [sent, waiting] })).status,
+	).toBe(204);
+	// An older revision is not kept, so the host is not told.
+	await room.publish(full("9"));
+	expect(keys).toEqual(["", "m1"]);
 });
