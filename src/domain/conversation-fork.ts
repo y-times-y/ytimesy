@@ -7,6 +7,20 @@
 export const CONVERSATION_FORK_REQUEST_ID = "conversation-fork";
 
 /**
+ * Starting a new fork is off unless YTIMESY_CONVERSATION_FORK_ENABLED=1:
+ * copying a VM for a fork failed in production (2026-11-16) and the user
+ * sees only a generic error. A fork already made can still be retried.
+ */
+export function conversationForkEnabled(
+	env: { readonly YTIMESY_CONVERSATION_FORK_ENABLED?: string } = process.env,
+): boolean {
+	return env.YTIMESY_CONVERSATION_FORK_ENABLED === "1";
+}
+
+export const CONVERSATION_FORK_UNAVAILABLE =
+	"Forking a chat is temporarily unavailable.";
+
+/**
  * A copy still "preparing" after this long was interrupted: its job stops
  * after 15 minutes (a Durable Object alarm's limit).
  */

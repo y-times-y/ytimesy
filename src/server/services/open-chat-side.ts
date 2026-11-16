@@ -18,6 +18,8 @@ export type OpenChatSide = {
 	readonly recoveryPoints?: readonly {
 		messageId: string;
 		codeAvailable: boolean;
+		/** False while forking is off; absent from a server before this field. */
+		forkAvailable?: boolean;
 	}[];
 	/**
 	 * The composer's model list for the chat's runtime when the chat's view

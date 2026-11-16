@@ -102,6 +102,8 @@ let db: PGlite;
 const session = randomUUID(),
 	project = randomUUID();
 beforeEach(async () => {
+	// Forking is off unless enabled; these tests are about how a fork works.
+	vi.stubEnv("YTIMESY_CONVERSATION_FORK_ENABLED", "1");
 	coordinate.mockReset().mockResolvedValue(true);
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,title text,listed_model_id text,status text,turn_status text,task_access text,selected_branch text,working_branch text,base_branch text,task_branch text,agent_role text,parent_session_id uuid,provider_ref text,task_placement text,items jsonb default '[]',task_summary text,task_review_state text,updated_at timestamptz default now());
@@ -135,7 +137,10 @@ beforeEach(async () => {
 		]),
 	]);
 });
-afterEach(() => db.close());
+afterEach(() => {
+	vi.unstubAllEnvs();
+	return db.close();
+});
 
 it("reports whether a recovery point and its code exist without loading the point", async () => {
 	expect(await conversationPointState("alice", session, "first")).toEqual({

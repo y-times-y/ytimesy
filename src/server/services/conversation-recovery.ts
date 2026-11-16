@@ -5,7 +5,9 @@ import {
 	copiedSessionScratchResetCommands,
 } from "#/domain/agent-session";
 import {
+	CONVERSATION_FORK_UNAVAILABLE,
 	type ConversationForkJournal,
+	conversationForkEnabled,
 	conversationForkStatus,
 } from "#/domain/conversation-fork";
 import {
@@ -465,6 +467,8 @@ export async function recoverConversation(
 	request: z.infer<typeof conversationRecoveryRequest>,
 ) {
 	const input = conversationRecoveryRequest.parse(request);
+	if (input.mode === "fork" && !conversationForkEnabled())
+		throw new RecoveryRefused(CONVERSATION_FORK_UNAVAILABLE);
 	// A fork's chat opens with its transcript now; its VM is copied after,
 	// outside the session lock (a copy can outlast the lock's idle limit, and
 	// it changes nothing in the source).
@@ -644,6 +648,7 @@ export async function listConversationRecoveryPoints(
     order by r.created_at desc limit 100`,
 		[userId, projectId, sessionId],
 	);
+	const forkAvailable = conversationForkEnabled();
 	return rows.map(
 		({
 			messageId,
@@ -651,6 +656,6 @@ export async function listConversationRecoveryPoints(
 		}: {
 			messageId: string;
 			codeAvailable: boolean;
-		}) => ({ messageId, codeAvailable }),
+		}) => ({ messageId, codeAvailable, forkAvailable }),
 	);
 }
