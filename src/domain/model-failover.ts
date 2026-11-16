@@ -35,6 +35,8 @@ export type FailoverReason =
 	| "timeout"
 	/** A subscription sign-in (SuperGrok) was rejected; only the user can renew it. */
 	| "plan-access"
+	/** xAI refused the SuperGrok plan for this request; retried on its own, no sign-in needed. */
+	| "plan-refused"
 	/** A subscription token the provider refused (Claude Code's setup-token). */
 	| "signed-out"
 	/** A fallback's provider account has no credit left (HTTP 402). */
@@ -49,6 +51,7 @@ const REASON_TEXT: Record<FailoverReason, string> = {
 	"usage-limit": "usage limit reached",
 	timeout: "timed out",
 	"plan-access": "sign-in needs renewing",
+	"plan-refused": "plan refused",
 	"signed-out": "token refused",
 	"out-of-credit": "out of credit",
 	"key-refused": "key refused",
@@ -74,6 +77,7 @@ function failingSentence(from: RouteLabel, reason: FailoverReason) {
 		"rate-limited": `${from.connection} is limiting requests right now`,
 		timeout: `${from.connection} stopped responding`,
 		"plan-access": `${from.connection} needs reconnecting in Settings`,
+		"plan-refused": `${from.connection} refused this request`,
 		"out-of-credit": `${from.connection} is out of credit`,
 		"key-refused": `${from.connection} refused its key`,
 	}[reason];
@@ -444,7 +448,8 @@ export function connectionWideFailure(reason: FailoverReason) {
 	return (
 		fallbackAccountFailure(reason) ||
 		reason === "signed-out" ||
-		reason === "plan-access"
+		reason === "plan-access" ||
+		reason === "plan-refused"
 	);
 }
 

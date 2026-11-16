@@ -291,14 +291,22 @@ it("refreshes an expiring token with the rotation kept and the revision unchange
 	// Fresh now: no second refresh.
 	await xaiSubscriptionAccessToken("alice", connection.id);
 	expect(requests).toHaveLength(1);
-	// A forced refresh uses the rotated token; xAI may omit a new one.
-	await xaiSubscriptionAccessToken("alice", connection.id, true);
+	// A 401 on the stored token refreshes with the rotated refresh token; xAI
+	// may omit a new one.
+	await xaiSubscriptionAccessToken("alice", connection.id, "access-2");
 	expect(requests[1].body.get("refresh_token")).toBe("refresh-2");
 	// Without a new refresh token, the previous one is kept.
 	expect(
-		(await xaiSubscriptionAccessToken("alice", connection.id, true)).token,
+		(await xaiSubscriptionAccessToken("alice", connection.id, "access-3"))
+			.token,
 	).toBe("access-4");
 	expect(requests[2].body.get("refresh_token")).toBe("refresh-2");
+	// A 401 on a token another step already replaced spends nothing.
+	expect(
+		(await xaiSubscriptionAccessToken("alice", connection.id, "access-3"))
+			.token,
+	).toBe("access-4");
+	expect(requests).toHaveLength(3);
 	expect((await loadModelConnection("alice", connection.id))?.revision).toBe(
 		connection.revision,
 	);
@@ -310,7 +318,7 @@ it("marks the connection for reconnecting when xAI rejects the refresh", async (
 	const failure = await xaiSubscriptionAccessToken(
 		"alice",
 		connection.id,
-		true,
+		"access-1",
 	).catch((error: unknown) => error);
 	expect(failure).toBeInstanceOf(XaiSubscriptionUnavailable);
 	expect(failoverReason(failure)).toBe("plan-access");
@@ -349,7 +357,7 @@ it("routes a turn's model calls to api.x.ai with the user's bearer, not a key", 
 	expect(requests[0].url).toBe(RESPONSES);
 	expect(requests[0].auth).toBe("Bearer access-1");
 	// A 403 marks the plan ineligible and moves the turn to another route.
-	expect(failoverReason(failure)).toBe("plan-access");
+	expect(failoverReason(failure)).toBe("plan-refused");
 	expect(await loadXaiSubscription("alice")).toMatchObject({
 		status: "not-eligible",
 	});

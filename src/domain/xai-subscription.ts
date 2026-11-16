@@ -32,12 +32,24 @@ export type XaiSubscriptionView =
 			readonly modelCount: number;
 	  };
 
+/**
+ * What Settings says about a connection that is not ready. Only a rejected
+ * sign-in asks the user to sign in again: a refusal is retried on its own
+ * (xaiConnectionMayServe), so it reads as a passing state.
+ */
 export function xaiSubscriptionMessage(
 	status: Exclude<XaiSubscriptionStatus, "ready">,
 ): string {
 	return status === "reconnect"
 		? "Your Grok sign-in expired. Reconnect it in Settings > Agents."
-		: "Your xAI plan can't use Grok here. Check your SuperGrok or X subscription, then reconnect.";
+		: "xAI refused the last Grok request. Your next Grok turn tries the plan again.";
+}
+
+/** Whether Settings should offer sign-in for this status (a refusal is retried instead). */
+export function xaiSubscriptionNeedsSignIn(
+	status: XaiSubscriptionStatus | "disconnected",
+): boolean {
+	return status === "disconnected" || status === "reconnect";
 }
 
 /**
@@ -91,16 +103,79 @@ export function xaiConnectionMayServe(
 	);
 }
 
+/**
+ * A spent plan, in xAI's words. xAI answers an exhausted plan with a 403
+ * that also names the subscription, e.g. "You have either run out of
+ * available resources or do not have an active Grok subscription. Manage
+ * your subscription at https://grok.com/?_s=usage or subscribe at
+ * https://grok.com/supergrok." (Hermes #26847), or
+ * "personal-team-blocked:spending-limit" with "You have run out of credits
+ * or need a Grok subscription" (CLIProxyAPI #5335). So limit wording is read
+ * first: such a 403 is a usage limit, never a verdict on the plan.
+ */
+const LIMIT_WORDING =
+	/run out|ran out|out of (?:available )?(?:resources|credits?|usage|quota)|spending[- ]?limit|usage[- ]limit|rate[- ]?limit|\blimit(?:s|ed)?\b|quota|exhaust|exceed|too many requests|add credits/i;
+
+/** An explicit refusal of the plan itself (it does not include Grok here). */
 const PLAN_REFUSAL =
-	/subscri|supergrok|plan\b|eligib|entitle|upgrade|premium|not (?:allowed|permitted|authorized) to use/i;
+	/not (?:eligible|entitled)|(?:does not|doesn't|do not|don't) (?:include|have (?:an? )?(?:active )?(?:grok |supergrok )?(?:subscription|access))|no (?:active )?(?:grok |supergrok )?subscription|subscription (?:is )?(?:required|inactive|expired|cancell?ed)|requires? (?:an? )?(?:active )?(?:supergrok|grok|x premium|premium)/i;
+
+export type XaiForbiddenVerdict =
+	| "usage-limit"
+	| "not-eligible"
+	| "unavailable";
 
 /**
- * What a 403's body says about the plan: "not-eligible" only when it names
- * the subscription or plan; any other 403 (a limit, a block, an empty body)
- * fails the request without recording a verdict.
+ * What a 403's body says: "usage-limit" when it speaks of a limit, credits
+ * or resources (checked first, since xAI's limit text also names the
+ * subscription); "not-eligible" only for an explicit refusal of the plan;
+ * anything else (an edge block, an empty body) is "unavailable". Only
+ * "not-eligible" is recorded on the connection.
  */
-export function xaiForbiddenVerdict(
-	body: string,
-): "not-eligible" | "unavailable" {
+export function xaiForbiddenVerdict(body: string): XaiForbiddenVerdict {
+	if (LIMIT_WORDING.test(body)) return "usage-limit";
 	return PLAN_REFUSAL.test(body) ? "not-eligible" : "unavailable";
+}
+
+/**
+ * OAuth errors (RFC 6749 §5.2) that end a sign-in: the refresh token is
+ * spent, revoked or unknown (xAI: `invalid_grant`, "Refresh token has been
+ * revoked" / "Invalid or unknown refresh token"), or the client is refused.
+ * Anything else from the token endpoint may pass and is retried.
+ */
+const DEFINITIVE_OAUTH_ERRORS = new Set([
+	"invalid_grant",
+	"invalid_client",
+	"unauthorized_client",
+]);
+
+/** Whether a failed refresh means the user must sign in again. */
+export function xaiRefreshRejected(status: number, body: string): boolean {
+	if (status !== 400 && status !== 401) return false;
+	try {
+		const parsed = JSON.parse(body) as { error?: unknown };
+		return (
+			typeof parsed.error === "string" &&
+			DEFINITIVE_OAUTH_ERRORS.has(parsed.error)
+		);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * A response body for the logs: one line, bounded, with anything shaped like
+ * a bearer token or JWT removed (xAI's error bodies carry none, but a log
+ * must not depend on that).
+ */
+export function xaiLogSnippet(body: string, limit = 300): string {
+	return body
+		.replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+		.replace(/\beyJ[\w-]+\.[\w-]+(?:\.[\w-]*)?/g, "[jwt]")
+		.replace(
+			/"(access_token|refresh_token|id_token)"\s*:\s*"[^"]*"/g,
+			'"$1":"[redacted]"',
+		)
+		.replace(/\s+/g, " ")
+		.slice(0, limit);
 }

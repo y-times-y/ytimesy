@@ -156,7 +156,13 @@ export function failoverReason(error: unknown): FailoverReason | null {
 		if (current instanceof SubscriptionUsageLimitReached) return "usage-limit";
 		// A rejected SuperGrok sign-in waits for the user; other routes still work.
 		if (current instanceof XaiSubscriptionUnavailable)
-			return current.reason === "unavailable" ? "outage" : "plan-access";
+			return current.reason === "unavailable"
+				? "outage"
+				: current.reason === "usage-limit"
+					? "usage-limit"
+					: current.reason === "not-eligible"
+						? "plan-refused"
+						: "plan-access";
 		if (current instanceof ClaudeSubscriptionLimitReached) return "usage-limit";
 		if (current instanceof ClaudeSubscriptionRefused) return "signed-out";
 		if (current instanceof ClaudeCodeApiUnavailable) return current.reason;

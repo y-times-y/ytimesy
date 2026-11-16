@@ -66,6 +66,7 @@ export const serverAnalyticsEvents = {
 			"usage-limit",
 			"timeout",
 			"plan-access",
+			"plan-refused",
 			"signed-out",
 			"out-of-credit",
 			"key-refused",
