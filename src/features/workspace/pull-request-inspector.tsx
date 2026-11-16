@@ -361,7 +361,8 @@ export function PullRequestInspector({
 				<ArrowLeft size={14} />
 				Pull requests
 			</button>
-			{pickerMenu}
+			{/* The all-repositories page has its own list to go back to. */}
+			{onBack ? null : pickerMenu}
 		</>
 	);
 	const listed = open.find((pr) => pr.number === number);

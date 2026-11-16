@@ -1752,3 +1752,81 @@
 	color: #f08a8a;
 	font-style: normal;
 }
+
+/* Phones: the tables become cards. Every column stays reachable (nothing hides
+   behind a sideways scroll): the title on top, then its chat, checks, review and
+   size as one wrapping line. A column with nothing to say leaves no gap. */
+@media (max-width: 600px) {
+	.gh-repository-list .gh-table thead,
+	.gh-issues .gh-table thead {
+		display: none;
+	}
+	.gh-repository-list .gh-table,
+	.gh-repository-list .gh-table tbody,
+	.gh-issues .gh-table,
+	.gh-issues .gh-table tbody {
+		display: block;
+		width: 100%;
+	}
+	.gh-repository-list .gh-table tr,
+	.gh-issues .gh-table tr {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px 14px;
+		/* The left padding lines the second row up under the title, past its icon. */
+		padding: 12px 14px 12px 40px;
+		border-bottom: 1px solid #ffffff0b;
+	}
+	.gh-repository-list .gh-table td,
+	.gh-issues .gh-table td {
+		display: block;
+		padding: 0;
+		border: 0;
+	}
+	.gh-repository-list .gh-table td:first-child,
+	.gh-issues .gh-table td:first-child {
+		flex: 1 1 calc(100% + 26px);
+		min-width: 0;
+		margin-left: -26px;
+	}
+	.gh-repository-list .gh-table td:has(> .gh-mark-none:only-child) {
+		display: none;
+	}
+	.gh-repository-list .gh-table td:last-child {
+		margin-left: auto;
+	}
+	.gh-table-title {
+		max-width: none;
+		white-space: normal;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+	}
+	.gh-table-open > span:last-child {
+		min-width: 0;
+	}
+	.gh-chat-rail {
+		max-width: 46vw;
+	}
+	.gh-issues .gh-issues-table td {
+		padding: 0;
+	}
+	.gh-issues .gh-issue-row {
+		min-height: 0;
+		align-items: flex-start;
+	}
+	.gh-issues .gh-issue-side {
+		margin-left: 0;
+	}
+	.gh-issues-bar > .gh-filter-tabs {
+		flex: 1 1 100%;
+		overflow-x: auto;
+	}
+	.gh-issues-bar > .pr-head-spacer {
+		display: none;
+	}
+	.gh-issues-bar > .work-repo-filter {
+		margin-left: auto;
+	}
+}
