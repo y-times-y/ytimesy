@@ -109,3 +109,30 @@
 		min-height: 44px;
 	}
 }
+
+/* The left sidebar's toggle sits top left of the page while the sidebar is
+   closed (styles.css): the header starts clear of it and lines up with it, as
+   the chat's title row does. */
+:where(:root:not([data-sidebar="open"])) .work-page-header {
+	padding-left: 48px;
+}
+.work-page-header {
+	min-height: 44px;
+	box-sizing: border-box;
+}
+@media (max-width: 600px) {
+	.work-page {
+		padding-top: max(6px, env(safe-area-inset-top));
+	}
+	:where(:root:not([data-sidebar="open"])) .work-page-header {
+		padding-left: 54px;
+	}
+	.work-page-header {
+		padding-top: 0;
+	}
+}
+@media (min-width: 601px) {
+	.work-page {
+		padding-top: 6px;
+	}
+}
