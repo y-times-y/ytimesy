@@ -2515,6 +2515,9 @@ code.session-tool-target {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.secret-request-label .secret-request-replaces {
+	color: #e0b45a;
+}
 .secret-request-saved {
 	display: inline-flex;
 	flex: 1 1 16em;

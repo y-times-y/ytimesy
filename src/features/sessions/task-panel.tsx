@@ -78,7 +78,9 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 				) : null}
 			</header>
 			{tasks.length === 0 ? (
-				<p className="task-empty">Subagents appear here when Main starts them.</p>
+				<p className="task-empty">
+					Subagents appear here when Main starts them.
+				</p>
 			) : (
 				<ol className="task-list">
 					{shown.map((task) => {

@@ -110,3 +110,75 @@ it("does not promise the agent never sees the value", () => {
 	expect(description).toContain("best-effort");
 	expect(description).toMatch(/ask only when you cannot proceed/);
 });
+
+it("refuses a name the project has unless the agent asks to replace it", async () => {
+	await expect(
+		run(
+			{
+				secrets: [
+					{ name: "CLOUDFLARE_DEPLOY_TOKEN", kind: "runtime", reason: "x" },
+				],
+			},
+			["CLOUDFLARE_DEPLOY_TOKEN"],
+		),
+	).resolves.toMatchObject({
+		requested: false,
+		error: expect.stringContaining("replace: true"),
+	});
+});
+
+it("asks for a new value of a secret the project has when told to replace it", async () => {
+	await expect(
+		run(
+			{
+				secrets: [
+					{
+						name: "CLOUDFLARE_DEPLOY_TOKEN",
+						kind: "runtime",
+						reason: " Rejected by Cloudflare ",
+						replace: true,
+					},
+					{ name: "STRIPE_KEY", kind: "runtime", reason: "Charges" },
+				],
+			},
+			["CLOUDFLARE_DEPLOY_TOKEN"],
+		),
+	).resolves.toEqual({
+		requested: true,
+		secrets: [
+			{
+				name: "CLOUDFLARE_DEPLOY_TOKEN",
+				kind: "runtime",
+				reason: "Rejected by Cloudflare",
+				replace: true,
+			},
+			{ name: "STRIPE_KEY", kind: "runtime", reason: "Charges" },
+		],
+	});
+});
+
+it("ignores replace for a name the project does not have: it is a plain request", async () => {
+	await expect(
+		run({
+			secrets: [
+				{ name: "STRIPE_KEY", kind: "runtime", reason: "", replace: true },
+			],
+		}),
+	).resolves.toEqual({
+		requested: true,
+		secrets: [{ name: "STRIPE_KEY", kind: "runtime", reason: "" }],
+	});
+});
+
+it("accepts replace in the older one-secret shape", async () => {
+	await expect(
+		run({ name: "STRIPE_KEY", kind: "runtime", reason: "r", replace: true }, [
+			"STRIPE_KEY",
+		]),
+	).resolves.toEqual({
+		requested: true,
+		secrets: [
+			{ name: "STRIPE_KEY", kind: "runtime", reason: "r", replace: true },
+		],
+	});
+});

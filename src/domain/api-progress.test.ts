@@ -101,3 +101,40 @@ it("keeps the last known context during compaction and clears the compacting sta
 	expect(recordedContextUsage(items)?.compacting).toBe(false);
 	expect(recordedContextUsage(items)?.context?.last.totalTokens).toBe(100);
 });
+
+it("keeps replace on a secret request, so the card can say it replaces a value", () => {
+	const items = applyApiProgress([], "turn", {
+		type: "tool-result",
+		id: "call",
+		name: "request_project_secret",
+		output: {
+			requested: true,
+			secrets: [
+				{
+					name: "CLOUDFLARE_DEPLOY_TOKEN",
+					kind: "runtime",
+					reason: "Rejected",
+					replace: true,
+				},
+				{ name: "STRIPE_KEY", kind: "runtime", reason: "" },
+			],
+		},
+	});
+	expect(items[0]).toMatchObject({
+		kind: "secretRequest",
+		secrets: [
+			{
+				name: "CLOUDFLARE_DEPLOY_TOKEN",
+				secretKind: "runtime",
+				replace: true,
+			},
+			{ name: "STRIPE_KEY", secretKind: "runtime" },
+		],
+	});
+	const request = items[0];
+	const second =
+		request?.kind === "secretRequest" && "secrets" in request
+			? request.secrets[1]
+			: undefined;
+	expect(second?.replace).toBeUndefined();
+});

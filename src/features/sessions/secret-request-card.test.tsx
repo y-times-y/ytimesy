@@ -60,3 +60,43 @@ it("shows only the outcome once answered", () => {
 		expect(html).not.toContain("<input");
 	}
 });
+
+it("asks for a new value of a secret the project has, and says it replaces it", () => {
+	const replacing: SecretRequestItem = {
+		kind: "secretRequest",
+		id: SessionItemId("replace"),
+		secrets: [
+			{
+				name: "CLOUDFLARE_DEPLOY_TOKEN",
+				secretKind: "runtime",
+				reason: "Cloudflare rejects the current token.",
+				replace: true,
+			},
+		],
+	};
+	const html = renderToStaticMarkup(
+		<SecretRequestCard item={replacing} outcome="pending" actions={actions} />,
+	);
+	expect(html).toContain("a new value for ");
+	expect(html).toContain("CLOUDFLARE_DEPLOY_TOKEN");
+	expect(html).toContain("Replaces the current value");
+	expect(html).toContain('aria-label="New value for CLOUDFLARE_DEPLOY_TOKEN"');
+	expect(html).toContain(">Replace<");
+	expect(html).toContain("replacing what is set now");
+});
+
+it("keeps Save when only some of the secrets replace one", () => {
+	const mixed: SecretRequestItem = {
+		kind: "secretRequest",
+		id: SessionItemId("mixed"),
+		secrets: [
+			{ name: "OLD_KEY", secretKind: "runtime", reason: "", replace: true },
+			{ name: "NEW_KEY", secretKind: "runtime", reason: "" },
+		],
+	};
+	const html = renderToStaticMarkup(
+		<SecretRequestCard item={mixed} outcome="pending" actions={actions} />,
+	);
+	expect(html).toContain(">Save<");
+	expect(html.match(/Replaces the current value/g)).toHaveLength(1);
+});

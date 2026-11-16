@@ -275,6 +275,7 @@ function requestedSecret(
 			name?: unknown;
 			kind?: unknown;
 			reason?: unknown;
+			replace?: unknown;
 		};
 		if (
 			typeof secret?.name !== "string" ||
@@ -288,6 +289,7 @@ function requestedSecret(
 				typeof secret.reason === "string"
 					? secret.reason.slice(0, SECRET_REASON_LIMIT)
 					: "",
+			...(secret.replace === true ? { replace: true } : {}),
 		});
 	}
 	return secrets.length ? { secrets } : null;
