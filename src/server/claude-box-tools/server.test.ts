@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { boxCallRunsOnEdge } from "#/domain/claude-box-tools";
+import {
+	agentSecretsEnvFile,
+	REDACTED,
+	secretForms,
+} from "#/domain/project-secret";
 import type { GuestExec } from "./identity-machines";
 import {
 	type ClaudeBoxToolsConfig,
@@ -14,6 +19,7 @@ import {
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const TURN = "22222222-2222-4222-8222-222222222222";
 const EDGE = "https://edge.example/claude/mcp";
+const SECRET = "sk-live-0123456789abcdef";
 
 /** The chat's VM, played by this machine's shell: the tools' real commands run here. */
 const localExec: GuestExec = (options) =>
@@ -86,6 +92,7 @@ afterEach(async () => {
 async function start(
 	overrides: Partial<ClaudeBoxToolsConfig> = {},
 	exec: GuestExec = localExec,
+	envPath?: string,
 ) {
 	const cwd = mkdtempSync(join(tmpdir(), "box-tools-repo-"));
 	directories.push(cwd);
@@ -106,6 +113,7 @@ async function start(
 		edge: { url: EDGE, headers: { Authorization: "Bearer edge-grant" } },
 		exec,
 		fetch: edge.fetcher,
+		...(envPath ? { envPath } : {}),
 	});
 	started.push(server);
 	const rpc = async (
@@ -223,6 +231,86 @@ describe("the runner box's tool server", () => {
 		writeFileSync(join(box.cwd, "creds"), "token=ghs_turn_git_token\n");
 		const read = await box.call("read", { path: "creds" });
 		expect(JSON.stringify(read)).not.toContain("ghs_turn_git_token");
+	});
+
+	it("redacts the project's runtime secrets on the VM, so their values never reach the box", async () => {
+		const secrets = mkdtempSync(join(tmpdir(), "box-tools-secrets-"));
+		directories.push(secrets);
+		const envPath = join(secrets, "agent.env");
+		writeFileSync(
+			envPath,
+			agentSecretsEnvFile([
+				{ name: "API_KEY", value: SECRET, kind: "runtime" },
+			]),
+		);
+		const seen: string[] = [];
+		const watching: GuestExec = async (options) => {
+			const result = await localExec(options);
+			seen.push(`${result.stdout}${result.stderr}`);
+			return result;
+		};
+		const box = await start({ redactOnVm: true }, watching, envPath);
+		writeFileSync(join(box.cwd, ".env"), `API_KEY=${SECRET}\nOTHER=1\n`);
+		const read = await box.call("read", { path: ".env" });
+		expect(read.content[0]?.text).toContain(`API_KEY=${REDACTED}`);
+		const ran = await box.call("bash", {
+			command: `. ${envPath}; echo "$API_KEY"; printf %s "$API_KEY" | base64`,
+		});
+		expect(ran.content[0]?.text).toContain(REDACTED);
+		expect(JSON.stringify([read, ran])).not.toContain(SECRET);
+		// Nothing the VM sent the box held the value, in any form the edge redacts.
+		for (const output of seen)
+			for (const form of secretForms(SECRET))
+				expect(output).not.toContain(form);
+		expect(
+			box.edge.calls.filter((call) => call.method === "tools/call"),
+		).toEqual([]);
+	});
+
+	it("hands an edit of a file holding a secret to the edge, without writing the placeholder over it", async () => {
+		const secrets = mkdtempSync(join(tmpdir(), "box-tools-secrets-"));
+		directories.push(secrets);
+		const envPath = join(secrets, "agent.env");
+		writeFileSync(
+			envPath,
+			agentSecretsEnvFile([
+				{ name: "API_KEY", value: SECRET, kind: "runtime" },
+			]),
+		);
+		const box = await start({ redactOnVm: true }, localExec, envPath);
+		writeFileSync(join(box.cwd, ".env"), `API_KEY=${SECRET}\nOTHER=1\n`);
+		const args = {
+			path: ".env",
+			edits: [{ old_string: "OTHER=1", new_string: "OTHER=2" }],
+		};
+		expect((await box.call("edit", args)).content[0]?.text).toBe(
+			"edge ran edit",
+		);
+		expect(readFileSync(join(box.cwd, ".env"), "utf8")).toBe(
+			`API_KEY=${SECRET}\nOTHER=1\n`,
+		);
+		expect(
+			box.edge.calls
+				.filter((call) => call.method === "tools/call")
+				.map((call) => call.params),
+		).toEqual([{ name: "edit", arguments: args }]);
+		// A file without a secret is still edited on the box.
+		writeFileSync(join(box.cwd, "plain.txt"), "OTHER=1\n");
+		const edited = await box.call("edit", { ...args, path: "plain.txt" });
+		expect(edited.isError).toBe(false);
+		expect(readFileSync(join(box.cwd, "plain.txt"), "utf8")).toBe("OTHER=2\n");
+	});
+
+	it("shows no output when the VM cannot redact it", async () => {
+		const box = await start(
+			{ redactOnVm: true },
+			localExec,
+			"/nonexistent/agent.env",
+		);
+		writeFileSync(join(box.cwd, "a.txt"), "visible\n");
+		const read = await box.call("read", { path: "a.txt" });
+		expect(read.isError).toBe(true);
+		expect(JSON.stringify(read)).not.toContain("visible");
 	});
 
 	it("answers only Claude Code, which holds its random bearer", async () => {

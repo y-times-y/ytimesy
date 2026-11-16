@@ -19,6 +19,7 @@ import { leanShapeSurface } from "#/server/services/lean-shape-surface";
 import { runToolForMcp } from "#/server/services/mcp-tool-call";
 import {
 	BoxMachineRefused,
+	BoxRedactedWrite,
 	type GuestExec,
 	identityWorkspaceMachines,
 } from "./identity-machines";
@@ -54,6 +55,18 @@ export type ClaudeBoxToolsConfig = {
 	readonly tools: readonly string[];
 	/** Turn tokens the edge put on the VM (git, memory), removed from results. */
 	readonly redact: readonly string[];
+	/**
+	 * The turn has runtime secrets: the VM redacts every command's output
+	 * before it leaves (vm-secret-redaction.ts); their values are never here.
+	 */
+	readonly redactOnVm?: boolean;
+};
+
+/** Per-call bookkeeping the tool server keeps around the VM's commands. */
+export type BoxCallHooks = {
+	readonly onRan?: () => void;
+	readonly onRedacted?: () => void;
+	readonly beforeWrite?: () => void;
 };
 
 export type ClaudeBoxToolsServer = {
@@ -86,12 +99,21 @@ export function claudeBoxToolSet(
 	config: ClaudeBoxToolsConfig,
 	exec: GuestExec,
 	signal: AbortSignal,
-	onRan?: () => void,
+	hooks: BoxCallHooks & { readonly envPath?: string } = {},
 ): ToolSet {
 	const machines = identityWorkspaceMachines({
 		vmId: config.vmId,
 		exec,
-		...(onRan ? { onRan } : {}),
+		...(hooks.onRan ? { onRan: hooks.onRan } : {}),
+		...(config.redactOnVm
+			? {
+					redactOnVm: {
+						...(hooks.envPath ? { envPath: hooks.envPath } : {}),
+						...(hooks.onRedacted ? { onRedacted: hooks.onRedacted } : {}),
+						...(hooks.beforeWrite ? { beforeWrite: hooks.beforeWrite } : {}),
+					},
+				}
+			: {}),
 	});
 	const workspace: AgentToolWorkspace = {
 		machines,
@@ -194,15 +216,28 @@ export async function startClaudeBoxTools(input: {
 	readonly exec: GuestExec;
 	readonly fetch?: typeof fetch;
 	readonly signal?: AbortSignal;
+	/** Tests only: the VM's env file (AGENT_SECRETS_ENV_PATH otherwise). */
+	readonly envPath?: string;
 }): Promise<ClaudeBoxToolsServer> {
 	const fetcher = input.fetch ?? fetch;
 	const signal = input.signal ?? new AbortController().signal;
 	// Per call: whether a command reached the guest, so a refusal can be
-	// handed to the edge only when nothing ran.
-	const calls = new AsyncLocalStorage<{ ran: boolean }>();
-	const tools = claudeBoxToolSet(input.config, input.exec, signal, () => {
-		const call = calls.getStore();
-		if (call) call.ran = true;
+	// handed to the edge only when nothing ran; and whether the VM redacted
+	// any of its output, so the call does not write that text back.
+	const calls = new AsyncLocalStorage<{ ran: boolean; redacted: boolean }>();
+	const tools = claudeBoxToolSet(input.config, input.exec, signal, {
+		onRan: () => {
+			const call = calls.getStore();
+			if (call) call.ran = true;
+		},
+		onRedacted: () => {
+			const call = calls.getStore();
+			if (call) call.redacted = true;
+		},
+		beforeWrite: () => {
+			if (calls.getStore()?.redacted) throw new BoxRedactedWrite();
+		},
+		...(input.envPath ? { envPath: input.envPath } : {}),
 	});
 	const redact = [...input.config.redact].filter(Boolean);
 	let listed: readonly McpToolDefinition[] | null = null;
@@ -225,7 +260,7 @@ export async function startClaudeBoxTools(input: {
 		args: Record<string, unknown>,
 	): Promise<McpCallResult> => {
 		const definition = tools[name];
-		const call = { ran: false };
+		const call = { ran: false, redacted: false };
 		try {
 			const ran = await calls.run(call, () =>
 				runToolForMcp(definition, name, args, {
@@ -237,6 +272,9 @@ export async function startClaudeBoxTools(input: {
 		} catch (error) {
 			if (error instanceof BoxMachineRefused && !call.ran)
 				return forward(name, args);
+			// Only reads ran (a write is refused before its first byte): the
+			// edge redoes the call with the real text and redacts its result.
+			if (error instanceof BoxRedactedWrite) return forward(name, args);
 			const message =
 				error instanceof Error ? error.message : "The tool call failed.";
 			return {

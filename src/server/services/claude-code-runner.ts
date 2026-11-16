@@ -1015,6 +1015,7 @@ async function prepareBoxTools(
 				shape: box.shape,
 				tools: box.tools,
 				redact: box.redact(),
+				...(grant.redactOnVm ? { redactOnVm: true } : {}),
 			},
 		};
 	} catch (error) {

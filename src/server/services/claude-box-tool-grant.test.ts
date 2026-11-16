@@ -89,6 +89,52 @@ describe("Claude box tool grants", () => {
 		expect(turn.held()).toBe("ident_new");
 	});
 
+	it("grants a turn with runtime secrets only when the VM can redact them itself", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const ready = machines();
+		const grant = await grantClaudeBoxTools({
+			machines: ready.value,
+			vm: VM,
+			store: store().value,
+			redactOnVm: true,
+		});
+		// The fake VM answers the probe with exit 0 and no marker: not ready.
+		expect(grant).toBeNull();
+		expect(ready.mint).not.toHaveBeenCalled();
+		const probing = machines();
+		(probing.value.exec as ReturnType<typeof vi.fn>).mockImplementation(
+			async (_vm: unknown, command: string) =>
+				command === "id -un"
+					? { exitCode: 0, stdout: "ubuntu\n", stderr: "" }
+					: { exitCode: 0, stdout: "", stderr: "\nytimesy-vm-redaction:0\n" },
+		);
+		expect(
+			await grantClaudeBoxTools({
+				machines: probing.value,
+				vm: VM,
+				store: store().value,
+				redactOnVm: true,
+			}),
+		).toEqual({
+			vmId: "vm-1",
+			linuxUser: "ubuntu",
+			token: "fs-token",
+			redactOnVm: true,
+		});
+		const probe = (probing.value.exec as ReturnType<typeof vi.fn>).mock
+			.calls[1]?.[1] as string;
+		expect(probe).toContain("/tmp/ytimesy-secrets/agent.env");
+		// No secrets: no probe, granted as before.
+		const plain = machines();
+		await grantClaudeBoxTools({
+			machines: plain.value,
+			vm: VM,
+			store: store().value,
+		});
+		expect(plain.value.exec).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
+	});
+
 	it("deletes the previous run's identity first, so one token lives per run", async () => {
 		const fake = machines();
 		const turn = store("ident_old");
