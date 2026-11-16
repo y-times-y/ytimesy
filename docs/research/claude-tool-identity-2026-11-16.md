@@ -19,7 +19,13 @@ containing the original arguments plus that private field set to `tool_use_id`.
 Both raw MCP requests arrived with the correct, distinct IDs. No tool command
 executed and no paid inference was requested.
 
-Observed output:
+Research-9 also identified the SDK's existing `params._meta["claudecode/toolUseId"]`
+transport by inspecting its pinned binary. I independently verified this with
+the probe: **with all hooks disabled and no hidden input field**, both identical
+parallel calls still carried the exact model IDs in that metadata field. Reuse
+that native transport rather than introducing an extra tool argument.
+
+Initial hidden-input probe output (before adding native-metadata assertions):
 
 ```json
 {"sdk":"0.3.321","result":"success","hookIds":["toolu_identity_0","toolu_identity_1"],"receivedIds":["toolu_identity_0","toolu_identity_1"],"calls":2,"strictSchema":true,"paidModelRequests":0,"commandsExecuted":0}
@@ -53,11 +59,18 @@ The SDK installation is an explicit external dependency, not a copied sample
 from this checkout. Repository Biome ignores `.mjs`; its attempted focused
 check exited 1 with no files processed, not a formatting pass.
 
+The extended probe also supports `--native-only`. Its output has empty
+`hookIds`, null hidden `receivedIds`, and native IDs `toolu_identity_0` and
+`toolu_identity_1`. A subsequent clean-copy run executed both modes and exited
+0 in 1.65 seconds. Both modes assert the native metadata IDs exactly. This
+proves live-process identity transport, not restart/resume behavior.
+
 ## Integration still required
 
-- Inject the identity only for ytimesy's MCP calls, extract it before normal
-  argument validation, and bind it to the authorized run/session and a canonical
-  input fingerprint. Never trust an arbitrary model-supplied private field.
+- Preserve `params._meta["claudecode/toolUseId"]` through ytimesy's MCP handlers
+  and forwarding calls, binding it to the authorized run/session and a canonical
+  input fingerprint. The current handler discards metadata. No new model-visible
+  input field or PreToolUse injection is needed for the pinned SDK.
 - Persist a claim before execution and the completed response before replying.
   A previous claim with no durable outcome must not re-execute the operation.
 - Completed duplicates return the recorded result; changed inputs under one ID
