@@ -240,6 +240,7 @@ import {
 	stopClaudeCodeTurnRun,
 	withMessagesSentDuringRun,
 } from "../services/claude-code-turn";
+import { noteClaudeTurnQuiet } from "../services/claude-step-pause";
 import {
 	CODE_MODE_TOOL,
 	codeModeTool,
@@ -2821,6 +2822,18 @@ async function runApiTurnAttempt(
 						...(claudeToolTime ? { toolTime: claudeToolTime } : {}),
 					}),
 				);
+				// The step is short (it follows the run's feed), so its grace
+				// rarely elapses here: the chat's object may pause the VM while
+				// the turn is parked, from the quiet noted here
+				// (claude-parked-turn.ts).
+				const quiet = bridgedPause?.quiet();
+				if (quiet !== undefined && execution?.vm)
+					noteClaudeTurnQuiet(turn.id, {
+						vm: execution.vm,
+						userId: owner.userId,
+						since: quiet?.since ?? null,
+						toolEnded: quiet?.toolEnded ?? false,
+					});
 				messages = withMessagesSentDuringRun(
 					claudeResult.messages,
 					sentDuringRun,

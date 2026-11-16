@@ -176,6 +176,23 @@ export function machineCallsInFlight(vm: string) {
 	return records.get(vm)?.inFlight ?? 0;
 }
 
+/** When this isolate paused the VM for thinking and has not resumed it, else null. */
+export function pausedForThinkingAt(vm: string) {
+	return records.get(vm)?.pausedAt ?? null;
+}
+
+/**
+ * A pause for thinking made by an earlier instance of this isolate's owner
+ * (a chat object that hibernated while its Claude Code turn was parked): its
+ * next guest operation resumes the VM as if this isolate had paused it.
+ */
+export function adoptThinkingPause(vm: WorkspaceId, pausedAt: number) {
+	const record = recordFor(vm);
+	if (record.pausing || record.resuming || record.pausedAt !== undefined)
+		return;
+	record.pausedAt = pausedAt;
+}
+
 type Log = (line: string) => void;
 
 /**
@@ -258,6 +275,131 @@ export function resumingAfterThinkingPause<M extends WorkspaceMachines>(
 	return wrapped as M;
 }
 
+/**
+ * One pause check of a quiet VM: gathers the facts (stopping at the first
+ * known blocker, or once `current` turns false) and pauses the VM if they
+ * allow. `trigger` names a path other than the in-step grace in the logs
+ * ("claude_parked": a parked Claude Code turn's chat object). Never throws.
+ */
+export async function attemptThinkingPause(input: {
+	readonly vm: WorkspaceId;
+	/** Plain machines (not a reader's): the probes run as the default user. */
+	readonly machines: WorkspaceMachines;
+	readonly otherTurnOnMachine: (vm: WorkspaceId) => Promise<boolean>;
+	readonly backgroundCommands?: (vm: WorkspaceId) => Promise<number>;
+	readonly attachments?: (
+		vm: WorkspaceId,
+	) => Promise<{ viewers: number; terminals: number }>;
+	/** The turn's tool calls running (or queued) now. */
+	readonly toolsRunning: () => number;
+	/** False once something overtook the check (a tool call, a step). */
+	readonly current: () => boolean;
+	/** Since when nothing of the turn used the VM. */
+	readonly quietSince: number;
+	readonly trigger?: "claude_parked";
+	readonly now?: () => number;
+	readonly log?: Log;
+}): Promise<"paused" | "skipped" | "overtaken"> {
+	const { vm, machines } = input;
+	const now = input.now ?? Date.now;
+	const log = input.log ?? console.info;
+	const backgroundCommands =
+		input.backgroundCommands ??
+		(async (target: WorkspaceId) =>
+			(await backgroundCommandsRunningOn(machines, target)).length);
+	const attachments =
+		input.attachments ??
+		((target: WorkspaceId) => guestAttachments(machines, target));
+	const trigger = input.trigger ? { trigger: input.trigger } : {};
+	let facts: ThinkingPauseFacts = {
+		toolsRunning: input.toolsRunning(),
+		machineCallsRunning: machineCallsInFlight(vm),
+		canPause: typeof machines.pause === "function",
+	};
+	const settledBlocker = () => {
+		const decision = thinkingPauseDecision(facts);
+		return !decision.pause && decision.reason !== "unknown"
+			? decision.reason
+			: undefined;
+	};
+	const gather = async <K extends keyof ThinkingPauseFacts>(
+		read: () => Promise<Pick<ThinkingPauseFacts, K>>,
+	) => {
+		if (settledBlocker() || !input.current()) return;
+		facts = { ...facts, ...(await read().catch(() => ({}))) };
+	};
+	try {
+		await gather(async () => ({
+			otherTurnOnMachine: await input.otherTurnOnMachine(vm),
+		}));
+		await gather(async () => ({
+			backgroundCommands: await backgroundCommands(vm),
+		}));
+		await gather(async () => {
+			const found = await attachments(vm);
+			return { desktopViewers: found.viewers, terminals: found.terminals };
+		});
+		if (!input.current()) return "overtaken";
+		// In-isolate facts again, as of now: the probes took time.
+		facts = {
+			...facts,
+			toolsRunning: input.toolsRunning(),
+			machineCallsRunning: machineCallsInFlight(vm),
+		};
+		const decision = thinkingPauseDecision(facts);
+		if (!decision.pause) {
+			// Only the reasons worth counting in rollout: the cheap in-isolate
+			// ones change between every call and say nothing.
+			if (
+				decision.reason !== "tool-running" &&
+				decision.reason !== "machine-call-running"
+			)
+				log(
+					JSON.stringify({
+						event: "vm.pause_thinking_skipped",
+						vm,
+						reason: decision.reason,
+						...trigger,
+					}),
+				);
+			return "skipped";
+		}
+		const record = recordFor(vm);
+		if (record.pausing || record.pausedAt !== undefined) return "skipped";
+		const idleMs = Math.max(0, Math.round(now() - input.quietSince));
+		// From here a guest operation on the VM waits for this pause and then
+		// resumes it (resumeIfPausedForThinking).
+		record.pausing = (async () => {
+			try {
+				await machines.pause?.(vm);
+				record.pausedAt = now();
+				log(
+					JSON.stringify({
+						event: "vm.paused_thinking",
+						vm,
+						idleMs,
+						...(input.trigger ? { reason: input.trigger } : {}),
+					}),
+				);
+				return true;
+			} catch (error) {
+				console.warn("The VM was not paused while the model thinks.", {
+					vm,
+					message:
+						error instanceof Error ? error.message.slice(0, 200) : "unknown",
+				});
+				return false;
+			} finally {
+				record.pausing = undefined;
+				forgetIdle(vm, record);
+			}
+		})();
+		return (await record.pausing) ? "paused" : "skipped";
+	} catch {
+		return "skipped";
+	}
+}
+
 export type ThinkingPauseTimers = {
 	set(run: () => void, ms: number): unknown;
 	clear(handle: unknown): void;
@@ -294,19 +436,13 @@ export function thinkingPauseScheduler(input: {
 	const graceMs = input.graceMs ?? THINKING_PAUSE_GRACE_MS;
 	const timers = input.timers ?? realTimers;
 	const now = input.now ?? Date.now;
-	const log = input.log ?? console.info;
-	const { machines } = input;
-	const backgroundCommands =
-		input.backgroundCommands ??
-		(async (vm: WorkspaceId) =>
-			(await backgroundCommandsRunningOn(machines, vm)).length);
-	const attachments =
-		input.attachments ?? ((vm: WorkspaceId) => guestAttachments(machines, vm));
 	const running = new Set<string>();
 	let timer: unknown;
 	/** Bumped by every tool call start: a check from before it is void. */
 	let generation = 0;
 	let lastToolEndedAt = now();
+	/** Whether a tool call of this step returned (else quiet since its start). */
+	let toolEnded = false;
 	let disposed = false;
 
 	const cancel = () => {
@@ -315,76 +451,21 @@ export function thinkingPauseScheduler(input: {
 		timer = undefined;
 	};
 
-	const skip = (vm: WorkspaceId, reason: ThinkingPauseBlocker) => {
-		// Only the reasons worth counting in rollout: the cheap in-isolate
-		// ones change between every call and say nothing.
-		if (reason === "tool-running" || reason === "machine-call-running") return;
-		log(JSON.stringify({ event: "vm.pause_thinking_skipped", vm, reason }));
-	};
-
-	const attempt = async (vm: WorkspaceId, started: number) => {
-		const current = () => started === generation && !disposed;
-		let facts: ThinkingPauseFacts = {
-			toolsRunning: running.size,
-			machineCallsRunning: machineCallsInFlight(vm),
-			canPause: typeof machines.pause === "function",
-		};
-		const settledBlocker = () => {
-			const decision = thinkingPauseDecision(facts);
-			return !decision.pause && decision.reason !== "unknown"
-				? decision.reason
-				: undefined;
-		};
-		const gather = async <K extends keyof ThinkingPauseFacts>(
-			read: () => Promise<Pick<ThinkingPauseFacts, K>>,
-		) => {
-			if (settledBlocker() || !current()) return;
-			facts = { ...facts, ...(await read().catch(() => ({}))) };
-		};
-		await gather(async () => ({
-			otherTurnOnMachine: await input.otherTurnOnMachine(vm),
-		}));
-		await gather(async () => ({
-			backgroundCommands: await backgroundCommands(vm),
-		}));
-		await gather(async () => {
-			const found = await attachments(vm);
-			return { desktopViewers: found.viewers, terminals: found.terminals };
+	const attempt = (vm: WorkspaceId, started: number) =>
+		attemptThinkingPause({
+			vm,
+			machines: input.machines,
+			otherTurnOnMachine: input.otherTurnOnMachine,
+			...(input.backgroundCommands
+				? { backgroundCommands: input.backgroundCommands }
+				: {}),
+			...(input.attachments ? { attachments: input.attachments } : {}),
+			toolsRunning: () => running.size,
+			current: () => started === generation && !disposed,
+			quietSince: lastToolEndedAt,
+			now,
+			...(input.log ? { log: input.log } : {}),
 		});
-		if (!current()) return;
-		// In-isolate facts again, as of now: the probes took time.
-		facts = {
-			...facts,
-			toolsRunning: running.size,
-			machineCallsRunning: machineCallsInFlight(vm),
-		};
-		const decision = thinkingPauseDecision(facts);
-		if (!decision.pause) return skip(vm, decision.reason);
-		const record = recordFor(vm);
-		if (record.pausing || record.pausedAt !== undefined) return;
-		const idleMs = Math.max(0, Math.round(now() - lastToolEndedAt));
-		// From here a guest operation on the VM waits for this pause and then
-		// resumes it (resumeIfPausedForThinking).
-		record.pausing = (async () => {
-			try {
-				await machines.pause?.(vm);
-				record.pausedAt = now();
-				log(JSON.stringify({ event: "vm.paused_thinking", vm, idleMs }));
-				return true;
-			} catch (error) {
-				console.warn("The VM was not paused while the model thinks.", {
-					vm,
-					message:
-						error instanceof Error ? error.message.slice(0, 200) : "unknown",
-				});
-				return false;
-			} finally {
-				record.pausing = undefined;
-				forgetIdle(vm, record);
-			}
-		})();
-		await record.pausing;
-	};
 
 	const arm = () => {
 		if (disposed || running.size > 0) return;
@@ -410,7 +491,16 @@ export function thinkingPauseScheduler(input: {
 			if (disposed) return;
 			running.delete(id);
 			lastToolEndedAt = now();
+			toolEnded = true;
 			if (running.size === 0) arm();
+		},
+		/**
+		 * Since when nothing of the turn used the VM through this step: its
+		 * last tool call's return, else the step's start (`toolEnded` false:
+		 * an earlier quiet may still run on). Null with a tool call running.
+		 */
+		quiet() {
+			return running.size > 0 ? null : { since: lastToolEndedAt, toolEnded };
 		},
 		/** The step ended: no pause is scheduled by it any more. */
 		dispose() {

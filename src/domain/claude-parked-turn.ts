@@ -124,3 +124,131 @@ export function parkedTurnRenewal(input: {
 	if (input.room.cancelled) return refuse("cancelled");
 	return { renew: true };
 }
+
+/**
+ * Pausing the chat's VM while a parked Claude Code turn's model thinks
+ * (YTIMESY_PAUSE_VM_WHILE_THINKING, thinking-pause.ts). A turn whose
+ * `claude` runs on a runner box without box tools reaches its VM only
+ * through steps of this object (ytimesy's tools over MCP), and its feed
+ * steps are short: the in-step grace never elapses. So each such step notes
+ * since when nothing used the VM, the object keeps it, and once the turn
+ * parks it checks the VM a grace after that quiet began: at once when the
+ * quiet is already that old, else at one extra wake. The next MCP call wakes
+ * a step whose guest operations resume the VM first.
+ */
+
+/** What one step saw (noteClaudeTurnQuiet). */
+export type ClaudeTurnQuiet = {
+	readonly vm: string;
+	readonly userId: string;
+	/** Since when nothing used the VM; null: a tool call was still running. */
+	readonly since: number | null;
+	/** A tool call returned in the step; else the quiet may predate it. */
+	readonly toolEnded: boolean;
+};
+
+/** The chat object's record of its turn's VM quiet. */
+export type ParkedVmQuiet = {
+	readonly turnId: string;
+	readonly userId: string;
+	readonly vm: string;
+	readonly quietSince: number | null;
+	/** Paused for thinking and not resumed since, as the last step left it. */
+	readonly pausedAt: number | null;
+};
+
+/**
+ * The record after a step: the step's quiet, carried back over steps that
+ * used no tool (tools run only in steps, so the quiet held between them).
+ * A step that noted nothing (another placement, a failure before Claude)
+ * pauses nothing; a VM still paused stays recorded so a later step, in a
+ * new instance of the object, still resumes it first.
+ */
+export function nextParkedVmQuiet(input: {
+	readonly turnId: string;
+	readonly previous: ParkedVmQuiet | null;
+	readonly noted: ClaudeTurnQuiet | null;
+	/** pausedForThinkingAt of the VM after the step. */
+	readonly pausedAt: (vm: string) => number | null;
+}): ParkedVmQuiet | null {
+	const previous =
+		input.previous?.turnId === input.turnId ? input.previous : null;
+	const { noted } = input;
+	if (!noted) {
+		const pausedAt = previous ? input.pausedAt(previous.vm) : null;
+		return previous && pausedAt !== null
+			? { ...previous, quietSince: null, pausedAt }
+			: null;
+	}
+	const carried =
+		noted.since !== null &&
+		!noted.toolEnded &&
+		previous?.vm === noted.vm &&
+		previous.quietSince !== null
+			? Math.min(previous.quietSince, noted.since)
+			: noted.since;
+	return {
+		turnId: input.turnId,
+		userId: noted.userId,
+		vm: noted.vm,
+		quietSince: carried,
+		pausedAt: input.pausedAt(noted.vm),
+	};
+}
+
+/**
+ * When a turn that just parked checks its VM: null when nothing may pause
+ * (no quiet, a tool call was running, already paused); else the quiet's
+ * start plus the grace, never before now.
+ */
+export function parkedVmPauseAt(input: {
+	readonly now: number;
+	readonly turnId: string;
+	readonly quiet: ParkedVmQuiet | null;
+	readonly graceMs: number;
+}) {
+	const { quiet } = input;
+	if (
+		!quiet ||
+		quiet.turnId !== input.turnId ||
+		quiet.quietSince === null ||
+		quiet.pausedAt !== null
+	)
+		return null;
+	return Math.max(input.now, quiet.quietSince + input.graceMs);
+}
+
+export type ParkedVmPauseRefusal =
+	| "no-quiet"
+	| "paused"
+	| "not-parked"
+	| "stepping"
+	| "call-pending"
+	| "too-soon";
+
+/**
+ * Whether the object checks the VM now (its probes still decide the
+ * pause): the turn is still parked, no step runs, no MCP call is queued,
+ * and its quiet has lasted the grace.
+ */
+export function parkedVmPauseCheck(input: {
+	readonly now: number;
+	readonly quiet: ParkedVmQuiet | null;
+	readonly parkedTurn: string | null;
+	readonly stepping: boolean;
+	readonly pendingCalls: number;
+	readonly graceMs: number;
+}):
+	| { readonly check: true; readonly quiet: ParkedVmQuiet }
+	| { readonly check: false; readonly reason: ParkedVmPauseRefusal } {
+	const refuse = (reason: ParkedVmPauseRefusal) =>
+		({ check: false, reason }) as const;
+	const { quiet } = input;
+	if (!quiet || quiet.quietSince === null) return refuse("no-quiet");
+	if (quiet.pausedAt !== null) return refuse("paused");
+	if (input.parkedTurn !== quiet.turnId) return refuse("not-parked");
+	if (input.stepping) return refuse("stepping");
+	if (input.pendingCalls > 0) return refuse("call-pending");
+	if (input.now < quiet.quietSince + input.graceMs) return refuse("too-soon");
+	return { check: true, quiet };
+}
