@@ -234,7 +234,7 @@ export function IssueList({
 				<Search size={14} aria-hidden="true" />
 				<input
 					type="search"
-					placeholder="Filter by title, number or label"
+					placeholder="Filter issues"
 					value={query}
 					onChange={(event) => setQuery(event.target.value)}
 					aria-label="Filter issues"

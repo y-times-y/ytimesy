@@ -322,13 +322,6 @@ import {
 	hubReadsToMake,
 	openUserHub,
 } from "./user-hub-connection";
-import type { WorkItemsKind } from "./work-items-page";
-import {
-	issuesKey,
-	issuesRequest,
-	pullRequestsKey,
-	pullRequestsRequest,
-} from "./work-items-queries";
 import {
 	agentPanelHubTopics,
 	backgroundCommandHubTopics,
@@ -339,6 +332,13 @@ import {
 	useHubRead,
 	userHubStore,
 } from "./user-hub-store";
+import type { WorkItemsKind } from "./work-items-page";
+import {
+	issuesKey,
+	issuesRequest,
+	pullRequestsKey,
+	pullRequestsRequest,
+} from "./work-items-queries";
 import {
 	type InspectorView,
 	type ToolsView,

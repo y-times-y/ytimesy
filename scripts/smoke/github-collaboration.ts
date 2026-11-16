@@ -228,11 +228,12 @@ try {
 		),
 		true,
 	);
+	// On a phone the rows are cards: nothing scrolls sideways.
 	assert.equal(
 		await page
 			.locator(".gh-scroll-viewport")
 			.evaluate((element) => element.scrollWidth > element.clientWidth),
-		true,
+		false,
 	);
 	await page.locator(".gh-table-open").first().click();
 	await page.setViewportSize({ width: 320, height: 480 });
@@ -287,6 +288,33 @@ try {
 		await page.locator(".work-page .gh-table-repo").allTextContents(),
 	);
 	assert.deepEqual([...issueRepos].sort(), ["docs", "editor"]);
+	// A phone: the table becomes cards, so checks, review and chat are on screen,
+	// not behind a sideways scroll.
+	await button("Pages: pull requests").click();
+	await page.locator(".work-page .gh-table tbody tr").first().waitFor();
+	await page.setViewportSize({ width: 390, height: 780 });
+	// A string, not a function: the test runner's transform would name inner
+	// functions with a helper the page does not have.
+	const phone = await page.evaluate(`(() => {
+		const row = document.querySelector(".work-page .gh-table tbody tr");
+		const inView = (selector) => {
+			const box = row && row.querySelector(selector)?.getBoundingClientRect();
+			return Boolean(box && box.width > 0 && box.right <= innerWidth + 1);
+		};
+		return {
+			page: document.documentElement.scrollWidth <= innerWidth,
+			checks: inView(".gh-checks-cell"),
+			review: inView(".gh-review-mark"),
+			diff: inView(".gh-diffstat"),
+		};
+	})()`);
+	assert.deepEqual(phone, {
+		page: true,
+		checks: true,
+		review: true,
+		diff: true,
+	});
+	await page.setViewportSize({ width: 1200, height: 780 });
 	assert.deepEqual(errors, []);
 	console.log(
 		`PASS: dense list/search, comments, reply, resolve, inline suggestion + change-request review, CI log/rerun, title/labels, close/reopen PR + issue, in-app linked PR, new issue, and 320px overflow checks (${(await actions()).length} simulated writes).`,

@@ -137,7 +137,7 @@ export function PullRequestList({
 				<input
 					type="search"
 					aria-label="Filter pull requests"
-					placeholder="Filter by title, number, author or label"
+					placeholder="Filter pull requests"
 					value={query}
 					onChange={(event) => setQuery(event.target.value)}
 				/>

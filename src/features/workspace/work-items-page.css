@@ -90,3 +90,22 @@
 	color: #d6a65f;
 	font-size: 12px;
 }
+
+@media (max-width: 600px) {
+	.work-page {
+		padding: 10px 0 0;
+	}
+	.work-page-header {
+		padding: 0 14px 10px;
+	}
+	.work-page-header h1 {
+		font-size: 18px;
+	}
+	.work-page-body {
+		border-width: 1px 0 0;
+		border-radius: 0;
+	}
+	.work-repo-filter {
+		min-height: 44px;
+	}
+}
