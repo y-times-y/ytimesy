@@ -241,6 +241,10 @@ class FakeVm {
 			return ok();
 		}
 		if (command.startsWith("tail -c 2000")) return ok(this.stderr);
+		if (command.startsWith("cat -- ")) {
+			const path = /'([^']+)'/.exec(command)?.[1] ?? "";
+			return ok(this.files.get(path) ?? "");
+		}
 		return ok();
 	});
 
@@ -2087,5 +2091,294 @@ describe("Claude Code runner: feed or poll", () => {
 		expect(
 			JSON.parse(off.files.get(`${RUNS}/1/options.json`) ?? "").feed,
 		).toBeUndefined();
+	});
+});
+
+describe("Claude Code runner: workspace tools on the runner box", () => {
+	const BOX_TOOLS = ["bash", "read", "write", "edit"];
+	const remote = { repository: "/home/ubuntu/app", workspaceTools: BOX_TOOLS };
+	const boxTools = (
+		grant: () => Promise<{
+			vmId: string;
+			linuxUser: string;
+			token: string;
+		} | null>,
+	) => ({
+		tools: BOX_TOOLS,
+		shape: "core" as const,
+		redact: () => ["ghs_turn_git_token"],
+		grant: vi.fn(grant),
+		bundle: () => ({
+			source: "export const startBoxTools = 1;",
+			version: "a".repeat(32),
+		}),
+	});
+
+	it("puts the bundle on the box once, then gives the run its grant file and the module to import", async () => {
+		const vm = new FakeVm();
+		const tools = boxTools(async () => ({
+			vmId: "vm-1",
+			linuxUser: "ubuntu",
+			token: "fs-identity-token",
+		}));
+		const step = input(vm, { remote, boxTools: tools });
+		const writeFile = vi.fn(step.writeFile);
+		await runClaudeCodeStep({ ...step, writeFile, mayPause: () => true });
+		const module = `${HOME}/.ytimesy/claude-box-tools/${"a".repeat(32)}.mjs`;
+		expect(writeFile).toHaveBeenCalledWith(
+			module,
+			"export const startBoxTools = 1;",
+		);
+		expect(
+			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").boxTools,
+		).toEqual({ module, config: "box-tools.json" });
+		expect(JSON.parse(vm.files.get(`${RUNS}/1/box-tools.json`) ?? "")).toEqual({
+			token: "fs-identity-token",
+			vmId: "vm-1",
+			linuxUser: "ubuntu",
+			cwd: "/home/ubuntu/app",
+			sessionId: SESSION,
+			turnId: TURN,
+			shape: "core",
+			tools: BOX_TOOLS,
+			redact: ["ghs_turn_git_token"],
+		});
+		// The token is redacted from the turn and never in the launch command.
+		expect(step.addRedaction).toHaveBeenCalledWith("fs-identity-token");
+		expect(vm.launched.join("\n")).not.toContain("fs-identity-token");
+		expect(tools.grant).toHaveBeenCalledOnce();
+		// A later run on the same box finds the bundle there.
+		const again = new FakeVm();
+		again.files.set(module, "export const startBoxTools = 1;");
+		const writeAgain = vi.fn(input(again).writeFile);
+		await runClaudeCodeStep({
+			...input(again, { remote, boxTools: tools }),
+			writeFile: writeAgain,
+			mayPause: () => true,
+		});
+		expect(writeAgain).not.toHaveBeenCalledWith(module, expect.anything());
+	});
+
+	it("keeps every tool on the edge when the grant is refused or the run is not on a box", async () => {
+		const refused = new FakeVm();
+		await runClaudeCodeStep(
+			input(refused, {
+				remote,
+				boxTools: boxTools(async () => null),
+				mayPause: () => true,
+			}),
+		);
+		expect(
+			JSON.parse(refused.files.get(`${RUNS}/1/options.json`) ?? "").boxTools,
+		).toBeUndefined();
+		expect(refused.files.has(`${RUNS}/1/box-tools.json`)).toBe(false);
+		const local = new FakeVm();
+		const tools = boxTools(async () => ({
+			vmId: "vm-1",
+			linuxUser: "ubuntu",
+			token: "t",
+		}));
+		await runClaudeCodeStep(
+			input(local, { boxTools: tools, mayPause: () => true }),
+		);
+		expect(tools.grant).not.toHaveBeenCalled();
+	});
+
+	it("shows the run's box tool calls from its stream once the runner says which tools it serves", async () => {
+		const vm = new FakeVm();
+		vm.files.set(`${RUNS}/current`, "1");
+		vm.files.set(`${RUNS}/1/started`, "1");
+		vm.files.set(`${RUNS}/1/box-tools-active`, JSON.stringify(["read"]));
+		vm.emit(
+			init,
+			{
+				type: "assistant",
+				message: {
+					content: [
+						{
+							type: "tool_use",
+							id: "toolu_read",
+							name: "mcp__ytimesy__read",
+							input: { path: "a.ts" },
+						},
+						{
+							type: "tool_use",
+							id: "toolu_agent",
+							name: "mcp__ytimesy__agent",
+							input: {},
+						},
+					],
+				},
+			},
+			{
+				type: "user",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "toolu_read",
+							content: "1 line",
+						},
+					],
+				},
+			},
+			success,
+		);
+		vm.status = "0";
+		const step = input(vm, {
+			remote,
+			boxTools: boxTools(async () => null),
+		});
+		await runClaudeCodeStep(step);
+		const shown = step.events.filter(
+			(event) => event.type === "tool-call" || event.type === "tool-result",
+		);
+		expect(shown).toEqual([
+			{
+				type: "tool-call",
+				id: "toolu_read",
+				name: "read",
+				input: { path: "a.ts" },
+			},
+			{ type: "tool-result", id: "toolu_read", name: "read", output: "1 line" },
+		]);
+	});
+
+	it("the actual SDK wrapper serves box tools locally and keeps the edge for the inbox", () => {
+		const directory = mkdtempSync(join(tmpdir(), "claude-wrapper-"));
+		try {
+			writeFileSync(join(directory, "runner.mjs"), CLAUDE_AGENT_RUNNER_SCRIPT);
+			writeFileSync(
+				join(directory, "sdk.mjs"),
+				`import { writeFileSync } from "node:fs";
+export async function* query({ options }) {
+	writeFileSync(${JSON.stringify(join(directory, "seen.json"))}, JSON.stringify(options.mcpServers));
+	yield { type: "result" };
+}`,
+			);
+			writeFileSync(
+				join(directory, "box.mjs"),
+				`import { readFileSync, writeFileSync } from "node:fs";
+export async function startBoxTools(input) {
+	writeFileSync(${JSON.stringify(join(directory, "box-input.json"))}, JSON.stringify({ edge: input.edge, config: JSON.parse(readFileSync(input.configPath, "utf8")) }));
+	return { url: "http://127.0.0.1:9/mcp", headers: { Authorization: "Bearer local" }, local: ["read", "bash"], close: async () => {} };
+}`,
+			);
+			writeFileSync(
+				join(directory, "options.json"),
+				JSON.stringify({
+					model: "local-test",
+					disallowedTools: [],
+					boxTools: {
+						module: join(directory, "box.mjs"),
+						config: "box-tools.json",
+					},
+				}),
+			);
+			writeFileSync(
+				join(directory, "box-tools.json"),
+				JSON.stringify({ token: "fs-identity-token" }),
+			);
+			const edge = {
+				type: "http",
+				url: "https://edge.example/claude/mcp",
+				headers: { Authorization: "Bearer grant" },
+			};
+			writeFileSync(
+				join(directory, "mcp.json"),
+				JSON.stringify({ mcpServers: { ytimesy: edge } }),
+			);
+			writeFileSync(join(directory, "system"), "Local functional test.");
+			writeFileSync(join(directory, "prompt"), "Return a result.");
+			execFileSync(
+				process.execPath,
+				[
+					join(directory, "runner.mjs"),
+					join(directory, "sdk.mjs"),
+					directory,
+					directory,
+				],
+				{ encoding: "utf8" },
+			);
+			expect(
+				JSON.parse(readFileSync(join(directory, "seen.json"), "utf8")),
+			).toEqual({
+				ytimesy: {
+					type: "http",
+					url: "http://127.0.0.1:9/mcp",
+					headers: { Authorization: "Bearer local" },
+				},
+			});
+			expect(
+				JSON.parse(readFileSync(join(directory, "box-input.json"), "utf8")),
+			).toEqual({
+				edge: { url: edge.url, headers: edge.headers },
+				config: { token: "fs-identity-token" },
+			});
+			expect(
+				JSON.parse(readFileSync(join(directory, "box-tools-active"), "utf8")),
+			).toEqual(["read", "bash"]);
+			// The grant file is gone once the run started.
+			expect(() => readFileSync(join(directory, "box-tools.json"))).toThrow();
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("the actual SDK wrapper keeps every tool on the edge when the box tools do not start", () => {
+		const directory = mkdtempSync(join(tmpdir(), "claude-wrapper-"));
+		try {
+			writeFileSync(join(directory, "runner.mjs"), CLAUDE_AGENT_RUNNER_SCRIPT);
+			writeFileSync(
+				join(directory, "sdk.mjs"),
+				`import { writeFileSync } from "node:fs";
+export async function* query({ options }) {
+	writeFileSync(${JSON.stringify(join(directory, "seen.json"))}, JSON.stringify(options.mcpServers));
+	yield { type: "result" };
+}`,
+			);
+			writeFileSync(
+				join(directory, "options.json"),
+				JSON.stringify({
+					model: "local-test",
+					disallowedTools: [],
+					boxTools: {
+						module: join(directory, "missing.mjs"),
+						config: "box-tools.json",
+					},
+				}),
+			);
+			writeFileSync(join(directory, "box-tools.json"), "{}");
+			const edge = {
+				type: "http",
+				url: "https://edge.example/claude/mcp",
+				headers: {},
+			};
+			writeFileSync(
+				join(directory, "mcp.json"),
+				JSON.stringify({ mcpServers: { ytimesy: edge } }),
+			);
+			writeFileSync(join(directory, "system"), "Local functional test.");
+			writeFileSync(join(directory, "prompt"), "Return a result.");
+			execFileSync(
+				process.execPath,
+				[
+					join(directory, "runner.mjs"),
+					join(directory, "sdk.mjs"),
+					directory,
+					directory,
+				],
+				{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+			);
+			expect(
+				JSON.parse(readFileSync(join(directory, "seen.json"), "utf8")),
+			).toEqual({
+				ytimesy: edge,
+			});
+			expect(() => readFileSync(join(directory, "box-tools.json"))).toThrow();
+			expect(() => readFileSync(join(directory, "box-tools-active"))).toThrow();
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });

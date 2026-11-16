@@ -1,0 +1,146 @@
+import { WorkspaceId } from "#/domain/ids";
+import { posixShellQuoted as quote } from "#/domain/posix-command";
+import type {
+	CommandOutput,
+	WorkspaceMachines,
+} from "#/server/services/workspace-machines";
+
+/**
+ * The chat VM as the Claude runner box reaches it: through a Freestyle
+ * identity token that may only run commands on that one VM as one Linux user
+ * (claude-box-tool-grant.ts mints it). The token reaches the VM's exec and
+ * terminal routes only, so files are written and read with commands too, and
+ * the box cannot start, pause, resize or route the VM: those stay on the
+ * edge, which started it before the run.
+ */
+export type GuestExec = (options: {
+	command: string;
+	timeoutMs?: number;
+	/** Base64, at most 1 MiB decoded. */
+	stdin?: string;
+}) => Promise<{
+	stdout?: string | null;
+	stderr?: string | null;
+	statusCode?: number | null;
+}>;
+
+/**
+ * The provider answered a command with an error status that means it did
+ * not run it (the VM is paused or gone, the grant was revoked, a bad
+ * request): the call can be handed to the edge without running twice.
+ */
+export class BoxMachineRefused extends Error {
+	constructor(readonly status: number) {
+		super(`The workspace machine refused the command (${status}).`);
+		this.name = "BoxMachineRefused";
+	}
+}
+
+/** Freestyle's own exec limit. */
+export const GUEST_EXEC_MAX_MS = 300_000;
+/** Raw bytes per write command: 1 MiB of stdin at most, decoded. */
+const WRITE_CHUNK_BYTES = 768 * 1024;
+/** readTextFile's exit status for a missing file. */
+const MISSING_EXIT = 3;
+
+function statusOf(error: unknown): number | null {
+	const status = (error as { status?: unknown } | null)?.status;
+	return typeof status === "number" ? status : null;
+}
+
+/** 4xx (other than a request timeout) is answered before the guest runs anything. */
+function refusedBeforeRunning(status: number) {
+	return status >= 400 && status < 500 && status !== 408;
+}
+
+function unsupported(name: string): never {
+	throw new Error(`${name} is not available on the Claude runner box.`);
+}
+
+export function identityWorkspaceMachines(input: {
+	readonly vmId: string;
+	readonly exec: GuestExec;
+	/** Told after each command the guest ran (for the caller's per-call bookkeeping). */
+	readonly onRan?: () => void;
+}): WorkspaceMachines {
+	const only = (workspaceId: WorkspaceId) => {
+		if (workspaceId !== input.vmId)
+			throw new Error("This grant reaches only the chat's own machine.");
+	};
+	const run = async (
+		command: string,
+		timeoutMs: number,
+		stdin?: string,
+	): Promise<CommandOutput> => {
+		let result: Awaited<ReturnType<GuestExec>>;
+		try {
+			result = await input.exec({
+				command,
+				timeoutMs: Math.min(GUEST_EXEC_MAX_MS, Math.max(1, timeoutMs)),
+				...(stdin === undefined ? {} : { stdin }),
+			});
+		} catch (error) {
+			const status = statusOf(error);
+			if (status !== null && refusedBeforeRunning(status))
+				throw new BoxMachineRefused(status);
+			throw error;
+		}
+		input.onRan?.();
+		return {
+			// Null: killed by its time limit, reported as timeout(1) does.
+			exitCode: result.statusCode ?? 124,
+			stdout: result.stdout ?? "",
+			stderr: result.stderr ?? "",
+		};
+	};
+	return {
+		async exec(workspaceId, command, timeoutMs = 120_000) {
+			only(workspaceId);
+			return run(command, timeoutMs);
+		},
+		async writeTextFile(workspaceId, path, contents) {
+			only(workspaceId);
+			const bytes = Buffer.from(contents, "utf8");
+			for (
+				let start = 0;
+				start === 0 || start < bytes.length;
+				start += WRITE_CHUNK_BYTES
+			) {
+				const piece = bytes.subarray(start, start + WRITE_CHUNK_BYTES);
+				const command =
+					start === 0
+						? `mkdir -p -- "$(dirname -- ${quote(path)})" && cat > ${quote(path)}`
+						: `cat >> ${quote(path)}`;
+				const written = await run(command, 60_000, piece.toString("base64"));
+				if (written.exitCode !== 0)
+					throw new Error(
+						`Could not write ${path}: ${written.stderr.slice(-300)}`.trim(),
+					);
+			}
+		},
+		async readTextFile(workspaceId, path) {
+			only(workspaceId);
+			const read = await run(
+				`if [ -f ${quote(path)} ]; then cat -- ${quote(path)}; else exit ${MISSING_EXIT}; fi`,
+				60_000,
+			);
+			if (read.exitCode === MISSING_EXIT) return null;
+			if (read.exitCode !== 0)
+				throw new Error(`Could not read ${path}: ${read.stderr.slice(-300)}`);
+			return read.stdout;
+		},
+		// The edge started the VM before the run; an identity cannot start one.
+		ensureRunning: async (workspaceId) => {
+			only(workspaceId);
+			return WorkspaceId(input.vmId);
+		},
+		isRunning: async () => true,
+		createProofWorkspace: () => unsupported("createProofWorkspace"),
+		destroySnapshot: () => unsupported("destroySnapshot"),
+		destroy: () => unsupported("destroy"),
+		exposeHttp: () => unsupported("exposeHttp"),
+		destroyOrphans: () => unsupported("destroyOrphans"),
+		snapshotEnvironment: () => unsupported("snapshotEnvironment"),
+		provisionSession: () => unsupported("provisionSession"),
+	};
+}

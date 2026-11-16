@@ -271,6 +271,23 @@ export function harnessLifecycleHooks(input: {
 	}
 
 	return {
+		/**
+		 * Whether any hook runs around tool calls (PreToolUse, PostToolUse,
+		 * PostToolUseFailure). A configuration that cannot be read counts as
+		 * yes: tools that skip `wrap` (the Claude runner box's) must not run then.
+		 */
+		toolHooksConfigured: async (): Promise<boolean> => {
+			try {
+				return (await config()).hooks.some(
+					(hook) =>
+						hook.event === "PreToolUse" ||
+						hook.event === "PostToolUse" ||
+						hook.event === "PostToolUseFailure",
+				);
+			} catch {
+				return true;
+			}
+		},
 		wrap: (tools: ToolSet): ToolSet =>
 			Object.fromEntries(
 				Object.entries(tools).map(([name, definition]) => {

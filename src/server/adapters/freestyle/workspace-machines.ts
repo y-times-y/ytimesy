@@ -32,6 +32,10 @@ import type {
 import { abortableFreestyleFetch, callSignalFetch } from "./abortable-fetch";
 import { boundedFreestyleFetch, fastPollFreestyleFetch } from "./bounded-fetch";
 import {
+	mintBoxToolIdentity,
+	revokeBoxToolIdentity,
+} from "./box-tool-identity";
+import {
 	ensureVmEdgeAuthorizer,
 	listVmEdgeRoutes,
 	publishVmEdgeRoute,
@@ -468,6 +472,17 @@ export function createFreestyleWorkspaceMachines(
 					providerWorkspaceId: workspaceId,
 				});
 			}
+		},
+
+		boxToolIdentities: {
+			mint: (workspaceId, linuxUser, record) =>
+				mintBoxToolIdentity(freestyle.identities, {
+					vmId: workspaceId,
+					linuxUser,
+					record,
+				}),
+			revoke: (identityId) =>
+				revokeBoxToolIdentity(freestyle.identities, identityId),
 		},
 
 		async forkWorkspace(source, slug, sizeId) {

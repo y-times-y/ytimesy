@@ -8,6 +8,7 @@ import {
 	type ClaudeRunnerBox,
 } from "#/domain/claude-runner";
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
+import type { LeanToolShape } from "#/domain/harness-model-profile";
 import type { WorkspaceId } from "#/domain/ids";
 import { isReaderRole, type SubagentRole } from "#/domain/subagent";
 import { directTranscriptStore } from "../adapters/checkpoints/direct-transcript";
@@ -28,6 +29,12 @@ import {
 import { isPlatformRestart } from "../adapters/freestyle/provider-retry";
 import { gitProxyConfiguration } from "../adapters/github/git-proxy-transfer";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
+import {
+	type BoxToolIdentityStore,
+	grantClaudeBoxTools,
+	releaseClaudeBoxToolIdentity,
+} from "./claude-box-tool-grant";
+import { claudeBoxToolsBundle } from "./claude-box-tools-bundle";
 import {
 	CLAUDE_CODE_INBOX_CALL,
 	closeClaudeCodeBridge,
@@ -65,6 +72,12 @@ export function claudeCodeBridgeToolSet(
 		Object.entries(tools).filter(([name]) => !skipped.has(name)),
 	);
 }
+
+/**
+ * The VM each turn's current box tool grant was minted for, in this isolate
+ * (a restarted one does not know, and treats a replaced VM's grant as stale).
+ */
+const boxToolGrantVms = new Map<string, string>();
 
 /**
  * One durable step of a Claude Code turn, with the turn's context: its
@@ -109,6 +122,22 @@ export async function runClaudeCodeTurnStep(input: {
 	readonly runner?: {
 		readonly box: ClaudeRunnerBox;
 		readonly workspaceTools: readonly string[];
+		/**
+		 * The lean workspace tools the box runs itself against the chat's VM
+		 * (YTIMESY_CLAUDE_BOX_TOOLS, claude-box-tools/); absent: all on the edge.
+		 */
+		readonly boxTools?: {
+			readonly tools: readonly string[];
+			readonly shape: LeanToolShape;
+			readonly redact: () => readonly string[];
+			/**
+			 * Checked before each grant: false (repository tool hooks, say)
+			 * keeps the run's tools on the edge.
+			 */
+			readonly eligible: () => Promise<boolean>;
+			/** The turn's identity record (api_turn.box_tool_identity). */
+			readonly store: BoxToolIdentityStore;
+		};
 	};
 }): Promise<ClaudeCodeStepResult> {
 	const edge = gitProxyConfiguration();
@@ -131,6 +160,18 @@ export async function runClaudeCodeTurnStep(input: {
 	const vm = ready.vm;
 	const { machines } = input;
 	const box = input.runner ? claudeRunnerMachine(input.runner.box) : null;
+	const boxTools = input.runner?.boxTools;
+	// The chat's VM was replaced: the identity names the lost one. Deleting it
+	// sends a running box's calls to the edge, which uses the new VM. One
+	// minted for this VM (a later step of the turn) is kept; unknown is deleted.
+	if (
+		boxTools &&
+		ready.replacedFrom !== undefined &&
+		boxToolGrantVms.get(input.turnId) !== vm
+	) {
+		boxToolGrantVms.delete(input.turnId);
+		await releaseClaudeBoxToolIdentity({ machines, store: boxTools.store });
+	}
 	publishClaudeCodeTools(input.turnId, definitions);
 	const direct = directTranscriptStore(input.userId, input.sessionId);
 	const directTranscript = direct ? { direct } : {};
@@ -181,6 +222,26 @@ export async function runClaudeCodeTurnStep(input: {
 						remote: {
 							repository: ready.cwd,
 							workspaceTools: input.runner.workspaceTools,
+						},
+					}
+				: {}),
+			...(boxTools
+				? {
+						boxTools: {
+							tools: boxTools.tools,
+							shape: boxTools.shape,
+							redact: boxTools.redact,
+							grant: async () => {
+								if (!(await boxTools.eligible())) return null;
+								const grant = await grantClaudeBoxTools({
+									machines,
+									vm,
+									store: boxTools.store,
+								});
+								if (grant) boxToolGrantVms.set(input.turnId, grant.vmId);
+								return grant;
+							},
+							bundle: claudeBoxToolsBundle,
 						},
 					}
 				: {}),
@@ -266,7 +327,10 @@ export async function runClaudeCodeTurnStep(input: {
 			Promise.allSettled(running),
 			new Promise((resolve) => setTimeout(resolve, 5_000)),
 		]);
-		if (ended) closeClaudeCodeBridge(input.turnId);
+		if (ended) {
+			closeClaudeCodeBridge(input.turnId);
+			boxToolGrantVms.delete(input.turnId);
+		}
 	}
 }
 

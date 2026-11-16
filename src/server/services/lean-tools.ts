@@ -1,14 +1,9 @@
 import type { ToolSet } from "ai";
 import type { LeanToolShape } from "#/domain/harness-model-profile";
-import {
-	type LeanEngine,
-	type LeanSurfaceContext,
-	leanEngine,
-} from "./lean-engine";
-import { claudeTools } from "./lean-shapes/claude";
-import { codexTools } from "./lean-shapes/codex";
-import { coreTools } from "./lean-shapes/core";
-import { geminiTools } from "./lean-shapes/gemini";
+import { journaledToolOperation } from "./journaled-tool-operation";
+import type { LeanEngine, LeanSurfaceContext } from "./lean-engine";
+import { ensureLeanHelpers } from "./lean-helpers";
+import { leanShapeSurface } from "./lean-shape-surface";
 
 /**
  * The lean builder surfaces (docs/builder-tool-surface.md): each model family
@@ -23,20 +18,33 @@ import { geminiTools } from "./lean-shapes/gemini";
 
 export type { LeanCommandResult, LeanSurfaceContext } from "./lean-engine";
 
-/** The tools a lean shape offers, over the runtime's command tools in `base`. */
+/**
+ * The tools a lean shape offers, over the runtime's command tools in `base`.
+ * Writes run once per tool call through the durable journal unless the
+ * context gives its own `once`; helpers install with ensureLeanHelpers unless
+ * it gives `installHelpers`.
+ */
 export function leanShapeTools(
 	shape: LeanToolShape,
 	base: ToolSet,
 	context: LeanSurfaceContext,
 ): { tools: ToolSet; engine: LeanEngine } {
-	const engine = leanEngine(base, context);
-	const tools =
-		shape === "codex"
-			? codexTools(engine, base)
-			: shape === "claude"
-				? claudeTools(engine)
-				: shape === "gemini" || shape === "qwen"
-					? geminiTools(engine, shape === "qwen")
-					: coreTools(engine);
-	return { tools, engine };
+	return leanShapeSurface(shape, base, {
+		...context,
+		once:
+			context.once ??
+			((requestId, fingerprint, run) =>
+				journaledToolOperation(
+					{
+						sessionId: context.sessionId,
+						requestId,
+						fingerprint,
+						signal: context.signal,
+					},
+					run,
+				)),
+		installHelpers:
+			context.installHelpers ??
+			((workspace) => ensureLeanHelpers(workspace, context.sessionId)),
+	});
 }

@@ -127,3 +127,16 @@ export function builderToolSurface(input: {
 		},
 	};
 }
+
+/**
+ * The lean shape's own tools among `tools` (its shell, file and search tools,
+ * not report_task_blocked or anything the caller added): what a Claude runner
+ * box can serve itself (claude-box-tools/).
+ */
+export function leanSurfaceToolNames(
+	shape: LeanToolShape,
+	tools: ToolSet,
+): string[] {
+	const names = new Set<string>(Object.values(LEAN_SHAPE_TOOLS[shape]));
+	return Object.keys(tools).filter((name) => names.has(name));
+}

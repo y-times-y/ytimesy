@@ -7,9 +7,7 @@ import { agentOutputDirectory } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { STOPPED_COMMAND_STATUS } from "./api-agent-command-tools";
 import { COMMAND_WAIT_MAX_SECONDS } from "./command-wait";
-import { journaledToolOperation } from "./journaled-tool-operation";
 import { LeanEditError } from "./lean-edit";
-import { ensureLeanHelpers } from "./lean-helpers";
 import {
 	commandTruncationNote,
 	keepHead,
@@ -27,6 +25,11 @@ import { toolRequestFingerprint } from "./tool-execution-identity";
  * tracking); edits through one exact-then-fuzzy matcher; every output through
  * one limit (2000 lines / 50 KB, head for reads, tail for commands, with the
  * full command output kept in a file).
+ *
+ * The engine itself is pure over the workspace's machines: its journal and
+ * its helper installer are given to it (lean-tools.ts gives the edge's
+ * durable journal and ensureLeanHelpers; the Claude runner box gives its own,
+ * claude-box-tools/), so it bundles without the database or the helpers.
  */
 
 export type LeanSurfaceContext = {
@@ -55,6 +58,10 @@ export type LeanSurfaceContext = {
 		toolCallId: string,
 	) => Promise<string>;
 };
+
+/** What the engine runs with: the surface's context with its journal and helper installer decided. */
+export type LeanEngineContext = LeanSurfaceContext &
+	Required<Pick<LeanSurfaceContext, "once" | "installHelpers">>;
 
 /** Commands after which ytimesy-browser captures may be waiting: the browser command itself, or a wait on a background one. */
 const CAPTURING_COMMAND = /\bytimesy-(?:browser|job)\b/;
@@ -116,7 +123,7 @@ const HELPER_EXEC_MS = 30_000;
 const writableRoots = (cwd: string) => [cwd, MEMORY_DIRECTORY];
 
 /** The shared engine: one command runner, one file reader/writer, one edit matcher, one output limit. */
-export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
+export function leanEngine(base: ToolSet, context: LeanEngineContext) {
 	const { signal } = context;
 	const outputDirectory = agentOutputDirectory(context.sessionId);
 	const outputPath = (id: string) => `${outputDirectory}/${id}.stdout`;
@@ -137,10 +144,7 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 	const ready = async () => {
 		signal.throwIfAborted();
 		const workspace = await context.workspace();
-		const install = () =>
-			context.installHelpers
-				? context.installHelpers(workspace)
-				: ensureLeanHelpers(workspace, context.sessionId);
+		const install = () => context.installHelpers(workspace);
 		helpers ??= (
 			context.memo
 				? context.memo(`lean-helpers:${workspace.vm}`, install)
@@ -158,13 +162,7 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 		run: () => Promise<unknown>,
 	) => {
 		const requestId = `${context.turnId}:${context.toolCallPrefix ?? ""}${options.toolCallId}`;
-		const fingerprint = toolRequestFingerprint(name, args);
-		return context.once
-			? context.once(requestId, fingerprint, run)
-			: journaledToolOperation(
-					{ sessionId: context.sessionId, requestId, fingerprint, signal },
-					run,
-				);
+		return context.once(requestId, toolRequestFingerprint(name, args), run);
 	};
 	const call = async (name: string, args: unknown, options: ExecuteOptions) => {
 		const execute = base[name]?.execute;

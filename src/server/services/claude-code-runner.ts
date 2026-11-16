@@ -10,9 +10,14 @@ import {
 } from "#/domain/api-turn-failure";
 import { CANVAS_TOOL, canvasInstructions } from "#/domain/canvas";
 import { CLAUDE_AGENT_RUNNER_SCRIPT } from "#/domain/claude-agent-runner";
+import {
+	CLAUDE_BOX_TOOLS_ACTIVE,
+	CLAUDE_BOX_TOOLS_CONFIG,
+} from "#/domain/claude-box-tools";
 import { issueClaudeCodeGrant } from "#/domain/claude-code-grant";
 import { CLAUDE_CODE_PROXY_PREFIX } from "#/domain/claude-code-proxy";
 import {
+	CLAUDE_CODE_MCP_PREFIX,
 	CLAUDE_CODE_MCP_SERVER,
 	type ClaudeCodePlanStep,
 	type ClaudeCodeResult,
@@ -40,6 +45,7 @@ import {
 	MAX_DIRECT_TRANSCRIPT_BYTES,
 } from "#/domain/direct-transcript";
 import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
+import type { LeanToolShape } from "#/domain/harness-model-profile";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecretValues } from "#/domain/project-secret";
 import {
@@ -52,6 +58,7 @@ import type {
 	ClaudeSubscriptionStatus,
 } from "../adapters/claude-subscription";
 import { isPlatformRestart } from "../adapters/freestyle/provider-retry";
+import type { ClaudeBoxToolsConfig } from "../claude-box-tools/server";
 import {
 	COMMAND_SCOPES_DIRECTORY,
 	COMMAND_STOP_SCRIPT,
@@ -59,6 +66,7 @@ import {
 	scopedShellCommand,
 } from "./api-command-scope";
 import { ensureClaudeAgentSdk } from "./claude-agent-sdk";
+import type { ClaudeBoxToolGrant } from "./claude-box-tool-grant";
 import {
 	CLAUDE_STEP_MIN_AWAKE_MS,
 	CLAUDE_STEP_PAUSE_MS,
@@ -167,6 +175,21 @@ export type ClaudeCodeStepInput = {
 	readonly remote?: {
 		readonly repository: string;
 		readonly workspaceTools: readonly string[];
+	};
+	/**
+	 * With `remote`: the run serves these lean workspace tools on its runner
+	 * box, straight against the chat's VM (claude-box-tools/), instead of
+	 * through this object. Each new run gets its own grant; without one
+	 * (null) it uses the edge's tools as before.
+	 */
+	readonly boxTools?: {
+		readonly tools: readonly string[];
+		readonly shape: LeanToolShape;
+		/** Turn tokens the edge put on the VM, which results must not show. */
+		readonly redact: () => readonly string[];
+		readonly grant: () => Promise<ClaudeBoxToolGrant | null>;
+		/** The bundled tool server (scripts/build-claude-box-tools.ts) and its version. */
+		readonly bundle: () => { source: string; version: string };
 	};
 	/** Runs before a new run starts (not on later steps of one); throws to refuse it. */
 	readonly beforeLaunch?: () => Promise<void>;
@@ -498,7 +521,14 @@ async function claudeCodeStep(
 		run = launched.run;
 	}
 	const runDirectory = `${turnDirectory}/${run}`;
-	const reader = new ClaudeLineReader(input, claudeSessionId, measure);
+	const reader = new ClaudeLineReader(
+		input,
+		claudeSessionId,
+		measure,
+		input.boxTools
+			? () => boxToolsOfRun(input, `${input.turnId}:${run}`, runDirectory)
+			: null,
+	);
 	const backups = new TranscriptBackups(input, home, now);
 	/** The run reported its result: save its session, then the turn's answer. */
 	const finishResult = async (result: ClaudeCodeResult, commit: number) => {
@@ -818,13 +848,20 @@ class ClaudeLineReader {
 		private readonly input: ClaudeCodeStepInput,
 		public sessionId: string | null,
 		private readonly measure: StepMeasure,
+		/** The tools this run served on its box, when box tools are on. */
+		private readonly boxTools: (() => Promise<ReadonlySet<string>>) | null,
 	) {}
 	/** One line; its result, if it is the run's last. */
 	async read(line: string, key: string): Promise<ClaudeCodeResult | null> {
 		this.measure.lines++;
 		let result: ClaudeCodeResult | null = null;
+		const boxTools =
+			this.boxTools && line.includes(CLAUDE_CODE_MCP_PREFIX)
+				? await this.boxTools().catch(() => undefined)
+				: undefined;
 		for (const effect of claudeCodeEffects(line, key, {
 			toolName: this.input.toolName,
+			...(boxTools ? { boxTools } : {}),
 		})) {
 			if (effect.kind === "session") {
 				this.sessionId = effect.sessionId;
@@ -940,6 +977,92 @@ async function readMachineAndRunState(
 	};
 }
 
+/** Where the runner box keeps each version of the box tool server. */
+const BOX_TOOLS_DIRECTORY = ".ytimesy/claude-box-tools";
+
+/**
+ * Puts the box tool server's bundle on the runner box (once per version) and
+ * mints the run's grant. Null, logged, when either fails: the run then uses
+ * the edge's tools, as without box tools. The token is redacted from the
+ * turn and never logged.
+ */
+async function prepareBoxTools(
+	input: ClaudeCodeStepInput,
+	home: string,
+): Promise<{ module: string; config: ClaudeBoxToolsConfig } | null> {
+	const box = input.boxTools;
+	const remote = input.remote;
+	if (!box || !remote) return null;
+	try {
+		const bundle = box.bundle();
+		if (!/^[a-f0-9]{16,64}$/.test(bundle.version))
+			throw new Error("the box tool bundle has no version");
+		const module = `${home}/${BOX_TOOLS_DIRECTORY}/${bundle.version}.mjs`;
+		const present = await input.shell(`test -s ${quote(module)}`, 30_000);
+		if (present.exitCode !== 0) await input.writeFile(module, bundle.source);
+		const grant = await box.grant();
+		if (!grant) return null;
+		input.addRedaction?.(grant.token);
+		return {
+			module,
+			config: {
+				token: grant.token,
+				vmId: grant.vmId,
+				linuxUser: grant.linuxUser,
+				cwd: remote.repository,
+				sessionId: input.sessionId,
+				turnId: input.turnId,
+				shape: box.shape,
+				tools: box.tools,
+				redact: box.redact(),
+			},
+		};
+	} catch (error) {
+		console.warn("Claude box tools were not prepared; the edge serves them.", {
+			turnId: input.turnId,
+			message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+		});
+		return null;
+	}
+}
+
+/** The box tools each run served, by `turn:run`, as its runner wrote them. */
+const boxToolRuns = new Map<string, Promise<ReadonlySet<string>>>();
+
+/**
+ * The tools a run served on its box (CLAUDE_BOX_TOOLS_ACTIVE), read once per
+ * run: none when the file is missing (box tools off or not started), so the
+ * edge's bridge shows every call as before.
+ */
+function boxToolsOfRun(
+	input: ClaudeCodeStepInput,
+	key: string,
+	runDirectory: string,
+): Promise<ReadonlySet<string>> {
+	let found = boxToolRuns.get(key);
+	if (!found) {
+		found = input
+			.shell(
+				`cat -- ${quote(`${runDirectory}/${CLAUDE_BOX_TOOLS_ACTIVE}`)} 2>/dev/null; true`,
+				15_000,
+			)
+			.then(({ stdout }) => {
+				const names = stdout.trim() ? (JSON.parse(stdout) as unknown) : [];
+				return new Set(
+					Array.isArray(names)
+						? names.filter((name): name is string => typeof name === "string")
+						: [],
+				);
+			});
+		// A failed read is asked again on the next line.
+		found.catch(() => boxToolRuns.delete(key));
+		boxToolRuns.set(key, found);
+		if (boxToolRuns.size > 500)
+			boxToolRuns.delete(boxToolRuns.keys().next().value as string);
+	}
+	return found;
+}
+
 /**
  * Starts run `run` of this turn with the user messages since the last
  * answer, resuming the chat's Claude Code session when its transcript is
@@ -981,6 +1104,10 @@ async function launchRun(
 	const prompt = claudeCodePrompt(input.messages, Boolean(resumeId));
 	if (!prompt.trim()) return null;
 	input.addRedaction?.(grant);
+	const boxTools =
+		input.remote && input.boxTools && !input.reader
+			? await prepareBoxTools(input, home)
+			: null;
 	const inputs = input.reader
 		? `${readerScratchDirectory(input.sessionId)}/claude-${input.turnId}-${run}`
 		: runDirectory;
@@ -1042,8 +1169,25 @@ async function launchRun(
 							},
 						}
 					: {}),
+				...(boxTools
+					? {
+							boxTools: {
+								module: boxTools.module,
+								config: CLAUDE_BOX_TOOLS_CONFIG,
+							},
+						}
+					: {}),
 			}),
 		},
+		// The identity token, read and deleted by the runner when it starts.
+		...(boxTools
+			? [
+					{
+						path: `${runDirectory}/${CLAUDE_BOX_TOOLS_CONFIG}`,
+						contents: JSON.stringify(boxTools.config),
+					},
+				]
+			: []),
 		{
 			path: `${runDirectory}/runner.mjs`,
 			contents: CLAUDE_AGENT_RUNNER_SCRIPT,
@@ -1296,7 +1440,7 @@ async function finishRun(
 	commit: number,
 ) {
 	await shell(
-		`${commit >= 0 ? `printf '%s' ${commit} > ${quote(`${runDirectory}/offset`)}; ` : ""}: > ${quote(`${runDirectory}/consumed`)}; rm -f ${quote(`${runDirectory}/env`)} ${quote(`${runDirectory}/mcp.json`)}; true`,
+		`${commit >= 0 ? `printf '%s' ${commit} > ${quote(`${runDirectory}/offset`)}; ` : ""}: > ${quote(`${runDirectory}/consumed`)}; rm -f ${quote(`${runDirectory}/env`)} ${quote(`${runDirectory}/mcp.json`)} ${quote(`${runDirectory}/${CLAUDE_BOX_TOOLS_CONFIG}`)}; true`,
 		15_000,
 	).catch(() => undefined);
 }
@@ -1437,7 +1581,7 @@ export async function stopClaudeCodeRun(
 	if (!/^[a-f0-9-]{36}$/.test(turnId)) throw new Error("Invalid turn id.");
 	const root = commandScopeRoot(turnId);
 	await shell(
-		`d="$HOME"/${RUNS}/${turnId}; n=$(cat "$d/current" 2>/dev/null || true); case "$n" in ''|*[!0-9]*) exit 0;; esac; python3 -c ${quote(COMMAND_STOP_SCRIPT)} ${quote(root)} "cc-${turnId}-$n"; : > "$d/$n/consumed"; rm -f "$d/$n/env" "$d/$n/mcp.json"; true`,
+		`d="$HOME"/${RUNS}/${turnId}; n=$(cat "$d/current" 2>/dev/null || true); case "$n" in ''|*[!0-9]*) exit 0;; esac; python3 -c ${quote(COMMAND_STOP_SCRIPT)} ${quote(root)} "cc-${turnId}-$n"; : > "$d/$n/consumed"; rm -f "$d/$n/env" "$d/$n/mcp.json" "$d/$n/${CLAUDE_BOX_TOOLS_CONFIG}"; true`,
 		20_000,
 	);
 }
