@@ -6,11 +6,21 @@ Wants=network-online.target
 [Service]
 Type=simple
 DynamicUser=yes
-LoadCredential=proxy-key:/etc/ytimesy-codex-proxy.key
-Environment=CODEX_PROXY_SECRET_FILE=%d/proxy-key
+# The Workers' Ed25519 public key (base64 SPKI DER, mode 0644): not a secret.
+# The box holds no signing key. During the rollout only, a box that still has
+# the legacy shared secret can also accept the old HMAC form by adding:
+#   LoadCredential=proxy-key:/etc/ytimesy-codex-proxy.key
+#   Environment=CODEX_PROXY_SECRET_FILE=%d/proxy-key
+# (docs/research/codex-tunnel-production-2026-11-07.md, "Ed25519 credentials").
+Environment=CODEX_PROXY_PUBLIC_KEY_FILE=/etc/ytimesy-codex-proxy.pub
+Environment=PORT=443
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/bin/python3 /opt/ytimesy-codex-proxy.py
 Restart=always
 RestartSec=2
+# 78 (EX_CONFIG): no usable key or no python3-cryptography; restarting will not help.
+RestartPreventExitStatus=78
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
