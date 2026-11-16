@@ -37,8 +37,13 @@ export function AgentPanel({
 	const now = useNow(live);
 	if (helpers.length === 0 && background.length === 0) return null;
 	const { shown, folded } = foldAgentRows(helpers);
-	const all = [lead, ...helpers, ...background];
-	const working = all.filter((row) => row.status === "working").length;
+	// Agents are Main and its helpers. A background command is not one: it is
+	// counted on its own, so "3 agents working" never means three shell commands.
+	const agents = [lead, ...helpers];
+	const working = agents.filter((row) => row.status === "working").length;
+	const runningBackground = background.filter(
+		(row) => row.status === "working",
+	).length;
 	const rows = [lead, ...shown, ...(showFinished ? folded : [])];
 	return (
 		<TooltipPrimitive.Provider delayDuration={200}>
@@ -51,10 +56,14 @@ export function AgentPanel({
 					type="button"
 					className="agent-panel-summary"
 					aria-expanded={expanded}
-					onClick={() => setExpanded((open) => !open)}
+					onClick={() => {
+						setExpanded((open) => !open);
+						// Closing the panel returns it to its folded form.
+						if (expanded) setShowFinished(false);
+					}}
 				>
 					<span className="agent-panel-icons" aria-hidden="true">
-						{all.slice(0, 5).map((row) => (
+						{agents.slice(0, 5).map((row) => (
 							<AgentIcon
 								key={row.id}
 								icon={row.icon}
@@ -67,9 +76,18 @@ export function AgentPanel({
 							/>
 						))}
 					</span>
-					<span>{all.length} agents</span>
+					<span>
+						{agents.length} {agents.length === 1 ? "agent" : "agents"}
+					</span>
 					{working ? (
 						<span className="agent-panel-summary-meta">{working} working</span>
+					) : null}
+					{background.length ? (
+						<span className="agent-panel-summary-meta">
+							{runningBackground
+								? `${runningBackground} background running`
+								: `${background.length} background`}
+						</span>
 					) : null}
 					<ChevronRight
 						size={14}
@@ -89,14 +107,15 @@ export function AgentPanel({
 							/>
 						</li>
 					))}
-					{folded.length && !showFinished ? (
+					{folded.length ? (
 						<li>
 							<button
 								type="button"
 								className="agent-panel-more"
-								onClick={() => setShowFinished(true)}
+								aria-expanded={showFinished}
+								onClick={() => setShowFinished((shown) => !shown)}
 							>
-								+{folded.length} done
+								{showFinished ? "Hide done" : `+${folded.length} done`}
 							</button>
 						</li>
 					) : null}
@@ -105,6 +124,20 @@ export function AgentPanel({
 							<AgentRow row={row} now={now} selected={false} />
 						</li>
 					))}
+					{/* On a phone the list opens from the summary above it: this is the way
+					    back to the folded form without scrolling up to it. */}
+					<li className="agent-panel-collapse-item">
+						<button
+							type="button"
+							className="agent-panel-more agent-panel-collapse"
+							onClick={() => {
+								setExpanded(false);
+								setShowFinished(false);
+							}}
+						>
+							Show less
+						</button>
+					</li>
 				</ul>
 			</section>
 		</TooltipPrimitive.Provider>
