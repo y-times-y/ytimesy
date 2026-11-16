@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	lastMemoryReview,
 	memoryChat,
+	memoryChatsSince,
 	memoryProject,
 	memoryProjects,
 	memoryRecalls,
@@ -216,6 +217,101 @@ it("reads a project with its repository ids, and a chat with its project", async
 		name: "Web",
 		repositoryIds: [7, 9],
 	});
+});
+
+it("dreams from projected fields without transferring tool bodies or changing its input", async () => {
+	const { dreamChat } = await import("../services/memory-jobs");
+	await db.exec("create table harness_evaluation_run(root_session_id uuid)");
+	const since = new Date("2026-11-12T00:00:00Z");
+	const earlier = {
+		...said("old choice"),
+		timing: { startedAt: since.getTime() - 1000 },
+	};
+	const recent = {
+		...said("use tabs in the new parser"),
+		timing: { startedAt: since.getTime() + 1000 },
+	};
+	const items = [
+		earlier,
+		{
+			kind: "commandExecution",
+			id: "older-failure",
+			command: "old-check",
+			status: "failed",
+			exitCode: 2,
+			output: "old failure",
+		},
+		{ kind: "agentMessage", id: "old-answer", text: "old answer" },
+		recent,
+		{
+			kind: "dynamicToolCall",
+			id: "large-unused",
+			input: "unused input".repeat(20000),
+			output: "unused output".repeat(20000),
+		},
+		{
+			kind: "agentMessage",
+			id: "comment",
+			phase: "commentary",
+			text: "unused commentary".repeat(10000),
+		},
+		...Array.from({ length: 7 }, (_, index) => ({
+			kind: "commandExecution",
+			id: `failure-${index}`,
+			command: `new-check-${index}`,
+			status: "failed",
+			exitCode: index + 1,
+			output: `${"omitted prefix".repeat(3000)}${"🧪".repeat(400)}tail-${index}`,
+		})),
+		{
+			kind: "commandExecution",
+			id: "success",
+			command: "passing-check",
+			status: "completed",
+			exitCode: 0,
+			output: "unused successful output".repeat(10000),
+		},
+		{
+			kind: "commandExecution",
+			id: "running",
+			command: "unfinished-check",
+			status: "inProgress",
+			exitCode: null,
+			output: "unused running output".repeat(10000),
+		},
+		{ kind: "agentMessage", id: "first-answer", text: "intermediate answer" },
+		{ kind: "agentMessage", id: "last-answer", text: "the final answer" },
+	];
+	const id = await chat({ items });
+	await chat({ items, user: "u2" });
+	await chat({ items, parent: id });
+	await chat({ items, state: "running" });
+	// Both readers keep their existing timestamps (session vs latest turn).
+	// Align the fixture so the dream-input comparison also checks the date.
+	await db.query(
+		"update api_turn set updated_at=(select updated_at from agent_session where id=$1) where session_id=$1",
+		[id],
+	);
+	const [projected] = await memoryChatsSince("u1", since);
+	expect(projected?.id).toBe(id);
+	const complete = await memoryChat("u1", id);
+	if (!complete || !projected) throw new Error("Missing chat");
+	for (const boundary of [null, since])
+		for (const failures of [false, true])
+			expect(
+				dreamChat(projected, boundary, "https://example.test", failures),
+			).toEqual(
+				dreamChat(complete, boundary, "https://example.test", failures),
+			);
+	expect(JSON.stringify(projected).length).toBeLessThan(
+		JSON.stringify(complete).length / 20,
+	);
+	expect(complete.items).toHaveLength(items.length);
+	expect(await memoryChatsSince("nobody", since)).toEqual([]);
+	await db.query("update agent_session set items='null'::jsonb where id=$1", [
+		id,
+	]);
+	expect((await memoryChatsSince("u1", since))[0]?.items).toEqual([]);
 });
 
 it("records recalls by normalized text and reads when each line was last used", async () => {

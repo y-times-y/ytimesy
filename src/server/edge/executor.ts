@@ -66,6 +66,7 @@ import {
 	isRealtimeRoute,
 	routeRealtimeRequest,
 } from "../../realtime/worker";
+import { activeTurnHistory } from "../adapters/active-turn-history";
 import {
 	type ApiTurn,
 	abandonApiTurn,
@@ -99,7 +100,6 @@ import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
 import { registerMemoryRepos } from "../adapters/memory-repos";
 import { withConversationPublisher } from "../adapters/realtime-delivery";
 import { withTurnHistoryMirror } from "../adapters/turn-history-mirror";
-import { turnHistorySince } from "../adapters/turn-history-seed";
 import { turnStartRequest } from "../adapters/turn-start";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import {
@@ -150,7 +150,7 @@ import {
 } from "./machine-git-grant";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { stepFailureCause } from "./step-failure-cause";
-import { seededTranscript, TurnHistoryCache } from "./turn-history-cache";
+import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
 import { logTurnStepSizes } from "./turn-step-sizes";
 
@@ -854,70 +854,30 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				kind: "model-admission",
 			});
 	}
-	/**
-	 * A new turn's history from the chat's copy (kept when its last turn
-	 * ended, at transcript revision V) and only the item rows written after V,
-	 * instead of the whole transcript (megabytes) from Postgres. Null (read
-	 * it whole) when there is no copy, the turn keeps its items itself, or
-	 * the rows do not add up to a whole transcript.
-	 */
-	private async seedFromChatCopy(turnId: string, leaseId: string) {
-		let copy: ReturnType<TurnHistoryCache["chatCopy"]>;
+	private cachedModelHistory() {
 		try {
-			copy = this.history.chatCopy();
+			return this.history.chatMessagesCopy();
 		} catch {
 			return null;
 		}
-		if (!copy) return null;
-		// The last turn's model history too, when this turn continues it
-		// unchanged: then only the messages after it are read.
-		let messagesCopy: ReturnType<TurnHistoryCache["chatMessagesCopy"]> = null;
+	}
+
+	private cachedTurnHistory(
+		turnId: string,
+		version: string,
+		from: string | null,
+	) {
 		try {
-			messagesCopy = this.history.chatMessagesCopy();
-		} catch {
-			messagesCopy = null;
+			return from
+				? this.history.readActive(turnId, version, from)
+				: this.history.read(turnId, version);
+		} catch (error) {
+			console.warn(
+				"Turn history cache could not be read; loading stored history.",
+				{ cause: stepFailureCause(error) },
+			);
+			return null;
 		}
-		const row = await turnHistorySince(
-			turnId,
-			leaseId,
-			copy.itemsRev,
-			messagesCopy
-				? {
-						turnId: messagesCopy.turnId,
-						version: messagesCopy.version,
-						...(messagesCopy.settled
-							? { settledCount: messagesCopy.messages.length }
-							: {}),
-					}
-				: undefined,
-		);
-		if (!row || row.wholeItems) return null;
-		const items = seededTranscript(copy.items, row.count, row.changed);
-		if (!items) return null;
-		const continued =
-			row.messagesAfter !== null &&
-			messagesCopy !== null &&
-			messagesCopy.messages.length === row.messagesAfter;
-		// A count that does not match: the whole history from Postgres.
-		if (row.messagesAfter !== null && !continued) return null;
-		console.info(
-			JSON.stringify({
-				event: "turn.history_seeded",
-				turnId,
-				items: row.count,
-				rowsRead: row.changed.length,
-				messagesRead: row.messages.length,
-				messagesFromCopy: continued ? messagesCopy?.messages.length : 0,
-			}),
-		);
-		return {
-			messages:
-				continued && messagesCopy
-					? [...messagesCopy.messages, ...row.messages]
-					: row.messages,
-			items,
-			items_rev: row.itemsRev,
-		};
 	}
 	/**
 	 * Runs after Postgres committed the write: a local storage failure must not
@@ -1013,26 +973,31 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			);
 			row.cancel_requested = true;
 		}
-		let history = this.history.read(row.id, row.version);
+		let history = this.cachedTurnHistory(row.id, row.version, row.items_from);
 		const loadedFromDatabase = !history;
 		if (!history) {
-			const loaded =
-				(await this.seedFromChatCopy(row.id, leaseId)) ??
-				(
-					await database().query<
-						Pick<ApiTurn, "messages" | "items"> & { items_rev: string }
-					>(
-						// A turn row in the new shape keeps no items; the chat's are the history.
-						`select t.messages,case when jsonb_typeof(t.items)='array' then t.items else s.items end as items,
+			const loaded = row.items_from
+				? await activeTurnHistory(
+						row.id,
+						leaseId,
+						row.items_from,
+						this.cachedModelHistory(),
+					)
+				: (
+						await database().query<
+							Pick<ApiTurn, "messages" | "items"> & { items_rev: string }
+						>(
+							// A turn row in the new shape keeps no items; the chat's are the history.
+							`select t.messages,case when jsonb_typeof(t.items)='array' then t.items else s.items end as items,
 						 s.items_rev::text as items_rev
 						 from api_turn t join agent_session s on s.id=t.session_id where t.id=$1 and t.lease_id=$2`,
-						[row.id, leaseId],
-					)
-				).rows[0];
+							[row.id, leaseId],
+						)
+					).rows[0];
 			if (!loaded) return { kind: "unavailable" };
 			const { items_rev: itemsRev, ...whole } = loaded;
 			history = whole;
-			this.history.write(row.id, row.version, whole, undefined, itemsRev);
+			this.mirrorHistory(row.id, row.version, whole, undefined, itemsRev);
 		}
 		logTurnStepSizes(
 			row.id,

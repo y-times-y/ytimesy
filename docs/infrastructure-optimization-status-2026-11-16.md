@@ -64,6 +64,70 @@ isolation to hit the cost target.
 - The egress report passed a clean-copy run after installing declared
   dependencies with the Corepack download prompt disabled.
 
+## Active-turn working-view follow-up (local, not deployed)
+
+- Modern turn markers now load visible items from their indexed start position,
+  rather than reconstructing every older turn from Postgres or a local cache.
+  Matching predecessor model history still supplies its prefix locally; a stale
+  version falls back to the saved model messages, not an unverified prefix.
+- Independently parseable local item pages let a cache hit start at the active
+  user message or internal wake notice without joining/parsing old pages. Legacy
+  array-shaped turn rows retain their compatibility read path for one deploy.
+- Stream-only cache mirrors now stay in memory after the corresponding Postgres
+  progress write commits. Model/tool checkpoints persist the local cache; after
+  a reset, a newer Postgres version misses the older cache and reloads committed
+  progress. This removes SQLite mutations from those stream-only mirrors; it
+  does not remove the Postgres progress writes or make SQLite authoritative.
+- A failed cache write invalidates its version before changing pages, and cache
+  reads/writes are best-effort. Oversized individual cache items fall back to
+  Postgres rather than failing the turn.
+- Focused tests cover a different chat with 60 archived large items and only two
+  active items, preservation of archived content after checkpointing, wrong
+  leases/missing markers, predecessor-version mismatch, wake anchors, reset
+  recovery, and zero SQL mutations during stream-only cache updates.
+- `pnpm typecheck` and `YTIMESY_TARGET=cloudflare pnpm build` exited 0 for
+  this follow-up. The nine changed TypeScript files passed Biome.
+- The final focused history/recovery run exited 0: 210 tests in eight files.
+  The full-suite attempt passed 6,195 tests with eight skipped, but exited 1
+  because the Git CGI test fixture emitted an unhandled stdin `EPIPE` when its
+  child stopped reading a refused push. The fixture now keeps that CGI response
+  while forwarding other input errors to its reader; its 12 tests and Biome
+  passed (exit 0). The rerun exited 0: 6,195 passed and eight skipped,
+  with 863 test files passed and three skipped. That run preceded the newer
+  memory-dream projection; the projection has its separate focused checks below.
+
+This removes memory/egress growth from **older visible turns on the modern
+execution path**, not all possible growth. One extremely long active turn,
+model history, other full-transcript readers, and the legacy compatibility path
+still require work. Existing output previews are not a durable archive of the
+complete output and must not be described as lossless history. No 128 MiB
+worst-case proof, production result, or 100-user budget claim follows from these
+local tests.
+
+## Memory-dream egress follow-up (local, not deployed)
+
+- `memoryChatsSince` now projects just the fields `dreamChat` consumes inside
+  Postgres: user text/timing, non-commentary replies, and failed-command metadata
+  with output tails. Tool bodies, successful-command output and commentary stay
+  in the database. The authoritative transcript and `memoryChat` source reader
+  are unchanged. This does not bound all user/reply text in an unlimited chat.
+- A PGlite integration fixture verifies identical dream input with/without a
+  since boundary and failure inclusion, including supplementary Unicode in output
+  tails, first-five-failure selection, and last-reply selection. Its returned
+  projection is less than one twentieth the original fixture.
+- Memory adapter/job checks exited 0: 33 tests. `pnpm exec tsc --noEmit`
+  exited 0 after this change.
+- Read-only production-data verification with the local adapter (no deployment):
+  one eligible chat had 1,677 original items / 3,782,978 serialized bytes versus
+  277 projected items / 163,834 bytes, a 95.67% reduction for this read. All four
+  dream-input comparisons (since/no since, failures/no failures) were equal.
+  The diagnostic connection set `default_transaction_read_only=on`; no chat
+  text, user identifiers or credentials were printed. This one-chat result is
+  not an account-wide billing reduction or a 100-user capacity measurement.
+- A fresh `node --import tsx scripts/egress-report.ts 24` exited 0: 1.78 GB
+  of logged large results; ranked groups covered 96.6%. This still predates
+  deployment of these changes and excludes small reads/other provider egress.
+
 ## Remaining gates
 
 - Safe workspace pause during remote-model waits must preserve background

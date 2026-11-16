@@ -1,3 +1,4 @@
+import { startsTurn } from "#/domain/child-task-activity";
 import { jsonbText } from "#/domain/jsonb";
 import type { SessionItem } from "#/domain/session-item";
 
@@ -17,8 +18,10 @@ export function lastUserMessageIndex(items: readonly SessionItem[]) {
 export function newTurnItemsColumn(
 	items: readonly SessionItem[],
 ): string | null {
-	const last = lastUserMessageIndex(items);
-	return last >= 0 ? JSON.stringify({ from: items[last].id }) : null;
+	for (let index = items.length - 1; index >= 0; index--)
+		if (startsTurn(items[index]))
+			return JSON.stringify({ from: items[index].id });
+	return null;
 }
 
 /** A turn row's items as an array of this turn's items, in either shape. */
