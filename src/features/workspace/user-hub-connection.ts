@@ -20,6 +20,43 @@ import {
  */
 export const HUB_FAILURES_BEFORE_POLLING = 3;
 
+/**
+ * A tab that was away this long may have slept through pushes: its socket can
+ * look open while the phone or laptop slept (the silence check runs every two
+ * minutes, on a timer a hidden tab throttles). Coming back, the page asks the
+ * socket for an answer; none within HUB_PROBE_REPLY_MS and it reconnects, which
+ * starts with the whole map and so re-reads what was missed.
+ */
+export const HUB_PROBE_AFTER_AWAY_MS = 15_000;
+export const HUB_PROBE_REPLY_MS = 5_000;
+
+/** The browser's returns to the page: shown again, restored from the back-forward cache, back online. */
+function browserReturns(wake: (awayMs: number) => void) {
+	if (typeof document === "undefined") return () => {};
+	let hiddenAt: number | null = null;
+	const onVisibility = () => {
+		if (document.visibilityState === "hidden") {
+			hiddenAt = Date.now();
+			return;
+		}
+		const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+		hiddenAt = null;
+		wake(away);
+	};
+	const onPageShow = (event: PageTransitionEvent) => {
+		if (event.persisted) wake(Number.POSITIVE_INFINITY);
+	};
+	const onOnline = () => wake(Number.POSITIVE_INFINITY);
+	document.addEventListener("visibilitychange", onVisibility);
+	window.addEventListener("pageshow", onPageShow);
+	window.addEventListener("online", onOnline);
+	return () => {
+		document.removeEventListener("visibilitychange", onVisibility);
+		window.removeEventListener("pageshow", onPageShow);
+		window.removeEventListener("online", onOnline);
+	};
+}
+
 /** How often running chats in the background are read: never while the hub pushes. */
 export function backgroundTurnPollIntervalMs(hubOpen: boolean): number | false {
 	return hubOpen ? false : BACKGROUND_TURN_POLL_MS;
@@ -75,6 +112,8 @@ export type UserHubOptions = {
 	onDrop(): void;
 	location?: { protocol: string; host: string };
 	createSocket?: (url: string) => SocketLike;
+	/** Tells when the person is back after `awayMs` (the browser's events by default). */
+	watchReturn?: (wake: (awayMs: number) => void) => () => void;
 };
 
 export function userHubUrl(location: { protocol: string; host: string }) {
@@ -99,15 +138,19 @@ export function openUserHub(options: UserHubOptions): () => void {
 	let failedSockets = 0;
 	let retry: ReturnType<typeof setTimeout> | undefined;
 	let stopCurrent = () => {};
+	let probeCurrent = () => {};
 
 	const connect = () => {
 		if (closed) return;
 		const socket = createSocket(url);
 		let delivering = false;
 		let heardAt = Date.now();
+		let heardCount = 0;
 		let ping: ReturnType<typeof setInterval> | undefined;
+		let probeTimer: ReturnType<typeof setTimeout> | undefined;
 		const detach = () => {
 			clearInterval(ping);
+			clearTimeout(probeTimer);
 			socket.onopen = null;
 			socket.onmessage = null;
 			socket.onclose = null;
@@ -137,6 +180,21 @@ export function openUserHub(options: UserHubOptions): () => void {
 				socket.close(1000);
 			} catch {}
 		};
+		// Back after a while: is the socket still alive? Silence means it slept.
+		probeCurrent = () => {
+			if (!delivering || probeTimer !== undefined) return;
+			const before = heardCount;
+			try {
+				socket.send(LIVE_SOCKET_PING);
+			} catch {
+				end(null);
+				return;
+			}
+			probeTimer = setTimeout(() => {
+				probeTimer = undefined;
+				if (heardCount === before) end(null);
+			}, HUB_PROBE_REPLY_MS);
+		};
 		socket.onopen = () => {
 			heardAt = Date.now();
 			ping = setInterval(() => {
@@ -151,6 +209,7 @@ export function openUserHub(options: UserHubOptions): () => void {
 		};
 		socket.onmessage = (event) => {
 			heardAt = Date.now();
+			heardCount += 1;
 			const message = parseHubStateMessage(event.data);
 			if (!message) return;
 			if (!delivering) {
@@ -167,9 +226,21 @@ export function openUserHub(options: UserHubOptions): () => void {
 	};
 
 	connect();
+	const stopWatching = (options.watchReturn ?? browserReturns)((awayMs) => {
+		if (closed || awayMs < HUB_PROBE_AFTER_AWAY_MS) return;
+		if (retry !== undefined) {
+			// A reconnect waiting on a timer a hidden tab slowed: do it now.
+			clearTimeout(retry);
+			retry = undefined;
+			connect();
+			return;
+		}
+		probeCurrent();
+	});
 	return () => {
 		closed = true;
 		clearTimeout(retry);
+		stopWatching();
 		stopCurrent();
 	};
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { hubTopic } from "#/domain/user-hub";
 import {
+	AWAY_REREAD_MS,
 	agentPanelHubTopics,
 	anyChatTurn,
 	backgroundCommandHubTopics,
@@ -12,6 +13,7 @@ import {
 	hubDelivery,
 	hubReadDelayMs,
 	pollUnlessPushed,
+	tabWasAway,
 } from "./user-hub-store";
 
 describe("hubDelivery and pollUnlessPushed", () => {
@@ -156,5 +158,13 @@ describe("createUserHubStore", () => {
 			{ kind: "topics", topics: new Set(["push"]) },
 			{ kind: "resync" },
 		]);
+	});
+});
+
+describe("coming back to a tab that was away", () => {
+	it("re-reads after a long absence even while the hub looks open", () => {
+		expect(tabWasAway(1_000, 1_000 + AWAY_REREAD_MS)).toBe(true);
+		expect(tabWasAway(1_000, 1_000 + AWAY_REREAD_MS - 1)).toBe(false);
+		expect(tabWasAway(null, 99_999)).toBe(false);
 	});
 });

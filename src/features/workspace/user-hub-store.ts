@@ -191,7 +191,32 @@ export function useHubConnection(): HubConnection {
  * focus is not a burst of reads. Queries that set their own focus rule keep it.
  */
 export function refetchOnFocusUnlessPushed() {
-	return hubDelivery(userHubStore.connection()) !== "push";
+	return (
+		hubDelivery(userHubStore.connection()) !== "push" ||
+		tabWasAway(tabHiddenSince, Date.now())
+	);
+}
+
+/**
+ * A tab hidden this long may have missed pushes even though its socket looks
+ * open (a slept phone or laptop keeps a half-dead socket for minutes), so
+ * coming back re-reads like any other tab.
+ */
+export const AWAY_REREAD_MS = 15_000;
+
+export function tabWasAway(hiddenSince: number | null, now: number) {
+	return hiddenSince !== null && now - hiddenSince >= AWAY_REREAD_MS;
+}
+
+/** When the tab was hidden; kept until the focus handlers of that return have run. */
+let tabHiddenSince: number | null = null;
+if (typeof document !== "undefined") {
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "hidden") tabHiddenSince = Date.now();
+		// After this event's other listeners (the query client's focus
+		// refetch) have asked.
+		else setTimeout(() => (tabHiddenSince = null), 0);
+	});
 }
 
 export function useHubDelivery(): HubDelivery {
