@@ -2,6 +2,7 @@ import { Circle, CircleCheck, CircleDashed, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import type { AgentTodo } from "#/domain/agent-todos";
 import { foldFinished } from "#/domain/folded-list";
+import { useChatRefreshing } from "./chat-refreshing";
 
 /** Past this many done todos, the done ones fold into one "N done" row. */
 const DONE_TODOS_SHOWN = 6;
@@ -13,11 +14,13 @@ const DONE_TODOS_SHOWN = 6;
  */
 export function TodoList({
 	todos,
-	live = true,
+	live: liveProp = true,
 }: {
 	todos: readonly AgentTodo[];
 	live?: boolean;
 }) {
+	// A saved copy of the chat may say it works when it no longer does.
+	const live = liveProp && !useChatRefreshing();
 	const [showDone, setShowDone] = useState(false);
 	const done = todos.filter((todo) => todo.status === "completed").length;
 	const folded =

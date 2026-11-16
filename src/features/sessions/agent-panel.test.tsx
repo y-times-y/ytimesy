@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type AgentPanelRow, LEAD_ROW_ID } from "#/domain/agent-panel";
 import { KIND_ICONS } from "#/domain/helper-names";
 import { AgentPanel } from "./agent-panel";
+import { ChatRefreshingContext } from "./chat-refreshing";
 
 const row = (
 	id: string,
@@ -71,5 +72,25 @@ describe("the agents panel under the composer", () => {
 	it("offers a way back to the folded form", () => {
 		const html = render([row("build-1", "working")]);
 		expect(html).toContain("Show less");
+	});
+
+	it("says it is updating, not how many work, while the chat is refreshing", () => {
+		const html = text(
+			renderToStaticMarkup(
+				<ChatRefreshingContext.Provider value={true}>
+					<AgentPanel
+						lead={lead}
+						helpers={[row("build-1", "working")]}
+						background={[row("cmd-1", "working")]}
+						selectedId={LEAD_ROW_ID}
+						onSelect={() => undefined}
+					/>
+				</ChatRefreshingContext.Provider>,
+			),
+		);
+		expect(html).toContain("Updating…");
+		expect(html).not.toContain("2 working");
+		expect(html).not.toContain("background running");
+		expect(html).toContain("2 agents");
 	});
 });
