@@ -2703,12 +2703,16 @@ async function runApiTurnAttempt(
 										workspaceTools: Object.keys(surfaceTools),
 										// The lean workspace tools run on the box itself, with
 										// a per-run VM grant, when the flag is on and nothing
-										// needs this object around them: no project secrets to
-										// redact, no repository tool hooks (checked per grant).
+										// needs this object around them: no repository tool
+										// hooks, and runtime secrets only when the VM redacts
+										// them itself (both checked per grant).
 										...(surface.lean &&
 										!reader &&
-										!projectSecrets?.redact.length &&
-										claudeBoxToolsEnabled(process.env)
+										claudeBoxToolsEnabled(process.env) &&
+										// With runtime secrets only when the owner allows it:
+										// the box's VM token could read them (docs/claude-code-placement.md).
+										(!projectSecrets?.redact.length ||
+											process.env.YTIMESY_CLAUDE_BOX_TOOLS_SECRETS === "1")
 											? {
 													boxTools: {
 														tools: leanSurfaceToolNames(
@@ -2717,6 +2721,7 @@ async function runApiTurnAttempt(
 														),
 														shape: surface.lean.shape,
 														redact: () => [...vmTokens],
+														redactOnVm: Boolean(projectSecrets?.redact.length),
 														eligible: async () =>
 															!(await hooks.toolHooksConfigured()),
 														store: boxToolStore,

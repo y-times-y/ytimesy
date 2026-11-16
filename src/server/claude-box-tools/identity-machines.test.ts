@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
+import { VM_REDACTION_FAILED } from "#/domain/vm-secret-redaction";
 import {
 	BoxMachineRefused,
+	BoxRedactedWrite,
 	GUEST_EXEC_MAX_MS,
 	type GuestExec,
 	identityWorkspaceMachines,
@@ -97,6 +99,47 @@ describe("the runner box's identity machines", () => {
 		await machines.writeTextFile(VM, "/tmp/empty", "");
 		expect(exec.mock.calls[0]?.[0].stdin).toBe("");
 		expect(await machines.readTextFile(VM, "/tmp/missing")).toBeNull();
+	});
+
+	it("with runtime secrets, wraps each command for the VM's filter and strips its marker", async () => {
+		const exec = vi.fn<GuestExec>(async () => ({
+			statusCode: 0,
+			stdout: "out [REDACTED]",
+			stderr: "warn\nytimesy-vm-redaction:1\n",
+		}));
+		const onRedacted = vi.fn();
+		const machines = identityWorkspaceMachines({
+			vmId: "vm-1",
+			exec,
+			redactOnVm: { onRedacted },
+		});
+		expect(await machines.exec(VM, "make test")).toEqual({
+			exitCode: 0,
+			stdout: "out [REDACTED]",
+			stderr: "warn",
+		});
+		const sent = exec.mock.calls[0]?.[0].command ?? "";
+		expect(sent).toContain("\nmake test\n");
+		expect(sent).toContain("python3 -c");
+		expect(onRedacted).toHaveBeenCalledOnce();
+	});
+
+	it("with runtime secrets, refuses output the filter did not finish, and writes the caller refuses", async () => {
+		const machines = identityWorkspaceMachines({
+			vmId: "vm-1",
+			exec: async () => ({ statusCode: null, stdout: "", stderr: "" }),
+			redactOnVm: {
+				beforeWrite: () => {
+					throw new BoxRedactedWrite();
+				},
+			},
+		});
+		await expect(machines.exec(VM, "sleep 999")).rejects.toThrow(
+			VM_REDACTION_FAILED,
+		);
+		await expect(
+			machines.writeTextFile(VM, "/tmp/x", "a"),
+		).rejects.toBeInstanceOf(BoxRedactedWrite);
 	});
 
 	it("cannot start, route or delete the VM", async () => {
