@@ -55,3 +55,36 @@ it("keeps the recovery row's room under a message whose point has not loaded", (
 	const rule = css.match(/\n\.conversation-recovery \{[^}]*\}/)?.[0] ?? "";
 	expect(rule).toContain("min-height: 26px;");
 });
+
+it("offers no menu while forking is off and no code can be restored", () => {
+	const html = renderToStaticMarkup(
+		<ConversationRecovery
+			codeAvailable={false}
+			forkAvailable={false}
+			busy={false}
+			onRecover={async () => {}}
+		/>,
+	);
+	expect(html).toMatch(/^<div class="conversation-recovery"/);
+	expect(html).not.toContain("conversation-recovery-trigger");
+});
+
+it("names only the restore in the trigger while forking is off", () => {
+	const off = renderToStaticMarkup(
+		<ConversationRecovery
+			codeAvailable
+			forkAvailable={false}
+			busy={false}
+			onRecover={async () => {}}
+		/>,
+	);
+	const on = renderToStaticMarkup(
+		<ConversationRecovery
+			codeAvailable
+			busy={false}
+			onRecover={async () => {}}
+		/>,
+	);
+	expect(off).toContain('aria-label="Restore from here"');
+	expect(on).toContain('aria-label="Restore or fork from here"');
+});

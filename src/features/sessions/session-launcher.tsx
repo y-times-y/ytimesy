@@ -836,6 +836,7 @@ export function SessionLauncher({
 						return (
 							<ConversationRecovery
 								codeAvailable={point.codeAvailable}
+								forkAvailable={point.forkAvailable}
 								busy={busy || session.turnStatus === "running"}
 								onRecover={async (mode) => {
 									const recovered = await recoverPoint({

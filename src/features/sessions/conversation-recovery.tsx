@@ -19,10 +19,13 @@ export function refreshRecoveredWorkspace(client: QueryClient) {
 
 export function ConversationRecovery({
 	codeAvailable,
+	forkAvailable = true,
 	busy,
 	onRecover,
 }: {
 	codeAvailable: boolean;
+	/** False while forking is off; the menu then offers only the restores. */
+	forkAvailable?: boolean;
 	busy: boolean;
 	onRecover: (mode: "conversation" | "code" | "both" | "fork") => Promise<void>;
 }) {
@@ -44,6 +47,7 @@ export function ConversationRecovery({
 		}
 	}
 	const disabled = busy || pending;
+	if (!codeAvailable && !forkAvailable) return <ConversationRecoverySlot />;
 	return (
 		// Hidden until the message is hovered or focused (session-composer.css).
 		// A failure stays shown (data-error) until dismissed or the next action.
@@ -58,8 +62,12 @@ export function ConversationRecovery({
 						type="button"
 						className="conversation-recovery-trigger"
 						disabled={disabled}
-						aria-label="Restore or fork from here"
-						title="Restore or fork from here"
+						aria-label={
+							forkAvailable ? "Restore or fork from here" : "Restore from here"
+						}
+						title={
+							forkAvailable ? "Restore or fork from here" : "Restore from here"
+						}
 					>
 						<History size={14} aria-hidden="true" />
 					</button>
@@ -92,16 +100,18 @@ export function ConversationRecovery({
 									<Undo2 size={16} aria-hidden="true" />
 									Restore code and conversation
 								</DropdownMenu.Item>
-								<DropdownMenu.Separator />
+								{forkAvailable ? <DropdownMenu.Separator /> : null}
 							</>
 						) : null}
-						<DropdownMenu.Item
-							disabled={disabled}
-							onSelect={() => void recover("fork")}
-						>
-							<GitFork size={16} aria-hidden="true" />
-							Fork conversation
-						</DropdownMenu.Item>
+						{forkAvailable ? (
+							<DropdownMenu.Item
+								disabled={disabled}
+								onSelect={() => void recover("fork")}
+							>
+								<GitFork size={16} aria-hidden="true" />
+								Fork conversation
+							</DropdownMenu.Item>
+						) : null}
 					</DropdownMenu.Content>
 				</DropdownMenu.Portal>
 			</DropdownMenu.Root>
