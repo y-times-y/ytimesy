@@ -25,19 +25,33 @@ export function latestPageJoin(turns: number) {
 	 cross join lateral (select ${boundedPageStartSql("s.id", "turn_page.first")} as first) page`;
 }
 
+/** How much one page may hold at most (the newest item always fits). */
+export type PageLimits = { readonly bytes: number; readonly items: number };
+
 /** Indexed, bounded candidate rows; PostgreSQL keeps the rest of a long turn out of the Worker. */
 export function boundedPageStartSql(
 	session: string,
 	first: string,
 	stop?: string,
+	limits: PageLimits = {
+		bytes: TRANSCRIPT_PAGE_BYTES,
+		items: TRANSCRIPT_PAGE_ITEMS,
+	},
 ) {
-	return `(select coalesce(min(p.position) filter (where p.used_bytes <= ${TRANSCRIPT_PAGE_BYTES} or p.ordinal=1),0)
+	if (
+		!Number.isInteger(limits.bytes) ||
+		!Number.isInteger(limits.items) ||
+		limits.bytes < 1 ||
+		limits.items < 1
+	)
+		throw new Error("Invalid page.");
+	return `(select coalesce(min(p.position) filter (where p.used_bytes <= ${limits.bytes} or p.ordinal=1),0)
 	 from (select candidates.position,
 	 sum(candidates.bytes) over (order by candidates.position desc) as used_bytes,
 	 row_number() over (order by candidates.position desc) as ordinal
 	 from (select i.position,octet_length(i.item::text) as bytes from agent_session_item i
 	 where i.session_id=${session} and i.position >= ${first}${stop ? ` and i.position < ${stop}` : ""}
-	 order by i.position desc limit ${TRANSCRIPT_PAGE_ITEMS}) candidates) p)`;
+	 order by i.position desc limit ${limits.items}) candidates) p)`;
 }
 
 /** With latestPageJoin: bounded latest items, and whether older items remain pageable. */

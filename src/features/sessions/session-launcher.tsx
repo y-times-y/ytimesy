@@ -31,7 +31,10 @@ import {
 } from "#/domain/agent-provider";
 import { parseSteering } from "#/domain/agent-steering";
 import { recordedContextUsage } from "#/domain/api-progress";
-import type { AgentTaskActivity } from "#/domain/child-task-activity";
+import {
+	type AgentTaskActivity,
+	helperHasOlderItems,
+} from "#/domain/child-task-activity";
 import { isClaudeCodeRoute } from "#/domain/claude-code-route";
 import {
 	composerDraftKey,
@@ -223,6 +226,7 @@ export function SessionLauncher({
 	backgroundRuns,
 	onDraftStarted,
 	olderItems,
+	olderHelperItems,
 	loadedCatalog,
 	variant = "main",
 	setupHold,
@@ -248,6 +252,14 @@ export function SessionLauncher({
 	variant?: "main" | "side";
 	/** The chat holds turns before those shown; they load as the reader scrolls up. */
 	olderItems?: { readonly loading: boolean; readonly onLoad: () => void };
+	/**
+	 * A helper is read as its last page: its view loads older items as the
+	 * reader nears the top (`loadingId` is the helper being read).
+	 */
+	olderHelperItems?: {
+		readonly loadingId: string | null;
+		readonly onLoad: (helperId: string) => void;
+	};
 	/**
 	 * The model catalog the server read with the page's open chat: shown
 	 * until the browser's own read of it lands, so the model button keeps
@@ -1334,6 +1346,14 @@ export function SessionLauncher({
 					<SessionTimeline
 						key={selectedTask.id}
 						items={selectedTask.items}
+						olderItems={
+							olderHelperItems && helperHasOlderItems(selectedTask)
+								? {
+										loading: olderHelperItems.loadingId === selectedTask.id,
+										onLoad: () => olderHelperItems.onLoad(selectedTask.id),
+									}
+								: undefined
+						}
 						turnStatus={selectedTask.turnStatus}
 						tasks={childTasks}
 						taskParentId={selectedTask.id}

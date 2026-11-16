@@ -20,14 +20,14 @@ import { sessionTitleFromText } from "#/domain/session-item";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
-	agentSessionItemsOfKindsForOwner,
 	agentSessionMetadataForOwner,
 	childAgentSession,
 	deleteAgentSessionForOwner,
-	descendantAgentSessions,
+	descendantAgentSessionMetadata,
 	insertAgentSession,
 	latestAgentSessionMetadata,
 	listAgentSessions,
+	listedModelBlockItemsForOwner,
 	providerRefsHeldOutside,
 	reusableEmptyChat,
 	saveAgentSessionProviderRef,
@@ -121,7 +121,7 @@ async function resolveAgentSessionRecord(
 	if (!workspace) {
 		throw new Error("Prepare a project environment before starting an agent.");
 	}
-	let listed: Promise<AgentSessionRecord[]> | undefined;
+	let listed: Promise<Omit<AgentSessionRecord, "items">[]> | undefined;
 	const sessions = () => {
 		listed ??= listAgentSessions(input.userId, input.projectId);
 		return listed;
@@ -145,36 +145,10 @@ async function resolveAgentSessionRecord(
 	const inherited =
 		selected || input.listedModelId?.trim()
 			? null
-			: listedModelPreferenceFromSessions({
-					harness: input.harness,
-					sessions: [
-						...(parent
-							? [
-									{
-										harness: parent.harness,
-										listedModelId: parent.listedModelId,
-										items:
-											parent.harness === input.harness &&
-											parent.listedModelId?.trim()
-												? // Only what sessionListedModelIsBlocked scans.
-													((
-														await agentSessionItemsOfKindsForOwner(
-															input.userId,
-															[parent.id],
-															["error", "agentMessage"],
-														)
-													).get(parent.id) ?? [])
-												: [],
-									},
-								]
-							: []),
-						...(await sessions()).map((session) => ({
-							harness: session.harness,
-							listedModelId: session.listedModelId,
-							items: session.items,
-						})),
-					],
-				});
+			: await inheritedListedModel(input.userId, input.harness, [
+					...(parent ? [parent] : []),
+					...(await sessions()),
+				]);
 	const session =
 		selected ??
 		(await insertAgentSession({
@@ -196,6 +170,41 @@ async function resolveAgentSessionRecord(
 			templateSnapshotId: workspace.templateSnapshotId,
 		},
 	};
+}
+
+/**
+ * The model a new chat takes from its parent and the project's chats
+ * (listedModelPreferenceFromSessions). Their transcripts are not read: only
+ * what sessionListedModelIsBlocked scans, of the chats on this runtime that
+ * name a model.
+ */
+async function inheritedListedModel(
+	userId: string,
+	harness: AgentProviderId,
+	sessions: readonly Pick<
+		AgentSessionRecord,
+		"id" | "harness" | "listedModelId"
+	>[],
+) {
+	const scanned = [
+		...new Set(
+			sessions
+				.filter(
+					(session) =>
+						session.harness === harness && session.listedModelId?.trim(),
+				)
+				.map((session) => session.id),
+		),
+	];
+	const items = await listedModelBlockItemsForOwner(userId, scanned);
+	return listedModelPreferenceFromSessions({
+		harness,
+		sessions: sessions.map((session) => ({
+			harness: session.harness,
+			listedModelId: session.listedModelId,
+			items: items.get(session.id) ?? [],
+		})),
+	});
 }
 
 /**
@@ -592,7 +601,11 @@ export async function deleteAgentSessionMachine(
 		throw new Error("Agent session is not available.");
 	}
 	const workspace = await workspaceForProject(input.userId, input.projectId);
-	const children = await descendantAgentSessions(input.userId, session.id);
+	// Ids, machines and roles only: no transcript is read to delete one.
+	const children = await descendantAgentSessionMetadata(
+		input.userId,
+		session.id,
+	);
 	const removed = [session, ...children];
 	// Their running turns stop before their state goes (cancel, then purge).
 	for (const chat of removed) await cancelServerTurn(input.userId, chat.id);

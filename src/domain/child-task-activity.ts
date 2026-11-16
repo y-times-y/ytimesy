@@ -26,6 +26,12 @@ export type AgentTaskActivity = AgentTask & {
 	 */
 	readonly itemPositions?: readonly number[];
 	/**
+	 * The stored position the items held start at: a helper is read as its
+	 * last page (HELPER_PAGE), not whole; above 0 its older items load on
+	 * demand (helperHasOlderItems). Absent: the items start at 0.
+	 */
+	readonly itemsFrom?: number;
+	/**
 	 * A helper still working: only what changed in its transcript since the
 	 * `itemsRev` the browser sent (`base`), instead of the whole transcript
 	 * and its spend (the browser keeps its own `subagent` and `contextUsage`
@@ -47,6 +53,28 @@ export type AgentTaskActivity = AgentTask & {
  */
 export const HELPER_FULL_READ_MS = 10 * 60_000;
 
+/**
+ * How much of a helper's transcript a read sends: its last turns, bounded
+ * (the agents list reads only the latest reply, prompt and turn end; the
+ * helper's own view loads older pages as the reader scrolls up). Whole
+ * transcripts of every helper were megabytes per page load.
+ */
+export const HELPER_PAGE = { turns: 2, bytes: 32 * 1024, items: 40 } as const;
+
+/** An older page of a helper, read as the reader scrolls up its view. */
+export const HELPER_OLDER_PAGE = {
+	turns: 5,
+	bytes: 192 * 1024,
+	items: 150,
+} as const;
+
+/** The helper's transcript holds items before the ones the browser has. */
+export function helperHasOlderItems(
+	task: Pick<AgentTaskActivity, "itemsFrom">,
+) {
+	return (task.itemsFrom ?? 0) > 0;
+}
+
 /** A transcript's rows written after `base` (their positions), and its length now. */
 export type ItemsDelta = {
 	readonly base: string;
@@ -58,15 +86,21 @@ export type ItemsDelta = {
 	}[];
 };
 
-/** A stored transcript as the view shows it, each item with its stored position. */
-export function publicItemsWithPositions(stored: readonly SessionItem[]) {
+/**
+ * A stored transcript (or the page of it that starts at stored position
+ * `first`) as the view shows it, each item with its stored position.
+ */
+export function publicItemsWithPositions(
+	stored: readonly SessionItem[],
+	first = 0,
+) {
 	const items: SessionItem[] = [];
 	const positions: number[] = [];
-	stored.forEach((item, position) => {
+	stored.forEach((item, index) => {
 		const shown = childTaskPublicItems([item])[0];
 		if (shown) {
 			items.push(shown);
-			positions.push(position);
+			positions.push(first + index);
 		}
 	});
 	return { items, positions };
@@ -76,11 +110,14 @@ export function publicItemsWithPositions(stored: readonly SessionItem[]) {
  * The items the browser holds (at the delta's `base` revision) with the
  * delta's rows applied. Null when they do not fit (positions missing, a row
  * past the transcript's length): the caller reads the whole transcript.
+ * Rows before `held.from` (an older page the browser has not loaded, such
+ * as a background command's card closing) are left out: they load with it.
  */
 export function applyItemsDelta(
 	held: {
 		readonly items: readonly SessionItem[];
 		readonly positions: readonly number[];
+		readonly from?: number;
 	},
 	delta: ItemsDelta,
 ): { items: SessionItem[]; positions: number[] } | null {
@@ -98,6 +135,7 @@ export function applyItemsDelta(
 			row.position >= delta.count
 		)
 			return null;
+		if (row.position < (held.from ?? 0)) continue;
 		if (row.item) byPosition.set(row.position, row.item);
 		else byPosition.delete(row.position);
 	}
@@ -169,7 +207,7 @@ export function mergeAgentTaskActivity(
 	const merged: AgentTaskActivity[] = [];
 	for (const task of next) {
 		if (!task.unchanged && !task.itemsDelta) {
-			merged.push(task);
+			merged.push(withHeldOlderItems(held.get(task.id), task));
 			continue;
 		}
 		const before = held.get(task.id);
@@ -182,7 +220,11 @@ export function mergeAgentTaskActivity(
 			if (before.itemsRev !== itemsDelta.base || !before.itemPositions)
 				return null;
 			const applied = applyItemsDelta(
-				{ items: before.items, positions: before.itemPositions },
+				{
+					items: before.items,
+					positions: before.itemPositions,
+					from: before.itemsFrom,
+				},
 				itemsDelta,
 			);
 			if (!applied) return null;
@@ -193,6 +235,7 @@ export function mergeAgentTaskActivity(
 			...rest,
 			items,
 			...(itemPositions ? { itemPositions } : {}),
+			...(before.itemsFrom ? { itemsFrom: before.itemsFrom } : {}),
 			// A delta carries them read from the turns' starts; else the held ones.
 			...((rest.contextUsage ?? before.contextUsage)
 				? { contextUsage: rest.contextUsage ?? before.contextUsage }
@@ -203,6 +246,72 @@ export function mergeAgentTaskActivity(
 		});
 	}
 	return merged;
+}
+
+/**
+ * A helper read again as its last page keeps the older items the browser
+ * already loaded above it (the reader scrolled up), when the two meet: the
+ * page's first shown item is one the browser holds at the same position.
+ * Otherwise the page stands alone and older items load again on demand.
+ */
+function withHeldOlderItems(
+	before: AgentTaskActivity | undefined,
+	task: AgentTaskActivity,
+): AgentTaskActivity {
+	const from = task.itemsFrom ?? 0;
+	if (
+		!before ||
+		before.unchanged ||
+		before.itemsDelta ||
+		!before.itemPositions ||
+		!task.itemPositions ||
+		from === 0 ||
+		(before.itemsFrom ?? 0) >= from
+	)
+		return task;
+	const anchor = task.itemPositions[0];
+	const at = anchor === undefined ? -1 : before.itemPositions.indexOf(anchor);
+	if (at < 0 || before.items[at]?.id !== task.items[0]?.id) return task;
+	const older = before.itemPositions
+		.slice(0, at)
+		.flatMap((position, index) =>
+			position < from ? [{ position, item: before.items[index] }] : [],
+		)
+		.filter((entry): entry is { position: number; item: SessionItem } =>
+			Boolean(entry.item),
+		);
+	return {
+		...task,
+		items: [...older.map((entry) => entry.item), ...task.items],
+		itemPositions: [
+			...older.map((entry) => entry.position),
+			...task.itemPositions,
+		],
+		itemsFrom: before.itemsFrom ?? 0,
+	};
+}
+
+/**
+ * A helper's older page (read as the reader scrolls up its view) put above
+ * the items the browser holds. Unchanged when the browser's copy no longer
+ * starts where the page ends (a newer read replaced it meanwhile).
+ */
+export function withOlderHelperPage(
+	task: AgentTaskActivity,
+	page: {
+		readonly before: number;
+		readonly itemsFrom: number;
+		readonly items: readonly SessionItem[];
+		readonly itemPositions: readonly number[];
+	},
+): AgentTaskActivity {
+	if ((task.itemsFrom ?? 0) !== page.before || !task.itemPositions) return task;
+	return {
+		...task,
+		items: [...page.items, ...task.items],
+		itemPositions: [...page.itemPositions, ...task.itemPositions],
+		itemsFrom: page.itemsFrom,
+	};
 }
 
 /** The transcript revisions a poll sends back (`known`). */
