@@ -128,6 +128,21 @@ local tests.
   of logged large results; ranked groups covered 96.6%. This still predates
   deployment of these changes and excludes small reads/other provider egress.
 
+## Memory diagnostics follow-up
+
+The step-size logger no longer serializes an entire history array into a second
+large string just to measure it. It sums the JSON framing and UTF-8 byte count
+of each entry, so supplementary Unicode is counted correctly rather than as
+JavaScript string length. Cache-hit steps still skip this serialization walk.
+The four step-size tests and edge-executor TypeScript check exited 0; the new
+test compares exact serialized UTF-8 sizes and asserts neither whole array is
+serialized. This bounds the diagnostic temporary allocation to one entry, not
+the underlying turn state or a single oversized entry.
+
+An additional clean-environment VM sizing/lifecycle and box-grant regression
+run exited 0 (25 tests in three files). These fixture tests are not evidence
+that live AWS boxes have had their persistent credentials removed.
+
 ## Remaining gates
 
 - Safe workspace pause during remote-model waits must preserve background
