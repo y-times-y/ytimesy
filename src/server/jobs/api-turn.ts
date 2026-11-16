@@ -586,7 +586,7 @@ async function runApiTurnAttempt(
 	 * tools (claude-box-tool-grant.ts), recorded on the turn row.
 	 */
 	const boxToolStore: BoxToolIdentityStore = {
-		current: () => turnBoxToolIdentity(turn.id),
+		current: () => turnBoxToolIdentity(turn.id, turn.lease_id ?? null),
 		record: (identityId) =>
 			turn.lease_id
 				? recordTurnBoxToolIdentity(turn.id, turn.lease_id, identityId)
@@ -3076,7 +3076,11 @@ async function runApiTurnAttempt(
 		const saved = await timed("turn:finalize", () =>
 			finalizeApiTurn(turn, "completed", items),
 		);
-		await releaseBoxTools();
+		// Bounded: a slow provider never holds the turn's settled state back.
+		await Promise.race([
+			releaseBoxTools(),
+			new Promise((resolve) => setTimeout(resolve, 3_000)),
+		]);
 		if (saved !== "completed") {
 			// A stop that raced completion still hands off what was committed.
 			if (saved === "cancelled" && committed?.publish)
@@ -3514,7 +3518,11 @@ async function runApiTurnAttempt(
 		const saved = await (failedAttempt?.inFlight
 			? finalizeApiTurn(turn, settledState, items, failedAttempt.inFlight)
 			: finalizeApiTurn(turn, settledState, items));
-		await releaseBoxTools();
+		// Bounded: a slow provider never holds the turn's settled state back.
+		await Promise.race([
+			releaseBoxTools(),
+			new Promise((resolve) => setTimeout(resolve, 3_000)),
+		]);
 		if (saved)
 			await publishProgress?.(saved === "cancelled" ? "idle" : "failed").catch(
 				() => {},

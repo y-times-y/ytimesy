@@ -58,6 +58,7 @@ import {
 	requestClaudeStepPark,
 	requestClaudeStepPause,
 } from "./claude-step-pause";
+import { ensureLeanHelpers } from "./lean-helpers";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Native web tools stay local; workspace work uses the tracked MCP tool lifecycle on either host. */
@@ -238,7 +239,15 @@ export async function runClaudeCodeTurnStep(input: {
 									vm,
 									store: boxTools.store,
 								});
-								if (grant) boxToolGrantVms.set(input.turnId, grant.vmId);
+								if (grant) {
+									boxToolGrantVms.set(input.turnId, grant.vmId);
+									// The box serves the lean tools itself: their helper
+									// commands go on the VM now, as the edge's tools would.
+									await ensureLeanHelpers(
+										{ machines, vm },
+										input.sessionId,
+									).catch(() => undefined);
+								}
 								return grant;
 							},
 							bundle: claudeBoxToolsBundle,
