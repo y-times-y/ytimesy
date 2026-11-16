@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { claudeCodeTurnRevision } from "../src/domain/claude-code-route";
 import { SessionItemId } from "../src/domain/ids";
 import { subscriptionTurnRevision } from "../src/domain/subscription-turn";
 import {
@@ -17,6 +18,7 @@ import {
 	publishApiTurnProgress,
 	releaseClaimedApiTurn,
 	renewApiTurn,
+	renewParkedClaudeTurn,
 	TurnBaseChanged,
 } from "../src/server/adapters/api-turns";
 import {
@@ -1481,4 +1483,109 @@ it("plans on the history itself when the last turn left a tool call unanswered",
 		await previousTurnMessages("alice", sessionId, "test-model", revision),
 	);
 	expect(previous?.messages).toHaveLength(3);
+});
+
+/** A running turn on a chat object (durable-object), made a Claude Code turn when asked. */
+async function durableTurn(claude: boolean) {
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
+	await submit();
+	const turn = await claimApiTurn(2, 8, "durable-object");
+	if (!turn?.lease_id) throw new Error("not claimed");
+	if (claude)
+		await db.query(
+			"update api_turn set connection_id=null,connection_revision=$2 where id=$1",
+			[turn.id, claudeCodeTurnRevision()],
+		);
+	return turn;
+}
+const heartbeatAgo = (turnId: string, seconds: number) =>
+	db.query(
+		"update api_turn set heartbeat_at=now()-make_interval(secs=>$2) where id=$1",
+		[turnId, seconds],
+	);
+
+it("lets a chat object's Claude Code turn renew within 150 seconds, other turns still within 45", async () => {
+	const claude = await durableTurn(true);
+	// Parked: 100 s since its last renewal, still its own.
+	await heartbeatAgo(claude.id, 100);
+	expect(await renewApiTurn(claude)).toBe(true);
+	await heartbeatAgo(claude.id, 100);
+	await publishApiTurnProgress(claude, []);
+	await heartbeatAgo(claude.id, 140);
+	await checkpointApiTurn(claude, [{ role: "assistant", content: "ok" }], []);
+	// Past its window: lost, like any stale lease.
+	await heartbeatAgo(claude.id, 151);
+	expect(await renewApiTurn(claude)).toBe(false);
+	await expect(publishApiTurnProgress(claude, [])).rejects.toThrow("lease");
+	expect(await finalizeApiTurn(claude, "completed", [])).toBeNull();
+	await db.exec(
+		"truncate api_turn cascade; update agent_session set turn_status='idle'",
+	);
+
+	// An API turn on the same executor keeps 45 seconds.
+	const api = await durableTurn(false);
+	await heartbeatAgo(api.id, 46);
+	expect(await renewApiTurn(api)).toBe(false);
+	await db.exec(
+		"truncate api_turn cascade; update agent_session set turn_status='idle'",
+	);
+
+	// So does a Claude Code turn a box runs (executor node).
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "node");
+	await submit();
+	const box = await claimApiTurn(2, 8, "node");
+	if (!box) throw new Error("not claimed");
+	await db.query(
+		"update api_turn set connection_id=null,connection_revision=$2 where id=$1",
+		[box.id, claudeCodeTurnRevision()],
+	);
+	await heartbeatAgo(box.id, 46);
+	expect(await renewApiTurn({ ...box, connection_id: null } as never)).toBe(
+		false,
+	);
+});
+
+it("expires a parked Claude Code turn only after the chat objects' three minutes", async () => {
+	const turn = await durableTurn(true);
+	await heartbeatAgo(turn.id, 150);
+	await expireApiTurnLeases();
+	expect(
+		(await db.query("select state from api_turn where id=$1", [turn.id]))
+			.rows[0],
+	).toEqual({ state: "running" });
+	await heartbeatAgo(turn.id, 181);
+	await expireApiTurnLeases();
+	expect(
+		(await db.query("select state from api_turn where id=$1", [turn.id]))
+			.rows[0],
+	).toEqual({ state: "failed" });
+});
+
+it("renews a parked Claude Code turn in one statement, asking for a step when anything needs one", async () => {
+	const turn = await durableTurn(true);
+	const lease = turn.lease_id as string;
+	await heartbeatAgo(turn.id, 100);
+	expect(await renewParkedClaudeTurn(turn.id, lease)).toBe("renewed");
+	expect(
+		(
+			await db.query<{ fresh: boolean }>(
+				"select heartbeat_at>now()-interval '5 seconds' as fresh from api_turn where id=$1",
+				[turn.id],
+			)
+		).rows[0],
+	).toEqual({ fresh: true });
+	// A peer message waiting: renewed, but a step should see it.
+	await db.query(
+		"insert into agent_peer_inbox(id,recipient_id,message) values('m1',$1,'hello')",
+		[sessionId],
+	);
+	expect(await renewParkedClaudeTurn(turn.id, lease)).toBe("inbox");
+	await db.exec("delete from agent_peer_inbox");
+	// Another lease, a stale lease, or Stop: lost, and a step settles it.
+	expect(await renewParkedClaudeTurn(turn.id, randomUUID())).toBe("lost");
+	await heartbeatAgo(turn.id, 151);
+	expect(await renewParkedClaudeTurn(turn.id, lease)).toBe("lost");
+	await heartbeatAgo(turn.id, 10);
+	await cancelApiTurn("alice", sessionId);
+	expect(await renewParkedClaudeTurn(turn.id, lease)).toBe("lost");
 });

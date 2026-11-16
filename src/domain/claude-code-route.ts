@@ -9,6 +9,8 @@ import { CLAUDE_EFFORT_LEVELS, reasoningCapability } from "./model-connection";
  */
 const ROUTE_PREFIX = "claude-code/";
 const REVISION_PREFIX = "claude-code:v1:";
+/** What a Claude Code turn's connection revision starts with (isClaudeCodeRevision), for SQL. */
+export const CLAUDE_CODE_REVISION_PREFIX = REVISION_PREFIX;
 
 /** The connection key routes, failover and preferences use for the subscription. */
 export const CLAUDE_CODE_KEY = "claude-code";

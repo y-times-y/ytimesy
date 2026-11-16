@@ -51,6 +51,11 @@ export class SqliteClaudeFeed {
 				.toArray()[0] ?? null
 		);
 	}
+	/** The record of the turn's current (latest) run, null before any hello. */
+	currentState(turn: string) {
+		const run = this.currentRun(turn);
+		return run === null ? null : this.state(turn, run);
+	}
 	/** Makes `run` the turn's current run (dropping older ones); null for an older run. */
 	private adopt(turn: string, run: number) {
 		if (isStaleFeedRun(this.currentRun(turn), run)) return false;

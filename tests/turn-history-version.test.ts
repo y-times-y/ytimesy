@@ -35,7 +35,7 @@ beforeEach(async () => {
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,items jsonb not null default '[]',items_rev bigint not null default 0,updated_at timestamptz default now());
 	 create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,items jsonb not null default '[]',messages jsonb not null default '[]',
 	 failover jsonb,lease_id text,cancel_requested boolean not null default false,heartbeat_at timestamptz default now(),updated_at timestamptz default now(),
-	 base_turn_id uuid,base_version text,base_count integer);
+	 base_turn_id uuid,base_version text,base_count integer,executor text,connection_id uuid,connection_revision text);
 	 create function bump_items_rev() returns trigger language plpgsql as $$ begin new.items_rev := old.items_rev + 1; return new; end $$;
 	 create trigger bump_items_rev before update of items on agent_session for each row execute function bump_items_rev();`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {

@@ -65,7 +65,7 @@ it("retries a disconnected heartbeat once with the same fenced turn identity", a
 	expect(mocks.query).toHaveBeenCalledTimes(2);
 	expect(mocks.query.mock.calls[0]).toEqual(mocks.query.mock.calls[1]);
 	expect(mocks.query.mock.calls[0][0]).toContain(
-		"heartbeat_at>=now()-interval '45 seconds'",
+		"else interval '45 seconds' end",
 	);
 });
 
