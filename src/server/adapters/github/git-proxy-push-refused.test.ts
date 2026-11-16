@@ -154,3 +154,50 @@ it("does not merge for a push that names an exact commit (an approved default-br
 		warn.mockRestore();
 	}
 });
+
+it("fast-forwards the checkout to the merged branch after the retry, so the next turn does not diverge again", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	try {
+		const host = hostWithPushes([rejected, { exitCode: 0, stderr: "" }]);
+		await pushProxiedRepository(
+			host as never,
+			{
+				...repository,
+				revision: turnRevision,
+			} as never,
+		);
+		expect(
+			host.commands.some((command) => command.includes("merge --ff-only")),
+		).toBe(true);
+	} finally {
+		warn.mockRestore();
+	}
+});
+
+it("keeps a retried push that succeeded successful when the checkout cannot be caught up", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	try {
+		const host = hostWithPushes([rejected, { exitCode: 0, stderr: "" }]);
+		const exec = host.exec;
+		host.exec = async (command: string) => {
+			if (command.includes("merge --ff-only"))
+				throw new Error("guest unavailable");
+			return exec(command);
+		};
+		await expect(
+			pushProxiedRepository(
+				host as never,
+				{
+					...repository,
+					revision: turnRevision,
+				} as never,
+			),
+		).resolves.toBeUndefined();
+		expect(warn).toHaveBeenCalledWith(
+			"Workspace Git could not catch the checkout up",
+			expect.objectContaining({ cause: "guest unavailable" }),
+		);
+	} finally {
+		warn.mockRestore();
+	}
+});

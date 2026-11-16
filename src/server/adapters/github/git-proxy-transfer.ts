@@ -410,8 +410,36 @@ export async function pushProxiedRepository(
 		console.warn("Workspace Git push rejected; merging the remote branch", {
 			branch: input.branch,
 		});
-		return pushOnce(host, input, true);
+		await pushOnce(host, input, true);
+		// The branch on GitHub now holds the merge (or already held the
+		// commit). Without it in the checkout, the next turn's commit would
+		// diverge again and add another merge commit.
+		await catchUpCheckout(host, input).catch((cause: unknown) => {
+			console.warn("Workspace Git could not catch the checkout up", {
+				branch: input.branch,
+				cause: cause instanceof Error ? cause.message : "unknown",
+			});
+		});
 	}
+}
+
+/**
+ * Fast-forwards the checkout to the branch it just pushed. A checkout with
+ * uncommitted changes, or one that moved on, is left as it is: the update
+ * only ever fast-forwards.
+ */
+function catchUpCheckout(host: GitTransferHost, input: PushInput) {
+	return receiveProxiedRepository(host, {
+		owner: input.owner,
+		name: input.name,
+		branch: input.branch,
+		workingBranch: input.branch,
+		installationId: input.installationId,
+		userId: input.userId,
+		projectId: input.projectId,
+		destination: input.directory,
+		mode: "update",
+	});
 }
 
 async function pushOnce(
