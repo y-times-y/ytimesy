@@ -1308,3 +1308,19 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 				: String(row.updated_at),
 	};
 }
+
+/**
+ * Helpers left in `draft` (created, never started: the start request failed
+ * before its turn was queued) for over 15 minutes, with no turn: marked
+ * failed, so their card stops showing "Starting" with nothing behind it.
+ */
+export async function failAbandonedHelperDrafts() {
+	const result = await database().query(
+		`update agent_session s set task_state='failed', updated_at=now()
+		 where s.agent_role is not null and s.task_state='draft'
+		 and s.turn_status is distinct from 'running'
+		 and s.updated_at < now() - interval '15 minutes'
+		 and not exists (select 1 from api_turn t where t.session_id=s.id)`,
+	);
+	return result.rowCount ?? 0;
+}
