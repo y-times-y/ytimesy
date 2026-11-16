@@ -181,7 +181,10 @@ identical invocations (both run), changed inputs under one ID (refused), and a
 failed write with simulated partial effects (not repeated or forwarded). Edge
 bridge reset tests verify stable identity only, not execution deduplication.
 The final targeted run exited 0 (36 tests in four files); both application and
-edge TypeScript checks and both edge/box bundle builds exited 0.
+edge TypeScript checks and both edge/box bundle builds exited 0. The subsequent
+full clean-environment suite exited 0: 6,208 passed, eight skipped; 863 files
+passed and three skipped. This covers the review-reader and native-ID changes,
+not a live deployment, crash-safe journal, or capacity proof.
 
 This remains **per-process protection**, not a durable box journal. A separate
 pinned-SDK probe now verifies that plain resume after SIGKILL does not reissue
