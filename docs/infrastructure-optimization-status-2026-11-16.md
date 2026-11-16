@@ -143,6 +143,29 @@ An additional clean-environment VM sizing/lifecycle and box-grant regression
 run exited 0 (25 tests in three files). These fixture tests are not evidence
 that live AWS boxes have had their persistent credentials removed.
 
+## Review-worker evidence follow-up (local, not deployed)
+
+The live review loop now reads descendant metadata plus projected usage and
+command evidence, not every descendant transcript. User prompt text, assistant
+replies and ordinary tool output stay in Postgres. Complete run_code output is
+retained because execution grounding reads its nested call log; removing it
+would silently weaken verification. The existing full-transcript export remains
+for offline evaluation/smoke callers, which the TypeScript check identified.
+
+The SQL integration fixture compares token totals, command search text and
+executed-command lists against the original transcript, checks nested run_code
+commands and owner isolation, and returns less than one hundredth the fixture
+size. Adapter/review tests exited 0 (31 tests); both application and edge
+TypeScript checks, focused Biome and diff validation exited 0. No live billing
+reduction is claimed for this reader yet. The expanded adapter/review/attempt/
+delete regression run exited 0 (49 tests in four files), and the edge bundle
+build exited 0.
+
+The full clean-environment suite completed successfully with 6,197 passed and
+eight skipped (863 files passed, three skipped), including the eight memory
+adapter tests and four size-logging tests. This run preceded the review-worker
+follow-up, which has the focused checks above.
+
 ## Remaining gates
 
 - Safe workspace pause during remote-model waits must preserve background
@@ -150,7 +173,11 @@ that live AWS boxes have had their persistent credentials removed.
 - Full transcript/model-state loading and authoritative Postgres history still
   need bounded-memory/storage work. Do not describe a cache as that migration.
 - Box tool journaling is not durable across a restarted runner process. An
-  atomic file upload does not make an uncertain tool call safe to replay.
+  atomic file upload does not make an uncertain tool call safe to replay. The
+  pinned-SDK private invocation-ID transport probe now passes (including two
+  identical parallel calls and strict tool schemas), but restart/resume identity,
+  persisted receipts and fault-injected recovery remain unproven; see
+  `research/claude-tool-identity-2026-11-16.md`.
 - Runtime-secret box tools remain opt-in/off: VM-side output redaction is not
   access control. A VM exec token can bypass the wrapper and read VM secrets.
 - Live runner/proxy HMAC-to-public-key maintenance and permanent credential
