@@ -1248,7 +1248,7 @@ function SessionItemView({
 			);
 		}
 		case "plan":
-			if (item.todos) return <TodoList todos={item.todos} />;
+			if (item.todos) return <TodoList todos={item.todos} live={turnRunning} />;
 			return (
 				<LazyDetails className="session-activity" data-kind="plan">
 					<summary>
