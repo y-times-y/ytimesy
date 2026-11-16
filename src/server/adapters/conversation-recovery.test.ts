@@ -11,6 +11,7 @@ import {
 	recoverConversation,
 	retryConversationFork,
 } from "../services/conversation-recovery";
+import { WorkspaceProvisionError } from "../services/errors";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { withAfterResponse } from "./after-response";
 import {
@@ -625,6 +626,71 @@ describe("forking at a message", () => {
 			status: "ready",
 		});
 		expect(await forkState(recovered.id)).toBeNull();
+	});
+
+	it("tries the VM copy once more when the provider refuses it once, and logs why", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const run = machines();
+			run.calls.forkWorkspace.mockRejectedValueOnce(
+				new WorkspaceProvisionError({
+					operation: "create",
+					message: "Workspace provisioning failed.",
+					detail: "host recovering",
+				}),
+			);
+			const recovered = await recoverConversation(
+				run.machines,
+				"alice",
+				forkInput,
+			);
+			expect(run.calls.forkWorkspace).toHaveBeenCalledTimes(2);
+			expect(await forkState(recovered.id)).toBeNull();
+			expect(warn).toHaveBeenCalledWith(
+				"Forking the machine failed once; trying again.",
+				expect.objectContaining({
+					operation: "create",
+					detail: "host recovering",
+				}),
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("fails after the second refused copy and logs the provider's detail, not only its class", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const run = machines();
+			const refusal = () =>
+				new WorkspaceProvisionError({
+					operation: "create",
+					message: "Workspace provisioning failed.",
+					detail: "no capacity on host",
+				});
+			run.calls.forkWorkspace
+				.mockRejectedValueOnce(refusal())
+				.mockRejectedValueOnce(refusal());
+			const recovered = await recoverConversation(
+				run.machines,
+				"alice",
+				forkInput,
+			);
+			expect(run.calls.forkWorkspace).toHaveBeenCalledTimes(2);
+			expect(await forkState(recovered.id)).toEqual({
+				state: "failed",
+				message: "Couldn't fork this chat. Try again.",
+			});
+			expect(warn).toHaveBeenCalledWith(
+				"Preparing a forked chat failed.",
+				expect.objectContaining({
+					error: "WorkspaceProvisionError",
+					detail: "no capacity on host",
+				}),
+			);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it("keeps the fork's chat with a failure and a retry when its VM cannot be made", async () => {

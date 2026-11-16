@@ -16,6 +16,7 @@ import {
 } from "#/domain/conversation-recovery-failure";
 import { WorkspaceId } from "#/domain/ids";
 import { jsonbText } from "#/domain/jsonb";
+import { redactSecrets } from "#/domain/redact-secrets";
 import { sessionBranchName } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { type SubagentRole, writesOwnCheckout } from "#/domain/subagent";
@@ -59,6 +60,7 @@ import {
 	holdSettledConversationTurn,
 	type SettledConversationTurnHold,
 } from "./conversation-turn-settled";
+import { WorkspaceProvisionError } from "./errors";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -360,11 +362,14 @@ export async function prepareForkWorkspace(
 		const size = await projectMachineSize(userId, session.projectId);
 		// The fork's chat row already holds the slug: usage admission verifies
 		// a VM's owner from the chat that holds it.
+		const forking = scoped;
 		vm = (
-			await scoped.forkWorkspace(
-				source,
-				agentSessionMachineSlug(sessionId),
-				size,
+			await retryProviderCopy(() =>
+				forking.forkWorkspace?.(
+					source,
+					agentSessionMachineSlug(sessionId),
+					size,
+				),
 			)
 		).vm;
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
@@ -390,9 +395,7 @@ export async function prepareForkWorkspace(
 			return;
 		}
 	} catch (error) {
-		console.warn("Preparing a forked chat failed.", {
-			error: error instanceof Error ? error.name : "unknown",
-		});
+		console.warn("Preparing a forked chat failed.", forkFailureLog(error));
 		let leftoverVm: string | undefined;
 		if (vm && scoped)
 			try {
@@ -407,6 +410,49 @@ export async function prepareForkWorkspace(
 		return;
 	}
 	await admitForkTurns();
+}
+
+/** One more try for the provider's VM copy, which a busy or recovering host can refuse once. */
+const FORK_COPY_RETRY_DELAY_MS = 1_500;
+
+/**
+ * Copying the VM is the step that failed in production (2026-11-16, a
+ * WorkspaceProvisionError). A retry reuses a half-made copy by its slug, so a
+ * second attempt is safe; only a provisioning failure is retried.
+ */
+async function retryProviderCopy<T>(copy: () => Promise<T> | undefined) {
+	try {
+		return (await copy()) as T;
+	} catch (error) {
+		if (!(error instanceof WorkspaceProvisionError)) throw error;
+		console.warn("Forking the machine failed once; trying again.", {
+			operation: error.operation,
+			detail: redactSecrets(error.detail ?? error.message, 300),
+		});
+		await new Promise((resolve) =>
+			setTimeout(resolve, FORK_COPY_RETRY_DELAY_MS),
+		);
+		return (await copy()) as T;
+	}
+}
+
+/**
+ * What the server log keeps of a failed fork: the class, the message and a
+ * provisioning error's provider detail, redacted and cut. The user still
+ * sees one generic line (publicRecoveryFailure).
+ */
+function forkFailureLog(error: unknown) {
+	if (!(error instanceof Error)) return { error: "unknown" };
+	return {
+		error: error.name,
+		message: redactSecrets(error.message, 300),
+		...(error instanceof WorkspaceProvisionError
+			? {
+					operation: error.operation,
+					detail: redactSecrets(error.detail ?? "", 300),
+				}
+			: {}),
+	};
 }
 
 /** A message sent while the fork was preparing waits queued; start it now. */
