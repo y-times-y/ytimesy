@@ -112,9 +112,12 @@ export function githubWriteFailure(
 	if (status === 403 || status === 422 || status === 404 || status === 409)
 		return {
 			status: 409,
-			message: detail
-				? `GitHub refused this: ${detail}`
-				: "GitHub refused this change.",
+			message:
+				detail && !/^unknown error$/i.test(detail)
+					? `GitHub refused this: ${detail}`
+					: permission === "Actions: write"
+						? "GitHub did not accept the re-run. Usually GitHub Actions is blocked for the account (a failed payment or a spending limit), or the workflow no longer exists. Open the check on GitHub for the reason."
+						: "GitHub refused this change.",
 		};
 	return null;
 }

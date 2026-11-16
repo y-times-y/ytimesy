@@ -205,16 +205,59 @@ async function pullRequestChange(
 			return changeAssignees(github, { owner, repo, number }, input);
 		case "rerun":
 			return "jobId" in input.target
-				? github.actions.reRunJobForWorkflowRun({
-						owner,
-						repo,
-						job_id: input.target.jobId,
-					})
+				? rerunJob(github, { owner, repo }, input.target.jobId)
 				: github.actions.reRunWorkflowFailedJobs({
 						owner,
 						repo,
 						run_id: input.target.failedInRunId,
 					});
+	}
+}
+
+/**
+ * Re-runs one Actions job. When GitHub refuses with its bare "Unknown error"
+ * (it says that for a job it will not start), the job's own annotation names
+ * the reason, such as a failed payment or a spending limit: it is read and
+ * added to the refusal.
+ */
+async function rerunJob(
+	github: Github,
+	{ owner, repo }: { owner: string; repo: string },
+	jobId: number,
+) {
+	try {
+		return await github.actions.reRunJobForWorkflowRun({
+			owner,
+			repo,
+			job_id: jobId,
+		});
+	} catch (error) {
+		const reason = await jobAnnotation(github, { owner, repo }, jobId);
+		if (!reason || typeof error !== "object" || error === null) throw error;
+		const status = Number((error as { status?: unknown }).status);
+		throw Object.assign(new Error(`${reason}`), { status });
+	}
+}
+
+/** The first annotation message of an Actions job, or null when there is none to read. */
+async function jobAnnotation(
+	github: Github,
+	{ owner, repo }: { owner: string; repo: string },
+	jobId: number,
+): Promise<string | null> {
+	try {
+		const { data } = await github.checks.listAnnotations({
+			owner,
+			repo,
+			check_run_id: jobId,
+			per_page: 5,
+		});
+		const message = data
+			.map((annotation) => annotation.message?.trim())
+			.find((text): text is string => Boolean(text));
+		return message ? message.slice(0, 300) : null;
+	} catch {
+		return null;
 	}
 }
 

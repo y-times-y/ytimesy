@@ -67,6 +67,28 @@ describe("GitHub refusals", () => {
 		});
 	});
 
+	it("explains a re-run GitHub refuses with only 'Unknown error'", () => {
+		const failure = githubWriteFailure(
+			{
+				status: 403,
+				message: "Unknown error - https://docs.github.com/rest/actions",
+			},
+			"Actions: write",
+		);
+		expect(failure?.status).toBe(409);
+		expect(failure?.message).not.toContain("Unknown error");
+		expect(failure?.message).toContain("GitHub Actions is blocked");
+	});
+
+	it("does not invent a cause for another change refused as 'Unknown error'", () => {
+		expect(
+			githubWriteFailure(
+				{ status: 422, message: "Unknown error" },
+				"Pull requests: write",
+			)?.message,
+		).toBe("GitHub refused this change.");
+	});
+
 	it("leaves server failures to the caller", () => {
 		expect(
 			githubWriteFailure({ status: 502 }, "Pull requests: write"),
