@@ -4210,6 +4210,7 @@ export function WorkspaceHome({
 												changes={fileChanges}
 												repository={selectedProject?.fullName}
 												desktop={desktop}
+												turnRunning={isTurnRunning(session.turnStatus)}
 												onOpen={openInspector}
 												onIntent={intendView}
 												pullRequests={overviewPullRequests}

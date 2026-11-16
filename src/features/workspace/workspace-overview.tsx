@@ -21,6 +21,7 @@ export function WorkspaceOverview({
 	pullRequests,
 	repository,
 	desktop,
+	turnRunning = false,
 	onOpen,
 	onIntent,
 }: {
@@ -32,6 +33,8 @@ export function WorkspaceOverview({
 	pullRequests: readonly ListedPullRequest[];
 	repository?: string;
 	desktop: WorkspaceDesktop;
+	/** The agent is working in this chat now: only then does an in-progress todo spin. */
+	turnRunning?: boolean;
 	onOpen: (view: ToolsView) => void;
 }) {
 	const plan = items.filter((item) => item.kind === "plan").at(-1);
@@ -102,7 +105,7 @@ export function WorkspaceOverview({
 				</section>
 			) : null}
 			{todoPlan?.kind === "plan" && todoPlan.todos?.length ? (
-				<TodoList todos={todoPlan.todos} />
+				<TodoList todos={todoPlan.todos} live={turnRunning} />
 			) : null}
 			{plan?.text && !todoPlan ? (
 				<section className="overview-section">

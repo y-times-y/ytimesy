@@ -5373,3 +5373,8 @@ details.environment-build[open] > summary .session-activity-chevron {
 	/* biome-ignore lint/complexity/noImportantStyles: the chat panes' group sets display inline (react-resizable-panels) */
 	display: none !important;
 }
+
+/* A todo left in progress after the turn ended is dim, not a spinner. */
+.overview-todos [data-idle] .todo-status {
+	color: #686868;
+}

@@ -1,4 +1,4 @@
-import { Circle, CircleCheck, LoaderCircle } from "lucide-react";
+import { Circle, CircleCheck, CircleDashed, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import type { AgentTodo } from "#/domain/agent-todos";
 import { foldFinished } from "#/domain/folded-list";
@@ -6,7 +6,18 @@ import { foldFinished } from "#/domain/folded-list";
 /** Past this many done todos, the done ones fold into one "N done" row. */
 const DONE_TODOS_SHOWN = 6;
 
-export function TodoList({ todos }: { todos: readonly AgentTodo[] }) {
+/**
+ * `live` is whether the agent is working now. A todo still marked in progress
+ * after the turn ended (the agent stopped, failed or never ticked it) is not
+ * being worked on: it shows as unfinished, not as a spinner that never stops.
+ */
+export function TodoList({
+	todos,
+	live = true,
+}: {
+	todos: readonly AgentTodo[];
+	live?: boolean;
+}) {
 	const [showDone, setShowDone] = useState(false);
 	const done = todos.filter((todo) => todo.status === "completed").length;
 	const folded =
@@ -34,7 +45,11 @@ export function TodoList({ todos }: { todos: readonly AgentTodo[] }) {
 			<ol>
 				{folded.shown.map((todo, index) => (
 					// biome-ignore lint/suspicious/noArrayIndexKey: Provider todo snapshots have no IDs and may repeat text; these rows hold no local state.
-					<li key={`${index}:${todo.text}`} data-status={todo.status}>
+					<li
+						key={`${index}:${todo.text}`}
+						data-status={todo.status}
+						data-idle={todo.status === "in_progress" && !live ? "" : undefined}
+					>
 						<span
 							className="todo-status"
 							role="img"
@@ -42,14 +57,20 @@ export function TodoList({ todos }: { todos: readonly AgentTodo[] }) {
 								todo.status === "completed"
 									? "Completed"
 									: todo.status === "in_progress"
-										? "In progress"
+										? live
+											? "In progress"
+											: "Not finished"
 										: "Pending"
 							}
 						>
 							{todo.status === "completed" ? (
 								<CircleCheck size={16} />
 							) : todo.status === "in_progress" ? (
-								<LoaderCircle size={16} className="todo-status-spin" />
+								live ? (
+									<LoaderCircle size={16} className="todo-status-spin" />
+								) : (
+									<CircleDashed size={16} />
+								)
 							) : (
 								<Circle size={16} />
 							)}
