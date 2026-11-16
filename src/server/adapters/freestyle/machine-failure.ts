@@ -32,6 +32,13 @@ export type MachineFailureKind =
 
 const NOT_RUNNING_IN_TIME =
 	/did not become running|stopped before it became running/i;
+/**
+ * The VM's own host cannot run it: its guest never answers a command, or the
+ * host is full ("server is at capacity", a 429 for that VM). A new VM lands
+ * on another host, so these count toward replacing it.
+ */
+const HOST_CANNOT_RUN_VM =
+	/started but is not answering|server is at capacity/i;
 const LEASE_BUSY = /another operation is updating this machine/i;
 const QUOTA =
 	/LIMIT_EXCEEDED|limit of \d+ VMs|at its VM limit|allowance for vcpu_time|memory_time has been used|compute allowance/i;
@@ -94,6 +101,9 @@ export function machineStartUnstartable(error: unknown): boolean {
 	return (
 		text.includes(PROVIDER_UNAVAILABLE_MESSAGE) ||
 		NOT_RUNNING_IN_TIME.test(text) ||
+		// 2026-11-16: a chat stuck on "isn't responding" for hours, its VM's
+		// host full, because neither failure counted and it was never replaced.
+		HOST_CANNOT_RUN_VM.test(text) ||
 		/FreestyleApiError 5\d\d|PROVIDER_TIMEOUT/.test(detail)
 	);
 }
