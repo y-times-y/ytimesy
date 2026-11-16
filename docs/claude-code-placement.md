@@ -463,6 +463,19 @@ as the text the model got (the edge's bridge records the tool's structured
 output instead). A call the box handed to the edge after a refusal is shown
 twice (stream and bridge); rare.
 
+**File upload crash boundary (2026-11-16, local verification only).** The identity
+adapter no longer truncates a destination before sending its chunks. It stages
+bytes privately beside the resolved destination, flushes them, preserves existing
+permission bits, and atomically replaces the destination only after the complete
+upload. Existing symlinks keep pointing to their original targets. Files up to
+768 KiB still take one exec; larger files use chunked staging, with cleanup on
+handled failures. A process or VM crash can leave an uncommitted staging directory,
+but not a partially replaced destination. This is not durable tool-call journaling
+or proof that a call with an unknown response may be replayed. Local-shell tests
+cover a failed second chunk retaining the original, Unicode split across chunks,
+empty files, executable modes and symlinks; live provider failure injection is not
+claimed.
+
 **Phase 2b (not built):** mirror the box's calls into the turn's journal
 (today the box's run-once is in memory: a restarted runner process starts
 over, and Postgres has no record of box calls); an edge Worker route that runs

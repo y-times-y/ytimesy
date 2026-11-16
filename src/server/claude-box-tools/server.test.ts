@@ -128,11 +128,14 @@ async function start(
 		});
 		return {
 			status: response.status,
-			body: response.status === 200 ? await response.json() : null,
+			body:
+				response.status === 200
+					? ((await response.json()) as { result: unknown })
+					: null,
 		};
 	};
 	const call = async (name: string, args: Record<string, unknown>) =>
-		(await rpc("tools/call", { name, arguments: args })).body.result as {
+		(await rpc("tools/call", { name, arguments: args })).body?.result as {
 			content: { type: string; text: string }[];
 			isError: boolean;
 		};
@@ -149,8 +152,12 @@ describe("the runner box's tool server", () => {
 			"write",
 		]);
 		const listed = await box.rpc("tools/list");
+		if (!listed.body)
+			throw new Error("The tools/list response was not successful.");
 		expect(
-			listed.body.result.tools.map((tool: { name: string }) => tool.name),
+			(listed.body.result as { tools: { name: string }[] }).tools.map(
+				(tool) => tool.name,
+			),
 		).toEqual(["bash", "read", "write", "edit", "canvas"]);
 		const written = await box.call("write", {
 			path: "notes.txt",

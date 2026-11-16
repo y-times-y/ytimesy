@@ -102,10 +102,58 @@ for (const calculation of result.result?.calculations ?? [])
 		rows.set(key, row);
 	}
 
-const total = [...rows.values()].reduce((sum, row) => sum + row.bytes, 0);
+// The ranked query is limited to 15 groups; its sum is not the account total.
+const totals = await json<{
+	result?: {
+		calculations?: { alias: string; aggregates?: { value: number }[] }[];
+	};
+}>(`${api}/accounts/${account}/workers/observability/telemetry/query`, {
+	method: "POST",
+	body: JSON.stringify({
+		queryId: "egress-report-total",
+		timeframe: { from: now - hours * 3_600_000, to: now },
+		view: "calculations",
+		parameters: {
+			datasets: [],
+			filters: [
+				{
+					key: "event",
+					operation: "eq",
+					type: "string",
+					value: "db.large_result",
+				},
+			],
+			calculations: [
+				{
+					operator: "sum",
+					key: "approxBytes",
+					keyType: "number",
+					alias: "bytes",
+				},
+			],
+		},
+	}),
+});
+const bytesCalculation = totals.result?.calculations?.find(
+	(calculation) => calculation.alias === "bytes",
+);
+if (!bytesCalculation?.aggregates)
+	throw new Error(
+		"Cloudflare did not return the large-read total; usage is unknown.",
+	);
+const total = bytesCalculation.aggregates.reduce((sum, aggregate) => {
+	const value = Number(aggregate.value);
+	if (!Number.isFinite(value) || value < 0)
+		throw new Error("Cloudflare returned an invalid large-read total.");
+	return sum + value;
+}, 0);
+const rankedTotal = [...rows.values()].reduce((sum, row) => sum + row.bytes, 0);
 const gb = (bytes: number) => (bytes / 1e9).toFixed(2);
 console.log(
-	`Large database reads, last ${hours} h (queries of 100 KB or more)`,
+	`Top 15 groups of large database reads, last ${hours} h (queries of 100 KB or more)`,
+);
+console.log(
+	`Listed groups cover ${total ? ((100 * rankedTotal) / total).toFixed(1) : "0.0"}% of all logged large-read bytes. This is estimated result size, not total provider egress.`,
 );
 for (const [key, row] of [...rows].sort((a, b) => b[1].bytes - a[1].bytes))
 	console.log(

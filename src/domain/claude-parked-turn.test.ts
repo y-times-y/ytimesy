@@ -39,22 +39,23 @@ describe("whether a parked Claude Code turn's wake only renews", () => {
 	});
 
 	it("runs a step for anything a step must do", () => {
-		const cases: [Partial<typeof parked>, string][] = [
-			[{ parked: false }, "not-parked"],
-			[{ feed: null }, "feed-silent"],
+		const cases: [Partial<Parameters<typeof parkedTurnRenewal>[0]>, string][] =
 			[
-				{ feed: { ...feed, lastSeen: NOW - CLAUDE_FEED_STALE_MS } },
-				"feed-silent",
-			],
-			[{ feed: { ...feed, lastSeen: 0 } }, "feed-silent"],
-			[{ feed: { ...feed, receivedTo: 600 } }, "feed-unread"],
-			[{ feed: { ...feed, exitStatus: "0" } }, "feed-exited"],
-			[{ pendingCalls: 1 }, "call-pending"],
-			[{ waitingTurns: 1 }, "turn-waiting"],
-			[{ room: null }, "room-lease"],
-			[{ room: { expiresAt: NOW, cancelled: false } }, "room-lease"],
-			[{ room: { expiresAt: NOW + 1, cancelled: true } }, "cancelled"],
-		];
+				[{ parked: false }, "not-parked"],
+				[{ feed: null }, "feed-silent"],
+				[
+					{ feed: { ...feed, lastSeen: NOW - CLAUDE_FEED_STALE_MS } },
+					"feed-silent",
+				],
+				[{ feed: { ...feed, lastSeen: 0 } }, "feed-silent"],
+				[{ feed: { ...feed, receivedTo: 600 } }, "feed-unread"],
+				[{ feed: { ...feed, exitStatus: "0" } }, "feed-exited"],
+				[{ pendingCalls: 1 }, "call-pending"],
+				[{ waitingTurns: 1 }, "turn-waiting"],
+				[{ room: null }, "room-lease"],
+				[{ room: { expiresAt: NOW, cancelled: false } }, "room-lease"],
+				[{ room: { expiresAt: NOW + 1, cancelled: true } }, "cancelled"],
+			];
 		for (const [change, reason] of cases)
 			expect(parkedTurnRenewal({ ...parked, ...change })).toEqual({
 				renew: false,
