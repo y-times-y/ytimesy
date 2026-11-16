@@ -238,7 +238,6 @@ export function SectionPlanUsage({
 	);
 }
 
-
 /** A subscription plan's line in the model picker (ChatGPT by default). */
 export function ModelPickerPlanUsage({
 	bars,

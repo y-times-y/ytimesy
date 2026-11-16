@@ -22,6 +22,11 @@ export type RequestedSecret = {
 	readonly name: string;
 	readonly secretKind: RequestableSecretKind;
 	readonly reason: string;
+	/**
+	 * The project already has this one, and the agent asks for a new value (it was
+	 * rotated, or what is stored is rejected). Saving replaces the current value.
+	 */
+	readonly replace?: boolean;
 };
 
 /** The secrets a request asks for, whether it carries a list or (older chats) one name. */

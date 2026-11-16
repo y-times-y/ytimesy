@@ -44,6 +44,9 @@ export function SecretRequestCard({
 		({ name }) => values[name] && !saved.includes(name),
 	);
 	const only = secrets.length === 1 ? secrets[0] : undefined;
+	// The project has these already: pasting a value replaces the current one.
+	const replacing = secrets.filter(({ replace }) => replace);
+	const allReplace = replacing.length === secrets.length;
 
 	const skippedFrom = (done: readonly string[]) =>
 		secrets.map(({ name }) => name).filter((name) => !done.includes(name));
@@ -93,10 +96,11 @@ export function SecretRequestCard({
 				<strong>
 					{only ? (
 						<>
-							The agent needs <code>{only.name}</code>
+							The agent needs {only.replace ? "a new value for " : ""}
+							<code>{only.name}</code>
 						</>
 					) : (
-						`The agent needs ${secrets.length} values`
+						`The agent needs ${allReplace ? "new values for " : ""}${secrets.length} ${allReplace ? "secrets" : "values"}`
 					)}
 				</strong>
 				<span className="plan-proposal-status">
@@ -113,10 +117,15 @@ export function SecretRequestCard({
 			</header>
 			{pending || !only ? (
 				<ul className="secret-request-list">
-					{secrets.map(({ name, reason }) => (
+					{secrets.map(({ name, reason, replace }) => (
 						<li key={name} className="secret-request-row">
 							<div className="secret-request-label">
 								<code>{name}</code>
+								{replace ? (
+									<span className="secret-request-replaces">
+										Replaces the current value
+									</span>
+								) : null}
 								{reason ? <span title={reason}>{reason}</span> : null}
 							</div>
 							{pending ? (
@@ -131,8 +140,8 @@ export function SecretRequestCard({
 										type="password"
 										autoComplete="off"
 										spellCheck={false}
-										aria-label={`Value for ${name}`}
-										placeholder={`Paste ${name}`}
+										aria-label={`${replace ? "New value" : "Value"} for ${name}`}
+										placeholder={`Paste ${replace ? "new " : ""}${name}`}
 										value={values[name] ?? ""}
 										disabled={actions.disabled || saving}
 										onChange={(event) =>
@@ -156,9 +165,11 @@ export function SecretRequestCard({
 				<form id={formId} className="plan-proposal-actions" onSubmit={save}>
 					<p className="secret-request-note">
 						{error ??
-							(secrets.some(({ secretKind }) => secretKind === "runtime")
-								? "Saved encrypted to project settings. Empty fields are skipped."
-								: "Saved to project settings, visible in output. Empty fields are skipped.")}
+							`${
+								secrets.some(({ secretKind }) => secretKind === "runtime")
+									? "Saved encrypted to project settings"
+									: "Saved to project settings, visible in output"
+							}${replacing.length ? ", replacing what is set now" : ""}. Empty fields are skipped.`}
 					</p>
 					<button
 						type="button"
@@ -173,7 +184,7 @@ export function SecretRequestCard({
 						className="plan-proposal-approve"
 						disabled={actions.disabled || saving || !filled.length}
 					>
-						{saving ? "Saving…" : "Save"}
+						{saving ? "Saving…" : allReplace ? "Replace" : "Save"}
 					</button>
 				</form>
 			) : null}
