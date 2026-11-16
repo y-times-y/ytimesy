@@ -54,6 +54,7 @@ import {
 	ENVIRONMENT_SETUP_PROMPT,
 	setupRequestKeeping,
 } from "#/domain/environment-setup";
+import { issueNumberFromChatTitle } from "#/domain/github-issues";
 import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
@@ -1283,6 +1284,29 @@ export function WorkspaceHome({
 				});
 			}
 			pullRequestChatsByRepository.set(repository.repositoryId, byHead);
+		}
+	}
+	// The chat started for each issue, by repository and issue number: its title
+	// says which ("Issue #12: ..."), as startIssueChat names it. Newest first.
+	const issueChatsByRepository = new Map<
+		number,
+		Map<number, PullRequestChat>
+	>();
+	for (const { project, chats: listed } of projectChats) {
+		for (const repository of repositoriesForProject(project)) {
+			const byIssue =
+				issueChatsByRepository.get(repository.repositoryId) ??
+				new Map<number, PullRequestChat>();
+			for (const chat of listed) {
+				const number = issueNumberFromChatTitle(chat.title);
+				if (number === null || byIssue.has(number)) continue;
+				byIssue.set(number, {
+					id: chat.id,
+					title: chat.title,
+					working: chat.turnStatus === "running",
+				});
+			}
+			issueChatsByRepository.set(repository.repositoryId, byIssue);
 		}
 	}
 	// The next page load renders the rows with the PRs read now.
@@ -3883,6 +3907,10 @@ export function WorkspaceHome({
 											chatsOf={(repositoryId) =>
 												pullRequestChatsByRepository.get(repositoryId) ??
 												new Map<string, PullRequestChat>()
+											}
+											issueChatsOf={(repositoryId) =>
+												issueChatsByRepository.get(repositoryId) ??
+												new Map<number, PullRequestChat>()
 											}
 											onOpenChat={openChat}
 											harnessId={harnessId}

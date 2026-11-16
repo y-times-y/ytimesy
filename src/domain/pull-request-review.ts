@@ -174,6 +174,8 @@ export type RepositoryPullRequest = ListedRepositoryPullRequest & {
 	readonly deletions?: number;
 	/** The signed-in user has something to do here (see pullRequestWaitingOnYou). */
 	readonly waiting?: boolean;
+	/** Issues this pull request closes when it merges. */
+	readonly closes?: readonly number[];
 };
 
 /**

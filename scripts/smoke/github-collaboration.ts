@@ -284,6 +284,35 @@ try {
 	await page.locator(".work-page .gh-table tbody tr").first().waitFor();
 	await button("Pages: issues").click();
 	await page.locator(".work-page .gh-table tbody tr").first().waitFor();
+	// The chain: the issue's pull request and the chat on it show in the table,
+	// and open as the issue → chat → pull request → branch strip.
+	assert.deepEqual(
+		await page.locator(".work-page .gh-table th").allTextContents(),
+		["Issue", "Repo", "Chat", "Pull request", "Assignees / comments"],
+	);
+	const issueRow = page.locator(".work-page .gh-table tbody tr").first();
+	assert.match((await issueRow.textContent()) ?? "", /Polling fix/);
+	assert.match((await issueRow.textContent()) ?? "", /#74/);
+	await issueRow.locator(".gh-table-open, .gh-issue-row").first().click();
+	const chain = page.locator(".gh-chain");
+	await chain.waitFor();
+	assert.match((await chain.textContent()) ?? "", /Issue#39/);
+	assert.match((await chain.textContent()) ?? "", /Polling fix/);
+	assert.match((await chain.textContent()) ?? "", /#74open/);
+	assert.match((await chain.textContent()) ?? "", /Branchmain/);
+	await chain.getByRole("button", { name: /#74/ }).click();
+	await button("Review changes").waitFor();
+	await button("Pages: pull requests").click();
+	await page.locator(".work-page .gh-table tbody tr").first().waitFor();
+	assert.match(
+		(await page
+			.locator(".work-page .gh-table tbody tr")
+			.first()
+			.textContent()) ?? "",
+		/Closes #39/,
+	);
+	await button("Pages: issues").click();
+	await page.locator(".work-page .gh-table tbody tr").first().waitFor();
 	const issueRepos = new Set(
 		await page.locator(".work-page .gh-table-repo").allTextContents(),
 	);

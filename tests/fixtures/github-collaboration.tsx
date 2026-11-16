@@ -336,7 +336,21 @@ window.fetch = async (input, init) => {
 								title: `[docs] ${issue.title}`,
 								number: issue.number + 100,
 							}
-						: issue,
+						: {
+								...issue,
+								// The first open issue has a pull request that closes it.
+								...(issue.number === 39
+									? {
+											pullRequests: [
+												{
+													number: 74,
+													state: "open" as const,
+													head: "ytimesy/polling",
+												},
+											],
+										}
+									: {}),
+							},
 				),
 		});
 	}
@@ -361,6 +375,7 @@ window.fetch = async (input, init) => {
 			state: index % 5 === 2 ? "draft" : "open",
 			labels: [labels[index % 2]],
 			head: index % 4 === 1 ? "ytimesy/polling" : `feature/row-${index}`,
+			closes: index === 0 ? [39] : undefined,
 			checks: [
 				{ passed: 8, failed: 0, pending: 0 },
 				{ passed: 5, failed: 2, pending: 1 },
@@ -443,6 +458,20 @@ function Fixture() {
 											[
 												"ytimesy/polling",
 												{ id: "c1", title: "Polling fix", working: true },
+											],
+										])
+									: new Map()
+							}
+							issueChatsOf={(repositoryId) =>
+								repositoryId === 22
+									? new Map([
+											[
+												39,
+												{
+													id: "c9",
+													title: "Issue #39: Selection disappears",
+													working: false,
+												},
 											],
 										])
 									: new Map()

@@ -2,6 +2,7 @@ import { ArrowLeft, Check, ChevronDown } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { Suspense, useState } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
+import { chatForIssue } from "#/domain/github-issues";
 import { IssueList, IssuePage, NewIssue } from "./issues-inspector";
 import { PullRequestInspector } from "./pull-request-inspector";
 import { PullRequestList, type WorkRepository } from "./pull-request-list";
@@ -22,6 +23,7 @@ type Screen =
 			readonly kind: "issue";
 			readonly repository: WorkRepository;
 			readonly number: number;
+			readonly chat?: PullRequestChat;
 	  }
 	| { readonly kind: "new-issue"; readonly repository: WorkRepository };
 
@@ -89,6 +91,7 @@ export function WorkItemsPage({
 	kind,
 	repositories,
 	chatsOf,
+	issueChatsOf,
 	onOpenChat,
 	harnessId,
 	modelId,
@@ -99,6 +102,8 @@ export function WorkItemsPage({
 	repositories: readonly WorkRepository[];
 	/** The chat working on each pull request of a repository, by its head branch. */
 	chatsOf: (repositoryId: number) => ReadonlyMap<string, PullRequestChat>;
+	/** The chat started for each issue of a repository, by issue number. */
+	issueChatsOf: (repositoryId: number) => ReadonlyMap<number, PullRequestChat>;
 	onOpenChat: (chatId: string) => void;
 	harnessId?: AgentProviderId;
 	modelId?: string;
@@ -178,6 +183,8 @@ export function WorkItemsPage({
 						projectId={screen.repository.projectId}
 						harnessId={harnessId}
 						modelId={modelId}
+						chat={screen.chat}
+						onOpenChat={onOpenChat}
 						onChatStarted={(sessionId) =>
 							onChatStarted(sessionId, screen.repository.projectId)
 						}
@@ -225,8 +232,20 @@ export function WorkItemsPage({
 						toolbar={toolbar}
 						filter={issueFilter}
 						onFilter={setIssueFilter}
-						onOpen={(number, repository) =>
-							setScreen({ kind: "issue", repository, number })
+						chatFor={(repository, issue) =>
+							chatForIssue({
+								pullRequests: issue.pullRequests,
+								byHead: chatsOf(repository.repositoryId),
+								byIssue: issueChatsOf(repository.repositoryId),
+								number: issue.number,
+							})
+						}
+						onOpenChat={onOpenChat}
+						onOpenPullRequest={(number, repository) =>
+							setScreen({ kind: "pull-request", repository, number })
+						}
+						onOpen={(number, repository, chat) =>
+							setScreen({ kind: "issue", repository, number, chat })
 						}
 						onNew={() => setScreen({ kind: "new-issue", repository: shown[0] })}
 					/>

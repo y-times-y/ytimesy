@@ -45,6 +45,7 @@ type SignalsPage = {
 				additions: number;
 				deletions: number;
 				headRefOid: string;
+				closingIssuesReferences: { nodes: { number: number }[] };
 				latestOpinionatedReviews: {
 					nodes: { state: string; author: GithubUserNode }[];
 				};
@@ -66,6 +67,7 @@ const SIGNALS_QUERY = `query($owner: String!, $repo: String!, $after: String) {
     pullRequests(first: 100, states: [OPEN], orderBy: { field: UPDATED_AT, direction: DESC }, after: $after) {
       nodes {
         number additions deletions headRefOid
+        closingIssuesReferences(first: 3) { nodes { number } }
         latestOpinionatedReviews(first: 5) { nodes { state author { login avatarUrl } } }
         reviewRequests(first: 5) { nodes { requestedReviewer { __typename ... on User { login avatarUrl } } } }
       }
@@ -122,6 +124,7 @@ async function openPullRequestSignals(
 			checks: RepositoryPullRequest["checks"];
 			additions: number;
 			deletions: number;
+			closes: number[];
 		}
 	>();
 	try {
@@ -140,6 +143,9 @@ async function openPullRequestSignals(
 					additions: node.additions,
 					deletions: node.deletions,
 					checks: null,
+					closes: (node.closingIssuesReferences?.nodes ?? []).map(
+						(issue) => issue.number,
+					),
 					review: reviewMarkFrom({
 						decisions: node.latestOpinionatedReviews.nodes
 							.filter((review) => review.author)
