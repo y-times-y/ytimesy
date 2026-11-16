@@ -1,5 +1,6 @@
 import { ClaudeRunnerTransportFailure } from "#/domain/api-turn-failure";
 import type { ClaudeRunnerBox } from "#/domain/claude-runner";
+import { ed25519SigningKey } from "./ed25519-signing-key";
 
 /**
  * The runner box's three operations (infra/claude-runner-box/server.mjs), as
@@ -63,32 +64,6 @@ export async function runnerRequestSignature(
 	);
 }
 
-const signingKeys = new Map<string, Promise<CryptoKey>>();
-
-/** The imported private key, once per isolate per configured value. */
-function ed25519Key(pkcs8Base64: string) {
-	let key = signingKeys.get(pkcs8Base64);
-	if (!key) {
-		key = crypto.subtle
-			.importKey(
-				"pkcs8",
-				Uint8Array.from(atob(pkcs8Base64), (char) => char.charCodeAt(0)),
-				{ name: "Ed25519" },
-				false,
-				["sign"],
-			)
-			.catch((error: unknown) => {
-				signingKeys.delete(pkcs8Base64);
-				throw new Error(
-					"YTIMESY_CLAUDE_RUNNER_SIGNING_KEY is not a base64 PKCS8 Ed25519 private key.",
-					{ cause: error },
-				);
-			});
-		signingKeys.set(pkcs8Base64, key);
-	}
-	return key;
-}
-
 /** The Ed25519 signature (base64url, 86 characters) the box verifies with RUNNER_PUBLIC_KEY. */
 export async function runnerRequestEd25519Signature(
 	signingKey: string,
@@ -101,7 +76,7 @@ export async function runnerRequestEd25519Signature(
 	return base64url(
 		await crypto.subtle.sign(
 			{ name: "Ed25519" },
-			await ed25519Key(signingKey),
+			await ed25519SigningKey(signingKey, "YTIMESY_CLAUDE_RUNNER_SIGNING_KEY"),
 			await signedMaterial(method, target, expires, nonce, body),
 		),
 	);
