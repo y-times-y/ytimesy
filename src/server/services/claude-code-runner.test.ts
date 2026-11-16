@@ -1791,12 +1791,13 @@ describe("Claude Code runner: feed or poll", () => {
 		expect(vm.files.has(`${RUNS}/1/consumed`)).toBe(true);
 	});
 
-	it("a polling step hands over to the feed when the runner's hello arrives", async () => {
+	it("preserves the read offset when hello arrives after an empty poll", async () => {
 		const vm = attached();
 		vm.emit(init, ...work);
 		const fed = fakeFeed(() => 1_000_000);
 		const step = input(vm, { feed: fed.feed });
 		const polls = vm.shell.getMockImplementation();
+		let pollCount = 0;
 		vm.shell.mockImplementation(async (command: string, timeoutMs?: number) => {
 			const answer = await (
 				polls as (
@@ -1808,7 +1809,7 @@ describe("Claude Code runner: feed or poll", () => {
 					stderr: string;
 				}>
 			)(command, timeoutMs);
-			if (isPoll(command)) fed.push(init);
+			if (isPoll(command) && ++pollCount === 2) fed.push(init);
 			return answer;
 		});
 		const result = await runClaudeCodeStep(step);
