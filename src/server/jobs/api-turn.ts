@@ -782,6 +782,13 @@ async function runApiTurnAttempt(
 		leaseId: turn.lease_id as string,
 	};
 	let coordinated = false;
+	/**
+	 * The step returned with the lease carried to the next step: its room
+	 * lease keeps being renewed until this attempt's heartbeat stops, so a
+	 * slow cleanup (or a step ending at its deadline) never lets it lapse
+	 * before the next step acquires it.
+	 */
+	let leaseCarried = false;
 	let closeMcp: (() => Promise<void>) | undefined;
 	// Cross-chat memory and its VM clone; the clone's token is released when
 	// this step ends, however it ends.
@@ -836,7 +843,7 @@ async function runApiTurnAttempt(
 				);
 			});
 		if (
-			coordinated &&
+			(coordinated || leaseCarried) &&
 			!coordinationHeartbeatBusy &&
 			!abort.signal.aborted &&
 			Date.now() - lastCoordinationRenewal >= 10_000
@@ -2629,6 +2636,7 @@ async function runApiTurnAttempt(
 			if (gate === "wait") {
 				await saveCheckpoint();
 				coordinated = false;
+				leaseCarried = true;
 				return "continue";
 			}
 		}
@@ -2640,6 +2648,7 @@ async function runApiTurnAttempt(
 			if (gate === "wait") {
 				await saveCheckpoint();
 				coordinated = false;
+				leaseCarried = true;
 				return "continue";
 			}
 		}
@@ -2656,6 +2665,7 @@ async function runApiTurnAttempt(
 			if (loopStep.items) items = loopStep.items;
 			await saveCheckpoint();
 			coordinated = false;
+			leaseCarried = true;
 			return "continue";
 		}
 		if (loopStep?.kind === "finished") {
@@ -2876,6 +2886,7 @@ async function runApiTurnAttempt(
 				if (!Array.isArray(result) && result.outcome === "completed") {
 					await saveCheckpoint();
 					coordinated = false;
+					leaseCarried = true;
 					return "continue";
 				}
 			}
@@ -2900,6 +2911,7 @@ async function runApiTurnAttempt(
 			messages = hooks.drain(messages);
 			await saveCheckpoint();
 			coordinated = false;
+			leaseCarried = true;
 			return "continue";
 		}
 		messages = hooks.drain(messages);
@@ -2910,6 +2922,7 @@ async function runApiTurnAttempt(
 			await saveCheckpoint();
 			// Retain the same DO lease across step boundaries; only terminal outcomes release it.
 			coordinated = false;
+			leaseCarried = true;
 			return "continue";
 		}
 		// Background command exits already announced or seen reach their cards; new exits wake the chat later.
@@ -2967,6 +2980,7 @@ async function runApiTurnAttempt(
 					: finalHistory;
 				await saveCheckpoint();
 				coordinated = false;
+				leaseCarried = true;
 				return "continue";
 			}
 			throw new IncompleteAgentTurn("background-command-review-required");
@@ -3005,6 +3019,7 @@ async function runApiTurnAttempt(
 				messages = [...messages, { role: "user", content: goalStep.text }];
 				await saveCheckpoint();
 				coordinated = false;
+				leaseCarried = true;
 				// A durable step ends and the next one runs the notice; the local
 				// worker runs it as the same turn's next attempt.
 				return step ? "continue" : { failedOver: { ...turn, messages, items } };
@@ -3025,6 +3040,7 @@ async function runApiTurnAttempt(
 				if (next.kind === "run" && next.messages) messages = next.messages;
 				await saveCheckpoint();
 				coordinated = false;
+				leaseCarried = true;
 				return "continue";
 			}
 			messages = next.messages;
@@ -3266,6 +3282,7 @@ async function runApiTurnAttempt(
 				});
 				// The turn's lease carries over to the next step.
 				coordinated = false;
+				leaseCarried = true;
 				return { failedOver: { ...turn, messages, items } };
 			} catch (cause) {
 				if (!abort.signal.aborted)
@@ -3336,6 +3353,7 @@ async function runApiTurnAttempt(
 				await checkpointApiTurn(turn, messages, items, failover);
 				// The turn's lease carries over to the step on the new route.
 				coordinated = false;
+				leaseCarried = true;
 				return {
 					failedOver: {
 						...turn,
@@ -3413,6 +3431,7 @@ async function runApiTurnAttempt(
 				});
 				// The turn's lease carries over to the retried step.
 				coordinated = false;
+				leaseCarried = true;
 				return { failedOver: { ...turn, failover, messages, items } };
 			} catch (cause) {
 				if (!abort.signal.aborted)
@@ -3503,6 +3522,7 @@ async function runApiTurnAttempt(
 					);
 					// The turn's lease carries over to the step on the fallback.
 					coordinated = false;
+					leaseCarried = true;
 					return { failedOver: { ...turn, failover: next, messages, items } };
 				}
 				if (decision.kind === "ask") {
