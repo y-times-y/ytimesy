@@ -236,6 +236,9 @@ for (const name of [
 	"MCP_OAUTH_SLACK_CLIENT_SECRET",
 	"MCP_OAUTH_GITHUB_CLIENT_ID",
 	"MCP_OAUTH_GITHUB_CLIENT_SECRET",
+	// The edge's Ed25519 key for Claude runner-box requests
+	// (scripts/generate-claude-runner-keypair.ts); the boxes hold its public key.
+	"YTIMESY_CLAUDE_RUNNER_SIGNING_KEY",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }

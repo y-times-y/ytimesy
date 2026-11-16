@@ -44,7 +44,7 @@ import {
 	agentSessionForOwner,
 	agentSessionMetadataForOwner,
 	agentSessionPageForOwner,
-	descendantAgentSessions,
+	descendantAgentSessionMetadata,
 	sessionHoldsUserMessage,
 } from "../adapters/agent-sessions";
 import { apiReasoningEffort } from "../adapters/api-reasoning-effort";
@@ -698,7 +698,7 @@ export async function stopApiWorkspaceTask(scope: CodexSessionScope) {
 	await cancelServerTurn(userId, sessionId);
 	// Stop on a parent stops its whole subagent tree; cancelled children send no reports.
 	await Promise.all(
-		(await descendantAgentSessions(userId, sessionId))
+		(await descendantAgentSessionMetadata(userId, sessionId))
 			.filter((child) => child.agentRole && child.turnStatus === "running")
 			.map((child) => cancelServerTurn(userId, child.id).catch(() => {})),
 	);

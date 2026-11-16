@@ -139,3 +139,24 @@ describe("a pending push card's re-checks", () => {
 		expect(t.timers.clear).toHaveBeenCalled();
 	});
 });
+
+describe("while the user's hub pushes", () => {
+	it("starts no interval and checks only when asked", async () => {
+		const repeat = vi.fn();
+		const status = vi.fn(
+			async (): Promise<PushCardState> => ({ answer: "pending" }),
+		);
+		const checker = createPushCardChecker({
+			status,
+			onState: () => {},
+			visible: () => true,
+			intervalMs: null,
+			timers: { repeat, clear: vi.fn() },
+		});
+		await checker.start();
+		expect(repeat).not.toHaveBeenCalled();
+		expect(status).toHaveBeenCalledTimes(1);
+		await checker.check();
+		expect(status).toHaveBeenCalledTimes(2);
+	});
+});

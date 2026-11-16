@@ -13,7 +13,11 @@ import { CLAUDE_FEED_SENDER_SOURCE } from "./claude-feed-sender";
  * After each tool call, and before the run would end, its hooks ask ytimesy
  * (the MCP server's address, a method no tool list shows) for messages the
  * user sent meanwhile: Send on a queued message reaches the model at its
- * next step, not after the turn. Any failure reads as none.
+ * next step, not after the turn. Any failure reads as none. While its feed
+ * is connected to an object that says what is waiting, the hook after a
+ * tool call asks only when there is a sent message it has not fetched
+ * (claude-feed-sender.ts): no request, and no woken object, otherwise. The
+ * hook before stopping always asks (once a run, and nothing may be lost).
  *
  * When options.json names a feed (YTIMESY_CLAUDE_FEED), it also pushes each
  * line to the chat's object over a WebSocket (claude-feed-sender.ts), where
@@ -57,9 +61,19 @@ const inbox = async () => {
 		return "";
 	}
 };
+let feed = null;
+/** After a tool call: what was sent meanwhile, asked over HTTP only when the feed cannot rule it out. */
+const inboxAfterTool = async () => {
+	const due = feed ? feed.inboxDue() : null;
+	if (due === "") return "";
+	const text = await inbox();
+	// A key is fetched once something came back; an empty answer asks again next time.
+	if (due !== null && text) feed.inboxFetched(due);
+	return text;
+};
 options.hooks = {
 	PostToolUse: [{ timeout: 180, hooks: [async () => {
-		const text = await inbox();
+		const text = await inboxAfterTool();
 		return text ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } } : {};
 	}] }],
 	Stop: [{ timeout: 180, hooks: [async () => {
@@ -70,7 +84,7 @@ options.hooks = {
 const write = (line) =>
 	new Promise((resolve) => (process.stdout.write(line) ? resolve() : process.stdout.once("drain", resolve)));
 const feedGrant = /^Bearer\\s+(\\S+)$/i.exec(inboxServer?.headers?.Authorization ?? "")?.[1];
-const feed = settings.feed?.url && feedGrant && typeof WebSocket === "function"
+feed = settings.feed?.url && feedGrant && typeof WebSocket === "function"
 	? createFeed({ url: settings.feed.url, turnId: settings.feed.turnId, run: settings.feed.run, grant: feedGrant })
 	: null;
 let finished = false;

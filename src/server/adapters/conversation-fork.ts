@@ -5,7 +5,9 @@ import {
 	type ConversationForkJournal,
 } from "#/domain/conversation-fork";
 import { jsonbText } from "#/domain/jsonb";
+import { hubTopic } from "#/domain/user-hub";
 import { database } from "./database";
+import { noteUserHub } from "./user-hub-notes";
 
 /** Opens a fork's journal in the transaction that makes its chat row. */
 export async function openConversationForkJournal(
@@ -68,7 +70,9 @@ export async function bindConversationForkVm(
 		 delete from agent_task_command_receipt r using bound where r.parent_session_id=bound.id and r.request_id=$5`,
 		[sessionId, userId, vm, attempt, CONVERSATION_FORK_REQUEST_ID],
 	);
-	return (result.rowCount ?? 0) > 0;
+	const bound = (result.rowCount ?? 0) > 0;
+	if (bound) noteUserHub(userId, [hubTopic.fork(sessionId)]);
+	return bound;
 }
 
 /** Records the attempt's failure for the chat to show; a superseded attempt writes nothing. */
@@ -96,6 +100,7 @@ export async function failConversationFork(
 			CONVERSATION_FORK_REQUEST_ID,
 		],
 	);
+	noteUserHub(userId, [hubTopic.fork(sessionId)]);
 }
 
 /**

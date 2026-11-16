@@ -13,11 +13,17 @@ import { readBoundedRequestBody } from "../../domain/bounded-request-body";
 import {
 	CLAUDE_CODE_FEED_PATH,
 	CLAUDE_FEED_MAX_MESSAGE,
+	CLAUDE_FEED_PING,
 	CLAUDE_FEED_PROTOCOL,
 	CLAUDE_FEED_SOCKET_TAG,
 	type ClaudeFeedMode,
+	type ClaudeFeedState,
 	claudeFeedEnabled,
 	claudeFeedMessage,
+	claudeInboxKey,
+	type FeedTold,
+	feedLastHeard,
+	feedSyncFrames,
 	feedWakeAt,
 	isUrgentFeedLine,
 } from "../../domain/claude-feed";
@@ -25,11 +31,18 @@ import {
 	claudeFeedPreview,
 	livePreviewFrame,
 } from "../../domain/claude-feed-preview";
+import {
+	CLAUDE_PARKED_RENEW_MS,
+	CLAUDE_PARKED_ROOM_LEASE_MS,
+	claudeStepWake,
+	parkedTurnRenewal,
+} from "../../domain/claude-parked-turn";
 import { claimConversationStep } from "../../domain/conversation-step-receipts";
 import { turnControlSchema } from "../../domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../../domain/delivery-auth";
 import { environmentWorkflowRequest } from "../../domain/environment-workflow";
 import { proxyGithubGit } from "../../domain/github-git-proxy";
+import { LIVE_SOCKET_PONG } from "../../domain/live-progress-socket";
 import {
 	modelConversationName,
 	routeModelConversationStep,
@@ -41,7 +54,11 @@ import {
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
 import type { SessionTurnStatus } from "../../domain/session-item";
-import { settledHubTurnStatus, userHubEnabledFor } from "../../domain/user-hub";
+import {
+	parseHubNote,
+	settledHubTurnStatus,
+	userHubEnabledFor,
+} from "../../domain/user-hub";
 import { BUILD_ID } from "../../lib/build-id";
 import { socketPair } from "../../realtime/socket-upgrade";
 import {
@@ -52,8 +69,10 @@ import {
 import {
 	type ApiTurn,
 	abandonApiTurn,
+	apiTurnLeaseFreshSql,
 	cancelWaitingApiTurn,
 	refreshWaitingApiTurns,
+	renewParkedClaudeTurn,
 	turnPastDeadlineSql,
 } from "../adapters/api-turns";
 import {
@@ -91,6 +110,7 @@ import {
 import { pendingClaudeCodeCalls } from "../services/claude-code-bridge";
 import type { ClaudeCodeFeed } from "../services/claude-code-runner";
 import {
+	CLAUDE_STEP_PAUSE_MS,
 	claudeTurnRedaction,
 	forgetClaudeTurn,
 	registerClaudeTurn,
@@ -137,6 +157,8 @@ import { logTurnStepSizes } from "./turn-step-sizes";
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
 export { UserHub } from "./user-hub";
+
+import { registerUserHubNotes } from "./user-hub-notes-binding";
 
 // Workers cannot compile WebAssembly from bytes; Wrangler precompiles the
 // code-mode sandbox's module, imported only when a program first runs.
@@ -204,8 +226,16 @@ async function resolveModelConversation(step: WorkflowStep) {
 const PURGE_TOMBSTONE_TABLE =
 	"create table if not exists conversation_tombstone(id integer primary key check(id=1),purged_at integer not null)";
 
-/** What a Claude Code feed socket carries: its grant's turn and, after hello, its run. */
-type FeedAttachment = { turnId: string; run: number | null };
+/**
+ * What a Claude Code feed socket carries: its grant's turn and, after hello,
+ * its run; for a runner that takes inbox frames, what it was last told.
+ */
+type FeedAttachment = {
+	turnId: string;
+	run: number | null;
+	inbox?: boolean;
+	told?: FeedTold | null;
+};
 
 /** Fresh turns use DO receipts; legacy Node turns must finish on their original executor. */
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
@@ -296,7 +326,12 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (!this.bindIdentity(scope)) return false;
 		const active = this.activeTurn();
 		if (active?.turnId === turn.turnId) return active.leaseId === turn.leaseId;
-		if (active) return this.queue.add({ ...scope, ...turn });
+		if (active) {
+			const queued = this.queue.add({ ...scope, ...turn });
+			// Only steps keep a waiting turn's lease fresh: a parked turn steps now.
+			if (queued) await this.wakeSleepingTurn();
+			return queued;
+		}
 		await this.beginTurn({ ...scope, ...turn });
 		return true;
 	}
@@ -352,6 +387,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	 * call is answered without waiting out the pause.
 	 */
 	private async wakeSleepingTurn() {
+		this.unpark();
 		if (this.stepping || !this.activeTurn()) return;
 		const at = this.ctx.storage.sql
 			.exec<{ at: number }>(
@@ -361,9 +397,26 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (at !== undefined && at > Date.now())
 			await this.wake("turn", Date.now());
 	}
-	/** The turn loop and the room's lease expiry share this object's single alarm. */
-	private async wake(purpose: "turn" | "room", at: number | null) {
+	/**
+	 * The turn loop and the room's lease expiry share this object's single
+	 * alarm. A turn wake set with `parkedTurn` is that Claude Code turn's
+	 * parked renewal (claude-parked-turn.ts); any other turn wake unparks it,
+	 * so the wake runs a step.
+	 */
+	private async wake(
+		purpose: "turn" | "room",
+		at: number | null,
+		parkedTurn?: string,
+	) {
 		if (this.purged) return;
+		if (purpose === "turn") {
+			if (parkedTurn !== undefined && at !== null)
+				this.ctx.storage.sql.exec(
+					"insert into claude_park(id,turn_id) values(1,?) on conflict(id) do update set turn_id=excluded.turn_id",
+					parkedTurn,
+				);
+			else this.unpark();
+		}
 		if (at === null)
 			this.ctx.storage.sql.exec(
 				"delete from conversation_wake where purpose=?",
@@ -437,9 +490,118 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (turnAt === undefined || this.stepping) return;
 		this.stepping = true;
 		try {
+			if (await this.renewParkedTurn()) return;
 			await this.advanceTurn(now - turnAt);
 		} finally {
 			this.stepping = false;
+		}
+	}
+	/** The Claude Code turn parked here, if any (its next turn wake only renews). */
+	private parkedTurnId() {
+		return (
+			this.ctx.storage.sql
+				.exec<{ turnId: string }>("select turn_id as turnId from claude_park")
+				.toArray()[0]?.turnId ?? null
+		);
+	}
+	/**
+	 * Something needs the parked turn's step (feed lines, an MCP call, Stop,
+	 * a turn queued behind it): its next wake, even one already due, runs a
+	 * step; a renewal in progress does not sleep again.
+	 */
+	private unpark() {
+		if (this.renewingParked) this.parkInterrupted = true;
+		if (this.purged) return;
+		try {
+			this.ctx.storage.sql.exec("delete from claude_park");
+		} catch (error) {
+			console.warn("Parked turn was not unparked.", {
+				cause: stepFailureCause(error),
+			});
+		}
+	}
+	/** A parked turn's renewal is running (it awaits Postgres and the room). */
+	private renewingParked = false;
+	/** Something unparked the turn while its renewal ran. */
+	private parkInterrupted = false;
+	/**
+	 * A parked Claude Code turn's wake (claude-parked-turn.ts): renews its
+	 * Postgres lease (one statement) and its room lease (this object's own
+	 * storage) and sleeps again, without a step's claim, workspace or
+	 * metadata. False, and a step runs, when anything needs one, a renewal
+	 * is refused, or it fails.
+	 */
+	private async renewParkedTurn() {
+		const active = this.activeTurn();
+		const parkedTurn = this.parkedTurnId();
+		if (!active || parkedTurn === null) return false;
+		const lease = { turnId: active.turnId, leaseId: active.currentLeaseId };
+		this.renewingParked = true;
+		this.parkInterrupted = false;
+		try {
+			const decision = parkedTurnRenewal({
+				parked: parkedTurn === active.turnId,
+				now: Date.now(),
+				feed: this.heardFeedState(active.turnId),
+				pendingCalls: pendingClaudeCodeCalls(active.turnId),
+				waitingTurns: this.queue.waiting().length,
+				room: await this.room.heldTurn(lease),
+			});
+			if (!decision.renew) {
+				console.info(
+					JSON.stringify({
+						event: "claude.parked_step",
+						turnId: active.turnId,
+						reason: decision.reason,
+					}),
+				);
+				return false;
+			}
+			const renewed = await withDatabaseScope(
+				this.env.HYPERDRIVE.connectionString,
+				() => renewParkedClaudeTurn(lease.turnId, lease.leaseId),
+				null,
+			);
+			if (renewed !== "renewed") return false;
+			if (!(await this.room.renewParked(lease, CLAUDE_PARKED_ROOM_LEASE_MS)))
+				return false;
+			if (this.parkInterrupted) return false;
+			await this.wake(
+				"turn",
+				Date.now() + CLAUDE_PARKED_RENEW_MS,
+				active.turnId,
+			);
+			console.info(
+				JSON.stringify({ event: "claude.parked_renew", turnId: active.turnId }),
+			);
+			return true;
+		} catch (error) {
+			console.warn("Parked turn renewal failed; running a step.", {
+				cause: stepFailureCause(error),
+			});
+			return false;
+		} finally {
+			this.renewingParked = false;
+		}
+	}
+	/**
+	 * Parks the turn whose step just asked to (claudeStepWake): its room
+	 * lease first outlasts the sleep, or the room's own alarm would lapse it.
+	 * False when the room no longer holds it uncancelled or the write fails.
+	 */
+	private async parkTurn(turnId: string) {
+		const leaseId = this.activeTurn()?.currentLeaseId;
+		if (!leaseId) return false;
+		try {
+			return await this.room.renewParked(
+				{ turnId, leaseId },
+				CLAUDE_PARKED_ROOM_LEASE_MS,
+			);
+		} catch (error) {
+			console.warn("Claude turn was not parked.", {
+				cause: stepFailureCause(error),
+			});
+			return false;
 		}
 	}
 	/** A step of this object's turn is running in this instance. */
@@ -569,6 +731,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			).catch(() => console.warn("Abandoned turn could not be failed now."));
 			return this.endTurn("failed");
 		}
+		// A step runs: nothing of an earlier park holds.
+		this.unpark();
 		const resume = this.steps.read(step)?.state === "processing";
 		// Counts consecutive attempts that did not finish this step.
 		this.ctx.storage.sql.exec("update turn_loop set resumes=resumes+1");
@@ -652,30 +816,33 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			this.ctx.storage.sql.exec(
 				"update turn_loop set step_index=step_index+1,resumes=0",
 			);
-			// A Claude Code step that paused (nothing to answer, nobody
-			// watching) sleeps before the next; a call already waiting does not.
-			const pause = takeClaudeStepPause(step.turnId);
-			const now = Date.now();
-			const at =
-				now +
-				(pause > 0 && pendingClaudeCodeCalls(step.turnId) === 0 ? pause : 0);
+			// A Claude Code step that paused sleeps before the next; a feed step
+			// with nothing to do parks (only its leases are renewed until the
+			// feed or a call wakes it); a call already waiting does not sleep.
 			// Lines that arrived after the step's last read wake the next sooner.
 			// While watched, at once: they came in while the step ran, so the
 			// object did not preview them.
-			return this.wake(
-				"turn",
-				feed?.unread()
-					? feedWakeAt({
-							now,
+			const now = Date.now();
+			const next = claudeStepWake({
+				now,
+				pause: takeClaudeStepPause(step.turnId),
+				pendingCalls: pendingClaudeCodeCalls(step.turnId),
+				waitingTurns: this.queue.waiting().length,
+				unread: feed?.unread()
+					? {
 							urgent:
 								this.feedMode() === "live" ||
 								(this.pendingFeed()?.urgent ?? true),
 							mode: this.feedMode(),
 							pendingSince: this.pendingFeed()?.since ?? now,
-							scheduledAt: at,
-						})
-					: at,
-			);
+						}
+					: null,
+				fallbackPauseMs: CLAUDE_STEP_PAUSE_MS,
+			});
+			if (!next.parked) return this.wake("turn", next.at);
+			if (await this.parkTurn(step.turnId))
+				return this.wake("turn", next.at, step.turnId);
+			return this.wake("turn", Date.now());
 		}
 		await this.endTurn(settledHubTurnStatus(outcome));
 		if (
@@ -817,7 +984,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				`select t.id,t.session_id,t.user_id,t.connection_id,t.connection_revision,t.model_id,t.settings,t.failover,
 			 t.state,t.lease_id,t.cancel_requested,t.updated_at::text as version,t.items->>'from' as items_from,
 			 (extract(epoch from t.created_at)*1000)::float8 as queued_at_ms,
-			 heartbeat_at>=now()-interval '45 seconds' as fresh,
+			 ${apiTurnLeaseFreshSql("t")} as fresh,
 			 ${turnPastDeadlineSql("t")} as past_deadline,
 			 exists(select 1 from model_workflow_step s where s.turn_id=t.id) as legacy
 			 from api_turn t where t.id=$1 and t.lease_id=$2 and t.executor='durable-object'`,
@@ -891,7 +1058,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private claudeFeedHook(turnId: string) {
 		let consumed: { run: number; to: number } | null = null;
 		const feed: ClaudeCodeFeed = {
-			state: (run) => this.claudeFeed.state(turnId, run),
+			state: (run) => this.heard(turnId, this.claudeFeed.state(turnId, run)),
 			lines: (run, from, limit) =>
 				this.claudeFeed.lines(turnId, run, from, limit),
 			consume: (run, to) => {
@@ -932,6 +1099,72 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				);
 			},
 		};
+	}
+	/** A run's feed record, `lastSeen` as the runner was last heard (its pings too). */
+	private heard(turnId: string, state: ClaudeFeedState | null) {
+		if (!state || state.lastSeen === 0) return state;
+		return {
+			...state,
+			lastSeen: feedLastHeard(
+				state.lastSeen,
+				this.feedPongAt(turnId, state.run),
+			),
+		};
+	}
+	/** The turn's current run's feed, as last heard; null without one. */
+	private heardFeedState(turnId: string) {
+		return this.heard(turnId, this.claudeFeed.currentState(turnId));
+	}
+	/**
+	 * When the runtime last answered a ping on one of the run's feed sockets
+	 * (it does so without waking this object), null if never.
+	 */
+	private feedPongAt(turnId: string, run: number) {
+		const ctx = this.ctx as unknown as {
+			getWebSocketAutoResponseTimestamp?: (socket: WebSocket) => Date | null;
+		};
+		let latest: number | null = null;
+		try {
+			for (const socket of this.ctx.getWebSockets(turnId)) {
+				if ((socket.deserializeAttachment() as FeedAttachment)?.run !== run)
+					continue;
+				const at = ctx.getWebSocketAutoResponseTimestamp?.(socket)?.getTime();
+				if (at !== undefined && (latest === null || at > latest)) latest = at;
+			}
+		} catch {}
+		return latest;
+	}
+	/**
+	 * Brings the active turn's runners up to date (feedSyncFrames): the mode
+	 * when someone started or stopped watching, the key of the sent messages
+	 * waiting when it changed. Only runners that said they take inbox frames;
+	 * outgoing frames are free.
+	 */
+	private syncClaudeFeeds() {
+		const turnId = this.activeTurn()?.turnId;
+		if (!turnId || !claudeFeedEnabled()) return;
+		try {
+			const now: FeedTold = {
+				mode: this.feedMode(),
+				inbox: claudeInboxKey(this.room.latestItems()),
+			};
+			for (const socket of this.ctx.getWebSockets(turnId)) {
+				const attachment = socket.deserializeAttachment() as FeedAttachment;
+				if (!attachment?.inbox || attachment.run === null) continue;
+				const frames = feedSyncFrames(attachment.told ?? null, now);
+				if (!frames.length) continue;
+				for (const frame of frames) socket.send(JSON.stringify(frame));
+				socket.serializeAttachment({
+					...attachment,
+					told: now,
+				} satisfies FeedAttachment);
+			}
+		} catch (error) {
+			// The runner's hooks then keep asking over HTTP as before.
+			console.warn("Claude feed state was not sent.", {
+				cause: stepFailureCause(error),
+			});
+		}
 	}
 	/** Lines that arrived since the step started (read through a call: a step changes it). */
 	private pendingFeed() {
@@ -989,6 +1222,16 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				socket.close(1000, "stop");
 			} catch {}
 		};
+		// The runtime answers a ping without waking this object; should one
+		// still reach it, it is answered the same and counts as heard.
+		if (message === CLAUDE_FEED_PING && !this.purged && claudeFeedEnabled()) {
+			try {
+				socket.send(LIVE_SOCKET_PONG);
+			} catch {}
+			const { turnId, run } = socket.deserializeAttachment() as FeedAttachment;
+			if (run !== null) this.claudeFeed.touch(turnId, run, Date.now());
+			return;
+		}
 		if (
 			this.purged ||
 			!claudeFeedEnabled() ||
@@ -1018,8 +1261,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			socket.serializeAttachment({
 				turnId: turn,
 				run: data.run,
+				inbox: data.inbox === true,
+				told: null,
 			} satisfies FeedAttachment);
-			return reply({ type: "ack", receivedTo, mode });
+			// `ping`: this object reads the runtime's answers to pings as heard.
+			reply({ type: "ack", receivedTo, mode, ping: true });
+			// A (re)connected runner learns the mode and what is waiting now.
+			return this.syncClaudeFeeds();
 		}
 		const run = attachment.run;
 		const state = run === null ? null : this.claudeFeed.state(turn, run);
@@ -1086,6 +1334,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		now: number,
 	) {
 		for (const done of [...this.feedWaiters]) done();
+		// A parked turn's next wake reads them (a step, not a renewal).
+		this.unpark();
 		this.feedPending = {
 			since: this.feedPending?.since ?? now,
 			urgent: urgent || Boolean(this.feedPending?.urgent),
@@ -1165,12 +1415,19 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 						if (control.success && (await this.cancelWaiting(control.data)))
 							return new Response(null, { status: 204 });
 						const response = await this.room.fetch(authenticated);
-						// The room holds the stop; the turn running here stops now.
-						if (control.success && response.status === 204)
+						// The room holds the stop; the turn running here stops now, and
+						// one sleeping between steps (parked or paused) wakes to stop.
+						if (control.success && response.status === 204) {
 							abortLiveTurn(control.data.turnId);
+							if (this.activeTurn()?.turnId === control.data.turnId)
+								await this.wakeSleepingTurn();
+						}
 						return response;
 					}
-					return this.room.fetch(authenticated);
+					const response = await this.room.fetch(authenticated);
+					// A new viewer: the runner sends every second from now on.
+					if (path === "/live" || path === "/stream") this.syncClaudeFeeds();
+					return response;
 				},
 			);
 		}
@@ -1246,6 +1503,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			return;
 		}
 		this.room.webSocketClose(socket, code, reason, wasClean);
+		this.syncClaudeFeeds();
 	}
 	webSocketError(socket: WebSocket, error: unknown) {
 		if (this.isClaudeFeed(socket)) return;
@@ -1256,11 +1514,14 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		super(ctx, env);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		registerUserHubNotes(env);
 		this.room = new ConversationRoom(ctx, (at: number | null) =>
 			this.wake("room", at),
 		);
 		this.steps = new SqliteConversationSteps(ctx.storage.sql);
 		this.claudeFeed = new SqliteClaudeFeed(ctx.storage.sql);
+		// A newer snapshot may list a sent message (or no longer): the runner hears it.
+		this.room.onAdopted(() => this.syncClaudeFeeds());
 		this.history = new TurnHistoryCache(ctx.storage.sql);
 		this.queue = new SqliteTurnQueue(ctx.storage.sql);
 		ctx.storage.sql.exec(
@@ -1272,6 +1533,10 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			step_index integer not null, resumes integer not null)`);
 		ctx.storage.sql.exec(
 			"create table if not exists conversation_wake(purpose text primary key,at integer not null)",
+		);
+		// The Claude Code turn parked between steps (claude-parked-turn.ts).
+		ctx.storage.sql.exec(
+			"create table if not exists claude_park(id integer primary key check(id=1),turn_id text not null)",
 		);
 		ctx.storage.sql.exec(PURGE_TOMBSTONE_TABLE);
 		this.purged =
@@ -1302,6 +1567,7 @@ export default {
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		registerUserHubNotes(env);
 		const minute = Math.floor(controller.scheduledTime / 60_000);
 		// Codex egress health: every 5 minutes, only when an account to probe
 		// with is named. Alerts the owner when a path is blocked.
@@ -1428,6 +1694,7 @@ export default {
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		registerUserHubNotes(env);
 		let stage = "ingress";
 		try {
 			const path = new URL(request.url).pathname;
@@ -1468,6 +1735,37 @@ export default {
 				return env.USER_HUBS.getByName(userId, durableObjectLocation()).fetch(
 					new Request(request.url, { headers: request.headers }),
 				);
+			}
+			// The web Worker tells a user's hub what changed (noteUserHub).
+			if (route === "user-note") {
+				const secret = process.env.YTIMESY_REALTIME_SECRET;
+				if (!secret || secret.length < 32)
+					return new Response(null, { status: 503 });
+				if (request.method !== "POST")
+					return new Response(null, { status: 404 });
+				let body: string;
+				try {
+					body = await readBoundedRequestBody(request, 4_000);
+				} catch {
+					return new Response(null, { status: 413 });
+				}
+				if (!(await verifyDeliveryRequest(secret, request, body)))
+					return new Response(null, { status: 401 });
+				let value: unknown;
+				try {
+					value = JSON.parse(body);
+				} catch {
+					return new Response(null, { status: 400 });
+				}
+				const note = parseHubNote(value);
+				if (!note) return new Response(null, { status: 400 });
+				if (!userHubEnabledFor(process.env.YTIMESY_USER_HUB_USERS, note.userId))
+					return new Response(null, { status: 204 });
+				await env.USER_HUBS.getByName(
+					note.userId,
+					durableObjectLocation(),
+				).noteSignals(note.topics);
+				return new Response(null, { status: 204 });
 			}
 			// The web Worker claimed a sent message's turn on its own database
 			// connection (turn-start.ts) and hands it to the chat's loop here.

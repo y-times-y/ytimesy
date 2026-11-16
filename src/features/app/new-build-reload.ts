@@ -1,6 +1,7 @@
 import type { AnyRouter } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { BUILD_ID } from "#/lib/build-id";
+import { type HubConnection, userHubStore } from "../workspace/user-hub-store";
 
 /**
  * Open tabs move onto a new deploy by themselves, without a prompt: once the
@@ -13,6 +14,43 @@ import { BUILD_ID } from "#/lib/build-id";
 
 /** How often a visible tab asks the server which build it runs. */
 export const BUILD_CHECK_INTERVAL_MS = 5 * 60_000;
+/** How often the check repeats while the hub reports a build the server does not run yet. */
+export const HUB_BUILD_CONFIRM_MS = 30_000;
+
+/**
+ * Whether the tab asks the server (GET /api/version) which build it runs.
+ * While the user's hub delivers and reported a build, it does the asking: a
+ * deploy restarts the hub, and the reconnect's whole map carries the new
+ * build. The hub's build is then confirmed by the server (the edge may be
+ * up before the web Worker): after HUB_BUILD_CONFIRM_MS, then twice as long
+ * after each answer that still names this tab's build, up to
+ * BUILD_CHECK_INTERVAL_MS (an edge left on another build never polls faster).
+ * Without the hub: every BUILD_CHECK_INTERVAL_MS, and on leaving or coming
+ * back to the tab.
+ */
+export function buildCheckDue(input: {
+	readonly hub: HubConnection;
+	readonly build: string;
+	readonly sinceCheckMs: number;
+	/** Leaving or coming back to the tab. */
+	readonly visibilityChange: boolean;
+	/** Server answers so far that named this tab's build while the hub named another. */
+	readonly unconfirmed?: number;
+}): boolean {
+	if (input.hub.open && input.hub.build) {
+		if (input.hub.build === input.build) return false;
+		return (
+			input.sinceCheckMs >=
+			Math.min(
+				HUB_BUILD_CONFIRM_MS * 2 ** (input.unconfirmed ?? 0),
+				BUILD_CHECK_INTERVAL_MS,
+			)
+		);
+	}
+	return (
+		input.visibilityChange || input.sinceCheckMs >= BUILD_CHECK_INTERVAL_MS
+	);
+}
 /** No typing or pointer for this long counts as away from the tab. */
 export const IDLE_BEFORE_RELOAD_MS = 60_000;
 /** At most one stale-chunk reload this often, so a broken deploy cannot loop. */
@@ -140,6 +178,7 @@ export function watchForNewBuild(router: AnyRouter) {
 	if (BUILD_ID === "development") return;
 	let newBuild = false;
 	let checkedAt = Date.now();
+	let unconfirmed = 0;
 	let lastActiveAt = Date.now();
 	const active = () => {
 		lastActiveAt = Date.now();
@@ -159,13 +198,25 @@ export function watchForNewBuild(router: AnyRouter) {
 		)
 			window.location.reload();
 	};
-	const check = async () => {
-		if (!newBuild) {
+	const check = async (visibilityChange = false) => {
+		if (
+			!newBuild &&
+			buildCheckDue({
+				hub: userHubStore.connection(),
+				build: BUILD_ID,
+				sinceCheckMs: Date.now() - checkedAt,
+				visibilityChange,
+				unconfirmed,
+			})
+		) {
 			checkedAt = Date.now();
 			const build = await serverBuild();
 			if (build && build !== BUILD_ID) {
 				newBuild = true;
 				blockNextNavigation();
+			} else {
+				const hub = userHubStore.connection();
+				if (hub.open && hub.build && hub.build !== BUILD_ID) unconfirmed += 1;
 			}
 		}
 		reloadIfSafe();
@@ -205,10 +256,14 @@ export function watchForNewBuild(router: AnyRouter) {
 	// person's first keystroke.
 	document.addEventListener("visibilitychange", () => {
 		if (document.visibilityState === "visible") active();
-		void check();
+		void check(true);
 	});
-	window.setInterval(() => {
-		if (!newBuild && Date.now() - checkedAt < BUILD_CHECK_INTERVAL_MS) return;
-		void check();
-	}, 30_000);
+	// A local timer: it only asks the server when buildCheckDue says so (never
+	// while the hub vouches for this build), or reloads once that is safe.
+	window.setInterval(() => void check(), 30_000);
+	// The hub reporting another build checks at once.
+	userHubStore.subscribe(() => {
+		const hub = userHubStore.connection();
+		if (hub.open && hub.build && hub.build !== BUILD_ID) void check();
+	});
 }

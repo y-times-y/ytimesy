@@ -16,6 +16,19 @@ import {
 	infrastructureUsersFn,
 } from "./infrastructure-usage.fn";
 import { UsageWindowBars } from "./usage-windows";
+import {
+	anyChatTurn,
+	pollUnlessPushed,
+	useHubDelivery,
+	useHubRead,
+} from "./user-hub-store";
+
+/**
+ * Cloud usage moves while chats' machines run. While the user's hub pushes,
+ * it is read again when a chat's turn starts or ends, at most this often;
+ * otherwise it is polled at this interval.
+ */
+export const USAGE_READ_MS = 60_000;
 
 const dollars = (amount: number) =>
 	`$${(amount / 1_000_000).toLocaleString("en-US", {
@@ -61,11 +74,15 @@ const DISMISSED_USAGE_WARNING = "ytimesy:dismissed-usage-warning";
  */
 export function UsageWarningBanner() {
 	const readUsage = useServerFn(infrastructureUsageFn);
+	const delivery = useHubDelivery();
 	const usage = useQuery({
 		queryKey: ["infrastructure-usage"],
 		queryFn: () => readUsage(),
-		refetchInterval: 60_000,
+		refetchInterval: pollUnlessPushed(delivery, USAGE_READ_MS),
 		retry: false,
+	});
+	useHubRead(anyChatTurn, () => void usage.refetch({ cancelRefetch: false }), {
+		minIntervalMs: USAGE_READ_MS,
 	});
 	const warning = usage.data ? usageNotice(usage.data) : null;
 	const step = warning
@@ -110,10 +127,14 @@ export function InfrastructureUsage() {
 	const readAudit = useServerFn(infrastructureAllowanceAuditFn);
 	const adjustUsage = useServerFn(adjustInfrastructureUsageFn);
 	const cache = useQueryClient();
+	const delivery = useHubDelivery();
 	const usage = useQuery({
 		queryKey: ["infrastructure-usage"],
 		queryFn: () => readUsage(),
-		refetchInterval: 30_000,
+		refetchInterval: pollUnlessPushed(delivery, 30_000),
+	});
+	useHubRead(anyChatTurn, () => void usage.refetch({ cancelRefetch: false }), {
+		minIntervalMs: 30_000,
 	});
 	const users = useQuery({
 		queryKey: ["infrastructure-users"],

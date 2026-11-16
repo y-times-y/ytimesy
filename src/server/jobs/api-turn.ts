@@ -124,6 +124,7 @@ import {
 	turnMayHaveChangedWorkspace,
 	withoutSavingChanges,
 } from "#/domain/turn-saving";
+import { hubTopic } from "#/domain/user-hub";
 import { ASK_USER_TOOL } from "#/domain/user-question";
 import { apiReasoningEffort } from "#/server/adapters/api-reasoning-effort";
 import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
@@ -190,6 +191,7 @@ import { nodePublicHost } from "../adapters/public-host";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
+import { noteUserHub } from "../adapters/user-hub-notes";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import {
 	agentCapturesNote,
@@ -2317,6 +2319,7 @@ async function runApiTurnAttempt(
 					history = messages = background.messages;
 					await saveCheckpoint();
 					await publishProgress?.("running");
+					noteUserHub(owner.userId, [hubTopic.commands(owner.id)]);
 				}
 				// Push cards the user answered meanwhile: the chat's notice, and the agent reads it.
 				const pushResults = await withPushResultNotices({

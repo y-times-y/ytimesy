@@ -1,5 +1,9 @@
+import { generateKeyPairSync, verify } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { runnerSignature } from "../../../infra/claude-runner-box/server.mjs";
+import {
+	runnerSignature,
+	runnerSignedMaterial,
+} from "../../../infra/claude-runner-box/server.mjs";
 import {
 	claudeRunnerDiskShare,
 	claudeRunnerMachine,
@@ -61,6 +65,50 @@ describe("claudeRunnerMachine", () => {
 			);
 			expect(call.headers["x-ytimesy-runner-nonce"]).toMatch(/^[0-9a-f]{32}$/);
 		}
+	});
+
+	it("sends both signatures while the shared key is still set, and the Ed25519 one verifies", async () => {
+		const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+		const signingKey = privateKey
+			.export({ format: "der", type: "pkcs8" })
+			.toString("base64");
+		const fetcher = vi.fn<typeof fetch>(
+			async () =>
+				new Response(JSON.stringify({ exitCode: 0, stdout: "", stderr: "" })),
+		);
+		await claudeRunnerMachine({ ...box, signingKey }, fetcher).shell(
+			"true",
+			1000,
+		);
+		const init = fetcher.mock.calls[0]?.[1];
+		const headers = init?.headers as Record<string, string>;
+		expect(headers["x-ytimesy-delivery-signature"]).toMatch(/^[0-9a-f]{64}$/);
+		const material = runnerSignedMaterial(
+			"POST",
+			"/exec",
+			headers["x-ytimesy-delivery-expires"],
+			headers["x-ytimesy-runner-nonce"],
+			String(init?.body),
+		);
+		expect(
+			verify(
+				null,
+				Buffer.from(material),
+				publicKey,
+				Buffer.from(headers["x-ytimesy-runner-signature-ed25519"], "base64url"),
+			),
+		).toBe(true);
+	});
+
+	it("refuses to send with a malformed Ed25519 key instead of retrying it as a network failure", async () => {
+		const fetcher = vi.fn<typeof fetch>();
+		await expect(
+			claudeRunnerMachine(
+				{ baseUrl: box.baseUrl, signingKey: "A".repeat(64) },
+				fetcher,
+			).readFile("x"),
+		).rejects.toThrow(/YTIMESY_CLAUDE_RUNNER_SIGNING_KEY/);
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 
 	it("does not hide refused reads or replay refused commands", async () => {

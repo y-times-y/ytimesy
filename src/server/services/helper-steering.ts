@@ -3,22 +3,23 @@ import { isActiveSidekick } from "#/domain/sidekick";
 import { subagentTree } from "#/domain/subagent-tree";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
-	descendantAgentSessions,
+	agentSessionMetadataForOwner,
+	descendantAgentSessionMetadata,
 } from "../adapters/agent-sessions";
 import { stageServerPeerMessage } from "../adapters/server-peer-inbox";
 import { enqueuePeerMessage } from "../jobs/queue";
 import { mentionNoteFromTree } from "./agent-mentions";
 
 export type HelperSteeringDeps = {
+	/** The chat and its helpers without their transcripts: nothing here reads them. */
 	readonly session: (
 		userId: string,
 		sessionId: string,
-	) => Promise<AgentSessionRecord | null>;
+	) => Promise<Omit<AgentSessionRecord, "items"> | null>;
 	readonly descendants: (
 		userId: string,
 		rootId: string,
-	) => Promise<readonly AgentSessionRecord[]>;
+	) => Promise<readonly Omit<AgentSessionRecord, "items">[]>;
 	readonly enqueue: typeof enqueuePeerMessage;
 	/** Puts steering in a subagent's mailbox for its next model step. */
 	readonly stage: (
@@ -35,8 +36,8 @@ export type HelperSteeringDeps = {
 };
 
 const liveDeps: HelperSteeringDeps = {
-	session: agentSessionForOwner,
-	descendants: descendantAgentSessions,
+	session: agentSessionMetadataForOwner,
+	descendants: descendantAgentSessionMetadata,
 	enqueue: enqueuePeerMessage,
 	stage: stageServerPeerMessage,
 	notifyLead: stageServerPeerMessage,

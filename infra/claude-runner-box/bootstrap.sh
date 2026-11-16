@@ -1,8 +1,11 @@
 #!/bin/bash
 # First-boot setup of a runner box (Ubuntu 24.04 x86_64, run as root from the
-# instance's user data). The provisioning script fills the three placeholders.
+# instance's user data). The provisioning script fills the placeholders.
 # The box runs `claude` only: no repository, no user secrets, no inbound ports
-# when reached through a Cloudflare Tunnel (__TUNNEL_TOKEN__ set).
+# when reached through a Cloudflare Tunnel (__TUNNEL_TOKEN__ set). It verifies
+# the edge's requests with the edge's Ed25519 public key (__PUBLIC_KEY__) and
+# holds no key that could sign one. The tunnel token is the one credential it
+# keeps (docs/claude-code-placement.md, "What a box holds").
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
@@ -15,7 +18,7 @@ curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux
 useradd --system --create-home --home-dir /var/lib/ytimesy-runner --shell /usr/sbin/nologin ytimesy-runner || true
 install -d -o ytimesy-runner -g ytimesy-runner /var/lib/ytimesy-runner/work /opt/ytimesy-runner
 install -m 600 -o root -g root /dev/null /etc/ytimesy-runner.env
-printf 'RUNNER_SIGNING_KEY=%s\nRUNNER_HOME=/var/lib/ytimesy-runner\nPORT=8787\n' '__SIGNING_KEY__' > /etc/ytimesy-runner.env
+printf 'RUNNER_PUBLIC_KEY=%s\nRUNNER_HOME=/var/lib/ytimesy-runner\nPORT=8787\n' '__PUBLIC_KEY__' > /etc/ytimesy-runner.env
 
 cat > /opt/ytimesy-runner/server.mjs <<'SERVER'
 __SERVER_MJS__

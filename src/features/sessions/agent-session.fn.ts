@@ -22,7 +22,10 @@ import { requireSameOrigin } from "#/server/http";
 import { relayConversationDeliveriesOnce } from "#/server/jobs/conversation-delivery";
 import { withPublicFailure } from "#/server/public-failure";
 import { openAgentSession } from "#/server/services/agent-session-machine";
-import { projectAgentTasks } from "#/server/services/agent-task-activity";
+import {
+	olderHelperItems,
+	projectAgentTasks,
+} from "#/server/services/agent-task-activity";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import { prewarmChatMachine } from "#/server/services/machine-prewarm";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -168,6 +171,32 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 			data.known,
 			{ deltas: data.deltas, fresh: data.fresh },
 		);
+	});
+
+/**
+ * A helper's items before stored position `before` (the oldest its view
+ * holds; a helper is read as its last page), read as the reader scrolls up.
+ */
+export const getOlderHelperItems = createServerFn({ method: "GET" })
+	.validator((data: unknown) =>
+		z
+			.object({
+				projectId: z.uuid(),
+				helperId: z.uuid(),
+				before: z.number().int().min(1).max(10_000_000),
+			})
+			.parse(data),
+	)
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		const page = await olderHelperItems(
+			user.id,
+			data.projectId,
+			data.helperId,
+			data.before,
+		);
+		if (!page) throw new Error("That agent is not part of this project.");
+		return page;
 	});
 
 /** Helper transcript revisions the browser holds; anything odd is ignored. */

@@ -6,6 +6,7 @@ import {
 	forgetClaudeTurn,
 	registerClaudeTurn,
 	rememberClaudeTurnRedaction,
+	requestClaudeStepPark,
 	requestClaudeStepPause,
 	takeClaudeStepPause,
 } from "./claude-step-pause";
@@ -44,6 +45,14 @@ describe("when a Claude Code step may sleep", () => {
 		requestClaudeStepPause(TURN, 15_000);
 		forgetClaudeTurn(TURN);
 		expect(claudeTurnRedaction(TURN)).toBeUndefined();
-		expect(takeClaudeStepPause(TURN)).toBe(0);
+		expect(takeClaudeStepPause(TURN)).toBeNull();
+	});
+
+	it("tells a polling pause from a feed step's park, once", () => {
+		requestClaudeStepPause(TURN, 15_000);
+		expect(takeClaudeStepPause(TURN)).toEqual({ kind: "pause", ms: 15_000 });
+		expect(takeClaudeStepPause(TURN)).toBeNull();
+		requestClaudeStepPark(TURN);
+		expect(takeClaudeStepPause(TURN)).toEqual({ kind: "park" });
 	});
 });

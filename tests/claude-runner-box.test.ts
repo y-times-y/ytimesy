@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,6 +9,8 @@ import {
 	DISK_WARN_SHARE,
 	runnerSignature,
 } from "../infra/claude-runner-box/server.mjs";
+import { claudeRunnerKeypair } from "../scripts/generate-claude-runner-keypair";
+import { runnerRequestHeaders } from "../src/server/adapters/claude-runner-box";
 
 const secret = "s".repeat(40);
 let server: ReturnType<typeof createRunnerServer>;
@@ -173,5 +176,175 @@ describe("the runner box health", () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+});
+
+describe("the runner box with the edge's Ed25519 public key", () => {
+	const edge = claudeRunnerKeypair();
+	const legacy = "h".repeat(40);
+	let box: ReturnType<typeof createRunnerServer>;
+	let origin = "";
+
+	beforeAll(async () => {
+		// A leftover shared key beside the public key must not keep working.
+		box = createRunnerServer({
+			secret: legacy,
+			publicKey: edge.publicKey,
+			home,
+		});
+		await new Promise<void>((resolve) => box.listen(0, "127.0.0.1", resolve));
+		origin = `http://127.0.0.1:${(box.address() as AddressInfo).port}`;
+	});
+	afterAll(() => new Promise<void>((resolve) => box.close(() => resolve())));
+
+	async function send(
+		path: string,
+		headers: Record<string, string>,
+		body = '{"command":"printf ok"}',
+		at = origin,
+	) {
+		return (await fetch(at + path, { method: "POST", body, headers })).status;
+	}
+
+	it("accepts a request the edge signed, and only once", async () => {
+		const body = '{"command":"printf ok"}';
+		const headers = await runnerRequestHeaders(
+			{ signingKey: edge.signingKey },
+			"/exec",
+			body,
+		);
+		expect(headers["x-ytimesy-runner-signature-ed25519"]).toMatch(
+			/^[A-Za-z0-9_-]{86}$/,
+		);
+		expect(headers["x-ytimesy-delivery-signature"]).toBeUndefined();
+		const response = await fetch(`${origin}/exec`, {
+			method: "POST",
+			body,
+			headers,
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ stdout: "ok" });
+		expect(await send("/exec", headers, body)).toBe(403);
+	});
+
+	it("accepts the rollout's double-signed request, which a box without the public key also accepts", async () => {
+		const both = { secret: legacy, signingKey: edge.signingKey };
+		expect(
+			await send(
+				"/exec",
+				await runnerRequestHeaders(both, "/exec", '{"command":"printf ok"}'),
+			),
+		).toBe(200);
+		const hmacBox = createRunnerServer({ secret: legacy, home });
+		await new Promise<void>((resolve) =>
+			hmacBox.listen(0, "127.0.0.1", resolve),
+		);
+		try {
+			const at = `http://127.0.0.1:${(hmacBox.address() as AddressInfo).port}`;
+			expect(
+				await send(
+					"/exec",
+					await runnerRequestHeaders(both, "/exec", '{"command":"printf ok"}'),
+					'{"command":"printf ok"}',
+					at,
+				),
+			).toBe(200);
+			// That box cannot check Ed25519, so an Ed25519-only request is refused, not let through.
+			expect(
+				await send(
+					"/exec",
+					await runnerRequestHeaders(
+						{ signingKey: edge.signingKey },
+						"/exec",
+						'{"command":"printf ok"}',
+					),
+					'{"command":"printf ok"}',
+					at,
+				),
+			).toBe(403);
+		} finally {
+			await new Promise<void>((resolve) => hmacBox.close(() => resolve()));
+		}
+	});
+
+	it("refuses the shared HMAC key, another keypair and a missing signature once it has the public key", async () => {
+		const body = '{"command":"printf ok"}';
+		expect(
+			await send(
+				"/exec",
+				await runnerRequestHeaders({ secret: legacy }, "/exec", body),
+				body,
+			),
+		).toBe(403);
+		const other = claudeRunnerKeypair();
+		expect(
+			await send(
+				"/exec",
+				await runnerRequestHeaders(
+					{ signingKey: other.signingKey },
+					"/exec",
+					body,
+				),
+				body,
+			),
+		).toBe(403);
+		const { "x-ytimesy-runner-signature-ed25519": _, ...unsigned } =
+			await runnerRequestHeaders(
+				{ signingKey: edge.signingKey },
+				"/exec",
+				body,
+			);
+		expect(await send("/exec", unsigned, body)).toBe(403);
+	});
+
+	it("refuses a tampered body, path, expiry, nonce or signature, and an expired request", async () => {
+		const body = '{"command":"printf ok"}';
+		const signed = () =>
+			runnerRequestHeaders({ signingKey: edge.signingKey }, "/exec", body);
+		expect(
+			await send("/exec", await signed(), '{"command":"printf evil"}'),
+		).toBe(403);
+		expect(await send("/read", await signed(), body)).toBe(403);
+		const later = await signed();
+		later["x-ytimesy-delivery-expires"] = String(
+			Number(later["x-ytimesy-delivery-expires"]) + 1000,
+		);
+		expect(await send("/exec", later, body)).toBe(403);
+		const renonced = await signed();
+		renonced["x-ytimesy-runner-nonce"] = "b".repeat(32);
+		expect(await send("/exec", renonced, body)).toBe(403);
+		const flipped = await signed();
+		const signature = flipped["x-ytimesy-runner-signature-ed25519"];
+		flipped["x-ytimesy-runner-signature-ed25519"] =
+			(signature[0] === "A" ? "B" : "A") + signature.slice(1);
+		expect(await send("/exec", flipped, body)).toBe(403);
+		const expired = await runnerRequestHeaders(
+			{ signingKey: edge.signingKey },
+			"/exec",
+			body,
+			Date.now() - 60_000,
+		);
+		expect(await send("/exec", expired, body)).toBe(403);
+	});
+
+	it("will not start without a way to verify, or with a key that is not Ed25519", () => {
+		expect(() => createRunnerServer({ home })).toThrow(/too short/);
+		expect(() => createRunnerServer({ secret: "short", home })).toThrow(
+			/too short/,
+		);
+		const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 })
+			.publicKey.export({ format: "der", type: "spki" })
+			.toString("base64");
+		expect(() => createRunnerServer({ publicKey: rsa, home })).toThrow(
+			/Ed25519/,
+		);
+		expect(() =>
+			createRunnerServer({ publicKey: edge.publicKey, home }),
+		).not.toThrow();
+	});
+
+	it("makes keys in the shapes the settings check (provision.py, claudeRunnerFor)", () => {
+		expect(edge.publicKey).toMatch(/^[A-Za-z0-9+/]{59}=$/);
+		expect(edge.signingKey).toMatch(/^[A-Za-z0-9+/]{64}$/);
 	});
 });

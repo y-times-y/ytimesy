@@ -1,7 +1,7 @@
 import { subagentTree } from "#/domain/subagent-tree";
 import {
 	type AgentSessionRecord,
-	descendantAgentSessions,
+	descendantAgentSessionMetadata,
 } from "../adapters/agent-sessions";
 import { childReportEventsSince } from "../adapters/agent-task-events";
 import { stageServerPeerMessage } from "../adapters/server-peer-inbox";
@@ -26,10 +26,11 @@ const POLL_MS = 3_000;
 export type CheckerPairGateDeps = {
 	readonly now: () => number;
 	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+	/** The judge's workers without their transcripts (read every few seconds). */
 	readonly workers: (
 		userId: string,
 		judgeId: string,
-	) => Promise<readonly AgentSessionRecord[]>;
+	) => Promise<readonly Omit<AgentSessionRecord, "items">[]>;
 	readonly reportEvents: typeof childReportEventsSince;
 	readonly stage: typeof stageServerPeerMessage;
 };
@@ -47,7 +48,7 @@ const defaultDeps: CheckerPairGateDeps = {
 			signal.addEventListener("abort", done, { once: true });
 		}),
 	workers: async (userId, judgeId) =>
-		(await descendantAgentSessions(userId, judgeId)).filter(
+		(await descendantAgentSessionMetadata(userId, judgeId)).filter(
 			(child) => child.parentSessionId === judgeId,
 		),
 	reportEvents: (...args) => childReportEventsSince(...args),

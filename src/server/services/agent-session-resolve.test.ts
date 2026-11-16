@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	list: vi.fn(),
 	insert: vi.fn(),
 	reusable: vi.fn(),
+	blockItems: vi.fn(async () => new Map<string, unknown[]>()),
 }));
 vi.mock("#/server/adapters/workspaces", () => ({
 	workspaceForProject: mocks.workspace,
@@ -22,7 +23,8 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 	reusableEmptyChat: mocks.reusable,
 	childAgentSession: vi.fn(),
 	deleteAgentSessionForOwner: vi.fn(),
-	descendantAgentSessions: vi.fn(),
+	descendantAgentSessionMetadata: vi.fn(),
+	listedModelBlockItemsForOwner: mocks.blockItems,
 	providerRefsHeldOutside: vi.fn(),
 	saveAgentSessionProviderRef: vi.fn(async () => undefined),
 	selectAgentSessionHarness: vi.fn(),
@@ -126,6 +128,37 @@ it("reads the chat list for the model a new chat inherits", async () => {
 	expect(mocks.list).toHaveBeenCalledOnce();
 	expect(mocks.insert).toHaveBeenCalledWith(
 		expect.objectContaining({ listedModelId: "api/connection/model" }),
+	);
+});
+
+it("skips a model the provider blocked, reading only the rows that say so", async () => {
+	mocks.list.mockResolvedValue([
+		{ ...chat, id: "blocked", listedModelId: "api/connection/blocked" },
+		{ ...chat, id: "other-runtime", harness: "codex", listedModelId: "gpt" },
+		{ ...chat, id: "fine", listedModelId: "api/connection/fine" },
+	]);
+	mocks.blockItems.mockResolvedValueOnce(
+		new Map([
+			[
+				"blocked",
+				[
+					{
+						kind: "error",
+						message: "[user_blocked] access has been restricted",
+					},
+				],
+			],
+		]),
+	);
+	await openAgentSession({
+		userId: "owner",
+		projectId: "project",
+		harness: "api",
+	});
+	// Only the chats on this runtime that name a model; no transcript is read.
+	expect(mocks.blockItems).toHaveBeenCalledWith("owner", ["blocked", "fine"]);
+	expect(mocks.insert).toHaveBeenCalledWith(
+		expect.objectContaining({ listedModelId: "api/connection/fine" }),
 	);
 });
 

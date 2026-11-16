@@ -223,7 +223,9 @@ export async function answerClaudeCodeMcp(
 	const reply = await handleMcpMessage(message, {
 		tools: async () => (await claudeCodeBridgeTools(grant.turnId)) ?? [],
 		call: (name, args) => requestClaudeCodeCall(grant.turnId, name, args),
-		// Asked after every tool call: answered here at once unless the turn's
+		// Asked before the run stops, and after a tool call when the run's feed
+		// announced a sent message (or there is no feed: an older runner, a
+		// lost socket; claude-feed.ts). Answered here at once unless the turn's
 		// heartbeat (in this object) saw a sent message or cannot rule one out.
 		// The step takes it once picked up, so a slow answer is waited for.
 		inbox: async () => {

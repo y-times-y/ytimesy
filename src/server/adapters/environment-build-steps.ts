@@ -36,12 +36,31 @@ export const noBuildSteps: EnvironmentBuildSteps = {
 const bounded = (value: string | null | undefined, limit: number) =>
 	value == null ? null : value.slice(-limit);
 
-export function databaseBuildSteps(buildId: string): EnvironmentBuildSteps {
-	const write = (sql: string, params: unknown[]) =>
+/** A running step's output tells the page at most this often (its start and end always do). */
+export const BUILD_OUTPUT_NOTE_MS = 10_000;
+
+/**
+ * `changed` hears each recorded change (the user's hub tells the page to
+ * read the build's steps): every start and finish, output at most every
+ * BUILD_OUTPUT_NOTE_MS.
+ */
+export function databaseBuildSteps(
+	buildId: string,
+	changed: () => void = () => {},
+	now: () => number = Date.now,
+): EnvironmentBuildSteps {
+	let outputNotedAt = Number.NEGATIVE_INFINITY;
+	const write = (sql: string, params: unknown[], output = false) =>
 		database()
 			.query(sql, params)
 			.then(
-				() => undefined,
+				() => {
+					if (output) {
+						if (now() - outputNotedAt < BUILD_OUTPUT_NOTE_MS) return;
+						outputNotedAt = now();
+					}
+					changed();
+				},
 				() => undefined,
 			);
 	return {
@@ -57,6 +76,7 @@ export function databaseBuildSteps(buildId: string): EnvironmentBuildSteps {
 			write(
 				"update environment_build_step set output=$3 where build_id=$1 and key=$2 and state='running'",
 				[buildId, key, bounded(output, 4000)],
+				true,
 			),
 		finish: (key, state, details = {}) =>
 			write(

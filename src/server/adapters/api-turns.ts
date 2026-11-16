@@ -6,7 +6,11 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
-import { isClaudeCodeRevision } from "#/domain/claude-code-route";
+import {
+	CLAUDE_CODE_REVISION_PREFIX,
+	isClaudeCodeRevision,
+} from "#/domain/claude-code-route";
+import { CLAUDE_TURN_LEASE_SECONDS } from "#/domain/claude-parked-turn";
 import { CONVERSATION_FORK_REQUEST_ID } from "#/domain/conversation-fork";
 import { jsonbText } from "#/domain/jsonb";
 import {
@@ -635,6 +639,70 @@ export const turnPastDeadlineSql = (alias: string) =>
 	 and d.request_id='${TURN_DEADLINE_REQUEST_ID}' and d.status='done'
 	 and (d.response->>'deadlineAt')::double precision <= extract(epoch from now())*1000)`;
 
+/**
+ * SQL: the turn's lease is fresh, renewed within its window. A chat
+ * object's Claude Code turn may park between steps and renew only every
+ * CLAUDE_PARKED_RENEW_MS (claude-parked-turn.ts), so its window is
+ * CLAUDE_TURN_LEASE_SECONDS, still inside the three minutes after which
+ * expireApiTurnLeases fails it; every other turn's (box turns, API and
+ * Codex turns) stays 45 seconds. `alias` names the turn row where the
+ * statement aliases it.
+ */
+export function apiTurnLeaseFreshSql(alias?: string) {
+	const c = alias ? `${alias}.` : "";
+	return `${c}heartbeat_at>=now()-case when ${c}executor='durable-object' and ${c}connection_id is null
+	 and starts_with(${c}connection_revision,'${CLAUDE_CODE_REVISION_PREFIX}')
+	 then interval '${CLAUDE_TURN_LEASE_SECONDS} seconds' else interval '45 seconds' end`;
+}
+
+/**
+ * Renews the turn's lease ($1 id, $2 lease) unless it is cancelled or stale;
+ * a turn past its runner deadline is cancelled in the same statement, so
+ * the renewal fails and the turn settles as a clean stop. Returns the row
+ * with whether the chat's peer inbox holds anything (and a sent message).
+ */
+const RENEW_TURN_LEASE_SQL = `with expired as (update api_turn t set cancel_requested=true where t.id=$1 and t.lease_id=$2 and t.state='running'
+		 and not t.cancel_requested and ${turnPastDeadlineSql("t")} returning t.id)
+		 update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested
+		 and ${apiTurnLeaseFreshSql()} and not exists(select 1 from expired)
+		 returning id,session_id,exists(select 1 from agent_peer_inbox q where q.recipient_id=api_turn.session_id and not q.accepted) as inbox_pending,
+		 exists(select 1 from agent_peer_inbox q where q.recipient_id=api_turn.session_id and not q.accepted and q.queued_send->>'released'='true') as sent_pending`;
+type RenewedTurnLease = {
+	session_id: string;
+	inbox_pending: boolean;
+	sent_pending: boolean;
+};
+
+/**
+ * The renewal of a parked Claude Code turn, which runs no step
+ * (claude-parked-turn.ts): "renewed", "inbox" when renewed but the chat's
+ * peer inbox holds something a step should see, or "lost" (cancelled, past
+ * its deadline, stale or no longer this lease's), when a step should run
+ * and settle it.
+ */
+export async function renewParkedClaudeTurn(
+	turnId: string,
+	leaseId: string,
+): Promise<"renewed" | "inbox" | "lost"> {
+	const startedAt = Date.now();
+	const row = (
+		await retryDroppedConnection(() =>
+			database().query<RenewedTurnLease>(RENEW_TURN_LEASE_SQL, [
+				turnId,
+				leaseId,
+			]),
+		)
+	).rows?.[0];
+	if (!row) return "lost";
+	observePeerInbox(
+		row.session_id,
+		startedAt,
+		row.inbox_pending,
+		row.sent_pending,
+	);
+	return row.inbox_pending || row.sent_pending ? "inbox" : "renewed";
+}
+
 export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 	// Only the idempotent, identity-fenced heartbeat may retry a disconnected socket.
 	// Cancellation, stale leases, pool saturation and SQL errors remain terminal.
@@ -645,16 +713,8 @@ export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 			try: async () => {
 				const startedAt = Date.now();
 				// The inbox flag rides the heartbeat so steps can skip reading an empty inbox.
-				const renewed = await database().query<{
-					inbox_pending: boolean;
-					sent_pending: boolean;
-				}>(
-					`with expired as (update api_turn t set cancel_requested=true where t.id=$1 and t.lease_id=$2 and t.state='running'
-		 and not t.cancel_requested and ${turnPastDeadlineSql("t")} returning t.id)
-		 update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested
-		 and heartbeat_at>=now()-interval '45 seconds' and not exists(select 1 from expired)
-		 returning id,exists(select 1 from agent_peer_inbox q where q.recipient_id=api_turn.session_id and not q.accepted) as inbox_pending,
-		 exists(select 1 from agent_peer_inbox q where q.recipient_id=api_turn.session_id and not q.accepted and q.queued_send->>'released'='true') as sent_pending`,
+				const renewed = await database().query<RenewedTurnLease>(
+					RENEW_TURN_LEASE_SQL,
 					[turn.id, turn.lease_id],
 				);
 				const row = renewed.rows?.[0];
@@ -701,7 +761,7 @@ export async function checkpointApiTurn(
 		database().query<{ version: string; previous: string; items_rev: string }>(
 			`with saved as (update api_turn set messages=$3,base_turn_id=null,base_version=null,base_count=null,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
-		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
+		 and ${apiTurnLeaseFreshSql()} returning session_id,updated_at)
 		 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
 		 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION},items_rev::text as items_rev`,
 			[
@@ -745,7 +805,7 @@ export async function publishApiTurnProgress(
 		database().query<{ version: string; previous: string; items_rev: string }>(
 			`with saved as (update api_turn set items=${write.apiTurn},updated_at=now()
 	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
-	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
+	 and ${apiTurnLeaseFreshSql()} returning session_id,updated_at)
 	 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
 	 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION},items_rev::text as items_rev`,
 			[turn.id, turn.lease_id, write.itemsText, ...write.extra],
@@ -814,7 +874,7 @@ export async function finalizeApiTurn(
 	>(
 		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=${write.apiTurn},messages=coalesce($5::jsonb,messages),
 		 base_turn_id=case when $5::jsonb is null then base_turn_id end,updated_at=now()
-		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning id,session_id,state,created_at,updated_at)
+		 where id=$1 and lease_id=$2 and state='running' and ${apiTurnLeaseFreshSql()} returning id,session_id,state,created_at,updated_at)
 		 update agent_session s set items=${write.session},turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
 		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
 		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS},

@@ -60,7 +60,8 @@ import {
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
-	descendantAgentSessions,
+	descendantAgentSessionMetadata,
+	descendantTokenUsageItemsForOwner,
 } from "../adapters/agent-sessions";
 import {
 	addSessionRequestUsage,
@@ -119,11 +120,13 @@ export async function guardSubagentStep(input: {
 	readonly onFinalStep?: () => void;
 	readonly deps?: {
 		readonly recordStep?: typeof recordSubagentStep;
-		readonly descendants?: typeof descendantAgentSessions;
+		/** The descendants' token use rows only (read at every step). */
+		readonly descendantUsage?: typeof descendantTokenUsageItemsForOwner;
 	};
 }): Promise<ModelMessage[]> {
 	const recordStep = input.deps?.recordStep ?? recordSubagentStep;
-	const descendants = input.deps?.descendants ?? descendantAgentSessions;
+	const descendants =
+		input.deps?.descendantUsage ?? descendantTokenUsageItemsForOwner;
 	const { steps, budget } = await recordStep(input.session.id);
 	const limits = budget ?? input.session.agentBudget;
 	if (!limits) return input.messages;
@@ -135,7 +138,9 @@ export async function guardSubagentStep(input: {
 	).reduce(
 		(total, child) =>
 			total +
-			budgetUsageTokens(sessionTokenUsage(child.items as SessionItem[])) *
+			budgetUsageTokens(
+				sessionTokenUsage(child.usageItems as readonly SessionItem[]),
+			) *
 				weight(child.listedModelId),
 		0,
 	);
@@ -409,7 +414,7 @@ export type SidekickRuntimeDeps = {
 	readonly roundChanges?: typeof sidekickRoundChanges;
 	readonly mergeFork?: typeof mergeSubagentFork;
 	readonly saveState?: typeof saveSidekickState;
-	readonly descendants?: typeof descendantAgentSessions;
+	readonly descendants?: typeof descendantAgentSessionMetadata;
 	readonly stop?: typeof requestSubagentStop;
 	readonly now?: () => number;
 	/** The round's classifier (classifySidekick with the variant's role models). */
@@ -632,7 +637,7 @@ export async function retireLeadSidekicks(
 	deps?: SidekickRuntimeDeps,
 	options: { readonly keepIdle?: boolean } = {},
 ) {
-	const children = await (deps?.descendants ?? descendantAgentSessions)(
+	const children = await (deps?.descendants ?? descendantAgentSessionMetadata)(
 		lead.userId,
 		lead.id,
 	);
