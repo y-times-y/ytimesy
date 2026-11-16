@@ -1,5 +1,10 @@
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+import {
+	unwrapVmRedaction,
+	VM_REDACTION_FAILED,
+	vmRedactedCommand,
+} from "#/domain/vm-secret-redaction";
 import type {
 	CommandOutput,
 	WorkspaceMachines,
@@ -36,6 +41,19 @@ export class BoxMachineRefused extends Error {
 	}
 }
 
+/**
+ * A file write in a call whose earlier output had runtime secrets redacted on
+ * the VM: the text it would write may hold the placeholder instead of the
+ * value (an edit reads the whole file, then writes it back). Nothing was
+ * written, so the call can be handed to the edge, which edits the real text.
+ */
+export class BoxRedactedWrite extends Error {
+	constructor() {
+		super("This call read redacted text and may not write it back.");
+		this.name = "BoxRedactedWrite";
+	}
+}
+
 /** Freestyle's own exec limit. */
 export const GUEST_EXEC_MAX_MS = 300_000;
 /** Raw bytes per write command: 1 MiB of stdin at most, decoded. */
@@ -62,7 +80,19 @@ export function identityWorkspaceMachines(input: {
 	readonly exec: GuestExec;
 	/** Told after each command the guest ran (for the caller's per-call bookkeeping). */
 	readonly onRan?: () => void;
+	/**
+	 * The turn has runtime secrets: every command's output is redacted on
+	 * the VM before it leaves (vm-secret-redaction.ts). `envPath` is for tests.
+	 */
+	readonly redactOnVm?: {
+		readonly envPath?: string;
+		/** Told when a command's output had values replaced. */
+		readonly onRedacted?: () => void;
+		/** Throws (BoxRedactedWrite) to refuse a file write. */
+		readonly beforeWrite?: () => void;
+	};
 }): WorkspaceMachines {
+	const redaction = input.redactOnVm;
 	const only = (workspaceId: WorkspaceId) => {
 		if (workspaceId !== input.vmId)
 			throw new Error("This grant reaches only the chat's own machine.");
@@ -75,7 +105,9 @@ export function identityWorkspaceMachines(input: {
 		let result: Awaited<ReturnType<GuestExec>>;
 		try {
 			result = await input.exec({
-				command,
+				command: redaction
+					? vmRedactedCommand(command, redaction.envPath)
+					: command,
 				timeoutMs: Math.min(GUEST_EXEC_MAX_MS, Math.max(1, timeoutMs)),
 				...(stdin === undefined ? {} : { stdin }),
 			});
@@ -86,12 +118,19 @@ export function identityWorkspaceMachines(input: {
 			throw error;
 		}
 		input.onRan?.();
-		return {
+		const output = {
 			// Null: killed by its time limit, reported as timeout(1) does.
 			exitCode: result.statusCode ?? 124,
 			stdout: result.stdout ?? "",
 			stderr: result.stderr ?? "",
 		};
+		if (!redaction) return output;
+		// No marker: the filter did not run or was cut off (a provider time
+		// limit), so nothing it sent is known to be redacted.
+		const redacted = unwrapVmRedaction(output.stderr);
+		if (!redacted) throw new Error(VM_REDACTION_FAILED);
+		if (redacted.replaced > 0) redaction.onRedacted?.();
+		return { ...output, stderr: redacted.stderr };
 	};
 	return {
 		async exec(workspaceId, command, timeoutMs = 120_000) {
@@ -100,6 +139,7 @@ export function identityWorkspaceMachines(input: {
 		},
 		async writeTextFile(workspaceId, path, contents) {
 			only(workspaceId);
+			redaction?.beforeWrite?.();
 			const bytes = Buffer.from(contents, "utf8");
 			for (
 				let start = 0;
