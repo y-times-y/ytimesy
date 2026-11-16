@@ -65,11 +65,20 @@ The extended probe also supports `--native-only`. Its output has empty
 0 in 1.65 seconds. Both modes assert the native metadata IDs exactly. This
 proves live-process identity transport, not restart/resume behavior.
 
+## Local integration checkpoint
+
+The product handlers now preserve native identity through box forwarding and
+the edge bridge, and use it for tool execution IDs. Malformed IDs are refused;
+old calls without metadata remain accepted for one deploy. Per-process box
+memoization now binds fingerprints and retains failures, with tests covering
+partial effects and duplicate calls. This is not deployed and is not a durable
+box journal or a restart/resume proof.
+
 ## Integration still required
 
 - Preserve `params._meta["claudecode/toolUseId"]` through ytimesy's MCP handlers
   and forwarding calls, binding it to the authorized run/session and a canonical
-  input fingerprint. The current handler discards metadata. No new model-visible
+  input fingerprint. The local handler now preserves metadata. No new model-visible
   input field or PreToolUse injection is needed for the pinned SDK.
 - Persist a claim before execution and the completed response before replying.
   A previous claim with no durable outcome must not re-execute the operation.

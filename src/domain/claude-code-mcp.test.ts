@@ -89,6 +89,51 @@ describe("ytimesy's MCP server for Claude Code", () => {
 		});
 	});
 
+	it("keeps model invocation IDs separate from RPC counters and arguments", async () => {
+		const server = handlers();
+		for (const invocationId of ["toolu_parallel_a", "toolu_parallel_b"])
+			await handleMcpMessage(
+				{
+					jsonrpc: "2.0",
+					id: 1,
+					method: "tools/call",
+					params: {
+						name: "agent",
+						arguments: { brief: "same" },
+						_meta: { "claudecode/toolUseId": invocationId },
+					},
+				},
+				server,
+			);
+		expect(server.call.mock.calls).toEqual([
+			["agent", { brief: "same" }, "toolu_parallel_a"],
+			["agent", { brief: "same" }, "toolu_parallel_b"],
+		]);
+	});
+
+	it.each([null, false, 42, "", {}])(
+		"refuses malformed native invocation ID %j before execution",
+		async (invocationId) => {
+			const server = handlers();
+			expect(
+				await handleMcpMessage(
+					{
+						jsonrpc: "2.0",
+						id: 9,
+						method: "tools/call",
+						params: {
+							name: "agent",
+							arguments: {},
+							_meta: { "claudecode/toolUseId": invocationId },
+						},
+					},
+					server,
+				),
+			).toMatchObject({ body: { error: { code: -32602 } } });
+			expect(server.call).not.toHaveBeenCalled();
+		},
+	);
+
 	it("refuses unknown tools, methods and malformed messages", async () => {
 		const server = handlers();
 		expect(

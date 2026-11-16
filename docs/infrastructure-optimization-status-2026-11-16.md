@@ -166,6 +166,27 @@ eight skipped (863 files passed, three skipped), including the eight memory
 adapter tests and four size-logging tests. This run preceded the review-worker
 follow-up, which has the focused checks above.
 
+## Native MCP identity propagation (local, not deployed)
+
+The native `params._meta["claudecode/toolUseId"]` now reaches the box and edge
+execution IDs rather than being discarded and replaced with random IDs. Box
+forwarding preserves it, including safe pre-execution fallback; malformed IDs
+are refused. Old calls without metadata retain their existing shape for one
+deploy. No hidden tool argument or extra SDK hook was added.
+
+The existing box memo now checks input fingerprints and retains rejected
+operations instead of making them retryable under the same ID. Tests exercise
+a duplicate write after an outside modification (not repeated), distinct
+identical invocations (both run), changed inputs under one ID (refused), and a
+failed write with simulated partial effects (not repeated or forwarded). Edge
+bridge reset tests verify stable identity only, not execution deduplication.
+The final targeted run exited 0 (36 tests in four files); both application and
+edge TypeScript checks and both edge/box bundle builds exited 0.
+
+This remains **per-process protection**, not a durable box journal. It does not
+prove SDK restart/resume behavior, retain outcomes after a process loss, or stop
+a model intentionally issuing a new invocation after an unknown outcome.
+
 ## Remaining gates
 
 - Safe workspace pause during remote-model waits must preserve background

@@ -222,7 +222,15 @@ export async function answerClaudeCodeMcp(
 	}
 	const reply = await handleMcpMessage(message, {
 		tools: async () => (await claudeCodeBridgeTools(grant.turnId)) ?? [],
-		call: (name, args) => requestClaudeCodeCall(grant.turnId, name, args),
+		call: (name, args, invocationId) =>
+			requestClaudeCodeCall(
+				grant.turnId,
+				name,
+				args,
+				undefined,
+				undefined,
+				invocationId,
+			),
 		// Asked before the run stops, and after a tool call when the run's feed
 		// announced a sent message (or there is no feed: an older runner, a
 		// lost socket; claude-feed.ts). Answered here at once unless the turn's
