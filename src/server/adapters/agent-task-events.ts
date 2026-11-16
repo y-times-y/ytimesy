@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { jsonbText } from "#/domain/jsonb";
+import { hubTopic } from "#/domain/user-hub";
 import { database } from "./database";
+import { noteUserHub } from "./user-hub-notes";
 
 export type AgentTaskEventType = "completed" | "failed" | "blocked";
 
@@ -61,7 +63,11 @@ export async function saveAgentTaskBlockedEvent(input: {
 	if (!question) throw new Error("A blocked task must include its question.");
 	const dedupeKey = taskEventDedupeKey(input.sessionId, "blocked", question);
 	const eventId = randomUUID();
-	const result = await database().query<{ id: string }>(
+	const result = await database().query<{
+		id: string;
+		user_id: string;
+		parent_session_id: string;
+	}>(
 		`with task as (
 		 update agent_session
 		 set task_state='waiting', turn_status=case when exists(
@@ -78,11 +84,13 @@ export async function saveAgentTaskBlockedEvent(input: {
 		 on conflict(dedupe_key) do nothing
 		 returning id
 		)
-		select id from inserted`,
+		select inserted.id,task.user_id,task.parent_session_id from inserted cross join task`,
 		[input.sessionId, eventId, dedupeKey, jsonbText({ message: question })],
 	);
-	if (!result.rows[0]) return null;
-	return result.rows[0].id;
+	const row = result.rows[0];
+	if (!row) return null;
+	noteUserHub(row.user_id, [hubTopic.agents(row.parent_session_id)]);
+	return row.id;
 }
 
 export async function claimAgentTaskEvent(eventId?: string) {

@@ -105,9 +105,10 @@ import type { CodexUsage } from "./codex-usage";
  * (up to ~250 KB from the database) and the stream already carries every
  * change (a missed one makes it resync by itself), so this is a safety net:
  * at 10 s it was the largest database read of a day (a running turn read
- * ~85 MB an hour).
+ * ~85 MB an hour). Every five minutes keeps each user within the Worker
+ * request budget (about 1,000 a day each).
  */
-export const LIVE_STREAM_RECONCILE_MS = 60_000;
+export const LIVE_STREAM_RECONCILE_MS = 5 * 60_000;
 
 /**
  * How often the open chat is read while the message it held for setup is on

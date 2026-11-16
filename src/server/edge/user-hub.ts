@@ -2,17 +2,21 @@ import { DurableObject } from "cloudflare:workers";
 import { LIVE_SOCKET_CLOSE } from "../../domain/live-progress-socket";
 import type { SessionTurnStatus } from "../../domain/session-item";
 import {
+	applyHubSignals,
 	applyHubTurnChange,
 	type HubChats,
+	type HubSignals,
 	type HubStatusEntries,
 	type HubTurnChange,
 	hubStateMessage,
 	hubStatusEntries,
 	MAX_HUB_SOCKETS,
 	staleHubChats,
+	staleHubSignals,
 	USER_HUB_AUTHORIZATION_MS,
 	USER_HUB_EDGE_PATH,
 } from "../../domain/user-hub";
+import { BUILD_ID } from "../../lib/build-id";
 import {
 	pingAutoResponse,
 	type ServerSocket,
@@ -34,17 +38,21 @@ function hubSocketAttachment(socket: ServerSocket): HubSocketAttachment | null {
 }
 
 /**
- * One user's chats' turn status, pushed to that user's open tabs over
- * hibernatable sockets: the whole map on connect, then only what changed.
- * Fed by each chat's ModelConversation when a turn starts and settles. The
- * map is in SQLite, so it survives eviction and deploys; between pushes the
- * object sleeps and pings are answered by the runtime.
+ * One user's chats' turn status and change signals (hubTopic), pushed to
+ * that user's open tabs over hibernatable sockets: the whole map on connect
+ * (with this deploy's build id), then only what changed. Turn status is fed
+ * by each chat's ModelConversation when a turn starts and settles; signals
+ * by whatever changed (noteUserHub). Both are in SQLite, so they survive
+ * eviction and deploys; between pushes the object sleeps and pings are
+ * answered by the runtime.
  */
 export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 	constructor(ctx: DurableObjectState, env: EdgeExecutorEnvironment) {
 		super(ctx, env);
 		ctx.storage.sql.exec(`create table if not exists hub_chat(
 			session_id text primary key, turn_status text not null, updated_at integer not null)`);
+		ctx.storage.sql.exec(`create table if not exists hub_signal(
+			topic text primary key, at integer not null)`);
 		ctx.setWebSocketAutoResponse(
 			pingAutoResponse() as WebSocketRequestResponsePair,
 		);
@@ -62,6 +70,34 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 				{ turnStatus: row.status as SessionTurnStatus, updatedAt: row.at },
 			]),
 		);
+	}
+
+	private signals(): HubSignals {
+		return Object.fromEntries(
+			this.ctx.storage.sql
+				.exec<{ topic: string; at: number }>("select topic,at from hub_signal")
+				.toArray()
+				.map((row: { topic: string; at: number }) => [row.topic, row.at]),
+		);
+	}
+
+	/** Something a tab shows changed (RPC from the edge, or the web Worker's note). */
+	async noteSignals(topics: readonly string[]) {
+		const { signals, pushed } = applyHubSignals(
+			this.signals(),
+			topics,
+			Date.now(),
+		);
+		if (!Object.keys(pushed).length) return;
+		for (const [topic, at] of Object.entries(pushed))
+			this.ctx.storage.sql.exec(
+				"insert into hub_signal(topic,at) values(?,?) on conflict(topic) do update set at=excluded.at",
+				topic,
+				at,
+			);
+		for (const topic of staleHubSignals(signals))
+			this.ctx.storage.sql.exec("delete from hub_signal where topic=?", topic);
+		this.push({}, pushed);
 	}
 
 	/** A chat's turn started or settled (RPC from its ModelConversation). */
@@ -96,7 +132,12 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 			openedAt,
 			authorizedUntil: openedAt + USER_HUB_AUTHORIZATION_MS,
 		} satisfies HubSocketAttachment);
-		server.send(hubStateMessage(hubStatusEntries(this.chats()), true));
+		server.send(
+			hubStateMessage(hubStatusEntries(this.chats()), true, {
+				signals: this.signals(),
+				build: BUILD_ID,
+			}),
+		);
 		return upgradeResponse(client);
 	}
 
@@ -108,8 +149,8 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 	 * Sends the changed entries to every socket; one whose sign-in check
 	 * expired is closed instead, and its reconnect gets the whole map.
 	 */
-	private push(entries: HubStatusEntries) {
-		const message = hubStateMessage(entries);
+	private push(entries: HubStatusEntries, signals?: HubSignals) {
+		const message = hubStateMessage(entries, false, { signals });
 		const now = Date.now();
 		for (const socket of this.sockets()) {
 			const attachment = hubSocketAttachment(socket);

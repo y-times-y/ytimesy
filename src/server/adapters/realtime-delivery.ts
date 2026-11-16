@@ -6,7 +6,11 @@ import {
 	MAX_DELIVERY_BYTES,
 } from "#/domain/conversation-delivery";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
-import { USER_HUB_EDGE_PATH } from "#/domain/user-hub";
+import {
+	type HubNote,
+	USER_HUB_EDGE_PATH,
+	USER_HUB_NOTE_PATH,
+} from "#/domain/user-hub";
 import { executorFetch, hasExecutorBinding } from "./executor-fetch";
 import { realtimeDevelopmentConfiguration } from "./realtime-development-config";
 
@@ -171,6 +175,26 @@ export async function openUserHubSocket(userId: string) {
 		throw new Error(`User hub socket unavailable (${response.status}).`);
 	}
 	return response;
+}
+/** Tells the user's hub (over the edge) which of their topics changed. A no-op without the edge. */
+export async function postUserHubNote(note: HubNote) {
+	const config = realtimeDeliveryConfiguration();
+	if (!config) return;
+	const url = `${config.url}${USER_HUB_NOTE_PATH}`;
+	const body = JSON.stringify(note);
+	const response = await executorFetch(url, {
+		method: "POST",
+		headers: {
+			...(await signDeliveryRequest(config.secret, "POST", url, body)),
+			"Content-Type": "application/json",
+		},
+		body,
+		signal: AbortSignal.timeout(5000),
+	});
+	await response.body?.cancel().catch(() => {});
+	// An executor that predates notes answers 404: nothing to tell.
+	if (!response.ok && response.status !== 404)
+		throw new Error(`User hub note rejected (${response.status}).`);
 }
 export async function subscribeConversationSnapshot(
 	snapshot: ConversationSnapshot,

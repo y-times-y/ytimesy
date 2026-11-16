@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+	applyHubSignals,
 	applyHubTurnChange,
 	type HubChats,
 	hubStateMessage,
 	hubStatusEntries,
+	hubTopic,
+	isHubTopic,
+	MAX_HUB_NOTE_TOPICS,
+	parseHubNote,
 	parseHubStateMessage,
 	settledHubTurnStatus,
 	staleHubChats,
+	staleHubSignals,
 	userHubEnabledFor,
 } from "./user-hub";
 
@@ -135,5 +141,93 @@ describe("hub state messages", () => {
 				}),
 			),
 		).toEqual({ type: "state", chats: { b: { turnStatus: "idle" } } });
+	});
+});
+
+describe("hub signals", () => {
+	it("stamps each changed topic past its last stamp and pushes it", () => {
+		const first = applyHubSignals({}, ["agents:a", "push"], 100);
+		expect(first.pushed).toEqual({ "agents:a": 100, push: 100 });
+		// Twice in one millisecond still differs, so the tab reads again.
+		const again = applyHubSignals(first.signals, ["agents:a"], 100);
+		expect(again.pushed).toEqual({ "agents:a": 101 });
+		expect(again.signals).toEqual({ "agents:a": 101, push: 100 });
+	});
+	it("ignores invalid and repeated topics, and caps a note", () => {
+		const { pushed } = applyHubSignals(
+			{},
+			["agents:a", "agents:a", "bad topic", `x:${"y".repeat(101)}`, ""],
+			5,
+		);
+		expect(pushed).toEqual({ "agents:a": 5 });
+		const many = Array.from({ length: 30 }, (_, i) => `commands:c${i}`);
+		expect(Object.keys(applyHubSignals({}, many, 1).pushed)).toHaveLength(
+			MAX_HUB_NOTE_TOPICS,
+		);
+	});
+	it("forgets the oldest topics beyond the limit", () => {
+		expect(staleHubSignals({ a: 1, b: 3, c: 2 }, 2)).toEqual(["a"]);
+		expect(staleHubSignals({ a: 1 }, 2)).toEqual([]);
+	});
+	it("names topics by what changed", () => {
+		expect(hubTopic.agents("s")).toBe("agents:s");
+		expect(hubTopic.commands("s")).toBe("commands:s");
+		expect(hubTopic.workspace("p")).toBe("workspace:p");
+		expect(hubTopic.fork("s")).toBe("fork:s");
+		expect(hubTopic.chat("s")).toBe("chat:s");
+		for (const topic of ["agents:s", "push", "workspace:a-b_c"])
+			expect(isHubTopic(topic)).toBe(true);
+	});
+});
+
+describe("state messages with signals and build", () => {
+	it("round-trips signals and build on a whole map", () => {
+		const text = hubStateMessage({ a: { turnStatus: "running" } }, true, {
+			signals: { push: 4 },
+			build: "build-2",
+		});
+		expect(parseHubStateMessage(text)).toEqual({
+			type: "state",
+			full: true,
+			chats: { a: { turnStatus: "running" } },
+			signals: { push: 4 },
+			build: "build-2",
+		});
+	});
+	it("a signal-only change has no chats an older tab would act on", () => {
+		const parsed = parseHubStateMessage(
+			hubStateMessage({}, false, { signals: { "commands:a": 9 } }),
+		);
+		expect(parsed?.chats).toEqual({});
+		expect(parsed?.full).toBeUndefined();
+	});
+	it("an older hub's whole map has no signals (the tab keeps polling)", () => {
+		expect(
+			parseHubStateMessage(hubStateMessage({}, true))?.signals,
+		).toBeUndefined();
+	});
+	it("drops malformed signals and builds", () => {
+		expect(
+			parseHubStateMessage(
+				JSON.stringify({
+					type: "state",
+					chats: {},
+					signals: { push: "x", "bad topic": 1, "fork:f": 2 },
+					build: 7,
+				}),
+			),
+		).toEqual({ type: "state", chats: {}, signals: { "fork:f": 2 } });
+	});
+});
+
+describe("parseHubNote", () => {
+	it("takes a user and valid topics only", () => {
+		expect(
+			parseHubNote({ userId: "u", topics: ["push", "bad topic"] }),
+		).toEqual({ userId: "u", topics: ["push"] });
+		expect(parseHubNote({ userId: "u", topics: ["bad topic"] })).toBeNull();
+		expect(parseHubNote({ userId: "", topics: ["push"] })).toBeNull();
+		expect(parseHubNote({ topics: ["push"] })).toBeNull();
+		expect(parseHubNote(null)).toBeNull();
 	});
 });

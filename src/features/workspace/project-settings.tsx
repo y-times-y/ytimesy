@@ -88,6 +88,12 @@ import {
 	ProjectTrainingSettings,
 	TrainingConsentSettings,
 } from "./training-consent-settings";
+import {
+	anyChatTurn,
+	pollUnlessPushed,
+	useHubDelivery,
+	useHubRead,
+} from "./user-hub-store";
 
 type AccountView = {
 	readonly user: {
@@ -154,15 +160,26 @@ export function ProjectSettings({
 	}, [open]);
 	const readSubscriptionUsage = useServerFn(codexSubscriptionUsageFn);
 	// Shared with the model picker's plan line (plan-usage.tsx).
-	useQuery({
+	const hubDelivery = useHubDelivery();
+	const subscriptionUsage = useQuery({
 		queryKey: ["codex-subscription-usage"],
 		queryFn: () => readSubscriptionUsage(),
 		// Read with the panel, so Agents shows at its full height when picked.
 		enabled: open,
 		staleTime: 30_000,
-		refetchInterval: open && section === "agents" ? 60_000 : false,
+		// A plan's use moves with turns: while the user's hub pushes, read
+		// when a turn starts or ends instead of every minute.
+		refetchInterval:
+			open && section === "agents"
+				? pollUnlessPushed(hubDelivery, 60_000)
+				: false,
 		retry: false,
 	});
+	useHubRead(
+		anyChatTurn,
+		() => void subscriptionUsage.refetch({ cancelRefetch: false }),
+		{ enabled: open && section === "agents", minIntervalMs: 60_000 },
+	);
 	const account = useQuery({
 		queryKey: ["account"],
 		queryFn: () => requestJson<AccountView>("/api/account"),

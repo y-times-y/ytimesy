@@ -24,6 +24,7 @@ import type {
 	SubagentFork,
 	SubagentRole,
 } from "#/domain/subagent";
+import { hubTopic } from "#/domain/user-hub";
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
 import { heldForSetupSql } from "./queued-user-messages";
@@ -31,6 +32,7 @@ import {
 	boundedPageStartSql,
 	LATEST_CONTEXT_USAGE_SQL,
 } from "./transcript-page-sql";
+import { noteUserHub } from "./user-hub-notes";
 
 const SESSION_COLUMNS =
 	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
@@ -510,6 +512,7 @@ export async function applyBackgroundCommandExits(
 		[sessionId, userId, jsonbText(records)],
 	);
 	const row = result.rows[0];
+	if (row?.changed) noteUserHub(userId, [hubTopic.commands(sessionId)]);
 	return row ? { changed: row.changed, open: row.open } : null;
 }
 
@@ -1035,6 +1038,8 @@ export async function insertAgentSession(input: {
 		],
 	);
 	const session = toSession(result.rows[0]);
+	if (session.parentSessionId)
+		noteUserHub(session.userId, [hubTopic.agents(session.parentSessionId)]);
 	void captureServerAnalytics(
 		session.userId,
 		"agent_created",
@@ -1128,7 +1133,10 @@ export async function saveAgentTaskState(
 		 returning ${SESSION_COLUMNS}`,
 		[sessionId, taskState, turnStatus],
 	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
+	const session = result.rows[0] ? toSession(result.rows[0]) : null;
+	if (session?.parentSessionId)
+		noteUserHub(session.userId, [hubTopic.agents(session.parentSessionId)]);
+	return session;
 }
 
 export async function saveAgentSessionProviderRef(

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { refetchOnFocusUnlessPushed } from "#/features/workspace/user-hub-store";
 import interLatin from "../assets/fonts/inter-latin-wght-400-700.woff2?url";
 import { Analytics } from "../features/analytics/analytics";
 import { AppError, AppNotFound } from "../features/app/app-status";
@@ -80,7 +81,14 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 	const [queryClient] = useState(
 		() =>
 			new QueryClient({
-				defaultOptions: { queries: { staleTime: 15000, retry: false } },
+				defaultOptions: {
+					queries: {
+						staleTime: 15000,
+						retry: false,
+						// While the user hub pushes changes, focus re-reads nothing.
+						refetchOnWindowFocus: refetchOnFocusUnlessPushed,
+					},
+				},
 			}),
 	);
 	useEffect(() => followOtherTabSaves(queryClient), [queryClient]);

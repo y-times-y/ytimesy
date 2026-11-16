@@ -287,7 +287,11 @@ import {
 	resumeWorkspaceMachineFn,
 } from "./explorer.fn";
 import { prefetchWorkspaceFiles } from "./files-inspector";
-import { gitChangesPolling } from "./git-changes-polling";
+import {
+	changesReadMark,
+	gitChangesPolling,
+	STREAMED_CHANGES_READ_MS,
+} from "./git-changes-polling";
 import { UsageWarningBanner } from "./infrastructure-usage";
 import { openLiveProgress } from "./live-progress-connection";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
@@ -323,6 +327,16 @@ import {
 	pullRequestsKey,
 	pullRequestsRequest,
 } from "./work-items-queries";
+import {
+	agentPanelHubTopics,
+	backgroundCommandHubTopics,
+	hubDelivery,
+	hubReadDelayMs,
+	pollUnlessPushed,
+	useHubConnection,
+	useHubRead,
+	userHubStore,
+} from "./user-hub-store";
 import {
 	type InspectorView,
 	type ToolsView,
@@ -1123,12 +1137,51 @@ export function WorkspaceHome({
 		// Polls only while a turn runs: a read is a guest command, and polling
 		// between turns kept the VM from pausing. Opening the panel, window
 		// focus and a turn's end read (git-changes-polling.ts).
-		...gitChangesPolling(session.turnStatus),
+		...gitChangesPolling(
+			session.turnStatus,
+			() =>
+				!!selectedSessionId && progressStreamOpen.current === selectedSessionId,
+		),
 		staleTime: 5_000,
 	});
 	const refetchChanges = gitChanges.refetch;
 	const gitChangesShown = useRef(inspectorOpen);
 	gitChangesShown.current = inspectorOpen;
+	// While the turn streams, a finished tool step (an edit, a command) is
+	// when git may have changed: read then, at most once a minute, not on a timer.
+	const changesMark = changesReadMark(session.items);
+	const changesReadAt = useRef(0);
+	const changesReadTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `changesMark` is the trigger: it grows as tool steps finish.
+	useEffect(() => {
+		if (
+			!gitChangesShown.current ||
+			!isTurnRunning(session.turnStatus) ||
+			!selectedSessionId ||
+			progressStreamOpen.current !== selectedSessionId ||
+			changesReadTimer.current !== undefined
+		)
+			return;
+		const read = () => {
+			changesReadTimer.current = undefined;
+			changesReadAt.current = Date.now();
+			void refetchChanges({ cancelRefetch: false });
+		};
+		const delay = hubReadDelayMs(
+			changesReadAt.current,
+			Date.now(),
+			STREAMED_CHANGES_READ_MS,
+		);
+		if (delay === 0) read();
+		else changesReadTimer.current = setTimeout(read, delay);
+	}, [changesMark, session.turnStatus, selectedSessionId, refetchChanges]);
+	useEffect(
+		() => () => {
+			clearTimeout(changesReadTimer.current);
+			changesReadTimer.current = undefined;
+		},
+		[],
+	);
 	const changesTurnStatus = useRef(session.turnStatus);
 	useEffect(() => {
 		const was = changesTurnStatus.current;
@@ -1252,6 +1305,10 @@ export function WorkspaceHome({
 		// biome-ignore lint/suspicious/noDocumentCookie: one small cookie; cookieStore is missing in older Safari.
 		document.cookie = openChatCookie(activeProjectId, activeSessionId);
 	}, [activeProjectId, activeSessionId]);
+	// The user's hub socket (openUserHub, below): while it delivers signals,
+	// the side reads here are read when their topic changes, not polled.
+	const hubConnection = useHubConnection();
+	const hubPushes = hubDelivery(hubConnection);
 	// When each chat's helpers were last read whole (HELPER_FULL_READ_MS).
 	const tasksFullReadAt = useRef<Record<string, number>>({});
 	const agentTasks = useQuery({
@@ -1291,9 +1348,15 @@ export function WorkspaceHome({
 		enabled: Boolean(activeProjectId && activeSessionId),
 		refetchInterval: (query) =>
 			shouldPollSubagents(session.turnStatus, query.state.data ?? [])
-				? SUBAGENT_POLL_MS
+				? pollUnlessPushed(hubPushes, SUBAGENT_POLL_MS)
 				: false,
 	});
+	// A helper opened, started, blocked or settled (its own turn too).
+	useHubRead(
+		agentPanelHubTopics(activeSessionId, agentTasks.data ?? []),
+		() => void agentTasks.refetch({ cancelRefetch: false }),
+		{ enabled: Boolean(activeProjectId && activeSessionId) },
+	);
 	// Background commands of the chat and its helpers, for the agents list.
 	const backgroundChatIds = backgroundReadChatIds(
 		activeSessionId,
@@ -1312,14 +1375,23 @@ export function WorkspaceHome({
 		placeholderData: (previous, previousQuery) =>
 			previousQuery?.queryKey[1] === activeSessionId ? previous : undefined,
 		refetchInterval: (query) =>
-			backgroundPollMs({
-				agentsWorking,
-				running: Object.values(query.state.data ?? {}).reduce(
-					(count, commands) => count + commands.length,
-					0,
-				),
-			}),
+			pollUnlessPushed(
+				hubPushes,
+				backgroundPollMs({
+					agentsWorking,
+					running: Object.values(query.state.data ?? {}).reduce(
+						(count, commands) => count + commands.length,
+						0,
+					),
+				}),
+			),
 	});
+	// A command started or exited, or a turn that records exits ended.
+	useHubRead(
+		backgroundCommandHubTopics(backgroundChatIds),
+		() => void backgroundCommands.refetch({ cancelRefetch: false }),
+		{ enabled: Boolean(activeProjectId && backgroundChatIds.length) },
+	);
 	const backgroundRuns = backgroundRunsFromReadModel(
 		backgroundCommands.data ?? {},
 	);
@@ -2159,7 +2231,7 @@ export function WorkspaceHome({
 	]);
 
 	// The user's hub socket delivers (see openUserHub); background chats are polled until then.
-	const [hubOpen, setHubOpen] = useState(false);
+	const hubOpen = hubConnection.open;
 	const backgroundIds = backgroundTurnPollChatIds({
 		chats: sidebarChats,
 		openChatId: activeSessionId,
@@ -2192,6 +2264,7 @@ export function WorkspaceHome({
 	const hubSeenWholeMap = useRef(false);
 	const onHubState = useRef<(message: HubStateMessage) => void>(() => {});
 	onHubState.current = (message) => {
+		userHubStore.receive(message);
 		const { reads, refreshList } = hubReadsToMake({
 			message,
 			sidebarStatuses: new Map(
@@ -2213,12 +2286,12 @@ export function WorkspaceHome({
 		if (!userHub) return;
 		const close = openUserHub({
 			onState: (message) => onHubState.current(message),
-			onOpen: () => setHubOpen(true),
-			onDrop: () => setHubOpen(false),
+			onOpen: () => userHubStore.setOpen(true),
+			onDrop: () => userHubStore.setOpen(false),
 		});
 		return closeOnPageHide(() => {
 			close();
-			setHubOpen(false);
+			userHubStore.setOpen(false);
 		});
 	}, [userHub, pageRestores]);
 	const appliedBackgroundReads = useRef(new WeakSet<object>());
