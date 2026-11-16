@@ -1,5 +1,6 @@
 import {
 	checksCountFrom,
+	type PullRequestChecksCount,
 	type PullRequestFilter,
 	type PullRequestPerson,
 	pullRequestPerson,
@@ -108,6 +109,10 @@ async function openPullRequestSignals(
 	owner: string,
 	repo: string,
 ) {
+	// Three independent reads start together: the check rollup, the signed-in
+	// user, and the review and size signals below.
+	const rollups = readRollups(github, owner, repo);
+	const viewerRead = signedInLogin(github);
 	const heads = new Map<number, string>();
 	let viewer: string | null = null;
 	const signals = new Map<
@@ -120,7 +125,6 @@ async function openPullRequestSignals(
 		}
 	>();
 	try {
-		viewer = await signedInLogin(github);
 		let after: string | null = null;
 		for (let page = 0; page < 5; page++) {
 			const result: SignalsPage = await github.graphql<SignalsPage>(
@@ -129,6 +133,7 @@ async function openPullRequestSignals(
 			);
 			const pulls = result.repository?.pullRequests;
 			if (!pulls) break;
+			viewer = await viewerRead;
 			for (const node of pulls.nodes) {
 				heads.set(node.number, node.headRefOid);
 				signals.set(node.number, {
@@ -163,7 +168,7 @@ async function openPullRequestSignals(
 	} catch (error) {
 		console.warn("Pull request review signals unavailable", errorText(error));
 	}
-	await fillChecks(github, owner, repo, signals, heads);
+	await fillChecks(github, owner, repo, signals, heads, rollups);
 	return { signals, viewer };
 }
 
@@ -177,14 +182,18 @@ const CHECK_FALLBACK_LIMIT = 30;
  * GitHub's REST check runs and commit statuses (the reads the review panel
  * uses) when the rollup is refused. Each step is allowed to fail on its own.
  */
-async function fillChecks(
+type Rollups = {
+	counts: Map<number, PullRequestChecksCount | null>;
+	refused: boolean;
+};
+
+/** GraphQL's check rollup for the open pull requests, by number. */
+async function readRollups(
 	github: Github,
 	owner: string,
 	repo: string,
-	signals: Map<number, { checks: RepositoryPullRequest["checks"] }>,
-	heads: ReadonlyMap<number, string>,
-) {
-	let rollupRefused = false;
+): Promise<Rollups> {
+	const counts = new Map<number, PullRequestChecksCount | null>();
 	try {
 		let after: string | null = null;
 		for (let page = 0; page < 6; page++) {
@@ -196,16 +205,33 @@ async function fillChecks(
 			if (!pulls) break;
 			for (const node of pulls.nodes) {
 				const rollup = node.commits.nodes[0]?.commit.statusCheckRollup;
-				const entry = signals.get(node.number);
-				if (entry && rollup)
-					entry.checks = checksCountFrom(rollup.contexts.nodes);
+				counts.set(
+					node.number,
+					rollup ? checksCountFrom(rollup.contexts.nodes) : null,
+				);
 			}
 			if (!pulls.pageInfo.hasNextPage) break;
 			after = pulls.pageInfo.endCursor;
 		}
+		return { counts, refused: false };
 	} catch (error) {
-		rollupRefused = true;
 		console.warn("Pull request check rollup unavailable", errorText(error));
+		return { counts, refused: true };
+	}
+}
+
+async function fillChecks(
+	github: Github,
+	owner: string,
+	repo: string,
+	signals: Map<number, { checks: RepositoryPullRequest["checks"] }>,
+	heads: ReadonlyMap<number, string>,
+	rollups: Promise<Rollups>,
+) {
+	const { counts, refused: rollupRefused } = await rollups;
+	for (const [number, checks] of counts) {
+		const entry = signals.get(number);
+		if (entry) entry.checks = checks;
 	}
 	// A pull request GitHub answered for with no checks (a repository without
 	// CI) stays without; only a refused rollup is worth the REST reads.
@@ -250,19 +276,21 @@ export async function listRepositoryPullRequests(
 ): Promise<RepositoryPullRequest[]> {
 	const { owner, repo } = repositoryOwnerName(fullName);
 	const github = githubClient(token);
-	const pulls = await github.paginate(github.pulls.list, {
-		owner,
-		repo,
-		state: filter === "merged" ? "closed" : filter,
-		sort: "updated",
-		direction: "desc",
-		per_page: 100,
-	});
-	// Open pull requests only: a merged or closed one has no review to ask for.
-	const { signals, viewer } =
+	// Open pull requests only get review, check and size signals: a merged or
+	// closed one has no review to ask for. Both reads start together.
+	const [pulls, { signals, viewer }] = await Promise.all([
+		github.paginate(github.pulls.list, {
+			owner,
+			repo,
+			state: filter === "merged" ? "closed" : filter,
+			sort: "updated",
+			direction: "desc",
+			per_page: 100,
+		}),
 		filter === "open" || filter === "all"
-			? await openPullRequestSignals(github, owner, repo)
-			: { signals: new Map<number, never>(), viewer: null };
+			? openPullRequestSignals(github, owner, repo)
+			: { signals: new Map<number, never>(), viewer: null },
+	]);
 	return pulls
 		.filter((pull) =>
 			filter === "merged"
