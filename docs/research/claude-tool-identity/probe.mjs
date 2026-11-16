@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 const { query } = await import(process.env.CLAUDE_AGENT_SDK_MODULE ?? '/opt/ytimesy-claude-agent-sdk/0.3.321/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs');
 const home = await mkdtemp(join(tmpdir(), 'ytimesy-tool-id-'));
-const hooks = [], calls = [];
+const hooks = [], calls = [], nativeIds = [];
 let result = null;
+const nativeOnly = process.argv.includes('--native-only');
 const read = async req => { const chunks=[]; for await (const chunk of req) chunks.push(chunk); return JSON.parse(Buffer.concat(chunks).toString() || '{}'); };
 const server = http.createServer(async (req,res) => {
   const j = await read(req);
@@ -16,7 +17,7 @@ const server = http.createServer(async (req,res) => {
     const reply = value => json({jsonrpc:'2.0', id:j.id, result:value});
     if (j.method === 'initialize') return reply({protocolVersion:j.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'identity-probe',version:'1'}});
     if (j.method === 'tools/list') return reply({tools:[{name:'bash',description:'Identity probe only; no command executes.',inputSchema:{type:'object',properties:{command:{type:'string'}},required:['command'],additionalProperties:false}}]});
-    if (j.method === 'tools/call') { calls.push(j.params.arguments); return reply({content:[{type:'text',text:'probe recorded; no command executed'}]}); }
+    if (j.method === 'tools/call') { calls.push(j.params.arguments); nativeIds.push(j.params._meta?.['claudecode/toolUseId'] ?? null); return reply({content:[{type:'text',text:'probe recorded; no command executed'}]}); }
     return reply({});
   }
   if (req.url.startsWith('/v1/messages/count_tokens')) return json({input_tokens:10});
@@ -42,10 +43,12 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 try {
   const options={model:'claude-sonnet-5-5',cwd:home,tools:[],permissionMode:'bypassPermissions',allowDangerouslySkipPermissions:true,maxTurns:3,
     env:{PATH:process.env.PATH,HOME:home,CLAUDE_CODE_OAUTH_TOKEN:'probe-not-a-real-token',ANTHROPIC_BASE_URL:origin,DISABLE_AUTOUPDATER:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',DISABLE_TELEMETRY:'1',DISABLE_ERROR_REPORTING:'1'},
-    mcpServers:{vm:{type:'http',url:origin+'/mcp'}},hooks:{PreToolUse:[{hooks:[async input=>{ hooks.push(input.tool_use_id); return {hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'allow',updatedInput:{...input.tool_input,__ytimesy_call_id:input.tool_use_id}}}; }]}]}};
+    mcpServers:{vm:{type:'http',url:origin+'/mcp'}},hooks:nativeOnly ? {} : {PreToolUse:[{hooks:[async input=>{ hooks.push(input.tool_use_id); return {hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'allow',updatedInput:{...input.tool_input,__ytimesy_call_id:input.tool_use_id}}}; }]}]}};
   for await (const m of query({prompt:'Record the two probe calls.',options})) if(m.type==='result') result=m.subtype;
-  console.log(JSON.stringify({sdk:'0.3.321',result,hookIds:hooks,receivedIds:calls.map(c=>c.__ytimesy_call_id ?? null),calls:calls.length,strictSchema:true,paidModelRequests:0,commandsExecuted:0}));
+  console.log(JSON.stringify({sdk:'0.3.321',nativeOnly,result,hookIds:hooks,receivedIds:calls.map(c=>c.__ytimesy_call_id ?? null),nativeIds,calls:calls.length,strictSchema:true,paidModelRequests:0,commandsExecuted:0}));
   assert.equal(result,'success');
   assert.equal(calls.length,2);
-  assert.deepEqual(calls.map(c=>c.__ytimesy_call_id).sort(),['toolu_identity_0','toolu_identity_1']);
+  if (nativeOnly) { assert.deepEqual(hooks,[]); assert.ok(calls.every(c=>c.__ytimesy_call_id === undefined)); }
+  else assert.deepEqual(calls.map(c=>c.__ytimesy_call_id).sort(),['toolu_identity_0','toolu_identity_1']);
+  assert.deepEqual([...nativeIds].sort(),['toolu_identity_0','toolu_identity_1']);
 } finally { await new Promise(resolve=>server.close(resolve)); await rm(home,{recursive:true,force:true}); }
