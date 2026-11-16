@@ -38,6 +38,13 @@ import {
 	mergeAgentTaskActivity,
 } from "#/domain/child-task-activity";
 import {
+	addLivePreviews,
+	type LivePreviewMessage,
+	type LivePreviews,
+	pendingLivePreviews,
+	withLivePreviews,
+} from "#/domain/claude-feed-preview";
+import {
 	NO_SAVED_DEFAULT_BRANCHES,
 	type SavedDefaultBranches,
 } from "#/domain/default-branch-cookie";
@@ -2024,6 +2031,26 @@ export function WorkspaceHome({
 		if (!activeProjectId || !activeSessionId || !listenForProgress) return;
 		const epoch = sessionEpoch.current;
 		let lastRevision = "";
+		// A running Claude Code turn's text its step has not published yet,
+		// shown after the published items until a snapshot carries it.
+		let previews: LivePreviews = [];
+		const onPreview = (preview: LivePreviewMessage) => {
+			if (
+				epoch !== sessionEpoch.current ||
+				selectedSessionIdRef.current !== activeSessionId ||
+				currentSessionRef.current.turnStatus !== "running"
+			)
+				return;
+			const kept = addLivePreviews(previews, preview);
+			if (kept === previews) return;
+			const added = kept.slice(previews.length);
+			previews = kept;
+			setSession((current) =>
+				current.turnStatus === "running"
+					? { ...current, items: withLivePreviews(current.items, added) }
+					: current,
+			);
+		};
 		const onProgress = (revision: string, received: unknown) => {
 			if (
 				epoch !== sessionEpoch.current ||
@@ -2066,12 +2093,19 @@ export function WorkspaceHome({
 				sessionId: activeSessionId,
 				receivedAt: Date.now(),
 			};
+			// The step published what was previewed (its items replace the
+			// previews), or the turn is over.
+			previews =
+				progress.turnStatus === "running"
+					? pendingLivePreviews(incoming.items, previews)
+					: [];
+			const stillPreviewed = previews;
 			setSession((current) => {
 				const next = shown(current);
 				return progressMatchesTurn(current.items, next.items)
 					? {
 							...current,
-							items: next.items,
+							items: withLivePreviews(next.items, stillPreviewed),
 							hasOlderItems: next.hasOlderItems,
 							turnStatus: progress.turnStatus,
 							usage: progress.usage ?? current.usage,
@@ -2097,6 +2131,7 @@ export function WorkspaceHome({
 			projectId: activeProjectId,
 			sessionId: activeSessionId,
 			onProgress,
+			onPreview,
 			onOpen: () => {
 				progressStreamOpen.current = activeSessionId;
 			},

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	CLAUDE_FEED_PROTOCOL,
-	CLAUDE_FEED_QUIET_MS,
 	CLAUDE_FEED_STALE_MS,
+	CLAUDE_FEED_WAKE_LIVE_MS,
+	CLAUDE_FEED_WAKE_QUIET_MS,
 	claudeStepSource,
 	feedBatchDecision,
 	feedEntriesWithEnds,
@@ -97,8 +98,19 @@ describe("Claude feed step source and wake", () => {
 			50_000,
 		);
 		expect(feedWakeAt({ ...base, urgent: false, pendingSince: 48_000 })).toBe(
-			48_000 + CLAUDE_FEED_QUIET_MS,
+			48_000 + CLAUDE_FEED_WAKE_QUIET_MS,
 		);
+		// Watched, the object previews the text: the step wakes after ~10 s.
+		expect(
+			feedWakeAt({
+				...base,
+				mode: "live",
+				urgent: false,
+				pendingSince: 48_000,
+			}),
+		).toBe(48_000 + CLAUDE_FEED_WAKE_LIVE_MS);
+		expect(CLAUDE_FEED_WAKE_LIVE_MS).toBe(10_000);
+		expect(CLAUDE_FEED_WAKE_QUIET_MS).toBe(20_000);
 		expect(
 			feedWakeAt({
 				...base,
