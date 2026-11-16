@@ -79,6 +79,26 @@ it("merges a branch that moved, keeps both sides and pushes without force", () =
 	).toHaveLength(3);
 });
 
+it("leaves a merge the checkout can fast-forward to, so the next turn's commit descends from the branch", () => {
+	const { remote, publish, work } = scenario("r.txt");
+	run(publish, remote);
+	// What catching the checkout up does: fetch the branch, fast-forward only.
+	git(work, "fetch", "-q", remote, "chat");
+	git(work, "merge", "--ff-only", "FETCH_HEAD");
+	expect(git(work, "rev-parse", "HEAD")).toBe(git(remote, "rev-parse", "chat"));
+	expect(git(work, "ls-files").split("\n").sort()).toEqual([
+		"a.txt",
+		"b.txt",
+		"r.txt",
+	]);
+	// The next turn's commit now pushes without another rejection or merge.
+	writeFileSync(join(work, "c.txt"), "c\n");
+	git(work, "add", ".");
+	git(work, "commit", "-qm", "next turn");
+	git(work, "push", "-q", remote, "HEAD:refs/heads/chat");
+	expect(git(remote, "rev-parse", "chat")).toBe(git(work, "rev-parse", "HEAD"));
+});
+
 it("exits 68 and pushes nothing when the same file conflicts", () => {
 	const { remote, publish, work } = scenario("b.txt");
 	const before = git(remote, "rev-parse", "chat");
