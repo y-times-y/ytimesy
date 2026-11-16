@@ -221,7 +221,12 @@ for (const name of [
 	"GOOGLE_CLIENT_ID",
 	"GOOGLE_CLIENT_SECRET",
 	"YTIMESY_CODEX_TUNNEL_URL",
+	// Legacy HMAC key for the Codex proxy; superseded by the signing key below.
 	"YTIMESY_CODEX_TUNNEL_SECRET",
+	// The Workers' Ed25519 key for Codex proxy credentials
+	// (scripts/generate-codex-tunnel-keypair.ts); the proxy holds its public key.
+	// When set, the Workers send only Ed25519 credentials.
+	"YTIMESY_CODEX_TUNNEL_SIGNING_KEY",
 	"YTIMESY_CODEX_RELAY_URL",
 	"YTIMESY_CODEX_RELAY_SECRET",
 	// Further Codex egress relays, tried in order after the first (2..8).

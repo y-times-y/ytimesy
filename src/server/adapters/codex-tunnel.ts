@@ -1,5 +1,68 @@
-import { createHmac, randomBytes } from "node:crypto";
 import { Client } from "tunnelfetch";
+import { ed25519SigningKey } from "./ed25519-signing-key";
+
+/**
+ * The proxy (scripts/codex-connect-proxy.py) admits one CONNECT to
+ * chatgpt.com:443 per credential: proxy user `ytimesy`, password
+ * `e1.<expires>.<nonce>.<Ed25519 signature, hex>` signed with
+ * YTIMESY_CODEX_TUNNEL_SIGNING_KEY (base64 PKCS8; the proxy holds only the
+ * public key), or, until that key is set, the legacy
+ * `<expires>.<nonce>.<HMAC-SHA256, hex>` of YTIMESY_CODEX_TUNNEL_SECRET.
+ * Each credential expires in 60 s and its nonce is accepted once.
+ */
+const TARGET = "chatgpt.com:443";
+/** A base64 PKCS8 DER Ed25519 private key is 48 bytes: 64 base64 characters. */
+const SIGNING_KEY = /^[A-Za-z0-9+/]{64}$/;
+const encoder = new TextEncoder();
+
+const hex = (bytes: ArrayBuffer | Uint8Array) =>
+	Array.from(new Uint8Array(bytes), (value) =>
+		value.toString(16).padStart(2, "0"),
+	).join("");
+
+/** The bytes an Ed25519 credential signs; keep in step with `authorize` in the proxy. */
+export const codexTunnelEd25519Material = (expires: string, nonce: string) =>
+	encoder.encode(`e1.${expires}.${nonce}.${TARGET}`);
+
+/** The proxy password for one CONNECT: Ed25519 when its key is set, else the legacy HMAC. */
+export async function codexTunnelCredential(
+	env: Readonly<Record<string, string | undefined>>,
+	now = Date.now(),
+) {
+	const expires = String(now + 60_000);
+	const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+	const signingKey = (env.YTIMESY_CODEX_TUNNEL_SIGNING_KEY ?? "").trim();
+	if (signingKey) {
+		// A set but unusable key must not quietly fall back to the HMAC the
+		// proxy may no longer accept.
+		if (!SIGNING_KEY.test(signingKey))
+			throw new Error(
+				"YTIMESY_CODEX_TUNNEL_SIGNING_KEY is not a base64 PKCS8 Ed25519 private key.",
+			);
+		const signature = await crypto.subtle.sign(
+			{ name: "Ed25519" },
+			await ed25519SigningKey(signingKey, "YTIMESY_CODEX_TUNNEL_SIGNING_KEY"),
+			codexTunnelEd25519Material(expires, nonce),
+		);
+		return `e1.${expires}.${nonce}.${hex(signature)}`;
+	}
+	const secret = env.YTIMESY_CODEX_TUNNEL_SECRET;
+	if (!secret || secret.length < 64)
+		throw new Error("Codex tunnel signing key is missing.");
+	const key = await crypto.subtle.importKey(
+		"raw",
+		encoder.encode(secret),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const signature = await crypto.subtle.sign(
+		"HMAC",
+		key,
+		encoder.encode(`${expires}.${nonce}.${TARGET}`),
+	);
+	return `${expires}.${nonce}.${hex(signature)}`;
+}
 
 /** A request owns its TLS connection until its response is consumed or cancelled. */
 export async function codexTunnelFetch(
@@ -15,17 +78,9 @@ export async function codexTunnelFetch(
 	}
 	const proxy = process.env.YTIMESY_CODEX_TUNNEL_URL;
 	if (!proxy) throw new Error("Codex tunnel is not configured.");
-	const secret = process.env.YTIMESY_CODEX_TUNNEL_SECRET;
-	if (!secret || secret.length < 64)
-		throw new Error("Codex tunnel signing key is missing.");
 	const proxyUrl = new URL(proxy);
-	const expires = String(Date.now() + 60_000);
-	const nonce = randomBytes(16).toString("hex");
-	const signature = createHmac("sha256", secret)
-		.update(`${expires}.${nonce}.chatgpt.com:443`)
-		.digest("hex");
 	proxyUrl.username = "ytimesy";
-	proxyUrl.password = `${expires}.${nonce}.${signature}`;
+	proxyUrl.password = await codexTunnelCredential(process.env);
 	const { connect } = await import("cloudflare:sockets").catch(
 		(cause: unknown) => {
 			throw new Error(
