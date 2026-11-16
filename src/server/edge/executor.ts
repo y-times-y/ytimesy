@@ -35,13 +35,17 @@ import {
 	CLAUDE_PARKED_RENEW_MS,
 	CLAUDE_PARKED_ROOM_LEASE_MS,
 	claudeStepWake,
+	nextParkedVmQuiet,
 	parkedTurnRenewal,
+	parkedVmPauseAt,
+	parkedVmPauseCheck,
 } from "../../domain/claude-parked-turn";
 import { claimConversationStep } from "../../domain/conversation-step-receipts";
 import { turnControlSchema } from "../../domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../../domain/delivery-auth";
 import { environmentWorkflowRequest } from "../../domain/environment-workflow";
 import { proxyGithubGit } from "../../domain/github-git-proxy";
+import { WorkspaceId } from "../../domain/ids";
 import { LIVE_SOCKET_PONG } from "../../domain/live-progress-socket";
 import {
 	modelConversationName,
@@ -72,6 +76,7 @@ import {
 	abandonApiTurn,
 	apiTurnLeaseFreshSql,
 	cancelWaitingApiTurn,
+	otherRunningTurnOnMachine,
 	refreshWaitingApiTurns,
 	renewParkedClaudeTurn,
 	turnPastDeadlineSql,
@@ -115,11 +120,19 @@ import {
 	forgetClaudeTurn,
 	registerClaudeTurn,
 	takeClaudeStepPause,
+	takeClaudeTurnQuiet,
 } from "../services/claude-step-pause";
 import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
 import { abortLiveTurn } from "../services/live-turn-abort";
 import { alertCronFailure } from "../services/operational-alerts";
 import { timed, withStepTrace } from "../services/step-timing";
+import {
+	adoptThinkingPause,
+	attemptThinkingPause,
+	pausedForThinkingAt,
+	pauseVmWhileThinkingEnabled,
+	THINKING_PAUSE_GRACE_MS,
+} from "../services/thinking-pause";
 import {
 	admitQueuedTurns,
 	runBackgroundJob,
@@ -134,6 +147,7 @@ import {
 	verifiedClaudeFeedGrant,
 } from "./claude-code-routes";
 import { SqliteClaudeFeed } from "./claude-feed-storage";
+import { SqliteClaudeVmQuiet } from "./claude-vm-quiet-storage";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -241,6 +255,8 @@ type FeedAttachment = {
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private readonly steps: SqliteConversationSteps;
 	private readonly claudeFeed: SqliteClaudeFeed;
+	/** The Claude Code turn's VM quiet, for pausing it while parked. */
+	private readonly vmQuiet: SqliteClaudeVmQuiet;
 	/** A feed step waiting for lines (claude-feed.ts); called when lines or the exit arrive. */
 	private readonly feedWaiters = new Set<() => void>();
 	/** Lines arrived since the turn's last step started: when the first did, and whether any is urgent. */
@@ -401,10 +417,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	 * The turn loop and the room's lease expiry share this object's single
 	 * alarm. A turn wake set with `parkedTurn` is that Claude Code turn's
 	 * parked renewal (claude-parked-turn.ts); any other turn wake unparks it,
-	 * so the wake runs a step.
+	 * so the wake runs a step. A `thinking` wake checks a parked turn's VM
+	 * once its quiet has lasted the grace (parkedVmPauseAt).
 	 */
 	private async wake(
-		purpose: "turn" | "room",
+		purpose: "turn" | "room" | "thinking",
 		at: number | null,
 		parkedTurn?: string,
 	) {
@@ -480,6 +497,10 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (due.has("room")) {
 			await this.wake("room", null);
 			await this.room.alarm();
+		}
+		if (due.has("thinking")) {
+			await this.wake("thinking", null);
+			this.pauseParkedVm(this.stepping);
 		}
 		const turnAt = rows.find((row) => row.purpose === "turn")?.at;
 		// The turn's wake stays due while its step runs, so the room's lease
@@ -574,6 +595,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			console.info(
 				JSON.stringify({ event: "claude.parked_renew", turnId: active.turnId }),
 			);
+			// A VM check the park's own refused (a background command, a
+			// terminal) is tried again on this wake, without one of its own.
+			this.pauseParkedVm(false);
 			return true;
 		} catch (error) {
 			console.warn("Parked turn renewal failed; running a step.", {
@@ -606,6 +630,106 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 	/** A step of this object's turn is running in this instance. */
 	private stepping = false;
+	/** Bumped by every step: a VM check from before it is void. */
+	private stepGeneration = 0;
+	/**
+	 * After a step: the turn's VM quiet as the step noted it, and whether
+	 * its VM is still paused for thinking (a later instance of this object
+	 * adopts that pause, so its next step resumes the VM first).
+	 */
+	private settleVmQuiet(turnId: string) {
+		try {
+			this.vmQuiet.write(
+				nextParkedVmQuiet({
+					turnId,
+					previous: this.vmQuiet.read(),
+					noted: takeClaudeTurnQuiet(turnId),
+					pausedAt: pausedForThinkingAt,
+				}),
+			);
+		} catch (error) {
+			console.warn("Claude turn's VM quiet was not saved.", {
+				cause: stepFailureCause(error),
+			});
+		}
+	}
+	/**
+	 * A parked turn's VM may pause once its quiet lasted the grace: at once
+	 * when it already has, else at one `thinking` wake (claude-parked-turn.ts).
+	 */
+	private async scheduleParkedVmPause(turnId: string) {
+		if (!pauseVmWhileThinkingEnabled()) return;
+		const now = Date.now();
+		const at = parkedVmPauseAt({
+			now,
+			turnId,
+			quiet: this.vmQuiet.read(),
+			graceMs: THINKING_PAUSE_GRACE_MS,
+		});
+		if (at === null) return;
+		if (at <= now) this.pauseParkedVm(false);
+		else await this.wake("thinking", at);
+	}
+	/**
+	 * Pauses the parked turn's VM if it is still quiet and its probes allow
+	 * (thinking-pause.ts). Not awaited by the alarm: an MCP call arriving
+	 * meanwhile wakes a step at once, and the step's guest operations wait
+	 * for a pause in progress and resume the VM. Never throws.
+	 */
+	private pauseParkedVm(stepping: boolean) {
+		if (!pauseVmWhileThinkingEnabled()) return;
+		try {
+			const quiet = this.vmQuiet.read();
+			const decision = parkedVmPauseCheck({
+				now: Date.now(),
+				quiet,
+				parkedTurn: this.parkedTurnId(),
+				stepping,
+				pendingCalls: quiet ? pendingClaudeCodeCalls(quiet.turnId) : 0,
+				graceMs: THINKING_PAUSE_GRACE_MS,
+			});
+			if (!decision.check) return;
+			const { turnId, userId } = decision.quiet;
+			const vm = WorkspaceId(decision.quiet.vm);
+			const generation = this.stepGeneration;
+			const connection = this.env.HYPERDRIVE.connectionString;
+			const current = () =>
+				generation === this.stepGeneration &&
+				this.parkedTurnId() === turnId &&
+				pendingClaudeCodeCalls(turnId) === 0;
+			const attempt = attemptThinkingPause({
+				vm,
+				machines: createFreestyleWorkspaceMachines(
+					Effect.runSync(readFreestyleApiKey()),
+				),
+				otherTurnOnMachine: (target) =>
+					withDatabaseScope(
+						connection,
+						() => otherRunningTurnOnMachine(userId, turnId, target),
+						null,
+					),
+				toolsRunning: () => pendingClaudeCodeCalls(turnId),
+				current,
+				quietSince: decision.quiet.quietSince ?? Date.now(),
+				trigger: "claude_parked",
+			}).then((outcome) => {
+				const pausedAt = pausedForThinkingAt(vm);
+				if (outcome === "paused" && pausedAt !== null)
+					this.vmQuiet.markPaused(turnId, pausedAt);
+			});
+			this.ctx.waitUntil(
+				attempt.catch((error) =>
+					console.warn("Parked turn's VM pause check failed.", {
+						cause: stepFailureCause(error),
+					}),
+				),
+			);
+		} catch (error) {
+			console.warn("Parked turn's VM pause check failed.", {
+				cause: stepFailureCause(error),
+			});
+		}
+	}
 	/** Runs after the turn released its room lease, so a waiting turn can start. */
 	private async endTurn(settled: SessionTurnStatus) {
 		const ended = this.activeTurn();
@@ -618,6 +742,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		}
 		if (ended) this.storeEndedHistory(ended);
 		if (ended) this.endClaudeFeed(ended.turnId);
+		if (ended) takeClaudeTurnQuiet(ended.turnId);
+		this.vmQuiet.write(null);
 		this.ctx.storage.sql.exec("delete from turn_loop");
 		const next = this.queue.take();
 		if (next) {
@@ -733,6 +859,12 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		}
 		// A step runs: nothing of an earlier park holds.
 		this.unpark();
+		this.stepGeneration += 1;
+		// A VM paused while the turn was parked, maybe by an earlier instance
+		// of this object: the step's guest operations resume it first.
+		const quiet = this.vmQuiet.read();
+		if (quiet?.turnId === step.turnId && quiet.pausedAt !== null)
+			adoptThinkingPause(WorkspaceId(quiet.vm), quiet.pausedAt);
 		const resume = this.steps.read(step)?.state === "processing";
 		// Counts consecutive attempts that did not finish this step.
 		this.ctx.storage.sql.exec("update turn_loop set resumes=resumes+1");
@@ -806,6 +938,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		} finally {
 			stopRefreshing();
 			unregister();
+			this.settleVmQuiet(step.turnId);
 		}
 		// The step's checkpoint is saved: so is where it read the run's feed.
 		feed?.commit();
@@ -840,8 +973,10 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				fallbackPauseMs: CLAUDE_STEP_PAUSE_MS,
 			});
 			if (!next.parked) return this.wake("turn", next.at);
-			if (await this.parkTurn(step.turnId))
-				return this.wake("turn", next.at, step.turnId);
+			if (await this.parkTurn(step.turnId)) {
+				await this.wake("turn", next.at, step.turnId);
+				return this.scheduleParkedVmPause(step.turnId);
+			}
 			return this.wake("turn", Date.now());
 		}
 		await this.endTurn(settledHubTurnStatus(outcome));
@@ -1485,6 +1620,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		);
 		this.steps = new SqliteConversationSteps(ctx.storage.sql);
 		this.claudeFeed = new SqliteClaudeFeed(ctx.storage.sql);
+		this.vmQuiet = new SqliteClaudeVmQuiet(ctx.storage.sql);
 		// A newer snapshot may list a sent message (or no longer): the runner hears it.
 		this.room.onAdopted(() => this.syncClaudeFeeds());
 		this.history = new TurnHistoryCache(ctx.storage.sql);

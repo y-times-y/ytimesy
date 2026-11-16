@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import {
+	adoptThinkingPause,
+	attemptThinkingPause,
 	machineCallsInFlight,
+	pausedForThinkingAt,
 	pauseVmWhileThinkingEnabled,
 	resumingAfterThinkingPause,
 	THINKING_PAUSE_GRACE_MS,
@@ -402,5 +405,114 @@ describe("resumingAfterThinkingPause", () => {
 		clock.advance(THINKING_PAUSE_GRACE_MS);
 		await flush();
 		expect(machines.pause).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("attemptThinkingPause from a parked Claude Code turn", () => {
+	const facts = {
+		otherTurnOnMachine: async () => false,
+		backgroundCommands: async () => 0,
+		attachments: async () => ({ viewers: 0, terminals: 0 }),
+	};
+
+	it("pauses with reason claude_parked, and the bridged call resumes first", async () => {
+		const events: string[] = [];
+		const lines: Record<string, unknown>[] = [];
+		const vm = fakeVm();
+		const machines = fakeMachines(events);
+		const log = (line: string) => lines.push(JSON.parse(line));
+		const outcome = await attemptThinkingPause({
+			vm,
+			machines,
+			...facts,
+			toolsRunning: () => 0,
+			current: () => true,
+			quietSince: 1_000,
+			now: () => 13_000,
+			trigger: "claude_parked",
+			log,
+		});
+		expect(outcome).toBe("paused");
+		expect(lines).toContainEqual({
+			event: "vm.paused_thinking",
+			vm,
+			idleMs: 12_000,
+			reason: "claude_parked",
+		});
+		// The next MCP call's step runs the tool through the step's machines.
+		events.length = 0;
+		await resumingAfterThinkingPause(machines, { log }).exec(vm, "rg x");
+		expect(events).toEqual([`resume ${vm}`, `exec ${vm} rg x`]);
+		expect(pausedForThinkingAt(vm)).toBeNull();
+	});
+
+	it("never pauses with a call queued or once a step overtook the check", async () => {
+		const vm = fakeVm();
+		const machines = fakeMachines([]);
+		const base = {
+			vm,
+			machines,
+			...facts,
+			quietSince: 0,
+			trigger: "claude_parked" as const,
+			log: () => {},
+		};
+		expect(
+			await attemptThinkingPause({
+				...base,
+				toolsRunning: () => 1,
+				current: () => true,
+			}),
+		).toBe("skipped");
+		let current = true;
+		expect(
+			await attemptThinkingPause({
+				...base,
+				backgroundCommands: async () => {
+					current = false;
+					return 0;
+				},
+				toolsRunning: () => 0,
+				current: () => current,
+			}),
+		).toBe("overtaken");
+		expect(machines.pause).not.toHaveBeenCalled();
+	});
+
+	it("names the trigger when it keeps the VM running", async () => {
+		const lines: Record<string, unknown>[] = [];
+		const vm = fakeVm();
+		await attemptThinkingPause({
+			vm,
+			machines: fakeMachines([]),
+			...facts,
+			backgroundCommands: async () => 2,
+			toolsRunning: () => 0,
+			current: () => true,
+			quietSince: 0,
+			trigger: "claude_parked",
+			log: (line) => lines.push(JSON.parse(line)),
+		});
+		expect(lines).toEqual([
+			{
+				event: "vm.pause_thinking_skipped",
+				vm,
+				reason: "background-command",
+				trigger: "claude_parked",
+			},
+		]);
+	});
+
+	it("resumes a pause adopted from an earlier instance before the next call", async () => {
+		const events: string[] = [];
+		const vm = fakeVm();
+		const machines = fakeMachines(events);
+		adoptThinkingPause(vm, 5_000);
+		expect(pausedForThinkingAt(vm)).toBe(5_000);
+		await resumingAfterThinkingPause(machines, { log: () => {} }).exec(
+			vm,
+			"ls",
+		);
+		expect(events).toEqual([`resume ${vm}`, `exec ${vm} ls`]);
 	});
 });
