@@ -16,7 +16,102 @@ it("checks message existence without reconstructing large history for each progr
 	expect(
 		exec.mock.calls.some(([query]) => query.startsWith("select data")),
 	).toBe(false);
+	expect(
+		exec.mock.calls.filter(([query]) => /^(insert|update|delete)/i.test(query)),
+	).toEqual([]);
 	expect(history.read("large-turn", "v30")).toEqual({ messages, items: [] });
+});
+
+it("reads only independently parseable pages at the active user message, not old transcript chunks", () => {
+	const state = durableObjectState();
+	const sql = state.ctx.storage.sql;
+	const history = new TurnHistoryCache(sql as never);
+	const archived = Array.from({ length: 160 }, (_, index) =>
+		item(`archived-${index}`, "old bytes ".repeat(4_000)),
+	);
+	const active = [
+		{ kind: "userMessage", id: "current-77", text: "continue" },
+		item("current-answer"),
+	] as never;
+	history.write("turn", "v1", {
+		messages: [{ role: "user", content: "continue" }],
+		items: [...archived, ...active],
+	});
+	const parse = vi.spyOn(JSON, "parse");
+	try {
+		expect(history.readActive("turn", "v1", "current-77")?.items).toEqual(
+			active,
+		);
+		expect(
+			parse.mock.calls.reduce((bytes, [text]) => bytes + text.length, 0),
+		).toBeLessThan(501_000);
+	} finally {
+		parse.mockRestore();
+	}
+	// A cache created before the page index is a miss, never a whole-history parse.
+	sql.exec("delete from turn_item_anchor");
+	expect(history.readActive("turn", "v1", "current-77")).toBeNull();
+});
+
+it("keeps a silent wake as an active-turn anchor after internal user messages are hidden", () => {
+	const history = cache();
+	const wake = {
+		kind: "notice",
+		id: "wake-now",
+		wake: true,
+		message: "",
+	} as never;
+	history.write("turn", "v1", {
+		messages: [],
+		items: [item("older"), wake, item("new-result")],
+	});
+	expect(history.readActive("turn", "v1", "wake-now")?.items).toEqual([
+		wake,
+		item("new-result"),
+	]);
+});
+
+it("stream progress is a cache miss after restart, and the next checkpoint persists it", () => {
+	const state = durableObjectState();
+	const sql = state.ctx.storage.sql;
+	const history = new TurnHistoryCache(sql as never);
+	const prompt = { kind: "userMessage", id: "current", text: "work" } as never;
+	const context = [{ role: "user" as const, content: "work" }];
+	history.write("turn", "v1", { messages: context, items: [prompt] });
+	const streamed = [prompt, item("answer", "partial answer")];
+	history.write("turn", "v2", { items: streamed }, "v1", "2");
+	streamed[1] = item("answer", "not committed yet");
+	expect(history.readActive("turn", "v2", "current")?.items[1]).toEqual(
+		item("answer", "partial answer"),
+	);
+	const restarted = new TurnHistoryCache(sql as never);
+	// The database reports v2, not the durable cache's v1: the executor must reload Postgres.
+	expect(restarted.readActive("turn", "v2", "current")).toBeNull();
+	const checkpoint = [prompt, item("answer", "checkpointed answer")];
+	history.write(
+		"turn",
+		"v3",
+		{ messages: context, items: checkpoint },
+		"v2",
+		"3",
+	);
+	expect(
+		new TurnHistoryCache(sql as never).readActive("turn", "v3", "current")
+			?.items,
+	).toEqual(checkpoint);
+});
+
+it("invalidates the previous version before a failed page write, so partial cache data cannot be served", () => {
+	const history = cache();
+	history.write("turn", "v1", { messages: [], items: [] });
+	expect(() =>
+		history.write("turn", "v2", {
+			messages: [],
+			items: [item("too-large", "z".repeat(600_000))],
+		}),
+	).toThrow("page size");
+	expect(history.read("turn", "v1")).toBeNull();
+	expect(history.read("turn", "v2")).toBeNull();
 });
 
 function cache() {

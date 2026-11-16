@@ -23,6 +23,7 @@ export type ClaudeCodeCallReply = McpCallResult;
 export type ClaudeCodeCall = {
 	readonly name: string;
 	readonly args: Record<string, unknown>;
+	readonly invocationId?: string;
 	readonly reply: (value: ClaudeCodeCallReply) => void;
 	/** Taken by a step: a timed-out response no longer proves it did not run. */
 	started?: boolean;
@@ -116,6 +117,7 @@ export function requestClaudeCodeCall(
 	timeoutMs = 60 * 60_000,
 	/** A call the step took gets this much longer before it times out. */
 	startedGraceMs = 0,
+	invocationId?: string,
 ): Promise<ClaudeCodeCallReply> {
 	const entry = bridge(turnId);
 	return new Promise((resolve) => {
@@ -143,7 +145,12 @@ export function requestClaudeCodeCall(
 			if (index >= 0) entry.queue.splice(index, 1);
 			resolve(value);
 		};
-		const call: ClaudeCodeCall = { name, args, reply };
+		const call: ClaudeCodeCall = {
+			name,
+			args,
+			reply,
+			...(invocationId === undefined ? {} : { invocationId }),
+		};
 		entry.queue.push(call);
 		notify(entry);
 	});
@@ -187,7 +194,10 @@ export async function runClaudeCodeCall(
 	}
 	const entry = bridge(turnId);
 	entry.calls += 1;
-	const id = `ccmcp-${Date.now().toString(36)}-${entry.calls}`;
+	const id =
+		call.invocationId === undefined
+			? `ccmcp-${Date.now().toString(36)}-${entry.calls}`
+			: `ccmcp-${call.invocationId}`;
 	try {
 		await context.onEvent({
 			type: "tool-call",

@@ -432,76 +432,102 @@ it("leaves a turn it does not hold running when a stale Stop arrives", async () 
 	}
 });
 
-it("serves the next step's history from this chat's copy, and a failed copy only costs a reload", async () => {
-	const { mirrorTurnHistory } = await import(
-		"../src/server/adapters/turn-history-mirror"
-	);
-	const row = (version: string) => ({
-		rowCount: 1,
-		rows: [
-			{
-				id: turn.turnId,
-				session_id: scope.sessionId,
-				user_id: scope.userId,
-				state: "running",
-				fresh: true,
-				legacy: false,
-				cancel_requested: false,
-				version,
-			},
-		],
-	});
-	const loaded = [{ role: "user", content: "hi" }];
-	const written = [...loaded, { role: "assistant", content: "ok" }];
-	mocks.query
-		.mockResolvedValueOnce(row("v1"))
-		.mockResolvedValueOnce({
+it.each([false, true])(
+	"serves cached history and reloads after cache failure (active view: %s)",
+	async (activeView) => {
+		const { mirrorTurnHistory } = await import(
+			"../src/server/adapters/turn-history-mirror"
+		);
+		const workingItems = activeView
+			? [{ kind: "userMessage", id: "current-user", text: "hi" }]
+			: [];
+		const row = (version: string) => ({
 			rowCount: 1,
-			rows: [{ messages: loaded, items: [] }],
-		})
-		.mockResolvedValueOnce(row("v2"))
-		.mockResolvedValueOnce(row("v3"))
-		.mockResolvedValueOnce({
-			rowCount: 1,
-			rows: [{ messages: loaded, items: [] }],
+			rows: [
+				{
+					id: turn.turnId,
+					session_id: scope.sessionId,
+					user_id: scope.userId,
+					state: "running",
+					fresh: true,
+					legacy: false,
+					cancel_requested: false,
+					items_from: activeView ? "current-user" : null,
+					version,
+				},
+			],
 		});
-	const seen: unknown[] = [];
-	mocks.step.mockImplementation(
-		async (step, _machines, receipts, _signal, resume) => {
-			const claim = await receipts.claim(step, resume);
-			if (claim.kind !== "claimed") return "unavailable";
-			seen.push(claim.turn.messages);
-			// The step's checkpoint: v1 -> v2, then a copy that cannot be stored.
-			if (step.index === 1)
-				mirrorTurnHistory(
-					turn.turnId,
-					"v2",
-					{ messages: written as never, items: [] },
-					"v1",
-				);
-			else
-				mirrorTurnHistory(
-					turn.turnId,
-					"v3",
-					{ messages: [{ role: "user", content: 1n }] as never, items: [] },
-					"v2",
-				);
-			const outcome = step.index === 3 ? "completed" : "continue";
-			await receipts.complete(step, outcome);
-			return outcome;
-		},
-	);
-	const { object, state } = conversation();
-	await object.startTurn(scope, turn);
-	await state.ctx.storage.put("identity", scope);
-	await object.alarm();
-	await object.alarm();
-	await object.alarm();
-	expect(seen).toEqual([loaded, written, loaded]);
-	const loaders = mocks.query.mock.calls.filter(([query]) =>
-		String(query).startsWith("select t.messages,"),
-	);
-	// Step 2 read only the turn row; step 3 reloaded after the failed copy.
-	expect(loaders).toHaveLength(2);
-	expect(mocks.query).toHaveBeenCalledTimes(5);
-});
+		const loaded = [{ role: "user", content: "hi" }];
+		const written = [...loaded, { role: "assistant", content: "ok" }];
+		mocks.query
+			.mockResolvedValueOnce(row("v1"))
+			.mockResolvedValueOnce({
+				rowCount: 1,
+				rows: [
+					{
+						messages: loaded,
+						messages_after: null,
+						items: workingItems,
+						items_rev: "1",
+					},
+				],
+			})
+			.mockResolvedValueOnce(row("v2"))
+			.mockResolvedValueOnce(row("v3"))
+			.mockResolvedValueOnce({
+				rowCount: 1,
+				rows: [
+					{
+						messages: loaded,
+						messages_after: null,
+						items: workingItems,
+						items_rev: "1",
+					},
+				],
+			});
+		const seen: unknown[] = [];
+		mocks.step.mockImplementation(
+			async (step, _machines, receipts, _signal, resume) => {
+				const claim = await receipts.claim(step, resume);
+				if (claim.kind !== "claimed") return "unavailable";
+				seen.push(claim.turn.messages);
+				// The step's checkpoint: v1 -> v2, then a copy that cannot be stored.
+				if (step.index === 1)
+					mirrorTurnHistory(
+						turn.turnId,
+						"v2",
+						{ messages: written as never, items: workingItems as never },
+						"v1",
+					);
+				else
+					mirrorTurnHistory(
+						turn.turnId,
+						"v3",
+						{
+							messages: [{ role: "user", content: 1n }] as never,
+							items: workingItems as never,
+						},
+						"v2",
+					);
+				const outcome = step.index === 3 ? "completed" : "continue";
+				await receipts.complete(step, outcome);
+				return outcome;
+			},
+		);
+		const { object, state } = conversation();
+		await object.startTurn(scope, turn);
+		await state.ctx.storage.put("identity", scope);
+		await object.alarm();
+		await object.alarm();
+		await object.alarm();
+		expect(seen).toEqual([loaded, written, loaded]);
+		const loaders = mocks.query.mock.calls.filter(([query]) =>
+			String(query).startsWith(
+				activeView ? "with base as" : "select t.messages,",
+			),
+		);
+		// Step 2 read only the turn row; step 3 reloaded after the failed copy.
+		expect(loaders).toHaveLength(2);
+		expect(mocks.query).toHaveBeenCalledTimes(5);
+	},
+);

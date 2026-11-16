@@ -1,5 +1,13 @@
 import { PGlite } from "@electric-sql/pglite";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { type ApiTurn, renewApiTurn } from "../src/server/adapters/api-turns";
 import {
 	observePeerInbox,
@@ -31,11 +39,12 @@ const turn = {
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key);
-	create table api_turn(id uuid primary key,session_id uuid,lease_id uuid,state text,cancel_requested boolean default false,heartbeat_at timestamptz default now());
+	create table api_turn(id uuid primary key,session_id uuid,lease_id uuid,state text,cancel_requested boolean default false,heartbeat_at timestamptz default now(),executor text default 'node',connection_id uuid,connection_revision text default 'fixture');
 	create table agent_peer_inbox(id text primary key,recipient_id uuid not null,message text not null,accepted boolean not null default false,created_at timestamptz not null default now(),queued_send jsonb);
 	create table agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,primary key(parent_session_id,request_id));`);
 });
 beforeEach(async () => {
+	vi.useFakeTimers({ toFake: ["Date"] });
 	await db.exec("truncate agent_session,api_turn,agent_peer_inbox");
 	await query("insert into agent_session values($1)", [session]);
 	await query(
@@ -44,6 +53,7 @@ beforeEach(async () => {
 	);
 	statements.length = 0;
 });
+afterEach(() => vi.useRealTimers());
 afterAll(async () => {
 	await db.close();
 });
@@ -80,6 +90,8 @@ it("reads and injects what a heartbeat saw waiting, and skips accepted rows", as
 		checkpoint,
 	);
 	expect(injected.at(-1)).toEqual({ role: "user", content: "peer says hi" });
+	// The observation must start after the inbox write, not at the same frozen-clock tick.
+	vi.setSystemTime(Date.now() + 1);
 	await renewApiTurn(turn);
 	expect(peerInboxMayHaveMessages(session)).toBe(false);
 });

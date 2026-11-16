@@ -8,6 +8,7 @@ const provider = vi.hoisted(() => ({
 	existing: false,
 	metadata: {} as Record<string, string>,
 	resize: vi.fn(),
+	update: vi.fn(),
 	remove: vi.fn(),
 	create: vi.fn(),
 	exec: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("freestyle", async (importOriginal) => {
 			autoDeleteSeconds: 7_776_000,
 		}),
 		resize: provider.resize,
+		update: provider.update,
 		delete: provider.remove,
 		exec: provider.exec,
 		fs: { writeTextFile: provider.write },
@@ -52,6 +54,7 @@ beforeEach(() => {
 	provider.metadata = {};
 	vi.clearAllMocks();
 	provider.resize.mockResolvedValue(undefined);
+	provider.update.mockResolvedValue(undefined);
 	provider.exec.mockResolvedValue({ statusCode: 0 });
 	provider.write.mockResolvedValue(undefined);
 });

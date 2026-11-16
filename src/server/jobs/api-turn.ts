@@ -146,6 +146,7 @@ import {
 	checkpointApiTurn,
 	clearTurnBoxToolIdentity,
 	finalizeApiTurn,
+	otherRunningTurnOnMachine,
 	publishApiTurnProgress,
 	recordTurnBoxToolIdentity,
 	renewApiTurn,
@@ -239,6 +240,7 @@ import {
 	stopClaudeCodeTurnRun,
 	withMessagesSentDuringRun,
 } from "../services/claude-code-turn";
+import { noteClaudeTurnQuiet } from "../services/claude-step-pause";
 import {
 	CODE_MODE_TOOL,
 	codeModeTool,
@@ -341,6 +343,12 @@ import {
 	subagentTools,
 } from "../services/subagent-tools";
 import { thinLeadTools } from "../services/thin-lead-tools";
+import {
+	pauseVmWhileThinkingEnabled,
+	resumingAfterThinkingPause,
+	type ThinkingPauseScheduler,
+	thinkingPauseScheduler,
+} from "../services/thinking-pause";
 import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import {
@@ -627,6 +635,13 @@ async function runApiTurnAttempt(
 			step.index,
 		));
 	let execution: AgentToolWorkspace | undefined;
+	// YTIMESY_PAUSE_VM_WHILE_THINKING: the VM may be paused between tool calls
+	// (thinking-pause.ts), so every guest operation of this turn, its
+	// subagents' and its cleanup's, first resumes a VM paused that way.
+	const pausingWhileThinking = pauseVmWhileThinkingEnabled();
+	const plainMachines = machines;
+	if (pausingWhileThinking) machines = resumingAfterThinkingPause(machines);
+	let thinkingPause: ThinkingPauseScheduler | undefined;
 	// Subagents address the parent's and forks' VMs directly, so they get the
 	// machines before this session's scoping; the report needs the session.
 	const unscopedMachines = machines;
@@ -1362,6 +1377,15 @@ async function runApiTurnAttempt(
 			});
 		};
 		machines = machinesForAgentSession(turnMachines, owner);
+		// Fed by tool calls below: API turns' own, and Claude Code's bridged
+		// ones only when nothing of the run lives on the VM.
+		if (pausingWhileThinking)
+			thinkingPause = thinkingPauseScheduler({
+				vm: () => execution?.vm,
+				machines: plainMachines,
+				otherTurnOnMachine: (vm) =>
+					otherRunningTurnOnMachine(owner.userId, turn.id, vm),
+			});
 		queueMachines = machinesForAgentSession(unscopedMachines, owner);
 		publishProgress = async (turnStatus) => {
 			if (turnStatus === "running") {
@@ -2295,10 +2319,15 @@ async function runApiTurnAttempt(
 				: AbortSignal.any([abort.signal, softStop.signal]),
 			onToolStart: (call) => {
 				toolsStarted = true;
-				if (call && !call.providerExecuted)
+				if (call && !call.providerExecuted) {
 					toolTime?.start(call.toolCallId, call.toolName);
+					if (!claudeCode) thinkingPause?.toolStarted(call.toolCallId);
+				}
 			},
-			onToolEnd: (call) => toolTime?.end(call.toolCallId),
+			onToolEnd: (call) => {
+				toolTime?.end(call.toolCallId);
+				if (!claudeCode) thinkingPause?.toolEnded(call.toolCallId);
+			},
 			isUserRequest: (message) => isUserRequestMessage(items, message),
 			compactionSnapshot: compactionStateSnapshot({
 				workspace,
@@ -2674,6 +2703,39 @@ async function runApiTurnAttempt(
 					);
 					return claudeCodeSentMessagesText(taken);
 				};
+				// The lean workspace tools run on the box itself, with a per-run
+				// VM grant, when the flag is on and nothing needs this object
+				// around them: no repository tool hooks, and runtime secrets only
+				// when the VM redacts them itself (both checked per grant).
+				const offerBoxTools = Boolean(
+					claudeRunner &&
+						surface.lean &&
+						!reader &&
+						claudeBoxToolsEnabled(process.env) &&
+						// With runtime secrets only when the owner allows it:
+						// the box's VM token could read them (docs/claude-code-placement.md).
+						(!projectSecrets?.redact.length ||
+							process.env.YTIMESY_CLAUDE_BOX_TOOLS_SECRETS === "1"),
+				);
+				// The VM pauses while Claude thinks only when every tool call of
+				// the run reaches it through this object: `claude` on a runner box,
+				// without box tools. On the chat's VM, `claude` itself (and its
+				// model stream) runs there; box tools exec on it unseen here.
+				const bridgedPause =
+					claudeRunner && !offerBoxTools ? thinkingPause : undefined;
+				const claudeToolTime =
+					toolTime || bridgedPause
+						? {
+								start(id: string, tool: string) {
+									toolTime?.start(id, tool);
+									bridgedPause?.toolStarted(id);
+								},
+								end(id: string) {
+									toolTime?.end(id);
+									bridgedPause?.toolEnded(id);
+								},
+							}
+						: undefined;
 				const claudeResult = await timed("turn:claudeCode", () =>
 					runClaudeCodeTurnStep({
 						userId: owner.userId,
@@ -2701,18 +2763,7 @@ async function runApiTurnAttempt(
 									runner: {
 										box: claudeRunner,
 										workspaceTools: Object.keys(surfaceTools),
-										// The lean workspace tools run on the box itself, with
-										// a per-run VM grant, when the flag is on and nothing
-										// needs this object around them: no repository tool
-										// hooks, and runtime secrets only when the VM redacts
-										// them itself (both checked per grant).
-										...(surface.lean &&
-										!reader &&
-										claudeBoxToolsEnabled(process.env) &&
-										// With runtime secrets only when the owner allows it:
-										// the box's VM token could read them (docs/claude-code-placement.md).
-										(!projectSecrets?.redact.length ||
-											process.env.YTIMESY_CLAUDE_BOX_TOOLS_SECRETS === "1")
+										...(offerBoxTools && surface.lean
 											? {
 													boxTools: {
 														tools: leanSurfaceToolNames(
@@ -2768,9 +2819,21 @@ async function runApiTurnAttempt(
 							progress.offer(items);
 						},
 						inbox: takeSentMessages,
-						...(toolTime ? { toolTime } : {}),
+						...(claudeToolTime ? { toolTime: claudeToolTime } : {}),
 					}),
 				);
+				// The step is short (it follows the run's feed), so its grace
+				// rarely elapses here: the chat's object may pause the VM while
+				// the turn is parked, from the quiet noted here
+				// (claude-parked-turn.ts).
+				const quiet = bridgedPause?.quiet();
+				if (quiet !== undefined && execution?.vm)
+					noteClaudeTurnQuiet(turn.id, {
+						vm: execution.vm,
+						userId: owner.userId,
+						since: quiet?.since ?? null,
+						toolEnded: quiet?.toolEnded ?? false,
+					});
 				messages = withMessagesSentDuringRun(
 					claudeResult.messages,
 					sentDuringRun,
@@ -3593,6 +3656,7 @@ async function runApiTurnAttempt(
 		// Tools wait for the clone; a step that called none may end while it
 		// runs, so it is awaited before its token is released.
 		forgetLiveTurn();
+		thinkingPause?.dispose();
 		clearTimeout(softTimer);
 		// A turn that ended at its answer lets its preparation finish, bounded
 		// (a VM that does not answer); a stopped step's ends at its next check.

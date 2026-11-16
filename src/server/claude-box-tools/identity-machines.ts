@@ -9,6 +9,12 @@ import type {
 	CommandOutput,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
+import {
+	appendFileUpload,
+	beginFileUpload,
+	commitFileUpload,
+	completeFileUpload,
+} from "./atomic-file-upload";
 
 /**
  * The chat VM as the Claude runner box reaches it: through a Freestyle
@@ -141,21 +147,56 @@ export function identityWorkspaceMachines(input: {
 			only(workspaceId);
 			redaction?.beforeWrite?.();
 			const bytes = Buffer.from(contents, "utf8");
-			for (
-				let start = 0;
-				start === 0 || start < bytes.length;
-				start += WRITE_CHUNK_BYTES
-			) {
-				const piece = bytes.subarray(start, start + WRITE_CHUNK_BYTES);
-				const command =
-					start === 0
-						? `mkdir -p -- "$(dirname -- ${quote(path)})" && cat > ${quote(path)}`
-						: `cat >> ${quote(path)}`;
-				const written = await run(command, 60_000, piece.toString("base64"));
+			if (bytes.length <= WRITE_CHUNK_BYTES) {
+				const written = await run(
+					completeFileUpload(path),
+					60_000,
+					bytes.toString("base64"),
+				);
 				if (written.exitCode !== 0)
 					throw new Error(
 						`Could not write ${path}: ${written.stderr.slice(-300)}`.trim(),
 					);
+				return;
+			}
+			const prepared = await run(beginFileUpload(path), 60_000);
+			if (prepared.exitCode !== 0)
+				throw new Error(
+					`Could not prepare file upload: ${prepared.stderr.slice(-300)}`,
+				);
+			const directory = prepared.stdout.trim();
+			if (
+				!directory.startsWith("/") ||
+				!/\/\.ytimesy-upload-[^/\r\n]+$/.test(directory)
+			)
+				throw new Error(
+					"The workspace did not return a file upload directory.",
+				);
+			try {
+				for (
+					let start = 0;
+					start === 0 || start < bytes.length;
+					start += WRITE_CHUNK_BYTES
+				) {
+					const piece = bytes.subarray(start, start + WRITE_CHUNK_BYTES);
+					const written = await run(
+						appendFileUpload(directory, start === 0),
+						60_000,
+						piece.toString("base64"),
+					);
+					if (written.exitCode !== 0)
+						throw new Error(
+							`Could not upload ${path}: ${written.stderr.slice(-300)}`.trim(),
+						);
+				}
+				const committed = await run(commitFileUpload(directory), 60_000);
+				if (committed.exitCode !== 0)
+					throw new Error(
+						`Could not finish writing ${path}: ${committed.stderr.slice(-300)}`.trim(),
+					);
+			} finally {
+				// Cleanup must not turn a completed replacement into a failed write.
+				await run(`rm -rf -- ${quote(directory)}`, 60_000).catch(() => {});
 			}
 		},
 		async readTextFile(workspaceId, path) {

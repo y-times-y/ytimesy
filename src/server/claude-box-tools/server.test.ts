@@ -128,11 +128,14 @@ async function start(
 		});
 		return {
 			status: response.status,
-			body: response.status === 200 ? await response.json() : null,
+			body:
+				response.status === 200
+					? ((await response.json()) as { result: unknown })
+					: null,
 		};
 	};
 	const call = async (name: string, args: Record<string, unknown>) =>
-		(await rpc("tools/call", { name, arguments: args })).body.result as {
+		(await rpc("tools/call", { name, arguments: args })).body?.result as {
 			content: { type: string; text: string }[];
 			isError: boolean;
 		};
@@ -149,8 +152,12 @@ describe("the runner box's tool server", () => {
 			"write",
 		]);
 		const listed = await box.rpc("tools/list");
+		if (!listed.body)
+			throw new Error("The tools/list response was not successful.");
 		expect(
-			listed.body.result.tools.map((tool: { name: string }) => tool.name),
+			(listed.body.result as { tools: { name: string }[] }).tools.map(
+				(tool) => tool.name,
+			),
 		).toEqual(["bash", "read", "write", "edit", "canvas"]);
 		const written = await box.call("write", {
 			path: "notes.txt",
@@ -202,6 +209,88 @@ describe("the runner box's tool server", () => {
 			{ name: "bash", arguments: { command: "npm run dev", background: true } },
 			{ name: "bash", arguments: { command: "ytimesy-browser screenshot" } },
 		]);
+	});
+
+	it("uses native IDs for local write deduplication without collapsing a distinct identical invocation", async () => {
+		const box = await start();
+		const invoke = (id: string, content = "requested\n") =>
+			box.rpc("tools/call", {
+				name: "write",
+				arguments: { path: "identity.txt", content },
+				_meta: { "claudecode/toolUseId": id },
+			});
+		await invoke("toolu_write_alpha");
+		writeFileSync(join(box.cwd, "identity.txt"), "changed elsewhere\n");
+		await invoke("toolu_write_alpha");
+		expect(readFileSync(join(box.cwd, "identity.txt"), "utf8")).toBe(
+			"changed elsewhere\n",
+		);
+		const mismatch = await invoke("toolu_write_alpha", "different arguments\n");
+		expect(mismatch.body?.result).toMatchObject({ isError: true });
+		expect(readFileSync(join(box.cwd, "identity.txt"), "utf8")).toBe(
+			"changed elsewhere\n",
+		);
+		await invoke("toolu_write_beta");
+		expect(readFileSync(join(box.cwd, "identity.txt"), "utf8")).toBe(
+			"requested\n",
+		);
+	});
+
+	it("does not replay a failed local write under the same native ID after partial effects", async () => {
+		let cwd = "";
+		let attemptedWrites = 0;
+		const fault: GuestExec = async (options) => {
+			if (
+				options.stdin &&
+				Buffer.from(options.stdin, "base64")
+					.toString()
+					.includes('"content":"uncertain_payload_z9"')
+			) {
+				attemptedWrites++;
+				writeFileSync(join(cwd, "uncertain.txt"), "partial effect\n");
+				throw Object.assign(new Error("socket hang up after write"), {
+					status: 502,
+				});
+			}
+			return localExec(options);
+		};
+		const box = await start({}, fault);
+		cwd = box.cwd;
+		const request = {
+			name: "write",
+			arguments: { path: "uncertain.txt", content: "uncertain_payload_z9" },
+			_meta: { "claudecode/toolUseId": "toolu_uncertain_z9" },
+		};
+		expect((await box.rpc("tools/call", request)).body?.result).toMatchObject({
+			isError: true,
+		});
+		expect(attemptedWrites).toBe(1);
+		expect((await box.rpc("tools/call", request)).body?.result).toMatchObject({
+			isError: true,
+		});
+		expect(attemptedWrites).toBe(1);
+		expect(readFileSync(join(cwd, "uncertain.txt"), "utf8")).toBe(
+			"partial effect\n",
+		);
+		expect(box.edge.calls.some((call) => call.method === "tools/call")).toBe(
+			false,
+		);
+	});
+
+	it("preserves native invocation metadata when forwarding a tool", async () => {
+		const box = await start();
+		await box.rpc("tools/call", {
+			name: "canvas",
+			arguments: { title: "evidence" },
+			_meta: { "claudecode/toolUseId": "toolu_forward_z9" },
+		});
+		expect(
+			box.edge.calls.find((call) => call.method === "tools/call")?.params,
+		).toEqual({
+			name: "canvas",
+			arguments: { title: "evidence" },
+			_meta: { "claudecode/toolUseId": "toolu_forward_z9" },
+		});
 	});
 
 	it("hands a call to the edge when the provider refused it before anything ran", async () => {

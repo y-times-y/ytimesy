@@ -33,6 +33,9 @@ export type McpCallResult = {
  */
 export const CLAUDE_CODE_INBOX_METHOD = "ytimesy/inbox";
 
+/** Native Claude Code metadata, verified with the pinned SDK transport probe. */
+export const CLAUDE_CODE_TOOL_USE_ID = "claudecode/toolUseId";
+
 export type McpServerHandlers = {
 	readonly tools: () => Promise<readonly McpToolDefinition[]>;
 	/** The text for the model now; empty when nothing waits. */
@@ -40,6 +43,8 @@ export type McpServerHandlers = {
 	readonly call: (
 		name: string,
 		args: Record<string, unknown>,
+		/** Model invocation identity, independent of the JSON-RPC request counter. */
+		invocationId?: string,
 	) => Promise<McpCallResult>;
 };
 
@@ -104,7 +109,21 @@ export async function handleMcpMessage(
 			if (!name) return error(id, -32602, "Missing tool name.");
 			const known = (await handlers.tools()).some((tool) => tool.name === name);
 			if (!known) return error(id, -32602, `Unknown tool: ${name}`);
-			const called = await handlers.call(name, args);
+			const metadata = input._meta;
+			const invocationId =
+				metadata && typeof metadata === "object" && !Array.isArray(metadata)
+					? (metadata as Record<string, unknown>)[CLAUDE_CODE_TOOL_USE_ID]
+					: undefined;
+			if (
+				invocationId !== undefined &&
+				(typeof invocationId !== "string" || !invocationId)
+			)
+				return error(id, -32602, "Invalid Claude tool invocation identity.");
+			// Old runners omit metadata: preserve their call shape for one deploy.
+			const called =
+				invocationId === undefined
+					? await handlers.call(name, args)
+					: await handlers.call(name, args, invocationId);
 			return result({
 				content: called.content?.length
 					? called.content

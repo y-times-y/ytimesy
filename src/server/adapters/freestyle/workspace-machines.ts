@@ -163,6 +163,14 @@ export function createFreestyleWorkspaceMachines(
 					.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS }),
 			);
 		},
+		async pause(workspaceId) {
+			// The next guest operation must read the paused state, not reuse
+			// the running read behind the last one (recent-guest-state.ts).
+			forgetRunningGuest(workspaceId);
+			// Not retried: a pause that did land answers a repeat with a conflict,
+			// and a missed pause only costs the running time it would have saved.
+			await freestyle.vms.ref(workspaceId).pause();
+		},
 		async applyNetworkPolicy(workspaceId, policy) {
 			await retryTransientProviderFailure(() =>
 				applyVmNetworkPolicy(freestyle, workspaceId, policy),

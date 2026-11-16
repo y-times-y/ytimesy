@@ -38,6 +38,26 @@ it("warns once about an oversized history read from the database, and logs sizes
 	});
 });
 
+it("counts UTF-8 bytes exactly without serializing either whole history array", () => {
+	const info = vi.spyOn(console, "info").mockImplementation(() => {});
+	const history = {
+		messages: [{ role: "user", content: "different 🧪 漢字 \n text" }] as never,
+		items: [item('emoji 🎉 and quotes " and slash \\'), item("second")],
+	};
+	const expected = {
+		messagesBytes: Buffer.byteLength(JSON.stringify(history.messages)),
+		itemsBytes: Buffer.byteLength(JSON.stringify(history.items)),
+	};
+	const stringify = vi.spyOn(JSON, "stringify");
+	logTurnStepSizes("unicode-turn", history, "database");
+	expect(JSON.parse(String(info.mock.calls[0][0]))).toMatchObject(expected);
+	expect(
+		stringify.mock.calls.some(
+			([value]) => value === history.messages || value === history.items,
+		),
+	).toBe(false);
+});
+
 it("stays quiet for a small history and never serializes a cached one", () => {
 	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 	const info = vi.spyOn(console, "info").mockImplementation(() => {});

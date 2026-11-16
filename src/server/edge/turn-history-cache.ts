@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import { jsonbText } from "../../domain/jsonb";
 import type { SessionItem } from "../../domain/session-item";
+import { TurnItemPages } from "./turn-item-pages";
 
 /** Stays well under the 2 MB limit on one SQLite value in a Durable Object. */
 const CHUNK_CHARACTERS = 500_000;
@@ -14,7 +15,14 @@ type History = { messages: ModelMessage[]; items: SessionItem[] };
  * someone else wrote the turn and it must be read again.
  */
 export class TurnHistoryCache {
+	private readonly itemPages: TurnItemPages;
+	/** Postgres already saved these stream snapshots; only checkpoints mirror them to SQLite. */
+	private readonly progress = new Map<
+		string,
+		{ version: string; items: readonly SessionItem[]; itemsRev?: string }
+	>();
 	constructor(private readonly sql: SqlStorage) {
+		this.itemPages = new TurnItemPages(sql);
 		sql.exec(`create table if not exists turn_history(
 			turn_id text not null, part text not null check(part in ('messages','items')),
 			chunk integer not null, data text not null, primary key(turn_id,part,chunk))`);
@@ -73,10 +81,8 @@ export class TurnHistoryCache {
 			)
 			.toArray()[0];
 		if (!copy) return null;
-		const items = this.part(copy.turn_id, "items");
-		return items
-			? { itemsRev: copy.items_rev, items: JSON.parse(items) }
-			: null;
+		const items = this.items(copy.turn_id);
+		return items ? { itemsRev: copy.items_rev, items } : null;
 	}
 
 	/**
@@ -84,6 +90,20 @@ export class TurnHistoryCache {
 	 * revision is known (the latest), drop everything else.
 	 */
 	keepChatCopy() {
+		for (const [turnId, pending] of this.progress) {
+			const messages = this.part(turnId, "messages");
+			if (!messages) {
+				this.clear(turnId);
+				continue;
+			}
+			this.write(
+				turnId,
+				pending.version,
+				{ messages: JSON.parse(messages), items: pending.items },
+				undefined,
+				pending.itemsRev,
+			);
+		}
 		const kept = this.sql
 			.exec<{ turn_id: string; items_rev: string }>(
 				"select turn_id,items_rev from turn_history_items_rev order by cast(items_rev as integer) desc limit 1",
@@ -93,6 +113,7 @@ export class TurnHistoryCache {
 			this.clear();
 			return;
 		}
+		this.itemPages.keep(kept.turn_id);
 		// Its messages stay too when their version is known (its last write
 		// was mirrored here): they are what Postgres holds at that version.
 		const version = this.version(kept.turn_id);
@@ -138,13 +159,26 @@ export class TurnHistoryCache {
 		);
 	}
 
+	/** Only this turn's visible items; old cached transcript chunks are never joined. */
+	readActive(turnId: string, version: string, from: string): History | null {
+		if (this.version(turnId) !== version) return null;
+		const pending = this.progress.get(turnId);
+		const start = pending?.items.findIndex((item) => item.id === from) ?? -1;
+		const items = pending
+			? start < 0
+				? null
+				: structuredClone(pending.items.slice(start))
+			: this.itemPages.readFrom(turnId, from);
+		if (!items) return null;
+		const messages = this.part(turnId, "messages");
+		return messages ? { messages: JSON.parse(messages), items } : null;
+	}
+
 	read(turnId: string, version: string): History | null {
 		if (this.version(turnId) !== version) return null;
 		const messages = this.part(turnId, "messages");
-		const items = this.part(turnId, "items");
-		return messages && items
-			? { messages: JSON.parse(messages), items: JSON.parse(items) }
-			: null;
+		const items = this.items(turnId);
+		return messages && items ? { messages: JSON.parse(messages), items } : null;
 	}
 
 	/**
@@ -179,11 +213,31 @@ export class TurnHistoryCache {
 			this.clear(turnId);
 			return;
 		}
+		if (!history.messages && !settled) {
+			// This write followed a committed Postgres progress snapshot. Keeping it
+			// only here avoids rewriting SQLite on every streamed text delta. A reset
+			// loses the map, so its newer Postgres version misses the older durable
+			// checkpoint and reloads the saved progress instead of serving stale data.
+			this.progress.set(turnId, {
+				version,
+				items: [...history.items],
+				itemsRev,
+			});
+			return;
+		}
+		this.progress.delete(turnId);
+		// An interrupted/failed cache update must never retain its previous valid version.
+		this.sql.exec("delete from turn_history_version where turn_id=?", turnId);
+		this.itemPages.write(turnId, history.items);
 		// As Postgres stores them (jsonbText: NUL replaced), so a copy reads
 		// back exactly what a read from Postgres would.
 		if (history.messages)
 			this.store(turnId, "messages", jsonbText(history.messages));
-		this.store(turnId, "items", jsonbText(history.items));
+		// Item pages replace the old concatenated JSON copy; do not store it twice.
+		this.sql.exec(
+			"delete from turn_history where turn_id=? and part='items'",
+			turnId,
+		);
 		if (settled)
 			this.sql.exec(
 				"insert into turn_history_settled values(?) on conflict(turn_id) do nothing",
@@ -211,6 +265,9 @@ export class TurnHistoryCache {
 	}
 
 	clear(turnId?: string) {
+		if (turnId === undefined) this.progress.clear();
+		else this.progress.delete(turnId);
+		this.itemPages.clear(turnId);
 		if (turnId === undefined) {
 			this.sql.exec("delete from turn_history");
 			this.sql.exec("delete from turn_history_version");
@@ -229,12 +286,24 @@ export class TurnHistoryCache {
 	}
 
 	private version(turnId: string) {
+		const pending = this.progress.get(turnId);
+		if (pending) return pending.version;
 		return this.sql
 			.exec<{ version: string }>(
 				"select version from turn_history_version where turn_id=?",
 				turnId,
 			)
 			.toArray()[0]?.version;
+	}
+
+	private items(turnId: string): SessionItem[] | null {
+		const pending = this.progress.get(turnId);
+		if (pending) return structuredClone(pending.items) as SessionItem[];
+		const pages = this.itemPages.readAll(turnId);
+		if (pages) return pages;
+		// Cache entries written before independently parseable pages (legacy turns only).
+		const previous = this.part(turnId, "items");
+		return previous ? JSON.parse(previous) : null;
 	}
 
 	private part(turnId: string, part: "messages" | "items") {
