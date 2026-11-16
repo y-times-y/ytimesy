@@ -17,6 +17,12 @@ describe("turn items storage", () => {
 			'{"from":"u2"}',
 		);
 		expect(newTurnItemsColumn([note("n")])).toBeNull();
+		expect(
+			newTurnItemsColumn([
+				user("older"),
+				{ ...note("wake-now"), wake: true } as SessionItem,
+			]),
+		).toBe('{"from":"wake-now"}');
 	});
 
 	it("writes the full list for a legacy turn", () => {

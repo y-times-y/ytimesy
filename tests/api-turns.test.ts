@@ -165,6 +165,89 @@ function submit(userId = "alice", targetSessionId = sessionId) {
 	});
 }
 
+it("loads and checkpoints only the active visible turn while retaining every archived item", async () => {
+	const { activeTurnHistory } = await import(
+		"../src/server/adapters/active-turn-history"
+	);
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn?.lease_id) throw new Error("Missing turn lease");
+	const archived = Array.from({ length: 60 }, (_, index) => ({
+		kind: "agentMessage",
+		id: `archive-${index}`,
+		text: "historical payload ".repeat(3_000),
+	}));
+	const active = [
+		{ kind: "userMessage", id: "work-77", text: "new work" },
+		{ kind: "agentMessage", id: "answer-77", text: "in progress" },
+	];
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify([...archived, ...active]),
+	]);
+	await db.query("update api_turn set items=$2::jsonb where id=$1", [
+		turn.id,
+		JSON.stringify({ from: "work-77" }),
+	]);
+	const loaded = await activeTurnHistory(turn.id, turn.lease_id, "work-77");
+	expect(loaded?.items).toEqual(active);
+	expect(JSON.stringify(loaded)).not.toContain("historical payload");
+	if (!loaded) throw new Error("Missing active history");
+	const finished = {
+		kind: "agentMessage",
+		id: "answer-78",
+		text: "finished",
+	} as never;
+	await checkpointApiTurn(
+		{ ...turn, items: loaded.items, items_from: "work-77" },
+		loaded.messages,
+		[...loaded.items, finished],
+	);
+	const stored = await db.query<{ items: unknown[] }>(
+		"select items from agent_session where id=$1",
+		[sessionId],
+	);
+	expect(stored.rows[0].items).toEqual([...archived, ...active, finished]);
+	const baseTurnId = randomUUID();
+	const prefix = [{ role: "user" as const, content: "saved model prefix" }];
+	const suffix = [{ role: "assistant" as const, content: "new model suffix" }];
+	await db.query(
+		"update api_turn set messages=$2::jsonb,base_turn_id=$3,base_version='fixture-v7',base_count=1 where id=$1",
+		[turn.id, JSON.stringify([...prefix, ...suffix]), baseTurnId],
+	);
+	const read = vi.spyOn(db, "query");
+	try {
+		expect(
+			(
+				await activeTurnHistory(turn.id, turn.lease_id, "work-77", {
+					turnId: baseTurnId,
+					version: "fixture-v7",
+					settled: false,
+					messages: prefix,
+				})
+			)?.messages,
+		).toEqual([...prefix, ...suffix]);
+		const raw = await read.mock.results[0].value;
+		expect(raw.rows[0]).toMatchObject({ messages: suffix, messages_after: 1 });
+	} finally {
+		read.mockRestore();
+	}
+	expect(
+		(
+			await activeTurnHistory(turn.id, turn.lease_id, "work-77", {
+				turnId: baseTurnId,
+				version: "wrong-version",
+				settled: false,
+				messages: prefix,
+			})
+		)?.messages,
+	).toEqual([...prefix, ...suffix]);
+	expect(await activeTurnHistory(turn.id, randomUUID(), "work-77")).toBeNull();
+	expect(
+		await activeTurnHistory(turn.id, turn.lease_id, "missing-marker"),
+	).toBeNull();
+});
+
 it("stamps training eligibility when the turn is queued, off by default", async () => {
 	const projectId = randomUUID();
 	await db.query("insert into project(id,user_id) values($1,'alice')", [

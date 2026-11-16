@@ -108,6 +108,12 @@ async function githubBackend(target: string, init: RequestInit) {
 			GIT_PROTOCOL: headers.get("git-protocol") ?? "",
 		},
 	});
+	// A refused push can finish its CGI response before consuming the request.
+	// Keep that response; other input errors still reject the response reader.
+	child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+		if (error.code !== "EPIPE") child.stdout.destroy(error);
+	});
+	child.on("error", (error) => child.stdout.destroy(error));
 	child.stdin.end(body);
 	const chunks: Buffer[] = [];
 	for await (const chunk of child.stdout) chunks.push(chunk as Buffer);

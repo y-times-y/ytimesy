@@ -104,7 +104,27 @@ export type MemoryChat = {
 	items: SessionItem[];
 };
 
-/** Root chats with turns after `since`, newest first. */
+/**
+ * Only fields dreamChat consumes; full tool payloads never cross the database
+ * connection. Keep user boundaries and every final reply so its since filtering
+ * and last-reply selection remain unchanged. Failed-output tails retain at
+ * least 600 UTF-16 units for dreamChat's existing slice(-600).
+ */
+const DREAM_ITEMS_SQL = `(select coalesce(jsonb_agg(
+ case when e.item->>'kind'='userMessage' then jsonb_strip_nulls(jsonb_build_object(
+  'kind','userMessage','id',e.item->'id','text',e.item->'text','timing',e.item->'timing'))
+ when e.item->>'kind'='agentMessage' then jsonb_strip_nulls(jsonb_build_object(
+  'kind','agentMessage','id',e.item->'id','text',e.item->'text','phase',e.item->'phase'))
+ else jsonb_build_object('kind','commandExecution','id',e.item->'id',
+  'command',e.item->'command','cwd',e.item->'cwd','status',e.item->'status','exitCode',e.item->'exitCode',
+  'output',right(coalesce(e.item->>'output',''),600)) end order by e.position),'[]'::jsonb)
+ from jsonb_array_elements(case when jsonb_typeof(s.items)='array' then s.items else '[]'::jsonb end) with ordinality e(item,position)
+ where e.item->>'kind'='userMessage'
+ or (e.item->>'kind'='agentMessage' and coalesce(e.item->>'phase','')<>'commentary')
+ or (e.item->>'kind'='commandExecution' and e.item->'exitCode' is not null
+  and e.item->'exitCode'<>'null'::jsonb and e.item->'exitCode'<>'0'::jsonb))`;
+
+/** Root chats with turns after `since`, newest first, projected for dreaming only. */
 export async function memoryChatsSince(
 	userId: string,
 	since: Date | null,
@@ -112,7 +132,7 @@ export async function memoryChatsSince(
 ): Promise<MemoryChat[]> {
 	const rows = (
 		await database().query<ChatRow>(
-			`select s.id,s.title,p.full_name as project,p.name as project_name,(select coalesce(array_agg(r.repository_id::float8 order by r.position),array[p.repository_id::float8]) from project_repository r where r.project_id=p.id) as project_repository_ids,s.items,max(t.updated_at) as updated_at
+			`select s.id,s.title,p.full_name as project,p.name as project_name,(select coalesce(array_agg(r.repository_id::float8 order by r.position),array[p.repository_id::float8]) from project_repository r where r.project_id=p.id) as project_repository_ids,${DREAM_ITEMS_SQL} as items,max(t.updated_at) as updated_at
 			 from agent_session s join api_turn t on t.session_id=s.id and t.user_id=s.user_id
 			 left join project p on p.id=s.project_id
 			 where s.user_id=$1 and s.parent_session_id is null
