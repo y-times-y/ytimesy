@@ -232,19 +232,19 @@ async function rerunJob(
 			job_id: jobId,
 		});
 	} catch (error) {
-		const reason = await jobAnnotation(github, { owner, repo }, jobId);
+		const [reason] = await jobAnnotations(github, { owner, repo }, jobId);
 		if (!reason || typeof error !== "object" || error === null) throw error;
 		const status = Number((error as { status?: unknown }).status);
 		throw Object.assign(new Error(`${reason}`), { status });
 	}
 }
 
-/** The first annotation message of an Actions job, or null when there is none to read. */
-async function jobAnnotation(
+/** What GitHub says about an Actions job in its annotations (never throws; empty when none). */
+async function jobAnnotations(
 	github: Github,
 	{ owner, repo }: { owner: string; repo: string },
 	jobId: number,
-): Promise<string | null> {
+): Promise<string[]> {
 	try {
 		const { data } = await github.checks.listAnnotations({
 			owner,
@@ -252,12 +252,12 @@ async function jobAnnotation(
 			check_run_id: jobId,
 			per_page: 5,
 		});
-		const message = data
+		return data
 			.map((annotation) => annotation.message?.trim())
-			.find((text): text is string => Boolean(text));
-		return message ? message.slice(0, 300) : null;
+			.filter((text): text is string => Boolean(text))
+			.map((text) => text.slice(0, 400));
 	} catch {
-		return null;
+		return [];
 	}
 }
 
@@ -346,13 +346,27 @@ export async function actionsJobLog(
 	jobId: number,
 ): Promise<{ readonly log: string }> {
 	const { owner, repo } = repositoryOwnerName(fullName);
-	const response = await githubWrite("Actions: read", () =>
-		githubClient(token).actions.downloadJobLogsForWorkflowRun({
-			owner,
-			repo,
-			job_id: jobId,
-		}),
-	);
+	const github = githubClient(token);
+	let response: Awaited<
+		ReturnType<Github["actions"]["downloadJobLogsForWorkflowRun"]>
+	>;
+	try {
+		response = await githubWrite("Actions: read", () =>
+			github.actions.downloadJobLogsForWorkflowRun({
+				owner,
+				repo,
+				job_id: jobId,
+			}),
+		);
+	} catch (error) {
+		// A job that never started has no log. GitHub's annotations say why
+		// (a failed payment, a spending limit): that is what the log shows.
+		const said = await jobAnnotations(github, { owner, repo }, jobId);
+		if (!said.length) throw error;
+		return {
+			log: `GitHub has no log for this job; it did not run.\n\n${said.join("\n\n")}\n`,
+		};
+	}
 	const data: unknown = response.data;
 	if (typeof data === "string") return { log: data };
 	if (data instanceof ArrayBuffer || data instanceof Uint8Array)

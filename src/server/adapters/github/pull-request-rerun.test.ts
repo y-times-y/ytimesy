@@ -88,3 +88,50 @@ it("re-runs the job when GitHub accepts", async () => {
 	});
 	expect(rerun).toHaveBeenCalledWith({ owner: "o", repo: "r", job_id: 9 });
 });
+
+it("shows what GitHub says about a job that never started when it has no log", async () => {
+	github.client = {
+		actions: {
+			downloadJobLogsForWorkflowRun: async () => {
+				throw refused;
+			},
+		},
+		checks: {
+			listAnnotations: async () => ({
+				data: [
+					{
+						message:
+							"The job was not started because recent account payments have failed.",
+					},
+				],
+			}),
+		},
+	};
+	const { actionsJobLog } = await import("./pull-request-actions");
+	const { log } = await actionsJobLog("t", "o/r", 9);
+	expect(log).toContain("it did not run");
+	expect(log).toContain("recent account payments have failed");
+});
+
+it("explains a missing log when there is nothing to show", async () => {
+	github.client = {
+		actions: {
+			downloadJobLogsForWorkflowRun: async () => {
+				throw refused;
+			},
+		},
+		checks: { listAnnotations: async () => ({ data: [] }) },
+	};
+	const { actionsJobLog } = await import("./pull-request-actions");
+	await actionsJobLog("t", "o/r", 9).then(
+		() => {
+			throw new Error("should refuse");
+		},
+		async (error: unknown) => {
+			expect(error).toBeInstanceOf(Response);
+			expect(
+				((await (error as Response).json()) as { error: string }).error,
+			).toContain("no log for this job");
+		},
+	);
+});
