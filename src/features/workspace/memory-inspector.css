@@ -1120,3 +1120,11 @@ a.memory-row-action:hover {
 		padding: 56px 18px 12px;
 	}
 }
+
+/* While the left sidebar is closed its toggle sits top left of the page
+   (styles.css): the page's title starts clear of it. */
+:where(:root:not([data-sidebar="open"]))
+	.memory-page[data-view]
+	.memory-page-header {
+	padding-left: max(24px, 54px);
+}
