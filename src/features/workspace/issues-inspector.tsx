@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
 	ArrowLeft,
@@ -13,7 +13,7 @@ import {
 	Plus,
 	Search,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
@@ -49,6 +49,7 @@ import {
 	useRepositoryChoices,
 } from "./github-ui";
 import "./pull-request-inspector.css";
+import { issuesKey, issuesRequest } from "./work-items-queries";
 
 type Filter = IssueState | "all";
 type Screen =
@@ -134,7 +135,7 @@ export function IssuesInspector({
 		);
 	return (
 		<IssueList
-			repository={repository}
+			repositories={[{ ...repository, name: "" }]}
 			filter={filter}
 			onFilter={setFilter}
 			onOpen={(number) => setScreen({ kind: "issue", number })}
@@ -143,36 +144,58 @@ export function IssuesInspector({
 	);
 }
 
-function IssueList({
-	repository,
+export function IssueList({
+	repositories,
+	showRepository = false,
+	toolbar,
 	filter,
 	onFilter,
 	onOpen,
 	onNew,
 }: {
-	repository: GithubRepositoryRef;
+	repositories: readonly (GithubRepositoryRef & { readonly name: string })[];
+	/** Adds a Repo column: the table spans repositories. */
+	showRepository?: boolean;
+	/** Beside the state tabs (the repository filter). */
+	toolbar?: ReactNode;
 	filter: Filter;
 	onFilter: (filter: Filter) => void;
-	onOpen: (number: number) => void;
+	onOpen: (
+		number: number,
+		repository: GithubRepositoryRef & { readonly name: string },
+	) => void;
 	onNew: () => void;
 }) {
 	const [query, setQuery] = useState("");
-	const list = useQuery({
-		queryKey: ["issues", repository.repositoryId, filter],
-		queryFn: () =>
-			requestJson<{ issues: IssueSummary[] }>(
-				issuesPath(repository, { state: filter }),
-			),
-		refetchInterval: 60_000,
+	const lists = useQueries({
+		queries: repositories.map((repository) => ({
+			queryKey: issuesKey(repository.repositoryId, filter),
+			queryFn: () => issuesRequest(repository, filter),
+			refetchInterval: 60_000,
+		})),
 	});
 	const needle = query.trim().toLowerCase();
-	const issues = (list.data?.issues ?? []).filter(
-		(issue) =>
-			!needle ||
-			issue.title.toLowerCase().includes(needle) ||
-			`#${issue.number}`.includes(needle) ||
-			issue.labels.some((label) => label.name.toLowerCase().includes(needle)),
+	const rows = lists
+		.flatMap((list, index) =>
+			(list.data?.issues ?? []).map((issue) => ({
+				issue,
+				repository: repositories[index],
+			})),
+		)
+		.sort((a, b) => b.issue.updatedAt.localeCompare(a.issue.updatedAt))
+		.filter(
+			({ issue }) =>
+				!needle ||
+				issue.title.toLowerCase().includes(needle) ||
+				`#${issue.number}`.includes(needle) ||
+				issue.labels.some((label) => label.name.toLowerCase().includes(needle)),
+		);
+	const total = lists.reduce(
+		(sum, list) => sum + (list.data?.issues.length ?? 0),
+		0,
 	);
+	const failed = lists.filter((list) => list.error);
+	const pending = lists.some((list) => list.isPending);
 	const filters: { id: Filter; label: string }[] = [
 		{ id: "open", label: "Open" },
 		{ id: "closed", label: "Closed" },
@@ -191,13 +214,12 @@ function IssueList({
 							onClick={() => onFilter(item.id)}
 						>
 							{item.label}
-							{filter === item.id && list.data ? (
-								<span>{list.data.issues.length}</span>
-							) : null}
+							{filter === item.id && !pending ? <span>{total}</span> : null}
 						</button>
 					))}
 				</div>
 				<span className="pr-head-spacer" />
+				{toolbar}
 				<button
 					type="button"
 					className="pr-button"
@@ -218,14 +240,19 @@ function IssueList({
 					aria-label="Filter issues"
 				/>
 			</label>
+			{failed.length && !pending && failed.length < lists.length ? (
+				<p className="gh-partial" role="status">
+					Couldn't read {failed.length} of {lists.length} repositories.
+				</p>
+			) : null}
 			<GithubScrollArea className="pr-pane">
-				{list.error ? (
+				{failed.length === lists.length && failed.length ? (
 					<p className="pr-empty" role="alert">
-						{list.error.message}
+						{failed[0].error?.message}
 					</p>
-				) : list.isPending ? (
+				) : pending && !rows.length ? (
 					<p className="pr-empty">Loading issues…</p>
-				) : issues.length === 0 ? (
+				) : rows.length === 0 ? (
 					<p className="pr-empty">
 						{needle
 							? "No issues match."
@@ -238,17 +265,18 @@ function IssueList({
 						<thead>
 							<tr>
 								<th scope="col">Issue</th>
+								{showRepository ? <th scope="col">Repo</th> : null}
 								<th scope="col">Assignees / comments</th>
 							</tr>
 						</thead>
 						<tbody>
-							{issues.map((issue) => (
-								<tr key={issue.number}>
+							{rows.map(({ issue, repository }) => (
+								<tr key={`${repository.repositoryId}:${issue.number}`}>
 									<td>
 										<button
 											type="button"
 											className="gh-issue-row"
-											onClick={() => onOpen(issue.number)}
+											onClick={() => onOpen(issue.number, repository)}
 										>
 											<IssueStateIcon issue={issue} />
 											<span className="gh-issue-main">
@@ -265,6 +293,11 @@ function IssueList({
 											</span>
 										</button>
 									</td>
+									{showRepository ? (
+										<td>
+											<span className="gh-table-repo">{repository.name}</span>
+										</td>
+									) : null}
 									<td>
 										<span className="gh-issue-side">
 											{issue.assignees.length ? (
@@ -351,7 +384,7 @@ function IssueFields({
 	);
 }
 
-function IssuePage({
+export function IssuePage({
 	repository,
 	number,
 	onBack,
@@ -844,7 +877,7 @@ function StartIssueChat({
 	);
 }
 
-function NewIssue({
+export function NewIssue({
 	repository,
 	onBack,
 	onCreated,

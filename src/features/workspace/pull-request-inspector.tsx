@@ -248,6 +248,8 @@ type ReviewChat = {
 	/** The chat already open. A review must not continue it. */
 	readonly currentSessionId?: string;
 	readonly onReviewStarted?: (sessionId: string) => void;
+	/** Where the back button goes; without it, to this repository's own list. */
+	readonly onBack?: () => void;
 	readonly pullRequestChats?: ReadonlyMap<string, PullRequestChat>;
 	readonly onOpenChat?: (chatId: string) => void;
 };
@@ -261,6 +263,7 @@ export function PullRequestInspector({
 	modelId,
 	currentSessionId,
 	onReviewStarted,
+	onBack,
 	pullRequestChats,
 	onOpenChat,
 }: {
@@ -300,8 +303,8 @@ export function PullRequestInspector({
 	if (showList)
 		return (
 			<PullRequestList
-				repository={repository}
-				chats={pullRequestChats}
+				repositories={[{ ...repository, name: "" }]}
+				chatFor={(_, head) => pullRequestChats?.get(head)}
 				onOpenChat={onOpenChat}
 				onOpen={(pull) => {
 					setPicked(pull.number);
@@ -353,7 +356,7 @@ export function PullRequestInspector({
 				type="button"
 				className="pr-ghost"
 				aria-label="All pull requests"
-				onClick={() => setShowList(true)}
+				onClick={onBack ?? (() => setShowList(true))}
 			>
 				<ArrowLeft size={14} />
 				Pull requests

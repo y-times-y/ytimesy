@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 import {
 	GitMerge,
 	GitPullRequest,
@@ -6,12 +6,11 @@ import {
 	GitPullRequestDraft,
 	Search,
 } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import type {
 	PullRequestFilter,
 	RepositoryPullRequest,
 } from "#/domain/pull-request-review";
-import { requestJson } from "../projects/api";
 import {
 	type GithubRepositoryRef,
 	GithubScrollArea,
@@ -24,6 +23,14 @@ import {
 	type PullRequestChat,
 	ReviewMark,
 } from "./pull-request-marks";
+import { pullRequestsKey, pullRequestsRequest } from "./work-items-queries";
+
+/** A connected repository the table reads, with the name shown beside its rows. */
+export type WorkRepository = GithubRepositoryRef & {
+	readonly name: string;
+	/** The project this repository is connected through (chats started here belong to it). */
+	readonly projectId?: string;
+};
 
 export function PullStateIcon({
 	state,
@@ -45,37 +52,62 @@ export function PullStateIcon({
 	);
 }
 
-/** The dense repository table. Selecting a row opens the in-app review panel. */
+/**
+ * The dense pull request table, for one repository or for every connected
+ * one. Selecting a row opens the in-app review panel.
+ */
 export function PullRequestList({
-	repository,
+	repositories,
+	showRepository = false,
+	toolbar,
 	onOpen,
-	chats,
+	chatFor,
 	onOpenChat,
 }: {
-	repository: GithubRepositoryRef;
-	onOpen: (pull: RepositoryPullRequest) => void;
-	chats?: ReadonlyMap<string, PullRequestChat>;
+	repositories: readonly WorkRepository[];
+	/** Adds a Repo column: the table spans repositories. */
+	showRepository?: boolean;
+	/** Beside the state tabs (the repository filter). */
+	toolbar?: ReactNode;
+	onOpen: (pull: RepositoryPullRequest, repository: WorkRepository) => void;
+	chatFor?: (
+		repository: GithubRepositoryRef,
+		head: string,
+	) => PullRequestChat | undefined;
 	onOpenChat?: (chatId: string) => void;
 }) {
 	const [filter, setFilter] = useState<PullRequestFilter>("open");
 	const [query, setQuery] = useState("");
-	const list = useQuery({
-		queryKey: ["pull-requests", repository.repositoryId, filter],
-		queryFn: () =>
-			requestJson<{ pullRequests: RepositoryPullRequest[] }>(
-				`/api/github/pull-request?${new URLSearchParams({ installationId: String(repository.installationId), repositoryId: String(repository.repositoryId), state: filter })}`,
-			),
-		refetchInterval: 60_000,
+	const lists = useQueries({
+		queries: repositories.map((repository) => ({
+			queryKey: pullRequestsKey(repository.repositoryId, filter),
+			queryFn: () => pullRequestsRequest(repository, filter),
+			refetchInterval: 60_000,
+		})),
 	});
 	const needle = query.trim().toLowerCase();
-	const pulls = (list.data?.pullRequests ?? []).filter(
-		(pull) =>
-			!needle ||
-			`${pull.title} #${pull.number} ${pull.author} ${pull.head}`
-				.toLowerCase()
-				.includes(needle) ||
-			pull.labels.some((label) => label.name.toLowerCase().includes(needle)),
+	const rows = lists
+		.flatMap((list, index) =>
+			(list.data?.pullRequests ?? []).map((pull) => ({
+				pull,
+				repository: repositories[index],
+			})),
+		)
+		.sort((a, b) => b.pull.updatedAt.localeCompare(a.pull.updatedAt))
+		.filter(
+			({ pull }) =>
+				!needle ||
+				`${pull.title} #${pull.number} ${pull.author} ${pull.head}`
+					.toLowerCase()
+					.includes(needle) ||
+				pull.labels.some((label) => label.name.toLowerCase().includes(needle)),
+		);
+	const total = lists.reduce(
+		(sum, list) => sum + (list.data?.pullRequests.length ?? 0),
+		0,
 	);
+	const failed = lists.filter((list) => list.error);
+	const pending = lists.some((list) => list.isPending);
 	return (
 		<section className="pr gh-repository-list" aria-label="Pull requests">
 			<header className="gh-issues-bar">
@@ -93,12 +125,12 @@ export function PullRequestList({
 							onClick={() => setFilter(state)}
 						>
 							{state[0].toUpperCase() + state.slice(1)}
-							{filter === state && list.data ? (
-								<span>{list.data.pullRequests.length}</span>
-							) : null}
+							{filter === state && !pending ? <span>{total}</span> : null}
 						</button>
 					))}
 				</div>
+				<span className="pr-head-spacer" />
+				{toolbar}
 			</header>
 			<label className="gh-search">
 				<Search size={14} aria-hidden="true" />
@@ -110,14 +142,19 @@ export function PullRequestList({
 					onChange={(event) => setQuery(event.target.value)}
 				/>
 			</label>
+			{failed.length && !pending && failed.length < lists.length ? (
+				<p className="gh-partial" role="status">
+					Couldn't read {failed.length} of {lists.length} repositories.
+				</p>
+			) : null}
 			<GithubScrollArea className="pr-pane">
-				{list.error ? (
+				{failed.length === lists.length && failed.length ? (
 					<p className="pr-empty" role="alert">
-						{list.error.message}
+						{failed[0].error?.message}
 					</p>
-				) : list.isPending ? (
+				) : pending && !rows.length ? (
 					<p className="pr-empty">Loading pull requests…</p>
-				) : !pulls.length ? (
+				) : !rows.length ? (
 					<p className="pr-empty">
 						{needle ? "No pull requests match." : "No pull requests."}
 					</p>
@@ -126,6 +163,7 @@ export function PullRequestList({
 						<thead>
 							<tr>
 								<th scope="col">Pull request</th>
+								{showRepository ? <th scope="col">Repo</th> : null}
 								<th scope="col">Chat</th>
 								<th scope="col">Checks</th>
 								<th scope="col">Review</th>
@@ -134,13 +172,13 @@ export function PullRequestList({
 							</tr>
 						</thead>
 						<tbody>
-							{pulls.map((pull) => (
-								<tr key={pull.number}>
+							{rows.map(({ pull, repository }) => (
+								<tr key={`${repository.repositoryId}:${pull.number}`}>
 									<td>
 										<button
 											type="button"
 											className="gh-table-open"
-											onClick={() => onOpen(pull)}
+											onClick={() => onOpen(pull, repository)}
 										>
 											<PullStateIcon state={pull.state} />
 											<span>
@@ -155,9 +193,14 @@ export function PullRequestList({
 											</span>
 										</button>
 									</td>
+									{showRepository ? (
+										<td>
+											<span className="gh-table-repo">{repository.name}</span>
+										</td>
+									) : null}
 									<td>
 										<ChatRail
-											chat={chats?.get(pull.head)}
+											chat={chatFor?.(repository, pull.head)}
 											onOpen={onOpenChat}
 										/>
 									</td>

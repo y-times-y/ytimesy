@@ -5,6 +5,7 @@ import {
 	BookMarked,
 	Check,
 	ChevronRight,
+	CircleDot,
 	Clock3,
 	GitMerge,
 	GitPullRequest,
@@ -115,6 +116,14 @@ interface ProjectSidebarProps {
 	projectChats?: readonly ProjectChats<Project>[];
 	/** Opens a chat that may belong to another project (the Recent list). */
 	onSelectChatInProject?: (projectId: string, chatId: string) => void;
+	/** Opens the full-page Pull requests or Issues view across every connected repository. */
+	onOpenWorkItems?: (kind: "pull-requests" | "issues") => void;
+	/** Which of those pages is open. */
+	workItemsActive?: "pull-requests" | "issues" | null;
+	/** What waits on the signed-in user in each: the badge. Zero shows none. */
+	waitingOnYou?: { readonly pullRequests: number; readonly issues: number };
+	/** Reads the page ahead when the pointer or focus reaches its entry. */
+	onWorkItemsIntent?: () => void;
 	/** Opens the full-page Memory view (graph and list). */
 	onOpenMemory?: () => void;
 	memoryActive?: boolean;
@@ -151,6 +160,10 @@ export function ProjectSidebar({
 	onOpenSettings,
 	projectChats = [],
 	onSelectChatInProject,
+	onOpenWorkItems,
+	workItemsActive = null,
+	waitingOnYou,
+	onWorkItemsIntent,
 	onOpenMemory,
 	memoryActive = false,
 	onChatIntent,
@@ -577,6 +590,45 @@ export function ProjectSidebar({
 					</div>
 					{onOpenMemory ? (
 						<nav className="sidebar-nav" aria-label="Workspace">
+							{onOpenWorkItems
+								? (
+										[
+											["issues", "Issues", CircleDot],
+											["pull-requests", "Pull requests", GitPullRequest],
+										] as const
+									).map(([kind, label, Icon]) => {
+										const waiting =
+											kind === "issues"
+												? (waitingOnYou?.issues ?? 0)
+												: (waitingOnYou?.pullRequests ?? 0);
+										return (
+											<button
+												key={kind}
+												type="button"
+												className="sidebar-nav-item"
+												aria-current={
+													workItemsActive === kind ? "page" : undefined
+												}
+												onPointerEnter={onWorkItemsIntent}
+												onFocus={onWorkItemsIntent}
+												onClick={() => onOpenWorkItems(kind)}
+											>
+												<Icon size={16} strokeWidth={1.5} />
+												{label}
+												{waiting ? (
+													<span
+														className="sidebar-nav-badge"
+														role="img"
+														aria-label={`${waiting} waiting on you`}
+														title="Waiting on you"
+													>
+														{waiting > 99 ? "99+" : waiting}
+													</span>
+												) : null}
+											</button>
+										);
+									})
+								: null}
 							<button
 								type="button"
 								className="sidebar-nav-item"

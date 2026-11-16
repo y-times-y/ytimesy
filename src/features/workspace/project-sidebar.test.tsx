@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Project } from "#/domain/projects";
@@ -35,7 +36,11 @@ const projectChats = [
 	},
 ];
 
-function render(stored: string | null, hydrated = true) {
+function render(
+	stored: string | null,
+	hydrated = true,
+	extra: Partial<ComponentProps<typeof ProjectSidebar>> = {},
+) {
 	(globalThis as { window?: unknown }).window = {
 		localStorage: {
 			getItem: (key: string) => (key === SIDEBAR_SORT_KEY ? stored : null),
@@ -57,6 +62,7 @@ function render(stored: string | null, hydrated = true) {
 				projectChats={projectChats}
 				onOpenMemory={() => undefined}
 				memoryActive
+				{...extra}
 			/>
 		</RenderAsHydrated>,
 	);
@@ -64,6 +70,43 @@ function render(stored: string | null, hydrated = true) {
 
 afterEach(() => {
 	delete (globalThis as { window?: unknown }).window;
+});
+
+describe("left sidebar: Issues and Pull requests", () => {
+	const open = () => undefined;
+	it("lists Issues and Pull requests above Memory", () => {
+		const html = render(null, true, { onOpenWorkItems: open });
+		const issues = html.indexOf(">Issues");
+		const pulls = html.indexOf(">Pull requests");
+		const memory = html.indexOf(">Memory</button>");
+		expect(issues).toBeGreaterThan(-1);
+		expect(issues).toBeLessThan(pulls);
+		expect(pulls).toBeLessThan(memory);
+	});
+	it("shows no badge until something waits on the user", () => {
+		const html = render(null, true, {
+			onOpenWorkItems: open,
+			waitingOnYou: { pullRequests: 0, issues: 0 },
+		});
+		expect(html).not.toContain("sidebar-nav-badge");
+	});
+	it("badges only what waits on the user, and marks the open page", () => {
+		const html = render(null, true, {
+			onOpenWorkItems: open,
+			workItemsActive: "pull-requests",
+			waitingOnYou: { pullRequests: 3, issues: 0 },
+		});
+		expect(html.match(/sidebar-nav-badge/g)).toHaveLength(1);
+		expect(html).toContain('aria-label="3 waiting on you"');
+		expect(html).toMatch(
+			/aria-current="page"[^>]*>(?:<svg[^>]*>.*?<\/svg>)Pull requests/s,
+		);
+	});
+	it("is absent where the page cannot open", () => {
+		const html = render(null);
+		expect(html).not.toContain("Pull requests");
+		expect(html).not.toContain(">Issues");
+	});
 });
 
 describe("left sidebar", () => {

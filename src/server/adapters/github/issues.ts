@@ -52,16 +52,31 @@ export async function listIssues(
 ): Promise<IssueSummary[]> {
 	const { owner, repo } = repositoryOwnerName(fullName);
 	const github = githubClient(token);
-	const data = await github.paginate(github.issues.listForRepo, {
-		owner,
-		repo,
-		state,
-		sort: "updated",
-		per_page: 100,
-	});
+	const [data, viewer] = await Promise.all([
+		github.paginate(github.issues.listForRepo, {
+			owner,
+			repo,
+			state,
+			sort: "updated",
+			per_page: 100,
+		}),
+		signedInLogin(github),
+	]);
 	return data
 		.filter((issue) => !issue.pull_request)
-		.map((issue) => issueSummary(issue as GithubIssue));
+		.map((issue) => {
+			const summary = issueSummary(issue as GithubIssue);
+			const mine = viewer?.toLowerCase();
+			return {
+				...summary,
+				waiting:
+					summary.state === "open" &&
+					Boolean(mine) &&
+					summary.assignees.some(
+						(person) => person.login.toLowerCase() === mine,
+					),
+			};
+		});
 }
 
 /** Everything the Issues panel shows for one issue. */

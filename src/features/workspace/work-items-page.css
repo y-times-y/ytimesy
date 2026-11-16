@@ -1,0 +1,92 @@
+.work-page {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+	width: 100%;
+	max-width: 1280px;
+	margin: 0 auto;
+	padding: 28px 24px 0;
+	box-sizing: border-box;
+}
+.work-page-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 0 0 12px;
+}
+.work-page-header h1 {
+	margin: 0;
+	font-size: 20px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+.work-page-repo {
+	color: #8a8a8a;
+	font-size: 12px;
+}
+.work-back {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px 4px 4px;
+	border: 0;
+	border-radius: 6px;
+	background: none;
+	color: #bbb;
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+.work-back:hover {
+	background: #ffffff0a;
+	color: #eee;
+}
+.work-page-body {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+	border: 1px solid #ffffff12;
+	border-bottom: 0;
+	border-radius: 10px 10px 0 0;
+	overflow: hidden;
+	background: #101010;
+}
+.work-page-body > .pr {
+	flex: 1;
+	min-height: 0;
+	width: 100%;
+	max-width: none;
+}
+.work-repo-filter {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 8px 0 10px;
+	border: 1px solid #ffffff1f;
+	border-radius: 7px;
+	background: #161616;
+	color: #ccc;
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.work-repo-filter:hover {
+	background: #1d1d1d;
+	color: #eee;
+}
+.work-repo-menu {
+	min-width: 200px;
+}
+.gh-table-repo {
+	color: #aaa;
+	white-space: nowrap;
+}
+.gh-partial {
+	margin: 0;
+	padding: 6px 14px;
+	color: #d6a65f;
+	font-size: 12px;
+}
