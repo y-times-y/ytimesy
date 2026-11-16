@@ -386,9 +386,32 @@ VM, and the object is not woken for them.
   (`src/domain/claude-box-tools.ts`) decides, for the box and for the
   timeline alike.
 - **Not offered at all** (all on the edge, as before) when the turn has
-  project secrets (their values would have to be on the box to be redacted),
   repository tool hooks (`toolHooksConfigured`), a read-only helper, a
-  non-lean surface, or no runner box.
+  non-lean surface, or no runner box; or runtime secrets and a VM that
+  cannot redact them itself (below).
+
+**Runtime secrets are redacted on the VM** (`src/domain/vm-secret-redaction.ts`,
+2026-11-16). Their values are already on the VM, in the env file every
+command sources (`/tmp/ytimesy-secrets/agent.env`: `export NAME='value'`
+lines and `YTIMESY_REDACTED_SECRETS` naming the runtime ones), and never go
+to the box, nor a hash of them. For a turn with runtime secrets the grant
+first probes the VM (the env file is readable and names runtime secrets,
+python3 runs the filter); if not, no grant and the edge serves the tools as
+before. With a grant (`redactOnVm` in `box-tools.json`), the box wraps every
+command it runs on the VM (`identity-machines.ts`): stdout and stderr go to
+a private temporary directory there, and a Python port of `secretForms`
+(same forms: as written, JSON-escaped, URL-encoded, hex, base64/base64url
+and the three base64 alignments, longest first, `[REDACTED]`) replaces them
+before anything is sent; each form is also matched JSON-escaped, because
+the tool helpers print JSON the edge decodes before redacting. The box
+learns only how many were replaced. A missing count (filter missing, cut off
+by a provider time limit) fails the call with no output. An edit reads the
+whole file and writes it back, which would put `[REDACTED]` on disk: a call
+whose output was redacted is refused its first write and handed to the edge
+(only reads ran), which edits the real text. Differences from the edge:
+the box redacts before its own truncation (search results, pages), so a cut
+can fall a few characters elsewhere; a command the provider kills at its
+time limit shows no partial output.
 
 **The grant, per run** (`claude-box-tool-grant.ts`, `box-tool-identity.ts`).
 At each launch the edge deletes the turn's previous identity, starts the VM
@@ -426,6 +449,10 @@ turns that are settled or whose lease lapsed 3 minutes ago
   on the same box run as the same Unix user and could read a run's files
   before the runner deletes them, or its process memory; this is the same
   exposure the per-turn Claude grant already has there.
+- The identity token can run any command on the VM, so a compromised box
+  could read the env file directly: VM-side redaction keeps the values out
+  of the box's normal flow, not out of reach of a hostile one. Before it,
+  a turn with runtime secrets got no token at all.
 - Results are redacted on the box of the turn's VM tokens (machine git,
   ~/memory) known at launch. A token placed on the VM after the run started
   (the memory clone finishing late) is not in that list in phase 2a.

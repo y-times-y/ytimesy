@@ -132,6 +132,11 @@ export async function runClaudeCodeTurnStep(input: {
 			readonly shape: LeanToolShape;
 			readonly redact: () => readonly string[];
 			/**
+			 * The turn has runtime secrets: the box is granted only when the VM
+			 * can redact them itself (vm-secret-redaction.ts).
+			 */
+			readonly redactOnVm: boolean;
+			/**
 			 * Checked before each grant: false (repository tool hooks, say)
 			 * keeps the run's tools on the edge.
 			 */
@@ -238,6 +243,7 @@ export async function runClaudeCodeTurnStep(input: {
 									machines,
 									vm,
 									store: boxTools.store,
+									redactOnVm: boxTools.redactOnVm,
 								});
 								if (grant) {
 									boxToolGrantVms.set(input.turnId, grant.vmId);

@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { Freestyle } from "freestyle";
 import type { BackgroundJob } from "#/domain/background-job";
 import { claudeBoxToolsEnabled } from "#/domain/claude-box-tools";
+import { failAbandonedHelperDrafts } from "../adapters/agent-sessions";
 import {
 	clearTurnBoxToolIdentity,
 	compactSettledTurns,
@@ -105,6 +106,8 @@ export async function deliverBackgroundJob(
 						dispatchReleasableHeldSends(),
 						// VM grants of Claude runner boxes whose turn no longer runs
 						// (their tokens never expire; deleting the identity revokes them).
+						// Helpers whose start failed before a turn was queued.
+						failAbandonedHelperDrafts(),
 						// Off with box tools off; bookkeeping never fails the job.
 						claudeBoxToolsEnabled(process.env)
 							? sweepClaudeBoxToolIdentities({

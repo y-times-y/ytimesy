@@ -1,4 +1,8 @@
 import type { WorkspaceId } from "#/domain/ids";
+import {
+	vmRedactionProbe,
+	vmRedactionReady,
+} from "#/domain/vm-secret-redaction";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
@@ -29,6 +33,8 @@ export type ClaudeBoxToolGrant = {
 	readonly linuxUser: string;
 	/** The identity's token: never logged, only written to the run's input file. */
 	readonly token: string;
+	/** The box's commands have their output redacted on the VM (vm-secret-redaction.ts). */
+	readonly redactOnVm?: true;
 };
 
 /** A Linux user name as `id -un` prints it. */
@@ -52,12 +58,18 @@ async function revokeCurrent(
 /**
  * The grant for a run about to launch, or null: the provider has no
  * identities, a previous identity could not be deleted, the VM did not
- * start, or the mint failed.
+ * start, the mint failed, or the turn has runtime secrets (`redactOnVm`)
+ * and the VM cannot redact them itself (no readable env file naming them,
+ * no python3): their values never go to the box, so the edge serves the
+ * tools and redacts as before.
  */
 export async function grantClaudeBoxTools(input: {
 	readonly machines: WorkspaceMachines;
 	readonly vm: WorkspaceId;
 	readonly store: BoxToolIdentityStore;
+	readonly redactOnVm?: boolean;
+	/** Tests only: the VM's env file (AGENT_SECRETS_ENV_PATH otherwise). */
+	readonly envPath?: string;
 }): Promise<ClaudeBoxToolGrant | null> {
 	const identities = input.machines.boxToolIdentities;
 	if (!identities) return null;
@@ -72,8 +84,21 @@ export async function grantClaudeBoxTools(input: {
 		const linuxUser = probe.stdout.trim();
 		if (probe.exitCode !== 0 || !LINUX_USER.test(linuxUser))
 			throw new Error("the VM's default Linux user could not be read");
+		if (
+			input.redactOnVm &&
+			!vmRedactionReady(
+				await input.machines.exec(vm, vmRedactionProbe(input.envPath), 30_000),
+			)
+		)
+			throw new Error("the VM cannot redact the project's secrets itself");
 		const grant = await identities.mint(vm, linuxUser, input.store.record);
-		return grant ? { vmId: vm, linuxUser, token: grant.token } : null;
+		if (!grant) return null;
+		return {
+			vmId: vm,
+			linuxUser,
+			token: grant.token,
+			...(input.redactOnVm ? { redactOnVm: true as const } : {}),
+		};
 	} catch (error) {
 		console.warn("Claude box tools were not granted; the edge serves them.", {
 			vm: input.vm,
