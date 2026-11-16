@@ -74,6 +74,7 @@ const feed = settings.feed?.url && feedGrant && typeof WebSocket === "function"
 	? createFeed({ url: settings.feed.url, turnId: settings.feed.turnId, run: settings.feed.run, grant: feedGrant })
 	: null;
 let finished = false;
+let failed = false;
 try {
 	for await (const message of query({ prompt: read("prompt"), options })) {
 		if (message.type === "system" && message.subtype === "init" && /^[a-f0-9-]{36}$/i.test(message.session_id ?? ""))
@@ -84,9 +85,11 @@ try {
 		if (message.type === "result") finished = true;
 	}
 } catch (error) {
-	await feed?.finish(1);
-	throw error;
+	// Written before the feed's goodbye (which can take seconds): the step
+	// classifies the run's failure from this text.
+	process.stderr.write(String(error?.stack ?? error) + "\\n");
+	failed = true;
 }
-process.exitCode = finished ? 0 : 1;
+process.exitCode = finished && !failed ? 0 : 1;
 await feed?.finish(process.exitCode);
 `;

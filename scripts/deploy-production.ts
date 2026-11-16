@@ -363,6 +363,10 @@ const webVars: Record<string, string> = Object.fromEntries(
 		String(value),
 	]),
 );
+// The per-user push hub's users (src/domain/user-hub.ts): the web Worker reads
+// them from its vars, the edge executor (which feeds the hubs) gets the same.
+if (webVars.YTIMESY_USER_HUB_USERS !== undefined)
+	secrets.YTIMESY_USER_HUB_USERS = webVars.YTIMESY_USER_HUB_USERS;
 // The web hands background jobs (environment setup included) to the edge over
 // signed HTTPS, as the development server wires it (development-server.ts);
 // unset, a new project's setup is never handed off and stays queued. A name
