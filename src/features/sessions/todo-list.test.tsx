@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AgentTodo } from "#/domain/agent-todos";
+import { ChatRefreshingContext } from "./chat-refreshing";
 import { TodoList } from "./todo-list";
 
 const todos: AgentTodo[] = [
@@ -25,5 +26,17 @@ describe("TodoList", () => {
 		expect(renderToStaticMarkup(<TodoList todos={todos} />)).toContain(
 			"todo-status-spin",
 		);
+	});
+});
+
+describe("TodoList while the chat is refreshing", () => {
+	it("does not spin a todo from a saved copy that may be old", () => {
+		const html = renderToStaticMarkup(
+			<ChatRefreshingContext.Provider value={true}>
+				<TodoList todos={todos} live />
+			</ChatRefreshingContext.Provider>,
+		);
+		expect(html).not.toContain("todo-status-spin");
+		expect(html).toContain('aria-label="Not finished"');
 	});
 });

@@ -5378,3 +5378,32 @@ details.environment-build[open] > summary .session-activity-chevron {
 .overview-todos [data-idle] .todo-status {
 	color: #686868;
 }
+
+/* The open chat shows the browser's saved copy until the server's read lands:
+   a small cue, shown only if that takes a moment, and it takes no space. */
+.chat-updating {
+	position: absolute;
+	top: 10px;
+	left: 50%;
+	z-index: 6;
+	transform: translateX(-50%);
+	padding: 3px 10px;
+	border: 1px solid #ffffff14;
+	border-radius: 999px;
+	background: #1a1a1a;
+	color: #a8a8a8;
+	font-size: 12px;
+	opacity: 0;
+	pointer-events: none;
+	animation: chat-updating-in 160ms ease-out 450ms forwards;
+}
+@keyframes chat-updating-in {
+	to {
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.chat-updating {
+		animation-duration: 1ms;
+	}
+}

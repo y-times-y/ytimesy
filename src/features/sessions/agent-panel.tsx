@@ -9,6 +9,7 @@ import {
 	metricText,
 } from "#/domain/agent-panel";
 import { AgentIcon } from "./agent-icon";
+import { useChatRefreshing } from "./chat-refreshing";
 
 /**
  * The chat's agents under the composer, one row each: Main, the helpers of
@@ -31,6 +32,7 @@ export function AgentPanel({
 }) {
 	const [expanded, setExpanded] = useState(false);
 	const [showFinished, setShowFinished] = useState(false);
+	const refreshing = useChatRefreshing();
 	const live = [lead, ...helpers, ...background].some(
 		(row) => row.status === "working",
 	);
@@ -79,10 +81,12 @@ export function AgentPanel({
 					<span>
 						{agents.length} {agents.length === 1 ? "agent" : "agents"}
 					</span>
-					{working ? (
+					{refreshing ? (
+						<span className="agent-panel-summary-meta">Updating…</span>
+					) : working ? (
 						<span className="agent-panel-summary-meta">{working} working</span>
 					) : null}
-					{background.length ? (
+					{background.length && !refreshing ? (
 						<span className="agent-panel-summary-meta">
 							{runningBackground
 								? `${runningBackground} background running`
