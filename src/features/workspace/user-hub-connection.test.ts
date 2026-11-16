@@ -6,6 +6,8 @@ import { hubStateMessage, USER_HUB_PING_MS } from "#/domain/user-hub";
 import {
 	backgroundTurnPollIntervalMs,
 	HUB_FAILURES_BEFORE_POLLING,
+	HUB_PROBE_AFTER_AWAY_MS,
+	HUB_PROBE_REPLY_MS,
 	hubReadsToMake,
 	openUserHub,
 } from "./user-hub-connection";
@@ -172,5 +174,74 @@ describe("openUserHub", () => {
 		expect(sockets[0].closed).toBe(true);
 		vi.advanceTimersByTime(60_000);
 		expect(sockets).toHaveLength(1);
+	});
+
+	describe("coming back to a tab that was away", () => {
+		function awayHarness() {
+			const sockets: FakeSocket[] = [];
+			const events: string[] = [];
+			let wake: (awayMs: number) => void = () => {};
+			openUserHub({
+				location,
+				createSocket: () => {
+					const socket = new FakeSocket();
+					sockets.push(socket);
+					return socket;
+				},
+				onState: (message) =>
+					events.push(`state:${message.full ? "full" : "change"}`),
+				onOpen: () => events.push("open"),
+				onDrop: () => events.push("drop"),
+				watchReturn: (handler) => {
+					wake = handler;
+					return () => {};
+				},
+			});
+			const deliver = (socket: FakeSocket) => {
+				socket.onopen?.();
+				socket.onmessage?.({ data: hubStateMessage({}, true) });
+			};
+			return { sockets, events, deliver, wake: (ms: number) => wake(ms) };
+		}
+
+		it("asks a socket that was open for an answer, and keeps it when it answers", () => {
+			const { sockets, events, deliver, wake } = awayHarness();
+			deliver(sockets[0]);
+			wake(HUB_PROBE_AFTER_AWAY_MS);
+			expect(sockets[0].sent).toEqual(["ping"]);
+			sockets[0].onmessage?.({ data: "pong" });
+			vi.advanceTimersByTime(HUB_PROBE_REPLY_MS + 1);
+			expect(sockets).toHaveLength(1);
+			expect(events).toEqual(["open", "state:full"]);
+		});
+
+		it("reconnects at once when the socket slept through the absence", () => {
+			const { sockets, events, deliver, wake } = awayHarness();
+			deliver(sockets[0]);
+			wake(HUB_PROBE_AFTER_AWAY_MS + 60_000);
+			vi.advanceTimersByTime(HUB_PROBE_REPLY_MS + 1);
+			expect(events).toEqual(["open", "state:full", "drop"]);
+			vi.advanceTimersByTime(2_000);
+			expect(sockets).toHaveLength(2);
+			deliver(sockets[1]);
+			// The whole map of the new socket is what re-reads what was missed.
+			expect(events.slice(3)).toEqual(["open", "state:full"]);
+		});
+
+		it("does nothing for a short absence", () => {
+			const { sockets, deliver, wake } = awayHarness();
+			deliver(sockets[0]);
+			wake(HUB_PROBE_AFTER_AWAY_MS - 1);
+			expect(sockets[0].sent).toEqual([]);
+		});
+
+		it("connects now when a reconnect was waiting on a slowed timer", () => {
+			const { sockets, deliver, wake } = awayHarness();
+			deliver(sockets[0]);
+			sockets[0].onclose?.({ code: 1006 });
+			expect(sockets).toHaveLength(1);
+			wake(Number.POSITIVE_INFINITY);
+			expect(sockets).toHaveLength(2);
+		});
 	});
 });
