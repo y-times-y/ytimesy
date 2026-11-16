@@ -26,6 +26,35 @@ const tools = {
 };
 
 describe("Claude Code tool bridge", () => {
+	it("preserves the model tool ID across a bridge reset instead of assigning a new execution identity", async () => {
+		const execute = vi.fn(
+			async (_input: unknown, options: { toolCallId: string }) =>
+				options.toolCallId,
+		);
+		for (let restart = 0; restart < 2; restart++) {
+			const reply = requestClaudeCodeCall(
+				"identity-turn",
+				"probe",
+				{},
+				undefined,
+				undefined,
+				"toolu_stable_z9",
+			);
+			const [call] = takeClaudeCodeCalls("identity-turn");
+			await runClaudeCodeCall("identity-turn", call, {
+				tools: { probe: tool({ inputSchema: z.object({}), execute }) },
+				onEvent: async () => undefined,
+				signal: new AbortController().signal,
+			});
+			expect(await reply).toEqual({
+				text: "ccmcp-toolu_stable_z9",
+				isError: false,
+			});
+			closeClaudeCodeBridge("identity-turn");
+		}
+		// Identity transport only: this fake tool has no durable execution journal.
+		expect(execute).toHaveBeenCalledTimes(2);
+	});
 	it("hands an image result to Claude as an image block, not its base64 as text", async () => {
 		const viewer = tool({
 			inputSchema: z.object({}),
