@@ -491,8 +491,13 @@ async function recoverLocked(
 	try {
 		await client.query("begin");
 		await client.query("set local idle_in_transaction_session_timeout='120s'");
+		// Locked without its transcript: the backup below copies it inside the
+		// database, so it never travels to the Worker and back.
 		const selected = await client.query(
-			`select * from agent_session where user_id=$1 and id=$2 and project_id=$3 for update`,
+			`select id,project_id,workspace_id,harness,title,listed_model_id,turn_status,
+			  selected_branch,working_branch,task_branch,base_branch,provider_ref,
+			  parent_session_id,agent_role
+			 from agent_session where user_id=$1 and id=$2 and project_id=$3 for update`,
 			[userId, input.sessionId, input.projectId],
 		);
 		const row = selected.rows[0];
@@ -520,28 +525,22 @@ async function recoverLocked(
 		);
 		if (!point)
 			throw new RecoveryRefused("This message has no saved recovery point.");
-		// Retain the current conversation before replacing it; no original API turn is deleted.
-		const current = await client.query(
-			`select messages,model_id,connection_revision from api_turn where session_id=$1 and user_id=$2 order by created_at desc limit 1`,
-			[input.sessionId, userId],
-		);
+		// Retain the current conversation before replacing it; no original API
+		// turn is deleted. The transcript and the latest turn's messages are
+		// copied by the database (they were read out and written back before).
 		const backupId = `conversation-backup:${randomUUID()}`;
 		await client.query(
-			`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,completed_at) values($1,$2,'done',$3::jsonb,now())`,
-			[
-				input.sessionId,
-				backupId,
-				jsonbText({
-					id: backupId,
-					ok: true,
-					result: {
-						items: row.items,
-						messages: current.rows[0]?.messages ?? [],
-						modelId: current.rows[0]?.model_id,
-						revision: current.rows[0]?.connection_revision,
-					},
-				}),
-			],
+			`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,completed_at)
+			 select s.id,$2,'done',jsonb_build_object('id',$2::text,'ok',true,'result',
+			   jsonb_build_object('items',s.items,'messages',coalesce(t.messages,'[]'::jsonb))
+			   || case when t.model_id is null then '{}'::jsonb else jsonb_build_object('modelId',t.model_id) end
+			   || case when t.connection_revision is null then '{}'::jsonb else jsonb_build_object('revision',t.connection_revision) end),
+			  now()
+			 from agent_session s
+			 left join lateral (select messages,model_id,connection_revision from api_turn
+			   where session_id=s.id and user_id=$3 order by created_at desc limit 1) t on true
+			 where s.id=$1 and s.user_id=$3`,
+			[input.sessionId, backupId, userId],
 		);
 		let id = input.sessionId;
 		if (fork) {

@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { ProjectWorkspace } from "../../domain/project-workspace";
 import { redactSecrets } from "../../domain/project-workspace";
+import { hubTopic } from "../../domain/user-hub";
 import { database } from "./database";
+import { noteUserHub } from "./user-hub-notes";
+
+/** The user's open tabs read the project's environment again (their hub). */
+function noted(workspace: ProjectWorkspace) {
+	noteUserHub(workspace.userId, [hubTopic.workspace(workspace.projectId)]);
+	return workspace;
+}
 
 interface WorkspaceRow {
 	id: string;
@@ -88,7 +96,7 @@ export async function insertQueuedWorkspace(
 	);
 	if (!result.rows[0])
 		throw new Response("Workspace is not available.", { status: 403 });
-	return toWorkspace(result.rows[0]);
+	return noted(toWorkspace(result.rows[0]));
 }
 
 /** Re-queues a failed workspace, or restarts the stall clock of a queued one being retried. */
@@ -99,7 +107,7 @@ export async function markWorkspaceQueued(userId: string, workspaceId: string) {
 		 returning ${WORKSPACE_COLUMNS}`,
 		[workspaceId, userId],
 	);
-	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
+	return result.rows[0] ? noted(toWorkspace(result.rows[0])) : null;
 }
 
 export async function saveTemplateSnapshot(
@@ -112,7 +120,7 @@ export async function saveTemplateSnapshot(
 		 returning ${WORKSPACE_COLUMNS}`,
 		[workspaceId, snapshotId],
 	);
-	return toWorkspace(result.rows[0]);
+	return noted(toWorkspace(result.rows[0]));
 }
 
 export async function saveWorkspaceStatus(
@@ -126,7 +134,7 @@ export async function saveWorkspaceStatus(
 		 returning ${WORKSPACE_COLUMNS}`,
 		[workspaceId, status, errorMessage],
 	);
-	return toWorkspace(result.rows[0]);
+	return noted(toWorkspace(result.rows[0]));
 }
 
 /** Projects idle longer than this are not refreshed hourly; their next chat's build catches up. */

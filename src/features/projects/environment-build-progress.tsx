@@ -21,7 +21,13 @@ import {
 	isSetupRequestMessage,
 	PROJECT_SETUP_NAME,
 } from "#/domain/environment-setup";
+import { hubTopic } from "#/domain/user-hub";
 import { useAutoGrow } from "../app/use-auto-grow";
+import {
+	pollUnlessPushed,
+	useHubDelivery,
+	useHubRead,
+} from "../workspace/user-hub-store";
 import { requestJson } from "./api";
 
 /** How often the live view reads a running build (ms). */
@@ -38,21 +44,31 @@ export function environmentProgressQuery(projectId: string) {
 }
 
 /**
- * The newest build's steps. Read only when shown, and polled only while a
- * build runs (or `waiting` says one is about to start).
+ * The newest build's steps. Read only when shown. While the user's hub
+ * pushes, read again when the project's environment changes (a step starts,
+ * ends or prints); otherwise polled while a build runs (or `waiting` says
+ * one is about to start).
  */
 export function useEnvironmentProgress(
 	projectId: string,
 	options: { enabled: boolean; waiting?: boolean },
 ) {
-	return useQuery({
+	const delivery = useHubDelivery();
+	const enabled = options.enabled && Boolean(projectId);
+	const progress = useQuery({
 		...environmentProgressQuery(projectId),
-		enabled: options.enabled && Boolean(projectId),
+		enabled,
 		refetchInterval: (query) =>
 			query.state.data?.build?.status === "running" || options.waiting
-				? BUILD_PROGRESS_POLL_MS
+				? pollUnlessPushed(delivery, BUILD_PROGRESS_POLL_MS)
 				: false,
 	});
+	useHubRead(
+		[hubTopic.workspace(projectId)],
+		() => void progress.refetch({ cancelRefetch: false }),
+		{ enabled },
+	);
+	return progress;
 }
 
 /** Re-renders every second while `live`, for running durations. */

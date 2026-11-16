@@ -15,7 +15,7 @@ import { AGENT_TOOL } from "#/domain/subagent";
 import { subagentTree } from "#/domain/subagent-tree";
 import {
 	type AgentSessionRecord,
-	descendantAgentSessions,
+	descendantAgentSessionMetadata,
 } from "../adapters/agent-sessions";
 import { childReportEventsSince } from "../adapters/agent-task-events";
 import { hasActiveApiTurn } from "../adapters/api-turns";
@@ -56,10 +56,11 @@ const POLL_MS = 3_000;
 export type FusionLeadDeps = {
 	readonly now: () => number;
 	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+	/** The lead's children without their transcripts (read at every wait). */
 	readonly children: (
 		userId: string,
 		leadId: string,
-	) => Promise<readonly AgentSessionRecord[]>;
+	) => Promise<readonly Omit<AgentSessionRecord, "items">[]>;
 	readonly reportEvents: typeof childReportEventsSince;
 	readonly stage: typeof stageServerPeerMessage;
 	readonly saveState: typeof saveSidekickState;
@@ -84,7 +85,7 @@ const defaultDeps: FusionLeadDeps = {
 			signal.addEventListener("abort", done, { once: true });
 		}),
 	children: async (userId, leadId) =>
-		(await descendantAgentSessions(userId, leadId)).filter(
+		(await descendantAgentSessionMetadata(userId, leadId)).filter(
 			(child) => child.parentSessionId === leadId,
 		),
 	reportEvents: (...args) => childReportEventsSince(...args),
@@ -97,7 +98,7 @@ const defaultDeps: FusionLeadDeps = {
 };
 
 type Sidekick = {
-	readonly session: AgentSessionRecord;
+	readonly session: Omit<AgentSessionRecord, "items">;
 	readonly state: SidekickState;
 	readonly live: boolean;
 };

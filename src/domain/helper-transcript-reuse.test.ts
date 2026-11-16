@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
 	type AgentTaskActivity,
 	applyItemsDelta,
+	helperHasOlderItems,
 	knownHelperRevisions,
 	mergeAgentTaskActivity,
 	publicItemsWithPositions,
 	reusableHelperIds,
+	withOlderHelperPage,
 } from "./child-task-activity";
 
 const helper = (id: string, parent: string, live = false) => ({
@@ -213,5 +215,113 @@ describe("helper transcript deltas", () => {
 			{ ...delta, subagent: { steps: 9 } as never },
 		]);
 		expect(fresher?.[0]?.subagent).toMatchObject({ steps: 9 });
+	});
+});
+
+describe("a helper read as its last page", () => {
+	const msg = (id: string, text = id) =>
+		({ kind: "agentMessage", id, text }) as never;
+
+	it("numbers a page's items from the stored position it starts at", () => {
+		const shown = publicItemsWithPositions([msg("c"), msg("d")], 7);
+		expect(shown.positions).toEqual([7, 8]);
+		expect(helperHasOlderItems({ itemsFrom: 7 })).toBe(true);
+		expect(helperHasOlderItems({})).toBe(false);
+	});
+
+	it("leaves out delta rows above the page it holds (they load with their page)", () => {
+		const applied = applyItemsDelta(
+			{ items: [msg("c")], positions: [7], from: 7 },
+			{
+				base: "5",
+				count: 9,
+				rows: [
+					// A background command's card closing in an older turn.
+					{ position: 2, item: msg("old", "closed") },
+					{ position: 8, item: msg("d") },
+				],
+			},
+		);
+		expect(applied?.positions).toEqual([7, 8]);
+		expect(applied?.items.map((item) => item.id)).toEqual(["c", "d"]);
+	});
+
+	it("keeps the page's start across a delta, and loaded older items across a new page read", () => {
+		const held = [
+			task("h", {
+				items: [msg("a"), msg("b"), msg("c")],
+				itemPositions: [3, 4, 7],
+				itemsFrom: 3,
+				itemsRev: "5",
+			}),
+		];
+		const delta = mergeAgentTaskActivity(held, [
+			task("h", {
+				itemsRev: "6",
+				itemsDelta: {
+					base: "5",
+					count: 9,
+					rows: [{ position: 8, item: msg("d") }],
+				},
+			}),
+		]);
+		expect(delta?.[0]).toMatchObject({
+			itemsFrom: 3,
+			itemPositions: [3, 4, 7, 8],
+		});
+		// A page read again (fresh) starts at 7: the older items above it stay.
+		const page = mergeAgentTaskActivity(delta ?? [], [
+			task("h", {
+				items: [msg("c"), msg("d")],
+				itemPositions: [7, 8],
+				itemsFrom: 7,
+				itemsRev: "6",
+			}),
+		]);
+		expect(page?.[0]?.items.map((item) => item.id)).toEqual([
+			"a",
+			"b",
+			"c",
+			"d",
+		]);
+		expect(page?.[0]).toMatchObject({
+			itemsFrom: 3,
+			itemPositions: [3, 4, 7, 8],
+		});
+		// A page that no longer meets what the browser holds stands alone.
+		const moved = mergeAgentTaskActivity(delta ?? [], [
+			task("h", {
+				items: [msg("x")],
+				itemPositions: [20],
+				itemsFrom: 20,
+				itemsRev: "9",
+			}),
+		]);
+		expect(moved?.[0]).toMatchObject({ itemsFrom: 20, itemPositions: [20] });
+	});
+
+	it("puts an older page above the items held, only where they still start", () => {
+		const held = task("h", {
+			items: [msg("c")],
+			itemPositions: [7],
+			itemsFrom: 7,
+		});
+		const older = {
+			before: 7,
+			itemsFrom: 0,
+			items: [msg("a"), msg("b")],
+			itemPositions: [0, 4],
+		};
+		const merged = withOlderHelperPage(held, older);
+		expect(merged.items.map((item) => item.id)).toEqual(["a", "b", "c"]);
+		expect(merged).toMatchObject({ itemsFrom: 0, itemPositions: [0, 4, 7] });
+		expect(helperHasOlderItems(merged)).toBe(false);
+		// The view was read again meanwhile and starts elsewhere: unchanged.
+		const moved = task("h", {
+			items: [msg("z")],
+			itemPositions: [9],
+			itemsFrom: 9,
+		});
+		expect(withOlderHelperPage(moved, older)).toBe(moved);
 	});
 });

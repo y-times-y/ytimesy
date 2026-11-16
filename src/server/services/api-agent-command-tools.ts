@@ -4,6 +4,8 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { checkExecutionGroups } from "#/domain/check-execution-groups";
 import { sourceEvidenceContentsMatch } from "#/domain/project-source-evidence";
+import { hubTopic } from "#/domain/user-hub";
+import { noteUserHub } from "../adapters/user-hub-notes";
 import {
 	type AgentOutput,
 	type agentOutputArtifacts,
@@ -324,6 +326,8 @@ export function apiAgentCommandTools(
 				throw new Error(
 					"Could not start or observe command. Inspect owned command state before retrying uncertain execution.",
 				);
+			if (background)
+				noteUserHub(input.userId, [hubTopic.commands(input.sessionId)]);
 			return {
 				id,
 				status: "running",
@@ -336,6 +340,9 @@ export function apiAgentCommandTools(
 				...(background ? { background: true } : {}),
 			};
 		}
+		// The agents list shows it running (the user's hub tells the open tabs).
+		if (background)
+			noteUserHub(input.userId, [hubTopic.commands(input.sessionId)]);
 		return {
 			id,
 			...(observeSeconds === undefined

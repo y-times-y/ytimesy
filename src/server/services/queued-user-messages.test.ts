@@ -38,6 +38,9 @@ const mocks = vi.hoisted(() => ({
 	otherSetup: vi.fn(async (..._args: unknown[]) => null as string | null),
 	claimSetup: vi.fn(async (..._args: unknown[]) => null as unknown),
 }));
+vi.mock("../jobs/conversation-delivery", () => ({
+	relayConversationDeliveriesOnce: vi.fn(async () => undefined),
+}));
 vi.mock("../adapters/environment-setup-chats", () => ({
 	markEnvironmentSetupChat: mocks.markSetup,
 	otherProjectSetupChat: mocks.otherSetup,

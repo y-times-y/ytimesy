@@ -1,8 +1,11 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+	BUILD_CHECK_INTERVAL_MS,
+	buildCheckDue,
 	CHUNK_RELOAD_GUARD_MS,
 	chunkReloadAllowed,
 	fullNavigationOnto,
+	HUB_BUILD_CONFIRM_MS,
 	IDLE_BEFORE_RELOAD_MS,
 	isChunkLoadFailure,
 	safeToReload,
@@ -71,4 +74,62 @@ it("reloads for a stale chunk at most once per guard period", () => {
 	expect(chunkReloadAllowed(String(now - CHUNK_RELOAD_GUARD_MS), now)).toBe(
 		true,
 	);
+});
+
+describe("buildCheckDue", () => {
+	const hub = (build?: string, open = true) => ({ open, signals: true, build });
+	it("asks nothing while the hub vouches for this build, even on tab switches", () => {
+		for (const visibilityChange of [true, false])
+			expect(
+				buildCheckDue({
+					hub: hub("b1"),
+					build: "b1",
+					sinceCheckMs: BUILD_CHECK_INTERVAL_MS * 10,
+					visibilityChange,
+				}),
+			).toBe(false);
+	});
+	it("confirms another build the hub reports, backing off while the server lags", () => {
+		const due = (sinceCheckMs: number, unconfirmed: number) =>
+			buildCheckDue({
+				hub: hub("b2"),
+				build: "b1",
+				sinceCheckMs,
+				visibilityChange: false,
+				unconfirmed,
+			});
+		expect(due(HUB_BUILD_CONFIRM_MS, 0)).toBe(true);
+		expect(due(HUB_BUILD_CONFIRM_MS - 1, 0)).toBe(false);
+		expect(due(HUB_BUILD_CONFIRM_MS, 1)).toBe(false);
+		expect(due(2 * HUB_BUILD_CONFIRM_MS, 1)).toBe(true);
+		expect(due(BUILD_CHECK_INTERVAL_MS, 20)).toBe(true);
+	});
+	it("without the hub (or an older one), checks as before", () => {
+		for (const connection of [hub(undefined), hub("b1", false)]) {
+			expect(
+				buildCheckDue({
+					hub: connection,
+					build: "b1",
+					sinceCheckMs: 0,
+					visibilityChange: true,
+				}),
+			).toBe(true);
+			expect(
+				buildCheckDue({
+					hub: connection,
+					build: "b1",
+					sinceCheckMs: BUILD_CHECK_INTERVAL_MS - 1,
+					visibilityChange: false,
+				}),
+			).toBe(false);
+			expect(
+				buildCheckDue({
+					hub: connection,
+					build: "b1",
+					sinceCheckMs: BUILD_CHECK_INTERVAL_MS,
+					visibilityChange: false,
+				}),
+			).toBe(true);
+		}
+	});
 });

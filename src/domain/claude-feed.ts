@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CLAUDE_CODE_PROXY_PREFIX } from "./claude-code-proxy";
+import { LIVE_SOCKET_PING } from "./live-progress-socket";
 
 /**
  * The Claude Code output feed: the process running `claude` on the VM
@@ -11,11 +12,28 @@ import { CLAUDE_CODE_PROXY_PREFIX } from "./claude-code-proxy";
  * before. Offsets are the lines' byte offsets in that file, so the step's
  * cursor means the same in both modes.
  *
- * Runner to object: hello{turnId,run,receivedFrom?}, lines{from,to,entries},
- * beat, exit{status}. Object to runner: ack{receivedTo,mode}, need{from}, stop.
- * Authenticated with the run's grant (the one the MCP route takes), sent as
- * a bearer or, from a WebSocket client that cannot set headers, as the
- * second subprotocol.
+ * Runner to object: hello{turnId,run,receivedFrom?,inbox?}, lines{from,to,
+ * entries}, beat, exit{status}, and the bare text "ping". Object to runner:
+ * ack{receivedTo,mode,ping?,inbox?}, need{from}, stop, mode{mode},
+ * inbox{key}. Authenticated with the run's grant (the one the MCP route
+ * takes), sent as a bearer or, from a WebSocket client that cannot set
+ * headers, as the second subprotocol.
+ *
+ * Both ends keep talking to an older other end across a deploy: the ack of
+ * a hello says what the object understands (`ping`, `inbox`), and the
+ * runner uses only that; an older runner never says `inbox` and keeps
+ * beating, which the object still takes.
+ *
+ * Keep-alive: "ping" is answered "pong" by the runtime's WebSocket
+ * auto-response without waking the object (the room sets that pair for its
+ * viewers); the object reads when it last did so
+ * (getWebSocketAutoResponseTimestamp) as the runner last heard.
+ *
+ * Inbox: the run's hooks used to ask the object over HTTP after every tool
+ * call whether the user sent a queued message. Instead the object tells the
+ * runner the key of the sent messages waiting (claudeInboxKey) whenever it
+ * changes, and the hooks ask over HTTP only when there is a key they have
+ * not fetched (claude-agent-runner.ts).
  */
 export const CLAUDE_CODE_FEED_PATH = `${CLAUDE_CODE_PROXY_PREFIX}/feed`;
 /** The subprotocol the runner offers first and the object selects. */
@@ -30,11 +48,15 @@ export function claudeFeedEnabled(
 	return env.YTIMESY_CLAUDE_FEED === "1";
 }
 
-/** A runner silent this long (it beats every 20 s) is not followed: the step polls. */
+/** A runner silent this long (it pings or beats every 20 s) is not followed: the step polls. */
 export const CLAUDE_FEED_STALE_MS = 60_000;
+/** How long an idle runner waits before it pings (or, to an older object, beats). */
+export const CLAUDE_FEED_BEAT_MS = 20_000;
+/** The keep-alive the object answers without waking: the live viewers' ping. */
+export const CLAUDE_FEED_PING = LIVE_SOCKET_PING;
 /** How long the runner lets non-urgent lines wait before sending them, by mode. */
 export const CLAUDE_FEED_LIVE_MS = 1_000;
-export const CLAUDE_FEED_QUIET_MS = 10_000;
+export const CLAUDE_FEED_QUIET_MS = 30_000;
 /**
  * How long the object lets stored, unread non-urgent lines wait before it
  * wakes the turn's step, by mode. While someone watches, the object shows
@@ -42,7 +64,7 @@ export const CLAUDE_FEED_QUIET_MS = 10_000;
  * so the step need not be awake for every batch.
  */
 export const CLAUDE_FEED_WAKE_LIVE_MS = 10_000;
-export const CLAUDE_FEED_WAKE_QUIET_MS = 20_000;
+export const CLAUDE_FEED_WAKE_QUIET_MS = CLAUDE_FEED_QUIET_MS;
 /** Most lines in one batch. */
 export const CLAUDE_FEED_MAX_ENTRIES = 10_000;
 /** Largest message the object takes from a runner. */
@@ -59,6 +81,8 @@ export const claudeFeedMessage = z.discriminatedUnion("type", [
 		turnId: z.uuid(),
 		run: runNumber,
 		receivedFrom: offset.optional(),
+		/** The runner takes inbox frames (and asks over HTTP only on a new key). */
+		inbox: z.boolean().optional(),
 	}),
 	z.object({
 		type: z.literal("lines"),
@@ -189,6 +213,64 @@ export function feedWakeAt(input: {
 						: CLAUDE_FEED_WAKE_QUIET_MS),
 			);
 	return input.scheduledAt === null ? due : Math.min(due, input.scheduledAt);
+}
+
+/** Most sent messages one inbox key names; more only matter once these are taken. */
+const INBOX_KEY_IDS = 32;
+
+/**
+ * The key of the queued messages the user pressed Send on, from the chat's
+ * timeline items (the room's snapshot lists waiting messages last, marked
+ * queued, and released once sent): their ids in order, "" for none. A
+ * different key means a message the run's hooks have not fetched.
+ */
+export function claudeInboxKey(items: readonly unknown[]) {
+	const ids: string[] = [];
+	for (const item of items) {
+		if (!item || typeof item !== "object") continue;
+		const { kind, id, queued, released } = item as Record<string, unknown>;
+		if (
+			kind === "userMessage" &&
+			queued === true &&
+			released === true &&
+			typeof id === "string"
+		)
+			ids.push(id.slice(0, 128));
+		if (ids.length >= INBOX_KEY_IDS) break;
+	}
+	return ids.join(",");
+}
+
+/** What the object last told a runner that takes inbox frames. */
+export type FeedTold = {
+	readonly mode: ClaudeFeedMode;
+	readonly inbox: string;
+};
+
+/**
+ * The frames that bring a runner up to date: its mode when someone started
+ * or stopped watching, its inbox key when that changed. Outgoing messages
+ * are free; nothing is sent when nothing changed.
+ */
+export function feedSyncFrames(told: FeedTold | null, now: FeedTold) {
+	const frames: (
+		| { type: "mode"; mode: ClaudeFeedMode }
+		| {
+				type: "inbox";
+				key: string;
+		  }
+	)[] = [];
+	if (told?.mode !== now.mode) frames.push({ type: "mode", mode: now.mode });
+	if (told?.inbox !== now.inbox) frames.push({ type: "inbox", key: now.inbox });
+	return frames;
+}
+
+/**
+ * When the runner was last heard: its last message, or the runtime's last
+ * answer to its ping (null: never), whichever is later.
+ */
+export function feedLastHeard(lastSeen: number, pongAt: number | null) {
+	return pongAt !== null && pongAt > lastSeen ? pongAt : lastSeen;
 }
 
 /** The object's record of one run's feed. */

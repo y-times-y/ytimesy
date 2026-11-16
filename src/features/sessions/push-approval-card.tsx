@@ -6,6 +6,8 @@ import {
 	pushApprovalQuestion,
 } from "#/domain/push-approval";
 import type { PushApprovalItem } from "#/domain/session-item";
+import { hubTopic } from "#/domain/user-hub";
+import { useHubDelivery, useHubRead } from "../workspace/user-hub-store";
 import { createPushCardChecker } from "./push-card-checker";
 
 export type PushApprovalActions = {
@@ -48,7 +50,10 @@ export function PushApprovalCard({
 			setState({ answer: shownAnswer, detail: shownDetail });
 	}, [shownAnswer, shownDetail]);
 	// A pending card asks the server when shown, whenever the chat changes
-	// after it, and every 30 s while the tab is visible, until settled.
+	// after it, and until settled: every 30 s while the tab is visible, or,
+	// while the user's hub pushes, when a card of theirs is answered and when
+	// the tab is shown again.
+	const pushed = useHubDelivery() === "push";
 	const checker = useRef<ReturnType<typeof createPushCardChecker> | null>(null);
 	useEffect(() => {
 		if (shownAnswer !== "pending" || !status) return;
@@ -56,14 +61,21 @@ export function PushApprovalCard({
 			status: () => status(item.id),
 			onState: setState,
 			visible: () => document.visibilityState !== "hidden",
+			intervalMs: pushed ? null : undefined,
 		});
 		checker.current = next;
 		void next.start();
+		const shown = () => {
+			if (pushed && document.visibilityState === "visible") void next.check();
+		};
+		document.addEventListener("visibilitychange", shown);
 		return () => {
+			document.removeEventListener("visibilitychange", shown);
 			next.stop();
 			checker.current = null;
 		};
-	}, [item.id, shownAnswer, status]);
+	}, [item.id, shownAnswer, status, pushed]);
+	useHubRead([hubTopic.push], () => void checker.current?.check());
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `revision` is the trigger: it changes with the chat's items and turn status.
 	useEffect(() => {
 		void checker.current?.check();

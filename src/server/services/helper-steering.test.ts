@@ -70,6 +70,22 @@ const input = {
 };
 
 describe("the user steering a helper", () => {
+	it("needs no transcript: the chat and its helpers read as metadata", async () => {
+		const withoutItems = (session: AgentSessionRecord) => {
+			const { items: _items, ...metadata } = session;
+			return metadata as AgentSessionRecord;
+		};
+		const fake = deps(
+			[
+				row("root", null),
+				row("helper", "root", { title: "Build the export" }),
+			].map(withoutItems),
+		);
+		await expect(sendUserMessageToHelper(input, fake)).resolves.toMatchObject({
+			name: 'build-1 ("Build the export")',
+			delivery: "next step",
+		});
+	});
 	it("queues it as agent_send steering from the helper's parent and tells the lead", async () => {
 		const fake = deps([
 			row("root", null),

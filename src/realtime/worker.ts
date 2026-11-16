@@ -15,6 +15,7 @@ import {
 import {
 	type ActiveConversationTurn,
 	conversationPurgeSchema,
+	RETIRED_TURN_MS,
 	TURN_COORDINATION_LEASE_MS,
 	turnControlSchema,
 } from "../domain/conversation-turn-control";
@@ -137,6 +138,8 @@ export class ConversationRoom {
 	>();
 	/** Publications run one at a time: a delta merges into the snapshot the last one left. */
 	private publications: Promise<unknown> = Promise.resolve();
+	/** The host object's listener for a newer snapshot (the chat DO tells its Claude Code runner). */
+	private adopted: (() => void) | null = null;
 	/**
 	 * `schedule` lets a host object that also uses the alarm (the chat DO's turn
 	 * loop) multiplex it; by default the room owns the alarm.
@@ -201,6 +204,14 @@ export class ConversationRoom {
 	}
 	get isPurged() {
 		return this.purged;
+	}
+	/** Called after each newer snapshot is kept; a throwing listener is ignored. */
+	onAdopted(listener: () => void) {
+		this.adopted = listener;
+	}
+	/** The latest snapshot's timeline items (queued messages last), none without one. */
+	latestItems(): readonly unknown[] {
+		return this.latest?.progress.items ?? [];
 	}
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
@@ -549,6 +560,9 @@ export class ConversationRoom {
 				// No viewer: no frame is built and nothing is sent.
 				const viewers = this.viewers();
 				if (viewers.length) this.pushToViewers(viewers, incoming, delta);
+				try {
+					this.adopted?.();
+				} catch {}
 			}
 		}
 		return null;
@@ -595,12 +609,13 @@ export class ConversationRoom {
 				return new Response(null, { status: 409 });
 			}
 			if (action === "release") {
-				retired[input.turnId] = Date.now() + 70_000;
+				retired[input.turnId] = Date.now() + RETIRED_TURN_MS;
 				await storage.put("retired-turns", retired);
 				await storage.delete("active-turn");
 				await this.schedule(null);
 			} else {
-				if (current && !same) retired[current.turnId] = Date.now() + 70_000;
+				if (current && !same)
+					retired[current.turnId] = Date.now() + RETIRED_TURN_MS;
 				await storage.put("retired-turns", retired);
 				const next: ActiveConversationTurn = {
 					...input,
@@ -647,6 +662,49 @@ export class ConversationRoom {
 			return true;
 		});
 	}
+	/**
+	 * The room's lease of this turn, if it still holds that turn under that
+	 * lease (cancelled or not, expired or not); null otherwise.
+	 */
+	async heldTurn(input: { turnId: string; leaseId: string }) {
+		if (this.purged) return null;
+		const current =
+			await this.state.storage.get<ActiveConversationTurn>("active-turn");
+		return current?.turnId === input.turnId && current.leaseId === input.leaseId
+			? current
+			: null;
+	}
+	/**
+	 * The chat's own turn loop parking a Claude Code turn between steps
+	 * (claude-parked-turn.ts): renews its live, uncancelled lease for
+	 * `leaseMs` instead of TURN_COORDINATION_LEASE_MS, so the room's own
+	 * alarm does not lapse it before the next renewal. Local only: no HTTP
+	 * route takes a lease length. False when the turn no longer holds it.
+	 */
+	async renewParked(
+		input: { turnId: string; leaseId: string },
+		leaseMs: number,
+	) {
+		return this.state.storage.transaction(async (storage) => {
+			if (this.purged) return false;
+			const current = await storage.get<ActiveConversationTurn>("active-turn");
+			if (
+				!current ||
+				current.turnId !== input.turnId ||
+				current.leaseId !== input.leaseId ||
+				current.cancelled ||
+				current.expiresAt <= Date.now()
+			)
+				return false;
+			const next: ActiveConversationTurn = {
+				...current,
+				expiresAt: Math.max(current.expiresAt, Date.now() + leaseMs),
+			};
+			await storage.put("active-turn", next);
+			await this.schedule(next.expiresAt);
+			return true;
+		});
+	}
 	async alarm() {
 		await this.state.storage.transaction(async (storage) => {
 			if (this.purged) return;
@@ -657,7 +715,7 @@ export class ConversationRoom {
 					(await storage.get<Record<string, number>>("retired-turns")) ?? {};
 				for (const [id, expiry] of Object.entries(retired))
 					if (expiry <= Date.now()) delete retired[id];
-				retired[turn.turnId] = Date.now() + 70_000;
+				retired[turn.turnId] = Date.now() + RETIRED_TURN_MS;
 				await storage.put("retired-turns", retired);
 				await storage.delete("active-turn");
 			} else await this.schedule(turn.expiresAt);

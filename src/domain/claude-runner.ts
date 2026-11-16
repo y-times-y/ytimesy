@@ -5,14 +5,23 @@
  * to the chat's Freestyle machine. The chat machine is then only a workspace:
  * losing it costs a tool call, not the turn.
  *
- * Off unless YTIMESY_CLAUDE_RUNNER_URLS and YTIMESY_CLAUDE_RUNNER_SECRET are
- * set; YTIMESY_CLAUDE_RUNNER_USERS limits it to listed user ids ("*": everyone).
+ * Off unless YTIMESY_CLAUDE_RUNNER_URLS and a way to sign requests to the boxes
+ * are set: YTIMESY_CLAUDE_RUNNER_SIGNING_KEY (Ed25519 private key, base64
+ * PKCS8; the boxes hold only its public key) and, until every box has that
+ * public key, the legacy shared HMAC key YTIMESY_CLAUDE_RUNNER_SECRET. With
+ * both set each request carries both signatures. YTIMESY_CLAUDE_RUNNER_USERS limits it to listed user ids ("*": everyone).
  * YTIMESY_CLAUDE_RUNNER_SESSIONS, when present, further restricts rollout to those chats.
  */
 export type ClaudeRunnerBox = {
 	readonly baseUrl: string;
-	readonly secret: string;
+	/** Legacy shared HMAC key (32+ chars); absent once the boxes verify Ed25519. */
+	readonly secret?: string;
+	/** Ed25519 private key, base64 PKCS8 DER. */
+	readonly signingKey?: string;
 };
+
+/** A base64 PKCS8 DER Ed25519 private key is 48 bytes: 64 base64 characters. */
+const SIGNING_KEY = /^[A-Za-z0-9+/]{64}$/;
 
 /** A box this full takes no new run: writing would fail halfway (cleanup frees space within minutes). */
 export const CLAUDE_RUNNER_FULL_SHARE = 0.95;
@@ -113,8 +122,14 @@ export function claudeRunnerFor(input: {
 }): ClaudeRunnerBox | null {
 	const { env } = input;
 	const secret = env.YTIMESY_CLAUDE_RUNNER_SECRET ?? "";
+	const signingKey = (env.YTIMESY_CLAUDE_RUNNER_SIGNING_KEY ?? "").trim();
+	const signs = {
+		...(secret.length >= 32 ? { secret } : {}),
+		...(SIGNING_KEY.test(signingKey) ? { signingKey } : {}),
+	};
 	const urls = claudeRunnerUrls(env);
-	if (input.reader || secret.length < 32 || urls.length === 0) return null;
+	if (input.reader || Object.keys(signs).length === 0 || urls.length === 0)
+		return null;
 	const allowed = (env.YTIMESY_CLAUDE_RUNNER_USERS ?? "")
 		.split(",")
 		.map((value) => value.trim())
@@ -128,7 +143,10 @@ export function claudeRunnerFor(input: {
 			.filter(Boolean);
 		if (!sessions.includes(input.sessionId)) return null;
 	}
-	return { baseUrl: urls[sessionHash(input.sessionId) % urls.length], secret };
+	return {
+		baseUrl: urls[sessionHash(input.sessionId) % urls.length],
+		...signs,
+	};
 }
 
 /** What the system prompt says of working through tools when the code is not on this machine. */

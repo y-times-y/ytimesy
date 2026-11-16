@@ -134,6 +134,11 @@ export type ClaudeCodeStepInput = {
 	readonly mayPauseOnFeed?: () => boolean;
 	/** The step ended early: its next one should start after `ms`. */
 	readonly requestPause?: (ms: number) => void;
+	/**
+	 * A feed step ended with nothing to do: the turn parks until the feed or
+	 * a call wakes it (claude-parked-turn.ts); absent: `requestPause`.
+	 */
+	readonly requestPark?: () => void;
 	/** Runs a command on the VM as its default (builder) user. */
 	readonly shell: ClaudeCodeShell;
 	/** Writes and reads a file as the default user (transcript restore and save). */
@@ -751,9 +756,10 @@ async function followFeed(ctx: {
 }): Promise<ClaudeCodeStepResult> {
 	const { input, feed, run, reader, backups, now } = ctx;
 	let cursor = feed.state(run)?.consumedTo ?? 0;
-	const yieldStep = async (pause?: number): Promise<ClaudeCodeStepResult> => {
+	const yieldStep = async (park = false): Promise<ClaudeCodeStepResult> => {
 		feed.consume(run, cursor);
-		if (pause) input.requestPause?.(pause);
+		if (park && input.requestPark) input.requestPark();
+		else if (park) input.requestPause?.(CLAUDE_STEP_PAUSE_MS);
 		await backups.settled();
 		return { messages: [...input.messages], outcome: "continue" };
 	};
@@ -791,7 +797,7 @@ async function followFeed(ctx: {
 		if (lines.length) continue;
 		// Nothing to read or answer: the object sleeps, watched or not.
 		if (!busy && backups.idle() && (input.mayPauseOnFeed ?? input.mayPause)?.())
-			return yieldStep(CLAUDE_STEP_PAUSE_MS);
+			return yieldStep(true);
 		await Promise.race([
 			feed.wait(FEED_IDLE_WAIT_MS),
 			input.bridge.wait(FEED_IDLE_WAIT_MS),

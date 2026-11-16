@@ -17,6 +17,14 @@ export type ActiveConversationTurn = TurnControl & {
 	cancelled: boolean;
 };
 export const TURN_COORDINATION_LEASE_MS = 30_000;
+/**
+ * How long a turn the room let go (released, lapsed or replaced) may not
+ * take it again: longer than its Postgres lease can outlive its room lease
+ * (45 s against 30 s; a parked Claude Code turn's 150 s against 120 s,
+ * claude-parked-turn.ts), so a lapsed turn cannot come back while
+ * Postgres still takes its writes.
+ */
+export const RETIRED_TURN_MS = 70_000;
 
 export type TurnControlAction = "acquire" | "renew" | "release" | "cancel";
 type CoordinationFailureReason =

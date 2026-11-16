@@ -45,7 +45,12 @@ export type SubagentTreeSession = {
 	readonly listedModelId: string | null;
 	readonly createdAt: string;
 	readonly updatedAt: string;
-	readonly items: unknown;
+	/**
+	 * Its spend and a finished agent's end are read from it (the turns'
+	 * starts are enough); absent for a session read without its transcript,
+	 * which then counts no spend.
+	 */
+	readonly items?: unknown;
 	readonly taskState?: AgentTaskStatus | null;
 	readonly agentRole?: SubagentRole | null;
 	readonly agentBudget?: SubagentBudget | null;

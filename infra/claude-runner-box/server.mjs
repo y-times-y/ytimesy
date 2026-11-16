@@ -2,10 +2,20 @@
 // the machine it starts `claude` on (run a shell command, write a file, read a
 // file), for the edge to call over HTTPS. The box holds no repository code and
 // no user secrets: only `claude` and the short-lived per-turn grants the
-// runner writes for it. Requests carry the repo's delivery signature
-// (src/domain/delivery-auth.ts) plus a single-use nonce.
+// runner writes for it. Requests carry an Ed25519 signature by the edge (the
+// box holds only the public key, RUNNER_PUBLIC_KEY) over the method, path,
+// expiry, body hash and a single-use nonce. Until a box is given its public
+// key it still checks the old shared HMAC (RUNNER_SIGNING_KEY), the delivery
+// signature of src/domain/delivery-auth.ts; docs/claude-code-placement.md has
+// the rollout.
 import { spawn } from "node:child_process";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	createPublicKey,
+	timingSafeEqual,
+	verify,
+} from "node:crypto";
 import { mkdir, readFile, statfs, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, resolve, sep } from "node:path";
@@ -13,19 +23,32 @@ import { dirname, resolve, sep } from "node:path";
 const EXPIRY_HEADER = "x-ytimesy-delivery-expires";
 const SIGNATURE_HEADER = "x-ytimesy-delivery-signature";
 const NONCE_HEADER = "x-ytimesy-runner-nonce";
+const ED25519_HEADER = "x-ytimesy-runner-signature-ed25519";
 const MAX_BODY = 32 * 1024 * 1024;
 const MAX_OUTPUT = 8 * 1024 * 1024;
 const MAX_EXEC_MS = 15 * 60_000;
 
-function sign(secret, method, target, expires, nonce, body) {
+/** The bytes both signatures cover; the edge builds the same (runnerSignedMaterial). */
+export function runnerSignedMaterial(method, target, expires, nonce, body) {
 	const hash = createHash("sha256").update(body).digest("hex");
+	return `${method}\n${target}\n${expires}\n${hash}\n${nonce}`;
+}
+
+function sign(secret, method, target, expires, nonce, body) {
 	return createHmac("sha256", secret)
-		.update(`${method}\n${target}\n${expires}\n${hash}\n${nonce}`)
+		.update(runnerSignedMaterial(method, target, expires, nonce, body))
 		.digest("hex");
 }
 
-/** The signature the edge must send; exported so the edge client signs the same bytes. */
+/** The legacy HMAC signature; exported so the edge client signs the same bytes. */
 export const runnerSignature = sign;
+
+/** RUNNER_PUBLIC_KEY: base64 of the SPKI DER (scripts/generate-claude-runner-keypair.ts prints it). */
+export function runnerPublicKey(base64) {
+	const key = createPublicKey({ key: Buffer.from(base64.trim(), "base64"), format: "der", type: "spki" });
+	if (key.asymmetricKeyType !== "ed25519") throw new Error("Runner public key is not an Ed25519 key.");
+	return key;
+}
 
 /** Share of the disk holding `home` that is used (0-1). */
 async function diskUsedShare(home) {
@@ -37,8 +60,11 @@ async function diskUsedShare(home) {
 export const DISK_WARN_SHARE = 0.8;
 const WARN_EVERY_MS = 5 * 60_000;
 
-export function createRunnerServer({ secret, home, now = Date.now, disk = diskUsedShare }) {
-	if (!secret || secret.length < 32) throw new Error("Runner signing key is too short.");
+export function createRunnerServer({ secret, publicKey, home, now = Date.now, disk = diskUsedShare }) {
+	// With a public key the box accepts only the edge's Ed25519 signature, and a
+	// leftover shared key is ignored; without one it falls back to the HMAC.
+	const edgeKey = publicKey ? runnerPublicKey(publicKey) : null;
+	if (!edgeKey && (!secret || secret.length < 32)) throw new Error("Runner signing key is too short.");
 	const root = resolve(home);
 	const seen = new Map();
 	let lastWarning = 0;
@@ -48,13 +74,21 @@ export function createRunnerServer({ secret, home, now = Date.now, disk = diskUs
 	};
 	const authorized = (request, body) => {
 		const expires = request.headers[EXPIRY_HEADER] ?? "";
-		const signature = request.headers[SIGNATURE_HEADER] ?? "";
 		const nonce = request.headers[NONCE_HEADER] ?? "";
 		const at = now();
 		if (!/^\d{13}$/.test(expires) || Number(expires) <= at || Number(expires) > at + 65_000) return false;
-		if (!/^[0-9a-f]{64}$/.test(signature) || !/^[0-9a-f]{32}$/.test(nonce)) return false;
-		const expected = sign(secret, request.method, request.url, expires, nonce, body);
-		if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return false;
+		if (!/^[0-9a-f]{32}$/.test(nonce)) return false;
+		if (edgeKey) {
+			const signature = request.headers[ED25519_HEADER] ?? "";
+			if (!/^[A-Za-z0-9_-]{86}$/.test(signature)) return false;
+			const material = runnerSignedMaterial(request.method, request.url, expires, nonce, body);
+			if (!verify(null, Buffer.from(material), edgeKey, Buffer.from(signature, "base64url"))) return false;
+		} else {
+			const signature = request.headers[SIGNATURE_HEADER] ?? "";
+			if (!/^[0-9a-f]{64}$/.test(signature)) return false;
+			const expected = sign(secret, request.method, request.url, expires, nonce, body);
+			if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return false;
+		}
 		for (const [key, until] of seen) if (until <= at) seen.delete(key);
 		if (seen.has(nonce)) return false;
 		seen.set(nonce, Number(expires));
@@ -135,6 +169,8 @@ export function createRunnerServer({ secret, home, now = Date.now, disk = diskUs
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {
 	const secret = process.env.RUNNER_SIGNING_KEY ?? "";
+	const publicKey = process.env.RUNNER_PUBLIC_KEY ?? "";
 	const home = process.env.RUNNER_HOME ?? "/var/lib/ytimesy-runner";
-	createRunnerServer({ secret, home }).listen(Number(process.env.PORT ?? 8787), "127.0.0.1");
+	console.log(JSON.stringify({ level: "info", message: "Runner API verifies", signature: publicKey ? "ed25519" : "hmac" }));
+	createRunnerServer({ secret, publicKey, home }).listen(Number(process.env.PORT ?? 8787), "127.0.0.1");
 }

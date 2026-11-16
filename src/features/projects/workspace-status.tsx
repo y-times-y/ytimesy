@@ -1,4 +1,9 @@
-import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
+import {
+	queryOptions,
+	type UseQueryOptions,
+	useMutation,
+	useQuery,
+} from "@tanstack/react-query";
 import { KeyRound, LoaderCircle } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { EnvironmentBuildView } from "#/domain/environment-build-progress";
@@ -9,6 +14,12 @@ import {
 	workspacePrepareShowsStatus,
 	workspacePrepareStalled,
 } from "#/domain/project-workspace";
+import { hubTopic } from "#/domain/user-hub";
+import {
+	pollUnlessPushed,
+	useHubDelivery,
+	useHubRead,
+} from "../workspace/user-hub-store";
 import {
 	isUnreachableRead,
 	requestJson,
@@ -85,6 +96,35 @@ export function workspaceStatusIsLive(view: WorkspaceView | null | undefined) {
 	);
 }
 
+/**
+ * A project's environment status, kept current: while the user's hub
+ * pushes, read again when the project's environment changes; otherwise
+ * polled while a build runs.
+ */
+export function useLiveWorkspaceStatus(
+	projectId: string,
+	options: Pick<
+		UseQueryOptions<WorkspaceView | null>,
+		"retry" | "retryDelay"
+	> = {},
+) {
+	const delivery = useHubDelivery();
+	const workspace = useQuery({
+		...workspaceStatusQuery(projectId),
+		...options,
+		refetchInterval: (query) =>
+			workspaceStatusIsLive(query.state.data)
+				? pollUnlessPushed(delivery, 3000)
+				: false,
+	});
+	useHubRead(
+		[hubTopic.workspace(projectId)],
+		() => void workspace.refetch({ cancelRefetch: false }),
+		{ enabled: Boolean(projectId) },
+	);
+	return workspace;
+}
+
 /** A project's environment status; read ahead of a project switch too. */
 export function workspaceStatusQuery(projectId: string) {
 	return queryOptions({
@@ -109,12 +149,9 @@ export function WorkspaceStatus({
 	const indicatorContext = useContext(SetupIndicatorContext);
 	const indicator =
 		indicatorContext?.projectId === projectId ? indicatorContext : null;
-	const workspace = useQuery({
-		...workspaceStatusQuery(projectId),
+	const workspace = useLiveWorkspaceStatus(projectId, {
 		retry: retryTransientRead,
 		retryDelay: transientReadRetryDelay,
-		refetchInterval: (query) =>
-			workspaceStatusIsLive(query.state.data) ? 3000 : false,
 	});
 	const prepare = useMutation({
 		mutationFn: () =>

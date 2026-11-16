@@ -4,11 +4,14 @@ import type { ClaudeRunnerBox } from "#/domain/claude-runner";
 /**
  * The runner box's three operations (infra/claude-runner-box/server.mjs), as
  * the Claude Code runner's machine: run a shell command, write a file, read a
- * file. Each request is signed like a delivery request plus a single-use
- * nonce, which the box checks.
+ * file. Each request carries an expiry and a single-use nonce, signed with the
+ * edge's Ed25519 private key (the box holds only the public key) and, while
+ * the legacy shared key is still configured, with the old HMAC as well, so a
+ * box verifies whichever it is set up for (docs/claude-code-placement.md).
  */
 const EXPIRY_HEADER = "x-ytimesy-delivery-expires";
 const SIGNATURE_HEADER = "x-ytimesy-delivery-signature";
+const ED25519_HEADER = "x-ytimesy-runner-signature-ed25519";
 const NONCE_HEADER = "x-ytimesy-runner-nonce";
 const encoder = new TextEncoder();
 
@@ -17,7 +20,25 @@ const hex = (bytes: ArrayBuffer) =>
 		value.toString(16).padStart(2, "0"),
 	).join("");
 
-/** The bytes the box verifies; keep in step with `sign` in the box's server.mjs. */
+const base64url = (bytes: ArrayBuffer) =>
+	btoa(String.fromCharCode(...new Uint8Array(bytes)))
+		.replaceAll("+", "-")
+		.replaceAll("/", "_")
+		.replace(/=+$/, "");
+
+/** The bytes both signatures cover; keep in step with `runnerSignedMaterial` in the box's server.mjs. */
+async function signedMaterial(
+	method: string,
+	target: string,
+	expires: string,
+	nonce: string,
+	body: string,
+) {
+	const hash = hex(await crypto.subtle.digest("SHA-256", encoder.encode(body)));
+	return encoder.encode(`${method}\n${target}\n${expires}\n${hash}\n${nonce}`);
+}
+
+/** The legacy HMAC signature (hex), for boxes not yet given the edge's public key. */
 export async function runnerRequestSignature(
 	secret: string,
 	method: string,
@@ -26,7 +47,6 @@ export async function runnerRequestSignature(
 	nonce: string,
 	body: string,
 ) {
-	const hash = hex(await crypto.subtle.digest("SHA-256", encoder.encode(body)));
 	const key = await crypto.subtle.importKey(
 		"raw",
 		encoder.encode(secret),
@@ -38,9 +58,82 @@ export async function runnerRequestSignature(
 		await crypto.subtle.sign(
 			"HMAC",
 			key,
-			encoder.encode(`${method}\n${target}\n${expires}\n${hash}\n${nonce}`),
+			await signedMaterial(method, target, expires, nonce, body),
 		),
 	);
+}
+
+const signingKeys = new Map<string, Promise<CryptoKey>>();
+
+/** The imported private key, once per isolate per configured value. */
+function ed25519Key(pkcs8Base64: string) {
+	let key = signingKeys.get(pkcs8Base64);
+	if (!key) {
+		key = crypto.subtle
+			.importKey(
+				"pkcs8",
+				Uint8Array.from(atob(pkcs8Base64), (char) => char.charCodeAt(0)),
+				{ name: "Ed25519" },
+				false,
+				["sign"],
+			)
+			.catch((error: unknown) => {
+				signingKeys.delete(pkcs8Base64);
+				throw new Error(
+					"YTIMESY_CLAUDE_RUNNER_SIGNING_KEY is not a base64 PKCS8 Ed25519 private key.",
+					{ cause: error },
+				);
+			});
+		signingKeys.set(pkcs8Base64, key);
+	}
+	return key;
+}
+
+/** The Ed25519 signature (base64url, 86 characters) the box verifies with RUNNER_PUBLIC_KEY. */
+export async function runnerRequestEd25519Signature(
+	signingKey: string,
+	method: string,
+	target: string,
+	expires: string,
+	nonce: string,
+	body: string,
+) {
+	return base64url(
+		await crypto.subtle.sign(
+			{ name: "Ed25519" },
+			await ed25519Key(signingKey),
+			await signedMaterial(method, target, expires, nonce, body),
+		),
+	);
+}
+
+/** The headers that authorize one request: expiry, nonce and every signature the edge can make. */
+export async function runnerRequestHeaders(
+	box: Pick<ClaudeRunnerBox, "secret" | "signingKey">,
+	path: string,
+	body: string,
+	now = Date.now(),
+): Promise<Record<string, string>> {
+	const expires = String(now + 30_000);
+	const nonce = crypto.randomUUID().replaceAll("-", "");
+	const args = ["POST", path, expires, nonce, body] as const;
+	return {
+		[EXPIRY_HEADER]: expires,
+		[NONCE_HEADER]: nonce,
+		...(box.secret
+			? {
+					[SIGNATURE_HEADER]: await runnerRequestSignature(box.secret, ...args),
+				}
+			: {}),
+		...(box.signingKey
+			? {
+					[ED25519_HEADER]: await runnerRequestEd25519Signature(
+						box.signingKey,
+						...args,
+					),
+				}
+			: {}),
+	};
 }
 
 async function call<T>(
@@ -51,8 +144,8 @@ async function call<T>(
 	fetcher: typeof fetch,
 ): Promise<T> {
 	const body = JSON.stringify(input);
-	const expires = String(Date.now() + 30_000);
-	const nonce = crypto.randomUUID().replaceAll("-", "");
+	// Outside the transport try: a misconfigured key is not a network failure to retry.
+	const headers = await runnerRequestHeaders(box, path, body);
 	let response: Response;
 	try {
 		response = await fetcher(new URL(path, box.baseUrl), {
@@ -60,18 +153,7 @@ async function call<T>(
 			body,
 			redirect: "manual",
 			signal: AbortSignal.timeout(timeoutMs),
-			headers: {
-				[EXPIRY_HEADER]: expires,
-				[NONCE_HEADER]: nonce,
-				[SIGNATURE_HEADER]: await runnerRequestSignature(
-					box.secret,
-					"POST",
-					path,
-					expires,
-					nonce,
-					body,
-				),
-			},
+			headers,
 		});
 	} catch (error) {
 		throw new ClaudeRunnerTransportFailure(

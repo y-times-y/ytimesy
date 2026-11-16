@@ -1,4 +1,6 @@
+import { hubTopic } from "#/domain/user-hub";
 import { database } from "./database";
+import { noteUserHub } from "./user-hub-notes";
 
 export function modelConcurrencyLimits() {
 	const worker = Number(process.env.YTIMESY_MODEL_CONCURRENCY ?? "4");
@@ -30,9 +32,12 @@ export async function reserveAgentTaskStart(
 		where id=$3 and user_id=$1 and project_id=$2 and parent_session_id is not null
 		and task_state in ('draft','idle') and turn_status <> 'running'
 		and not exists(select 1 from api_turn t where t.session_id=$3 and t.state in ('queued','running'))
-		returning id`,
+		returning id,parent_session_id`,
 		[userId, projectId, taskId],
 	);
 	if (!result.rowCount)
 		throw new Error("The subagent is already running or no longer available.");
+	const parent = (result.rows[0] as { parent_session_id?: string } | undefined)
+		?.parent_session_id;
+	if (parent) noteUserHub(userId, [hubTopic.agents(parent)]);
 }

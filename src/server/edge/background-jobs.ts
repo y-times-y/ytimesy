@@ -32,6 +32,7 @@ import {
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { withEdgeModelEndpoints } from "./model-endpoint";
+import { registerUserHubNotes } from "./user-hub-notes-binding";
 
 const RECORD_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -158,6 +159,7 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		registerUserHubNotes(env);
 	}
 
 	async start(job: BackgroundJob): Promise<JobRecord["state"]> {
