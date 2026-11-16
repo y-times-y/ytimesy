@@ -1,9 +1,12 @@
 import type { ApiAgentEvent } from "./api-agent-event";
 import type { ApiTokenUsage } from "./api-token-usage";
+import { boxCallRunsOnEdge } from "./claude-box-tools";
 
 /** The MCP server name Claude Code knows ytimesy's own tools by. */
 export const CLAUDE_CODE_MCP_SERVER = "ytimesy";
-const MCP_PREFIX = `mcp__${CLAUDE_CODE_MCP_SERVER}__`;
+/** How Claude Code names ytimesy's tools: this prefix, then the tool's own name. */
+export const CLAUDE_CODE_MCP_PREFIX = `mcp__${CLAUDE_CODE_MCP_SERVER}__`;
+const MCP_PREFIX = CLAUDE_CODE_MCP_PREFIX;
 
 export type ClaudeCodePlanStep = {
 	readonly step: string;
@@ -218,7 +221,15 @@ function apiErrorText(event: Record<string, unknown>): string | null {
 export function claudeCodeEffects(
 	line: string,
 	lineKey: string,
-	context: { readonly toolName: (id: string) => string | undefined },
+	context: {
+		readonly toolName: (id: string) => string | undefined;
+		/**
+		 * ytimesy tools the run's runner box served itself (claude-box-tools.ts):
+		 * no bridge call shows them, so their calls are shown from here. Calls
+		 * the box handed to the edge are shown by the bridge as before.
+		 */
+		readonly boxTools?: ReadonlySet<string>;
+	},
 ): ClaudeCodeEffect[] {
 	let parsed: unknown;
 	try {
@@ -306,7 +317,20 @@ export function claudeCodeEffects(
 				typeof block.id === "string" &&
 				typeof block.name === "string"
 			) {
-				if (block.name.startsWith(MCP_PREFIX)) return;
+				if (block.name.startsWith(MCP_PREFIX)) {
+					const name = block.name.slice(MCP_PREFIX.length);
+					if (context.boxTools?.has(name) && !boxCallRunsOnEdge(block.input))
+						effects.push({
+							kind: "event",
+							event: {
+								type: "tool-call",
+								id: block.id,
+								name,
+								input: block.input ?? {},
+							},
+						});
+					return;
+				}
 				if (block.name === "TodoWrite") {
 					const plan = todoPlan(block.input);
 					if (plan?.length) effects.push({ kind: "plan", plan });
