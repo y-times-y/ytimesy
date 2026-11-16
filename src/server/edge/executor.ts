@@ -47,7 +47,11 @@ import {
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
 import type { SessionTurnStatus } from "../../domain/session-item";
-import { settledHubTurnStatus, userHubEnabledFor } from "../../domain/user-hub";
+import {
+	parseHubNote,
+	settledHubTurnStatus,
+	userHubEnabledFor,
+} from "../../domain/user-hub";
 import { BUILD_ID } from "../../lib/build-id";
 import { socketPair } from "../../realtime/socket-upgrade";
 import {
@@ -143,6 +147,8 @@ import { logTurnStepSizes } from "./turn-step-sizes";
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
 export { UserHub } from "./user-hub";
+
+import { registerUserHubNotes } from "./user-hub-notes-binding";
 
 // Workers cannot compile WebAssembly from bytes; Wrangler precompiles the
 // code-mode sandbox's module, imported only when a program first runs.
@@ -1347,6 +1353,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		super(ctx, env);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		registerUserHubNotes(env);
 		this.room = new ConversationRoom(ctx, (at: number | null) =>
 			this.wake("room", at),
 		);
@@ -1395,6 +1402,7 @@ export default {
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		registerUserHubNotes(env);
 		const minute = Math.floor(controller.scheduledTime / 60_000);
 		// Codex egress health: every 5 minutes, only when an account to probe
 		// with is named. Alerts the owner when a path is blocked.
@@ -1521,6 +1529,7 @@ export default {
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		registerUserHubNotes(env);
 		let stage = "ingress";
 		try {
 			const path = new URL(request.url).pathname;
@@ -1561,6 +1570,37 @@ export default {
 				return env.USER_HUBS.getByName(userId, durableObjectLocation()).fetch(
 					new Request(request.url, { headers: request.headers }),
 				);
+			}
+			// The web Worker tells a user's hub what changed (noteUserHub).
+			if (route === "user-note") {
+				const secret = process.env.YTIMESY_REALTIME_SECRET;
+				if (!secret || secret.length < 32)
+					return new Response(null, { status: 503 });
+				if (request.method !== "POST")
+					return new Response(null, { status: 404 });
+				let body: string;
+				try {
+					body = await readBoundedRequestBody(request, 4_000);
+				} catch {
+					return new Response(null, { status: 413 });
+				}
+				if (!(await verifyDeliveryRequest(secret, request, body)))
+					return new Response(null, { status: 401 });
+				let value: unknown;
+				try {
+					value = JSON.parse(body);
+				} catch {
+					return new Response(null, { status: 400 });
+				}
+				const note = parseHubNote(value);
+				if (!note) return new Response(null, { status: 400 });
+				if (!userHubEnabledFor(process.env.YTIMESY_USER_HUB_USERS, note.userId))
+					return new Response(null, { status: 204 });
+				await env.USER_HUBS.getByName(
+					note.userId,
+					durableObjectLocation(),
+				).noteSignals(note.topics);
+				return new Response(null, { status: 204 });
 			}
 			// The web Worker claimed a sent message's turn on its own database
 			// connection (turn-start.ts) and hands it to the chat's loop here.

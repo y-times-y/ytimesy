@@ -98,6 +98,7 @@ import {
 	slashMenuCommands,
 } from "#/domain/slash-command";
 import { turnSavingChanges } from "#/domain/turn-saving";
+import { hubTopic } from "#/domain/user-hub";
 import type { SettingsSection } from "#/domain/workspace-settings";
 import { captureAnalytics } from "#/features/analytics/client";
 import { startInteraction } from "#/features/analytics/web-vitals";
@@ -118,6 +119,11 @@ import type { OpenChatSide } from "#/server/services/open-chat-side";
 import type { CanvasFocus } from "../canvas/canvas-open-context";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
+import {
+	pollUnlessPushed,
+	useHubDelivery,
+	useHubRead,
+} from "../workspace/user-hub-store";
 import { AgentIcon } from "./agent-icon";
 import { AgentPanel } from "./agent-panel";
 import {
@@ -471,6 +477,7 @@ export function SessionLauncher({
 	const [forkRetrying, setForkRetrying] = useState(false);
 	// A forked chat opens before its VM copy is ready: a message sent meanwhile
 	// waits queued. Only a chat without a VM can be one.
+	const hubDelivery = useHubDelivery();
 	const forkStatus = useQuery({
 		queryKey: [
 			"conversation-fork",
@@ -488,9 +495,22 @@ export function SessionLauncher({
 						},
 					})
 				: null,
+		// While the user's hub pushes, the copy's end is signalled instead.
 		refetchInterval: (query) =>
-			query.state.data?.state === "preparing" ? 2_000 : false,
+			query.state.data?.state === "preparing"
+				? pollUnlessPushed(hubDelivery, 2_000)
+				: false,
 	});
+	useHubRead(
+		[hubTopic.fork(session.agentSessionId ?? "")],
+		() => void forkStatus.refetch({ cancelRefetch: false }),
+		{
+			enabled:
+				!!selectedProject?.id &&
+				!!session.agentSessionId &&
+				!session.workspaceId,
+		},
+	);
 	const forkPreparing = forkStatus.data?.state === "preparing";
 	const wasForkPreparing = useRef(false);
 	useEffect(() => {

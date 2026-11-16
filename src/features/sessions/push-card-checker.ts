@@ -15,7 +15,8 @@ export function createPushCardChecker(input: {
 	/** Optional observer for background status checks; they do not block approval. */
 	onChecking?(checking: boolean): void;
 	visible(): boolean;
-	intervalMs?: number;
+	/** Null: no interval (the user's hub signals changes; `check` is called then). */
+	intervalMs?: number | null;
 	timers?: {
 		repeat(run: () => void, ms: number): unknown;
 		clear(handle: unknown): void;
@@ -61,11 +62,12 @@ export function createPushCardChecker(input: {
 	}
 
 	return {
-		/** Checks now and starts the interval. */
+		/** Checks now and starts the interval (unless there is none). */
 		start() {
-			handle = timers.repeat(() => {
-				if (input.visible()) void check();
-			}, input.intervalMs ?? PUSH_CARD_RECHECK_MS);
+			if (input.intervalMs !== null)
+				handle = timers.repeat(() => {
+					if (input.visible()) void check();
+				}, input.intervalMs ?? PUSH_CARD_RECHECK_MS);
 			return check();
 		},
 		check,

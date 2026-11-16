@@ -140,6 +140,10 @@ describe("sessionReadInterval", () => {
 		).toBe(LIVE_STREAM_RECONCILE_MS);
 	});
 
+	it("re-reads a streaming chat at most every 5 minutes (Worker request budget)", () => {
+		expect(LIVE_STREAM_RECONCILE_MS).toBeGreaterThanOrEqual(5 * 60_000);
+	});
+
 	it("polls a running chat quickly only while no progress stream is open", () => {
 		expect(
 			sessionReadInterval({ polling: true, streamOpen: false, pollMs: 700 }),

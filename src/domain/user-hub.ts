@@ -8,6 +8,21 @@ import type { SessionTurnStatus } from "./session-item";
 export const USER_HUB_PATH = "/api/user/live";
 /** The edge executor's signed path that hands the upgrade to the user's hub. */
 export const USER_HUB_EDGE_PATH = "/user/live";
+/** The edge executor's signed path the web Worker tells a hub what changed on. */
+export const USER_HUB_NOTE_PATH = "/user/note";
+
+/** A note from the web Worker: which of the user's topics changed. */
+export type HubNote = { readonly userId: string; readonly topics: string[] };
+
+/** A note's body, or null when it is not one (never trusts the topics' shape). */
+export function parseHubNote(value: unknown): HubNote | null {
+	if (!value || typeof value !== "object") return null;
+	const { userId, topics } = value as Record<string, unknown>;
+	if (typeof userId !== "string" || !userId || userId.length > 100) return null;
+	if (!Array.isArray(topics)) return null;
+	const valid = topics.filter(isHubTopic).slice(0, MAX_HUB_NOTE_TOPICS);
+	return valid.length ? { userId, topics: valid } : null;
+}
 
 /** How often the browser pings; the hub answers without waking. */
 export const USER_HUB_PING_MS = 120_000;
@@ -108,18 +123,97 @@ export function hubStatusEntries(chats: HubChats): HubStatusEntries {
 	);
 }
 
-/** `full` marks the whole map, sent on every (re)connect. */
+/**
+ * What else the hub tells a tab changed, besides turn status: each topic
+ * maps to when it last changed (a stamp that only grows). A tab reads the
+ * matching data once when a topic it shows changes, instead of polling it.
+ * Topics name what changed, never what it changed to: the read stays the
+ * one source of truth.
+ */
+export const hubTopic = {
+	/** A helper of this chat was opened, started, blocked or settled (agents list). */
+	agents: (parentSessionId: string) => `agents:${parentSessionId}`,
+	/** A background command of this chat started or exited. */
+	commands: (sessionId: string) => `commands:${sessionId}`,
+	/** This project's environment: its status, its build, a build step. */
+	workspace: (projectId: string) => `workspace:${projectId}`,
+	/** This forked chat's machine copy was bound or failed. */
+	fork: (sessionId: string) => `fork:${sessionId}`,
+	/** A push card of this user was answered or settled (another may now be outdated). */
+	push: "push",
+	/**
+	 * A chat's turn status changed. Made by the tab from `chats`, never sent
+	 * as a signal, so turn changes and signals are watched alike.
+	 */
+	chat: (sessionId: string) => `chat:${sessionId}`,
+} as const;
+
+/** Most topics one hub remembers; the oldest are dropped first. */
+export const MAX_HUB_SIGNALS = 500;
+/** At most this many topics per note, and this long each. */
+export const MAX_HUB_NOTE_TOPICS = 20;
+const HUB_TOPIC = /^[a-z]+(:[A-Za-z0-9_-]{1,100})?$/;
+
+export function isHubTopic(value: unknown): value is string {
+	return typeof value === "string" && HUB_TOPIC.test(value);
+}
+
+export type HubSignals = Readonly<Record<string, number>>;
+
+/**
+ * The signals after topics changed at `now`: each gets a stamp past its
+ * last one (two changes in one millisecond still differ), so every change
+ * is pushed. Invalid and repeated topics are ignored.
+ */
+export function applyHubSignals(
+	signals: HubSignals,
+	topics: readonly string[],
+	now: number,
+): { signals: HubSignals; pushed: HubSignals } {
+	const pushed: Record<string, number> = {};
+	for (const topic of topics.slice(0, MAX_HUB_NOTE_TOPICS)) {
+		if (!isHubTopic(topic) || topic in pushed) continue;
+		pushed[topic] = Math.max(now, (signals[topic] ?? 0) + 1);
+	}
+	return { signals: { ...signals, ...pushed }, pushed };
+}
+
+/** The topics beyond the newest `limit`, to forget. */
+export function staleHubSignals(
+	signals: HubSignals,
+	limit = MAX_HUB_SIGNALS,
+): string[] {
+	const topics = Object.keys(signals);
+	if (topics.length <= limit) return [];
+	return topics.sort((a, b) => signals[b] - signals[a]).slice(limit);
+}
+
+/**
+ * `full` marks the whole map, sent on every (re)connect. `signals` and
+ * `build` come only from a hub that has them: a whole map without `signals`
+ * is an older hub, and the tab keeps polling what signals would cover.
+ * An older tab ignores both.
+ */
 export type HubStateMessage = {
 	readonly type: "state";
 	readonly full?: true;
 	readonly chats: HubStatusEntries;
+	readonly signals?: HubSignals;
+	/** The deploy the hub runs (the web Worker's too: one build id per deploy). */
+	readonly build?: string;
 };
 
-export function hubStateMessage(chats: HubStatusEntries, full = false) {
+export function hubStateMessage(
+	chats: HubStatusEntries,
+	full = false,
+	extra: { signals?: HubSignals; build?: string } = {},
+) {
 	return JSON.stringify({
 		type: "state",
 		...(full ? { full: true as const } : {}),
 		chats,
+		...(extra.signals ? { signals: extra.signals } : {}),
+		...(extra.build ? { build: extra.build } : {}),
 	} satisfies HubStateMessage);
 }
 
@@ -149,9 +243,24 @@ export function parseHubStateMessage(data: unknown): HubStateMessage | null {
 		if (TURN_STATUSES.includes(status as SessionTurnStatus))
 			chats[id] = { turnStatus: status as SessionTurnStatus };
 	}
+	let signals: Record<string, number> | undefined;
+	if (message.signals && typeof message.signals === "object") {
+		signals = {};
+		for (const [topic, at] of Object.entries(message.signals))
+			if (isHubTopic(topic) && typeof at === "number" && Number.isFinite(at))
+				signals[topic] = at;
+	}
+	const build =
+		typeof message.build === "string" &&
+		message.build.length > 0 &&
+		message.build.length <= 100
+			? message.build
+			: undefined;
 	return {
 		type: "state",
 		...(message.full === true ? { full: true } : {}),
 		chats,
+		...(signals ? { signals } : {}),
+		...(build ? { build } : {}),
 	};
 }

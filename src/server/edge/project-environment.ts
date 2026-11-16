@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { redactSecrets } from "#/domain/redact-secrets";
+import { hubTopic } from "#/domain/user-hub";
 import {
 	type EnvironmentWorkflowRequest,
 	environmentWorkflowRequest,
@@ -17,6 +18,7 @@ import {
 	ResumeLater,
 	withResumableCommand,
 } from "../adapters/resumable-commands";
+import { noteUserHub } from "../adapters/user-hub-notes";
 import type {
 	RuntimeCommandResult,
 	WorkspaceRuntime,
@@ -36,6 +38,7 @@ import {
 import { startBackgroundJob } from "./background-jobs";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { withEdgeModelEndpoints } from "./model-endpoint";
+import { registerUserHubNotes } from "./user-hub-notes-binding";
 
 const configuration = z.object({
 	DATABASE_URL: z.string().min(1),
@@ -70,6 +73,7 @@ type CommandJournal = {
 export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 	constructor(ctx: DurableObjectState, env: EdgeExecutorEnvironment) {
 		super(ctx, env);
+		registerUserHubNotes(env);
 		ctx.storage.sql.exec(`create table if not exists environment_request(
 			request_id text primary key, payload text not null,
 			state text not null check(state in ('queued','running','done')), created_at integer not null)`);
@@ -264,7 +268,9 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 					cleaned: true,
 				})),
 			);
-		const steps = databaseBuildSteps(buildId);
+		const steps = databaseBuildSteps(buildId, () =>
+			noteUserHub(input.userId, [hubTopic.workspace(input.projectId)]),
+		);
 		let snapshotId: string;
 		try {
 			// Provisioning is idempotent: the VM is found again by its build slug.

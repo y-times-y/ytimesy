@@ -37,6 +37,7 @@ import {
 	repositoriesForProject,
 } from "#/domain/projects";
 import { sessionCloneBranch } from "#/domain/session-branch";
+import { hubTopic } from "#/domain/user-hub";
 import { toolsSnapshotIdFromEnv } from "#/domain/workspace-boot-snapshot";
 import { captureServerAnalytics } from "../adapters/analytics";
 import { withCommandOutput } from "../adapters/command-output";
@@ -57,6 +58,7 @@ import { loadProjectSecretsForOwner } from "../adapters/project-secrets";
 import { projectForOwner } from "../adapters/projects";
 import { guestNodePath } from "../adapters/repository-setup";
 import { ResumeLater } from "../adapters/resumable-commands";
+import { noteUserHub } from "../adapters/user-hub-notes";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import {
 	recordWorkspaceEvent,
@@ -387,6 +389,11 @@ async function assertBuildSecretsCurrent(input: EnvironmentBuildInput) {
 		);
 }
 
+/** The user's open tabs read the project's environment and build again (their hub). */
+function noteBuildChanged(input: { userId: string; projectId: string }) {
+	noteUserHub(input.userId, [hubTopic.workspace(input.projectId)]);
+}
+
 export async function claimEnvironmentBuild(
 	input: EnvironmentBuildInput,
 	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
@@ -410,6 +417,7 @@ export async function claimEnvironmentBuild(
 	);
 	if (!claimed.rows.length)
 		throw new Error("An environment build is already running.");
+	noteBuildChanged(input);
 	void captureServerAnalytics(
 		input.userId,
 		"environment_started",
@@ -432,7 +440,7 @@ export async function provisionEnvironmentBuild(
 		recordWorkspaceEvent(input.userId, input.workspaceId, message);
 	if (!hasActive) await saveWorkspaceStatus(input.workspaceId, "provisioning");
 	await event("Preparing project environment.");
-	const steps = databaseBuildSteps(id);
+	const steps = databaseBuildSteps(id, () => noteBuildChanged(input));
 	await steps.start("machine", "Starting machine");
 	const from = input.incremental?.snapshotId ?? input.baseSnapshotId;
 	// A first build takes the machine adding the project started; any other
@@ -984,7 +992,7 @@ export async function activateEnvironmentBuild(
 	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
 ) {
 	await assertBuildSecretsCurrent(input);
-	const steps = databaseBuildSteps(id);
+	const steps = databaseBuildSteps(id, () => noteBuildChanged(input));
 	await steps.start("ready", "Saving the environment");
 	// Chats start by switching the checkout to their own branch, which refuses
 	// over uncommitted changes. Setup often rewrites tracked files (generated
@@ -1164,6 +1172,7 @@ export async function finishEnvironmentBuild(
 				{ key: id, timestamp: new Date() },
 			);
 		const workspace = await workspaceById(input.workspaceId);
+		if (workspace) noteBuildChanged(workspace);
 		if (!workspace?.templateSnapshotId)
 			await saveWorkspaceStatus(input.workspaceId, "failed", message);
 		await recordWorkspaceEvent(input.userId, input.workspaceId, message);

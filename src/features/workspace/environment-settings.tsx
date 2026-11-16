@@ -31,7 +31,7 @@ import {
 } from "../projects/environment-build-progress";
 import {
 	retryWorkspace,
-	workspaceStatusIsLive,
+	useLiveWorkspaceStatus,
 	workspaceStatusQuery,
 } from "../projects/workspace-status";
 
@@ -356,11 +356,7 @@ function RestoreButton({
  */
 function LastBuild({ projectId }: { projectId: string }) {
 	const queryClient = useQueryClient();
-	const workspace = useQuery({
-		...workspaceStatusQuery(projectId),
-		refetchInterval: (query) =>
-			workspaceStatusIsLive(query.state.data) ? 3000 : false,
-	});
+	const workspace = useLiveWorkspaceStatus(projectId);
 	const [showSteps, setShowSteps] = useState(false);
 	const build = workspace.data?.build ?? null;
 	const progress = useEnvironmentProgress(projectId, {

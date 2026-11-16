@@ -13,6 +13,7 @@ import {
 	type SessionItem,
 	sessionItemsFromUnknown,
 } from "#/domain/session-item";
+import { hubTopic } from "#/domain/user-hub";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -32,6 +33,7 @@ import type { GitTransferHost } from "../adapters/github/git-broker";
 import { pushProxiedRepository } from "../adapters/github/git-proxy-transfer";
 import { githubInstallationAccessToken } from "../adapters/github/installation-token";
 import { repositoryDirectory } from "../adapters/repository-setup";
+import { noteUserHub } from "../adapters/user-hub-notes";
 
 export const PUSH_APPROVAL_UNAVAILABLE =
 	"This push card is no longer available.";
@@ -182,6 +184,9 @@ async function settle(
 		const current = await deps.requests.record(userId, request.id);
 		return current ? stateOf(current) : { answer: "pending" };
 	}
+	// Every open card of this user checks again: this one is settled, and a
+	// push may have outdated another.
+	noteUserHub(userId, [hubTopic.push]);
 	await postPushResultNotices(userId, session.id, deps).catch((error) => {
 		console.warn("A push result notice was not posted.", {
 			error: error instanceof Error ? error.message : "unknown",
