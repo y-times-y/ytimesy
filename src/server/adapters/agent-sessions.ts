@@ -258,16 +258,54 @@ export async function listProjectProviderRefs(
 	return result.rows.map((row: { provider_ref: string }) => row.provider_ref);
 }
 
-export async function listAgentSessions(userId: string, projectId: string) {
+/**
+ * The project's top-level chats, newest first, without their transcripts
+ * (every chat's history was read here before: megabytes per call). A caller
+ * that needs a few kinds of items reads them by chat id.
+ */
+export async function listAgentSessions(
+	userId: string,
+	projectId: string,
+): Promise<Omit<AgentSessionRecord, "items">[]> {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS}
+		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")}
 		 from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id is null
 		   and archived_at is null
 		 order by updated_at desc`,
 		[userId, projectId],
 	);
-	return result.rows.map((row: AgentSessionRow) => toSession(row));
+	return result.rows.map((row: AgentSessionRow) =>
+		withoutItems(toSession(row)),
+	);
+}
+
+/**
+ * What sessionListedModelIsBlocked (listed-model.ts) scans of each of the
+ * user's chats: its errors and replies from its last non-blank reply on, in
+ * transcript order. The scan stops at that reply, so nothing older is read.
+ */
+export async function listedModelBlockItemsForOwner(
+	userId: string,
+	sessionIds: readonly string[],
+): Promise<Map<string, unknown[]>> {
+	const bySession = new Map<string, unknown[]>();
+	if (!sessionIds.length) return bySession;
+	const result = await database().query<{ session_id: string; item: unknown }>(
+		`select i.session_id, i.item
+		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		 where i.session_id = any($2::uuid[]) and i.kind in ('error','agentMessage')
+		  and i.position >= coalesce((select max(j.position) from agent_session_item j
+		   where j.session_id=i.session_id and j.kind='agentMessage' and j.item->>'text' ~ '[^[:space:]]'),0)
+		 order by i.session_id, i.position`,
+		[userId, [...sessionIds]],
+	);
+	for (const row of result.rows) {
+		const items = bySession.get(row.session_id);
+		if (items) items.push(row.item);
+		else bySession.set(row.session_id, [row.item]);
+	}
+	return bySession;
 }
 
 /**
@@ -809,12 +847,19 @@ export async function agentSessionById(sessionId: string) {
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
+/** The parent's oldest child, without its transcript (every child's was read before). */
 export async function childAgentSession(
 	userId: string,
 	parentSessionId: string,
-) {
-	const children = await childAgentSessions(userId, parentSessionId);
-	return children[0] ?? null;
+): Promise<Omit<AgentSessionRecord, "items"> | null> {
+	const result = await database().query(
+		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")}
+		 from agent_session
+		 where user_id=$1 and parent_session_id=$2
+		 order by created_at asc limit 1`,
+		[userId, parentSessionId],
+	);
+	return result.rows[0] ? withoutItems(toSession(result.rows[0])) : null;
 }
 
 /** The chat's side conversation, the oldest if more than one was opened. */
@@ -832,17 +877,11 @@ export async function sideChatForParent(
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
-async function childAgentSessions(userId: string, parentSessionId: string) {
-	const result = await database().query(
-		`select ${SESSION_COLUMNS}
-		 from agent_session
-		 where user_id=$1 and parent_session_id=$2
-		 order by created_at asc`,
-		[userId, parentSessionId],
-	);
-	return result.rows.map((row: AgentSessionRow) => toSession(row));
-}
-
+/**
+ * Every session under `parentSessionId` with its whole transcript. Only a
+ * caller that reads the descendants' items takes this (the review loop's
+ * workers); the rest take descendantAgentSessionMetadata.
+ */
 export async function descendantAgentSessions(
 	userId: string,
 	parentSessionId: string,
@@ -896,6 +935,39 @@ export async function descendantAgentSessionMetadata(
 		const { items: _items, ...metadata } = toSession(row);
 		return metadata;
 	});
+}
+
+/**
+ * Each descendant's model and the rows its token use is recorded on (its
+ * turns' user messages, sessionTokenUsage): what a subagent's budget check
+ * reads at every model step, instead of every descendant's whole transcript.
+ * `usageItems` is never a transcript to write back.
+ */
+export async function descendantTokenUsageItemsForOwner(
+	userId: string,
+	parentSessionId: string,
+): Promise<
+	{
+		readonly id: string;
+		readonly listedModelId: string | null;
+		readonly usageItems: readonly unknown[];
+	}[]
+> {
+	const descendants = await descendantAgentSessionMetadata(
+		userId,
+		parentSessionId,
+	);
+	if (!descendants.length) return [];
+	const usage = await agentSessionItemsOfKindsForOwner(
+		userId,
+		descendants.map((session) => session.id),
+		["userMessage"],
+	);
+	return descendants.map((session) => ({
+		id: session.id,
+		listedModelId: session.listedModelId,
+		usageItems: usage.get(session.id) ?? [],
+	}));
 }
 
 /**

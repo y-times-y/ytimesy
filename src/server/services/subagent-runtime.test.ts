@@ -40,7 +40,8 @@ vi.mock("../adapters/subagents", () => ({
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: adapters.session,
 	agentSessionMetadataForOwner: adapters.session,
-	descendantAgentSessions: vi.fn(async () => []),
+	descendantAgentSessionMetadata: vi.fn(async () => []),
+	descendantTokenUsageItemsForOwner: vi.fn(async () => []),
 }));
 vi.mock("./subagent-writer", () => ({
 	transferWriterPatch: adapters.transfer,
@@ -146,10 +147,12 @@ function guard(
 				steps,
 				budget: options.budget ?? budget,
 			})),
-			descendants: vi.fn(async () =>
-				(options.descendants ?? []).map(
-					(items) => ({ items }) as unknown as AgentSessionRecord,
-				),
+			descendantUsage: vi.fn(async () =>
+				(options.descendants ?? []).map((usageItems, index) => ({
+					id: `kid-${index}`,
+					listedModelId: null,
+					usageItems,
+				})),
 			),
 		},
 	});
@@ -199,7 +202,7 @@ describe("subagent step guard", () => {
 				onFinalStep,
 				deps: {
 					recordStep: vi.fn(async () => ({ steps, budget })),
-					descendants: vi.fn(async () => []),
+					descendantUsage: vi.fn(async () => []),
 				},
 			});
 			return { result, onFinalStep };
@@ -237,7 +240,7 @@ describe("subagent step guard", () => {
 						steps: 1,
 						budget: luna.agentBudget,
 					})),
-					descendants: vi.fn(async () => []),
+					descendantUsage: vi.fn(async () => []),
 				},
 			});
 		// 3M Luna tokens weigh 0.75M Opus tokens (the 0.25 floor): under budget.
@@ -422,7 +425,7 @@ describe("sidekick (lead mode fusion)", () => {
 							: { stopAtStep: options.stopAtStep }),
 					},
 				})),
-				descendants: vi.fn(async () => []),
+				descendantUsage: vi.fn(async () => []),
 			},
 		});
 	const round2 = sidekickState({

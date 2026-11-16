@@ -36,6 +36,7 @@ import {
 	HELPER_FULL_READ_MS,
 	knownHelperRevisions,
 	mergeAgentTaskActivity,
+	withOlderHelperPage,
 } from "#/domain/child-task-activity";
 import {
 	addLivePreviews,
@@ -234,6 +235,7 @@ import {
 } from "../projects/workspace-status";
 import {
 	deleteProjectAgentSession,
+	getOlderHelperItems,
 	listProjectAgentSessions,
 	listProjectAgentTasks,
 	prewarmProjectAgentSession,
@@ -2972,6 +2974,44 @@ export function WorkspaceHome({
 	const olderRead = useRef<string | null>(null);
 	/** When reading older turns last failed: the next try waits a little. */
 	const olderFailedAt = useRef(0);
+	/** The helper whose older items are being read (a helper is read as its last page). */
+	const [olderHelperLoading, setOlderHelperLoading] = useState<string | null>(
+		null,
+	);
+	const olderHelperRead = useRef<string | null>(null);
+	const olderHelperFailedAt = useRef(0);
+	/** Reads the helper's items before the oldest its view holds and puts them above. */
+	function loadOlderHelperItems(helperId: string) {
+		const projectId = activeProjectId;
+		const chatId = activeSessionId;
+		if (!projectId || !chatId || olderHelperRead.current) return;
+		if (Date.now() - olderHelperFailedAt.current < OLDER_RETRY_MS) return;
+		const key = chatSideKeys.tasks(projectId, chatId);
+		const before = queryClient
+			.getQueryData<readonly AgentTaskActivity[]>(key)
+			?.find((task) => task.id === helperId)?.itemsFrom;
+		if (!before) return;
+		olderHelperRead.current = helperId;
+		setOlderHelperLoading(helperId);
+		void getOlderHelperItems({ data: { projectId, helperId, before } })
+			.then((page) =>
+				queryClient.setQueryData<readonly AgentTaskActivity[]>(key, (tasks) =>
+					tasks?.map((task) =>
+						task.id === helperId
+							? withOlderHelperPage(task, { ...page, before })
+							: task,
+					),
+				),
+			)
+			// A failed read is tried again once the reader scrolls after a pause.
+			.catch(() => {
+				olderHelperFailedAt.current = Date.now();
+			})
+			.finally(() => {
+				olderHelperRead.current = null;
+				setOlderHelperLoading(null);
+			});
+	}
 	const [olderLoading, setOlderLoading] = useState(false);
 	/**
 	 * Reads the turns before the oldest one shown and puts them above it. A
@@ -3999,6 +4039,10 @@ export function WorkspaceHome({
 												}
 											}}
 											childTasks={agentTasks.data ?? []}
+											olderHelperItems={{
+												loadingId: olderHelperLoading,
+												onLoad: loadOlderHelperItems,
+											}}
 											backgroundRuns={backgroundRuns}
 											memoryActions={memoryActions}
 											key={composerKey.current.key}

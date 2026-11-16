@@ -221,6 +221,10 @@ it("does not read the saved model history of a restored point the transcript has
 });
 
 it("forks into independent session ancestry and retains the original conversation", async () => {
+	await db.query(
+		"insert into api_turn(session_id,user_id,messages,model_id,connection_revision) values($1,'alice',$2::jsonb,'model-now',null)",
+		[session, JSON.stringify([{ role: "user", content: "Continue" }])],
+	);
 	const recovered = await recoverConversation(
 		{} as WorkspaceMachines,
 		"alice",
@@ -253,6 +257,22 @@ it("forks into independent session ancestry and retains the original conversatio
 			)
 		).rows[0].items,
 	).toHaveLength(2);
+	// The backup is copied by the database: the transcript and the latest
+	// turn's messages, never read out and written back.
+	const backup = (
+		await db.query<{
+			response: { ok: boolean; result: Record<string, unknown> };
+		}>(
+			"select response from agent_task_command_receipt where request_id like 'conversation-backup:%'",
+		)
+	).rows[0]?.response;
+	expect(backup?.ok).toBe(true);
+	expect(backup?.result.items).toHaveLength(2);
+	expect(backup?.result).toMatchObject({
+		messages: [{ role: "user", content: "Continue" }],
+		modelId: "model-now",
+	});
+	expect(backup?.result).not.toHaveProperty("revision");
 });
 
 it("rejects other owners, running turns, active children, and code-less recovery", async () => {
@@ -407,7 +427,8 @@ it("rolls back a restore whose hold on the chat lapsed", async () => {
 		);
 		holder.connect.mockResolvedValue({
 			query: async (sql: string, values: unknown[]) => {
-				if (sql.startsWith("select messages,model_id"))
+				// The hold lapses while the current conversation is backed up.
+				if (sql.startsWith("insert into agent_task_command_receipt"))
 					vi.advanceTimersByTime(10_000);
 				return holder.query(sql, values);
 			},

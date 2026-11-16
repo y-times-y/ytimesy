@@ -9,13 +9,18 @@ import {
 import {
 	type AgentTaskActivity,
 	childTaskPublicItems,
+	HELPER_OLDER_PAGE,
+	HELPER_PAGE,
 	publicItemsWithPositions,
 	reusableHelperIds,
 } from "#/domain/child-task-activity";
-import { sessionItemsFromUnknown } from "#/domain/session-item";
+import {
+	type SessionItem,
+	sessionItemsFromUnknown,
+} from "#/domain/session-item";
 import { isSideChat } from "#/domain/side-chat";
 import { subagentTaskViews } from "#/domain/subagent-tree";
-import { transcriptItemsForOwner } from "#/server/adapters/agent-session-items";
+import { transcriptPagesForOwner } from "#/server/adapters/agent-session-items";
 import {
 	agentSessionItemsOfKindsForOwner,
 	agentSessionMetadataForOwner,
@@ -34,7 +39,7 @@ const SPEND_ITEM_KINDS = ["userMessage", "notice"] as const;
 export type AgentTaskReadMode = {
 	/** The browser applies `itemsDelta` (an older page never asks). */
 	readonly deltas?: boolean;
-	/** Read every working helper whole (their spend and context use change as they work). */
+	/** Read every helper still read as its last page, not by delta (a safety net). */
 	readonly fresh?: boolean;
 };
 
@@ -121,64 +126,53 @@ export async function projectAgentTasksAndBackground(
 			)
 		: new Set<string>();
 	const open = shownIds.filter((id) => !reused.has(id));
-	// Helpers still working: only the rows written since the revision the
-	// browser holds, when every one of them can be answered that way (their
-	// spend sums their descendants', so they are read whole together or not
-	// at all). The page asks for a whole read now and then (`fresh`) to
-	// refresh spend and context use.
+	// Each helper still read: only the rows written since the revision the
+	// browser holds, when it holds one and they are few; else its last page
+	// (HELPER_PAGE), never its whole transcript. Spend and context use come
+	// from the rows they are made of (the turns' starts) for every helper
+	// read, so a subtree's spend stays whole whichever way its transcripts
+	// travel. The page still asks for a page read now and then (`fresh`).
 	const deltas =
-		mode.deltas &&
-		!mode.fresh &&
-		open.length > 0 &&
-		open.every((id) => known[id] !== undefined)
+		mode.deltas && !mode.fresh
 			? await itemRowsSinceForOwner(
 					userId,
-					Object.fromEntries(open.map((id) => [id, known[id] as string])),
+					Object.fromEntries(
+						open.flatMap((id) =>
+							known[id] === undefined ? [] : [[id, known[id] as string]],
+						),
+					),
 				)
-			: null;
-	const byDelta =
-		deltas &&
-		open.every((id) => {
-			const delta = deltas.get(id);
-			return (
-				delta &&
+			: new Map<string, never>();
+	const byDelta = new Map(
+		[...deltas].filter(
+			([id, delta]) =>
+				open.includes(id) &&
+				known[id] !== undefined &&
 				delta.rows.length <= MAX_DELTA_ROWS &&
-				delta.rows.length < delta.count
-			);
-		})
-			? deltas
-			: null;
-	const [transcripts, rootBackgroundItems, spendItems] = await Promise.all([
-		transcriptItemsForOwner(userId, byDelta ? [] : open),
-		// Their background commands, from the rows that record them only.
-		backgroundCommandItemsForOwner(userId, [
-			root.id,
-			...(byDelta ? open : []),
-			...reused,
-		]),
-		// Read by delta, spend and context use still come from the only rows
-		// they are made of (the turns' starts), not whole transcripts.
-		byDelta
-			? agentSessionItemsOfKindsForOwner(userId, open, SPEND_ITEM_KINDS)
-			: null,
+				delta.rows.length < delta.count,
+		),
+	);
+	const paged = open.filter((id) => !byDelta.has(id));
+	const [pages, backgroundItems, spendItems] = await Promise.all([
+		transcriptPagesForOwner(userId, paged, HELPER_PAGE),
+		// Background commands from the rows that record them only: a page can
+		// leave out an older command that still runs.
+		backgroundCommandItemsForOwner(userId, [root.id, ...shownIds]),
+		agentSessionItemsOfKindsForOwner(userId, open, SPEND_ITEM_KINDS),
 	]);
 	const descendants = shown.map((session) => ({
 		...session,
-		items: transcripts.get(session.id) ?? [],
+		items: pages.get(session.id)?.items ?? [],
 	}));
 	const byId = new Map(descendants.map((session) => [session.id, session]));
-	// Spend and context use need only the turns' starts: read by delta, from
-	// those rows alone (spendItems).
 	const subagents = subagentTaskViews(
 		root.id,
 		[
 			root,
-			...(spendItems
-				? descendants.map((session) => ({
-						...session,
-						items: spendItems.get(session.id) ?? [],
-					}))
-				: descendants),
+			...descendants.map((session) => ({
+				...session,
+				items: spendItems.get(session.id) ?? [],
+			})),
 		],
 		Date.now(),
 	);
@@ -204,18 +198,17 @@ export async function projectAgentTasksAndBackground(
 				...(itemsRev ? { itemsRev } : {}),
 				unchanged: true as const,
 			};
-		const delta = byDelta?.get(task.id);
-		const deltaContextUsage = spendItems
-			? recordedContextUsage(
-					sessionItemsFromUnknown(spendItems.get(task.id) ?? []),
-				)
-			: undefined;
+		const delta = byDelta.get(task.id);
+		// The latest turn's measurement, recorded on its start.
+		const contextUsage = recordedContextUsage(
+			sessionItemsFromUnknown(spendItems.get(task.id) ?? []),
+		);
 		if (delta)
 			return {
 				...task,
 				...(queuedSteering.length ? { queuedSteering } : {}),
 				...(subagent ? { subagent } : {}),
-				...(deltaContextUsage ? { contextUsage: deltaContextUsage } : {}),
+				...(contextUsage ? { contextUsage } : {}),
 				items: [],
 				turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
 				itemsRev: delta.itemsRev,
@@ -230,10 +223,11 @@ export async function projectAgentTasksAndBackground(
 					})),
 				},
 			};
-		const items = sessionItemsFromUnknown(byId.get(task.id)?.items);
-		const contextUsage = recordedContextUsage(items);
+		const page = pages.get(task.id);
+		const items = sessionItemsFromUnknown(page?.items);
+		const first = page?.first ?? 0;
 		const shownItems = mode.deltas
-			? publicItemsWithPositions(items)
+			? publicItemsWithPositions(items, first)
 			: { items: childTaskPublicItems(items), positions: undefined };
 		return {
 			...(itemsRev ? { itemsRev } : {}),
@@ -242,38 +236,60 @@ export async function projectAgentTasksAndBackground(
 			...(contextUsage ? { contextUsage } : {}),
 			items: shownItems.items,
 			...(shownItems.positions ? { itemPositions: shownItems.positions } : {}),
+			...(mode.deltas && first > 0 ? { itemsFrom: first } : {}),
 			turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
 			...(subagent ? { subagent } : {}),
 		};
 	});
 	const now = Date.now();
-	const sessions = new Map<string, { items: unknown }>([
-		[root.id, { items: rootBackgroundItems.get(root.id) ?? [] }],
-		// A helper not read whole: only the rows that record its background commands.
-		...descendants.map(
-			(session) =>
-				[
-					session.id,
-					reused.has(session.id) || byDelta
-						? { items: rootBackgroundItems.get(session.id) ?? [] }
-						: session,
-				] as const,
-		),
-	]);
+	const readIds = new Set([root.id, ...shownIds]);
 	const background = Object.fromEntries(
-		backgroundReadChatIds(root.id, tasks).map((id) => {
-			const session = sessions.get(id);
-			return [
-				id,
-				session
-					? runningBackgroundCommands(
-							sessionItemsFromUnknown(session.items),
-							now,
-							backgroundCommandMaxSeconds(),
-						)
-					: [],
-			];
-		}),
+		backgroundReadChatIds(root.id, tasks).map((id) => [
+			id,
+			readIds.has(id)
+				? runningBackgroundCommands(
+						sessionItemsFromUnknown(backgroundItems.get(id) ?? []),
+						now,
+						backgroundCommandMaxSeconds(),
+					)
+				: [],
+		]),
 	);
 	return { tasks, background };
+}
+
+/**
+ * A helper's page before stored position `before` (the oldest the browser
+ * holds), as its view shows it, read as the reader scrolls up. Null for a
+ * helper that is not the user's or not in the project.
+ */
+export async function olderHelperItems(
+	userId: string,
+	projectId: string,
+	helperId: string,
+	before: number,
+): Promise<{
+	readonly items: SessionItem[];
+	readonly itemPositions: number[];
+	readonly itemsFrom: number;
+} | null> {
+	const helper = await agentSessionMetadataForOwner(userId, helperId);
+	if (!helper || helper.projectId !== projectId || !helper.parentSessionId)
+		return null;
+	const page = (
+		await transcriptPagesForOwner(userId, [helperId], {
+			...HELPER_OLDER_PAGE,
+			before,
+		})
+	).get(helperId);
+	if (!page) return null;
+	const shown = publicItemsWithPositions(
+		sessionItemsFromUnknown(page.items),
+		page.first,
+	);
+	return {
+		items: shown.items,
+		itemPositions: shown.positions,
+		itemsFrom: page.first,
+	};
 }
