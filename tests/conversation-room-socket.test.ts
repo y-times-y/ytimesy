@@ -108,3 +108,24 @@ it("restores viewer attachments after hibernation and closes viewers on purge", 
 	expect(socket.close).toHaveBeenCalledWith(4410, "deleted");
 	expect((await open()).status).toBe(410);
 });
+it("sends a preview frame to live viewers as is, without a revision or storing it", async () => {
+	const { room, socket, open } = fixture();
+	// Nobody watching: nothing took it, so the turn's step is woken instead.
+	expect(room.preview('{"type":"preview"}')).toBe(false);
+	await room.publish(full);
+	expect((await open()).status).toBe(200);
+	socket.send.mockClear();
+	const frame = JSON.stringify({
+		type: "preview",
+		turnId: "22222222-2222-4222-8222-222222222222",
+		events: [{ type: "text-delta", id: "cc-0-0", text: "Working on it." }],
+	});
+	expect(room.preview(frame)).toBe(true);
+	expect(socket.send).toHaveBeenCalledWith(frame);
+	// The chat's copy is unchanged: a new viewer gets revision 1 only.
+	socket.send.mockClear();
+	expect((await open()).status).toBe(200);
+	const sent = socket.send.mock.calls.map(([data]) => JSON.parse(data));
+	expect(sent.every((message) => message.type !== "preview")).toBe(true);
+	expect(sent[0]?.revision).toBe("1");
+});

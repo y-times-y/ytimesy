@@ -1,3 +1,7 @@
+import {
+	type LivePreviewMessage,
+	parseLivePreview,
+} from "#/domain/claude-feed-preview";
 import { createLiveProgressCopy } from "#/domain/live-progress";
 import {
 	LIVE_PROGRESS_PATH,
@@ -44,6 +48,12 @@ export type LiveProgressOptions = {
 	sessionId: string;
 	/** A whole snapshot of the chat, newest last; revisions only grow. */
 	onProgress(revision: string, progress: unknown): void;
+	/**
+	 * Text a running Claude Code turn wrote that its step has not published
+	 * yet (claude-feed-preview.ts): shown until a snapshot carries it. Only
+	 * the socket carries previews.
+	 */
+	onPreview?(preview: LivePreviewMessage): void;
 	/** The connection delivers (its first snapshot arrived, or the stream opened). */
 	onOpen(): void;
 	/** It stopped delivering; it reconnects by itself. */
@@ -177,7 +187,12 @@ export function openLiveProgress(options: LiveProgressOptions): () => void {
 			} catch {
 				return;
 			}
-			if (typeof message?.revision !== "string") return;
+			if (typeof message?.revision !== "string") {
+				// Previews only over a copy this socket delivered.
+				const preview = delivering ? parseLivePreview(message) : null;
+				if (preview) options.onPreview?.(preview);
+				return;
+			}
 			const progress = message.delta
 				? copy.delta(message.delta)
 				: copy.full(message.progress);

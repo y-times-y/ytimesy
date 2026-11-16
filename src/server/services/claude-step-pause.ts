@@ -25,6 +25,13 @@ type TurnHooks = {
 
 const hooks = new Map<string, TurnHooks>();
 const pauses = new Map<string, number>();
+/**
+ * Each turn's redaction list as its last step left it, kept in this isolate
+ * so the chat's object can redact a preview between steps
+ * (claude-feed-preview.ts). Lost with the isolate: then no preview is sent
+ * and the step is woken instead.
+ */
+const redactions = new Map<string, () => readonly string[]>();
 
 /** The executor registers the turn's hooks while it drives the turn. */
 export function registerClaudeTurn(turnId: string, turn: TurnHooks) {
@@ -36,8 +43,7 @@ export function registerClaudeTurn(turnId: string, turn: TurnHooks) {
 
 /** Whether this turn may sleep between steps: registered and unwatched. */
 export function claudeTurnMayPause(turnId: string) {
-	// Off switch for the edge executor's environment.
-	if (process.env.YTIMESY_CLAUDE_STEP_PAUSE === "0") return false;
+	if (!claudeFeedStepMayPause(turnId)) return false;
 	const turn = hooks.get(turnId);
 	if (!turn) return false;
 	try {
@@ -45,6 +51,36 @@ export function claudeTurnMayPause(turnId: string) {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Whether a step following the run's feed may sleep between batches, watched
+ * or not: its object previews the text to whoever watches and wakes the
+ * step for anything else (claude-feed.ts).
+ */
+export function claudeFeedStepMayPause(turnId: string) {
+	// Off switch for the edge executor's environment.
+	if (process.env.YTIMESY_CLAUDE_STEP_PAUSE === "0") return false;
+	return hooks.has(turnId);
+}
+
+/** The step's redaction list, for previews while no step runs. */
+export function rememberClaudeTurnRedaction(
+	turnId: string,
+	redact: () => readonly string[],
+) {
+	redactions.set(turnId, redact);
+}
+
+/** The turn's redaction list, if this isolate still has it. */
+export function claudeTurnRedaction(turnId: string) {
+	return redactions.get(turnId);
+}
+
+/** The turn ended: nothing of it stays here. */
+export function forgetClaudeTurn(turnId: string) {
+	redactions.delete(turnId);
+	pauses.delete(turnId);
 }
 
 /** The turn's feed, when its executor offers one (claude-feed.ts). */

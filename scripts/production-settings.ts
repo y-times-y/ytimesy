@@ -41,6 +41,9 @@ export function productionRuntimeSettings(
 			env.YTIMESY_PRODUCTION_DURABLE_OBJECT_LOCATION_HINT || "enam",
 		// Auth email goes out through the EMAIL send_email binding (wrangler config).
 		AUTH_EMAIL_FROM: env.AUTH_EMAIL_FROM || "noreply@ytimesy.com",
+		// Claude Code runs push their output to the chat object, which sleeps
+		// between batches (src/domain/claude-feed.ts). "0" turns it off.
+		YTIMESY_CLAUDE_FEED: env.YTIMESY_CLAUDE_FEED === "0" ? "0" : "1",
 	};
 }
 
