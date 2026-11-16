@@ -363,18 +363,61 @@ export async function receiveProxiedRepository(
 	});
 }
 
+type PushInput = Repository & {
+	directory: string;
+	baseBranch?: string;
+	revision?: string;
+	/**
+	 * Pushes exactly this commit (an approved push to a default branch);
+	 * the grant names it, so the proxy refuses any other.
+	 */
+	commit?: string;
+};
+
+/** GitHub refused the push because the branch has commits the checkout lacks. */
+class PushNotFastForward extends Error {}
+
+/**
+ * What a rejected non-fast-forward push says. Only the last lines of stderr
+ * are kept, and Git ends that rejection with its "git pull" / "fast-forwards"
+ * hints.
+ */
+const NOT_FAST_FORWARD_PATTERN =
+	/non-fast-forward|fetch first|git pull|fast-forwards/i;
+
+const BRANCH_DIVERGED =
+	"Workspace Git could not merge the chat's branch with newer commits already on GitHub (conflicting changes). Merge or rebase the branch from GitHub in the workspace, then send a message to push again.";
+const BRANCH_KEPT_MOVING =
+	"The chat's branch on GitHub changed again while ytimesy was merging it. Send a message to push again.";
+
+/**
+ * Pushes the turn's commit to the chat's branch. When the branch on GitHub
+ * has commits the checkout lacks (a rebase or amend after an earlier push,
+ * or a push from elsewhere), the push used to fail the same way every turn.
+ * A chat's turn publication now fetches the branch, merges it into the
+ * commit being published (history kept, nothing force-pushed) and pushes
+ * that, with a fresh grant: the proxy spends a write grant on its first push
+ * request, even a rejected one.
+ */
 export async function pushProxiedRepository(
 	host: GitTransferHost,
-	input: Repository & {
-		directory: string;
-		baseBranch?: string;
-		revision?: string;
-		/**
-		 * Pushes exactly this commit (an approved push to a default branch);
-		 * the grant names it, so the proxy refuses any other.
-		 */
-		commit?: string;
-	},
+	input: PushInput,
+) {
+	try {
+		return await pushOnce(host, input, false);
+	} catch (error) {
+		if (!(error instanceof PushNotFastForward) || !input.revision) throw error;
+		console.warn("Workspace Git push rejected; merging the remote branch", {
+			branch: input.branch,
+		});
+		return pushOnce(host, input, true);
+	}
+}
+
+async function pushOnce(
+	host: GitTransferHost,
+	input: PushInput,
+	reconcile: boolean,
 ) {
 	if (
 		input.revision &&
@@ -450,12 +493,44 @@ commit=$(git -C ${directory} rev-parse --verify ${quote(`${input.commit || input
 ${git} init -q --bare ${publish}
 printf '%s\n' "$objects" > ${quote(`${temporary}/push.git/objects/info/alternates`)}
 ${git} --git-dir=${publish} update-ref refs/heads/publish "$commit") || exit ${PUSH_EXIT.commit}
-${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/heads/${input.branch}`)} || exit ${PUSH_EXIT.push}`,
+${reconcile ? mergeRemoteBranchScript(git, publish, url, input.branch) : ""}${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/heads/${input.branch}`)} || exit ${PUSH_EXIT.push}`,
 			NETWORK_GIT_TIMEOUT_MS,
 		);
 		ran = true;
 		if (result.exitCode !== 0) {
 			const stderr = stderrTail(result, 400);
+			if (
+				!reconcile &&
+				result.exitCode === PUSH_EXIT.push &&
+				NOT_FAST_FORWARD_PATTERN.test(stderr)
+			) {
+				console.warn("Workspace Git command failed", {
+					failure: TRANSFER_FAILED,
+					exitCode: result.exitCode,
+					stderr,
+				});
+				throw new PushNotFastForward(TRANSFER_FAILED);
+			}
+			if (reconcile && result.exitCode === PUSH_EXIT.diverged) {
+				console.warn("Workspace Git command failed", {
+					failure: BRANCH_DIVERGED,
+					exitCode: result.exitCode,
+					stderr,
+				});
+				throw new Error(BRANCH_DIVERGED);
+			}
+			if (
+				reconcile &&
+				result.exitCode === PUSH_EXIT.push &&
+				NOT_FAST_FORWARD_PATTERN.test(stderr)
+			) {
+				console.warn("Workspace Git command failed", {
+					failure: BRANCH_KEPT_MOVING,
+					exitCode: result.exitCode,
+					stderr,
+				});
+				throw new Error(BRANCH_KEPT_MOVING);
+			}
 			const failure =
 				result.exitCode === PUSH_EXIT.commit
 					? "Workspace Git could not prepare the commit to push."
@@ -484,4 +559,31 @@ const PUSH_EXIT = {
 	prepare: 65,
 	commit: 66,
 	push: 67,
+	diverged: 68,
 } as const;
+
+/**
+ * Guest shell run before the retry's push: fetches the branch, and when it
+ * has commits the published commit lacks, merges it in without a working
+ * tree (`git merge-tree`). A remote that already contains the commit needs
+ * no push (exit 0); a conflicting merge, or a Git too old for `merge-tree
+ * --write-tree`, exits with PUSH_EXIT.diverged.
+ */
+export function mergeRemoteBranchScript(
+	git: string,
+	publish: string,
+	url: string,
+	branch: string,
+) {
+	const remoteRef = "refs/remotes/origin/chat";
+	return `${git} --git-dir=${publish} fetch -q --no-tags ${quote(url)} ${quote(`refs/heads/${branch}:${remoteRef}`)} || exit ${PUSH_EXIT.push}
+commit=$(${git} --git-dir=${publish} rev-parse --verify refs/heads/publish) || exit ${PUSH_EXIT.commit}
+remote=$(${git} --git-dir=${publish} rev-parse --verify ${remoteRef}) || exit ${PUSH_EXIT.push}
+if ${git} --git-dir=${publish} merge-base --is-ancestor "$commit" "$remote"; then exit 0; fi
+if ! ${git} --git-dir=${publish} merge-base --is-ancestor "$remote" "$commit"; then
+  tree=$(${git} --git-dir=${publish} merge-tree --write-tree --no-messages "$commit" "$remote") || exit ${PUSH_EXIT.diverged}
+  merged=$(GIT_AUTHOR_NAME=ytimesy GIT_AUTHOR_EMAIL=noreply@ytimesy.com GIT_COMMITTER_NAME=ytimesy GIT_COMMITTER_EMAIL=noreply@ytimesy.com ${git} --git-dir=${publish} commit-tree "$tree" -p "$commit" -p "$remote" -m "Merge remote changes into the chat's branch") || exit ${PUSH_EXIT.diverged}
+  ${git} --git-dir=${publish} update-ref refs/heads/publish "$merged" || exit ${PUSH_EXIT.commit}
+fi
+`;
+}
