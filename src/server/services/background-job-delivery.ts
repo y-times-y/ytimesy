@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { Freestyle } from "freestyle";
 import type { BackgroundJob } from "#/domain/background-job";
+import { claudeBoxToolsEnabled } from "#/domain/claude-box-tools";
 import {
 	clearTurnBoxToolIdentity,
 	compactSettledTurns,
@@ -104,11 +105,21 @@ export async function deliverBackgroundJob(
 						dispatchReleasableHeldSends(),
 						// VM grants of Claude runner boxes whose turn no longer runs
 						// (their tokens never expire; deleting the identity revokes them).
-						sweepClaudeBoxToolIdentities({
-							machines,
-							stale: () => staleTurnBoxToolIdentities(),
-							clear: clearTurnBoxToolIdentity,
-						}),
+						// Off with box tools off; bookkeeping never fails the job.
+						claudeBoxToolsEnabled(process.env)
+							? sweepClaudeBoxToolIdentities({
+									machines,
+									stale: () => staleTurnBoxToolIdentities(),
+									clear: clearTurnBoxToolIdentity,
+								}).catch((error: unknown) =>
+									console.warn("Box tool identity sweep failed.", {
+										message:
+											error instanceof Error
+												? error.message.slice(0, 200)
+												: "unknown",
+									}),
+								)
+							: Promise.resolve(),
 					]);
 					const failed = sweeps.find((sweep) => sweep.status === "rejected");
 					if (failed) throw failed.reason;

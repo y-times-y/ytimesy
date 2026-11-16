@@ -1157,10 +1157,12 @@ export async function expireApiTurnLeases() {
  */
 export async function turnBoxToolIdentity(
 	turnId: string,
+	/** Only while this lease still owns the turn: a lost attempt never revokes its successor's grant. */
+	leaseId?: string | null,
 ): Promise<string | null> {
 	const result = await database().query<{ box_tool_identity: string | null }>(
-		"select box_tool_identity from api_turn where id=$1",
-		[turnId],
+		"select box_tool_identity from api_turn where id=$1 and ($2::text is null or lease_id::text=$2::text)",
+		[turnId, leaseId ?? null],
 	);
 	return result.rows[0]?.box_tool_identity ?? null;
 }
