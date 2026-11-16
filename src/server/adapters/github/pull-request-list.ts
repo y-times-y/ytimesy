@@ -3,6 +3,7 @@ import {
 	type PullRequestFilter,
 	type PullRequestPerson,
 	pullRequestPerson,
+	pullRequestWaitingOnYou,
 	type RepositoryPullRequest,
 	reviewMarkFrom,
 } from "../../../domain/pull-request-review";
@@ -108,6 +109,7 @@ async function openPullRequestSignals(
 	repo: string,
 ) {
 	const heads = new Map<number, string>();
+	let viewer: string | null = null;
 	const signals = new Map<
 		number,
 		{
@@ -118,7 +120,7 @@ async function openPullRequestSignals(
 		}
 	>();
 	try {
-		const viewer = await signedInLogin(github);
+		viewer = await signedInLogin(github);
 		let after: string | null = null;
 		for (let page = 0; page < 5; page++) {
 			const result: SignalsPage = await github.graphql<SignalsPage>(
@@ -162,7 +164,7 @@ async function openPullRequestSignals(
 		console.warn("Pull request review signals unavailable", errorText(error));
 	}
 	await fillChecks(github, owner, repo, signals, heads);
-	return signals;
+	return { signals, viewer };
 }
 
 const errorText = (error: unknown) =>
@@ -257,10 +259,10 @@ export async function listRepositoryPullRequests(
 		per_page: 100,
 	});
 	// Open pull requests only: a merged or closed one has no review to ask for.
-	const signals =
+	const { signals, viewer } =
 		filter === "open" || filter === "all"
 			? await openPullRequestSignals(github, owner, repo)
-			: new Map();
+			: { signals: new Map<number, never>(), viewer: null };
 	return pulls
 		.filter((pull) =>
 			filter === "merged"
@@ -269,29 +271,44 @@ export async function listRepositoryPullRequests(
 					? !pull.merged_at
 					: true,
 		)
-		.map((pull) => ({
-			number: pull.number,
-			title: pull.title,
-			url: pull.html_url,
-			author: pull.user?.login ?? "ghost",
-			authorName: null,
-			authorAvatarUrl: pull.user?.avatar_url ?? null,
-			draft: Boolean(pull.draft),
-			state: pull.merged_at
-				? "merged"
-				: pull.state === "closed"
-					? "closed"
-					: pull.draft
-						? "draft"
-						: "open",
-			head: pull.head.ref,
-			base: pull.base.ref,
-			updatedAt: pull.updated_at,
-			labels: pull.labels.map((label) => ({
-				name: label.name ?? "",
-				color: label.color ?? "777777",
-				description: label.description ?? null,
-			})),
-			...(pull.state === "open" ? signals.get(pull.number) : {}),
-		}));
+		.map((pull) => {
+			const signal =
+				pull.state === "open" ? signals.get(pull.number) : undefined;
+			return {
+				number: pull.number,
+				title: pull.title,
+				url: pull.html_url,
+				author: pull.user?.login ?? "ghost",
+				authorName: null,
+				authorAvatarUrl: pull.user?.avatar_url ?? null,
+				draft: Boolean(pull.draft),
+				state: pull.merged_at
+					? "merged"
+					: pull.state === "closed"
+						? "closed"
+						: pull.draft
+							? "draft"
+							: "open",
+				head: pull.head.ref,
+				base: pull.base.ref,
+				updatedAt: pull.updated_at,
+				labels: pull.labels.map((label) => ({
+					name: label.name ?? "",
+					color: label.color ?? "777777",
+					description: label.description ?? null,
+				})),
+				...signal,
+				...(signal
+					? {
+							waiting: pullRequestWaitingOnYou({
+								state: "open",
+								author: pull.user?.login ?? "",
+								viewer,
+								review: signal.review,
+								checks: signal.checks,
+							}),
+						}
+					: {}),
+			};
+		});
 }

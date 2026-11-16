@@ -19,6 +19,8 @@ export type IssueSummary = {
 	readonly comments: number;
 	readonly createdAt: string;
 	readonly updatedAt: string;
+	/** An open issue assigned to the signed-in user: the sidebar badge counts it. */
+	readonly waiting?: boolean;
 };
 
 export type IssueComment = {

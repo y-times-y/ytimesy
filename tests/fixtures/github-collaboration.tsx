@@ -9,6 +9,10 @@ import type {
 } from "../../src/domain/pull-request-review";
 import { IssuesInspector } from "../../src/features/workspace/issues-inspector";
 import { PullRequestInspector } from "../../src/features/workspace/pull-request-inspector";
+import {
+	type WorkItemsKind,
+	WorkItemsPage,
+} from "../../src/features/workspace/work-items-page";
 import "../../src/styles.css";
 
 const author = { login: "morgan", avatarUrl: null, bot: false };
@@ -146,6 +150,8 @@ window.fetch = async (input, init) => {
 	if (!url.pathname.startsWith("/api/github/"))
 		return originalFetch(input, init);
 	const isIssue = url.pathname.endsWith("/issue");
+	// A second connected repository (the sidebar pages) has its own, smaller lists.
+	const second = url.searchParams.get("repositoryId") === "23";
 	const data = init?.body ? JSON.parse(String(init.body)) : null;
 	if (data) {
 		if (nextFailure) {
@@ -320,9 +326,18 @@ window.fetch = async (input, init) => {
 			);
 		const state = url.searchParams.get("state");
 		return Response.json({
-			issues: issues.filter(
-				(issue) => state === "all" || issue.state === state,
-			),
+			issues: issues
+				.filter((issue) => state === "all" || issue.state === state)
+				.slice(0, second ? 2 : undefined)
+				.map((issue) =>
+					second
+						? {
+								...issue,
+								title: `[docs] ${issue.title}`,
+								number: issue.number + 100,
+							}
+						: issue,
+				),
 		});
 	}
 	if (url.searchParams.has("number")) return Response.json(pull);
@@ -364,14 +379,24 @@ window.fetch = async (input, init) => {
 		}),
 	);
 	return Response.json({
-		pullRequests: state === "open" || state === "all" ? rows : [],
+		pullRequests:
+			state === "open" || state === "all"
+				? second
+					? rows.slice(0, 3).map((row) => ({
+							...row,
+							title: `[docs] ${row.title}`,
+							number: row.number + 100,
+							head: `docs/${row.head}`,
+						}))
+					: rows
+				: [],
 	});
 };
 const client = new QueryClient({
 	defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
 function Fixture() {
-	const [view, setView] = useState<"pr" | "issues">("pr");
+	const [view, setView] = useState<"pr" | "issues" | WorkItemsKind>("pr");
 	const [number, setNumber] = useState<number>();
 	return (
 		<QueryClientProvider client={client}>
@@ -390,10 +415,42 @@ function Fixture() {
 					<button type="button" onClick={() => setView("issues")}>
 						Issues
 					</button>
+					<button type="button" onClick={() => setView("pull-requests")}>
+						Pages: pull requests
+					</button>
+					<button type="button" onClick={() => setView("issues-all" as never)}>
+						Pages: issues
+					</button>
 					<small>Component test · simulated GitHub</small>
 				</nav>
 				<main className="qa-surface">
-					{view === "pr" ? (
+					{view === "pull-requests" || (view as string) === "issues-all" ? (
+						<WorkItemsPage
+							key={view}
+							kind={view === "pull-requests" ? "pull-requests" : "issues"}
+							repositories={[
+								{ ...repository, name: "editor", projectId: "p1" },
+								{
+									installationId: 11,
+									repositoryId: 23,
+									name: "docs",
+									projectId: "p2",
+								},
+							]}
+							chatsOf={(repositoryId) =>
+								repositoryId === 22
+									? new Map([
+											[
+												"ytimesy/polling",
+												{ id: "c1", title: "Polling fix", working: true },
+											],
+										])
+									: new Map()
+							}
+							onOpenChat={() => undefined}
+							onChatStarted={() => undefined}
+						/>
+					) : view === "pr" ? (
 						<PullRequestInspector
 							key={number ?? "list"}
 							repository={{ ...repository, number }}

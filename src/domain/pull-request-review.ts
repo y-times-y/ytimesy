@@ -172,7 +172,35 @@ export type RepositoryPullRequest = ListedRepositoryPullRequest & {
 	readonly checks?: PullRequestChecksCount | null;
 	readonly additions?: number;
 	readonly deletions?: number;
+	/** The signed-in user has something to do here (see pullRequestWaitingOnYou). */
+	readonly waiting?: boolean;
 };
+
+/**
+ * Whether an open pull request is waiting on the signed-in user: they were
+ * asked to review it, or it is theirs and ready to merge (approved, and every
+ * check passed). Counted by the sidebar badge; never "everything open".
+ */
+export function pullRequestWaitingOnYou(input: {
+	readonly state: string;
+	readonly author: string;
+	readonly viewer: string | null;
+	readonly review: PullRequestReviewMark | null | undefined;
+	readonly checks: PullRequestChecksCount | null | undefined;
+}): boolean {
+	if (input.state !== "open" || !input.viewer) return false;
+	if (input.review?.kind === "requested" && input.review.you) return true;
+	const mine = input.author.toLowerCase() === input.viewer.toLowerCase();
+	const checks = input.checks;
+	return Boolean(
+		mine &&
+			input.review?.kind === "approved" &&
+			checks &&
+			checks.passed > 0 &&
+			checks.failed === 0 &&
+			checks.pending === 0,
+	);
+}
 
 /**
  * The one review mark for a pull request. A reviewer's latest verdict counts:

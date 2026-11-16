@@ -253,6 +253,40 @@ try {
 		.scrollIntoViewIfNeeded();
 	await page.keyboard.press("Escape");
 	await page.setViewportSize({ width: 1200, height: 780 });
+	// The sidebar pages: every connected repository in one table, a repository
+	// filter, and the in-app review page behind a row.
+	await button("Pages: pull requests").click();
+	await page.locator(".work-page .gh-table tbody tr").first().waitFor();
+	assert.equal(await page.locator(".work-page .gh-table tbody tr").count(), 21);
+	assert.deepEqual(
+		await page.locator(".work-page .gh-table th").allTextContents(),
+		["Pull request", "Repo", "Chat", "Checks", "Review", "Diff", "Updated"],
+	);
+	assert.equal(
+		await page.locator(".gh-chat-rail[data-working]").count(),
+		5,
+		"the working chat's rail sweeps on each pull request it owns",
+	);
+	await button("Filter by repository").click();
+	await page.getByRole("menuitem", { name: "docs" }).click();
+	await page.waitForFunction(
+		() =>
+			document.querySelectorAll(".work-page .gh-table tbody tr").length === 3,
+	);
+	assert.equal(
+		await page.locator(".gh-table-repo").first().textContent(),
+		"docs",
+	);
+	await page.locator(".work-page .gh-table-open").first().click();
+	await button("Review changes").waitFor();
+	await button("All pull requests").click();
+	await page.locator(".work-page .gh-table tbody tr").first().waitFor();
+	await button("Pages: issues").click();
+	await page.locator(".work-page .gh-table tbody tr").first().waitFor();
+	const issueRepos = new Set(
+		await page.locator(".work-page .gh-table-repo").allTextContents(),
+	);
+	assert.deepEqual([...issueRepos].sort(), ["docs", "editor"]);
 	assert.deepEqual(errors, []);
 	console.log(
 		`PASS: dense list/search, comments, reply, resolve, inline suggestion + change-request review, CI log/rerun, title/labels, close/reopen PR + issue, in-app linked PR, new issue, and 320px overflow checks (${(await actions()).length} simulated writes).`,

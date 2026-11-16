@@ -5352,3 +5352,24 @@ details.environment-build[open] > summary .session-activity-chevron {
 	color: #f87171;
 	font-size: 12px;
 }
+
+/* What waits on the user, beside Issues and Pull requests: never everything open. */
+.sidebar-nav-badge {
+	margin-left: auto;
+	min-width: 18px;
+	padding: 0 6px;
+	border-radius: 999px;
+	background: #3b82f6;
+	color: #fff;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	line-height: 18px;
+	text-align: center;
+}
+
+/* The Pull requests and Issues pages from the left sidebar replace the chat, like Memory
+   (their own styles load with the page). */
+.workspace-main[data-work-page="true"] > :not(.work-page) {
+	/* biome-ignore lint/complexity/noImportantStyles: the chat panes' group sets display inline (react-resizable-panels) */
+	display: none !important;
+}

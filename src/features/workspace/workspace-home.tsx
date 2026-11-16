@@ -8,6 +8,8 @@ import {
 import { useServerFn } from "@tanstack/react-start";
 import { LoaderCircle, Maximize2, Minimize2, PanelRight } from "lucide-react";
 import {
+	lazy,
+	Suspense,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -175,6 +177,7 @@ import {
 import { sessionStoppedByUser } from "#/domain/turn-end";
 import type { HubStateMessage } from "#/domain/user-hub";
 import { replyStartedAfter } from "#/domain/web-vitals";
+import { connectedRepositories, waitingCount } from "#/domain/work-items";
 import {
 	desktopInspectorShouldStart,
 	desktopSidebarShouldOpen,
@@ -306,6 +309,13 @@ import {
 	hubReadsToMake,
 	openUserHub,
 } from "./user-hub-connection";
+import type { WorkItemsKind } from "./work-items-page";
+import {
+	issuesKey,
+	issuesRequest,
+	pullRequestsKey,
+	pullRequestsRequest,
+} from "./work-items-queries";
 import {
 	type InspectorView,
 	type ToolsView,
@@ -350,6 +360,13 @@ type PendingSend = {
 };
 
 /** How long after the open chat shows the project's other chats are read ahead. */
+/** The Pull requests and Issues pages load when first opened (the sidebar reads them ahead on hover). */
+const WorkItemsPage = lazy(() =>
+	import("./work-items-page").then((module) => ({
+		default: module.WorkItemsPage,
+	})),
+);
+
 const READ_AHEAD_DELAY_MS = 800;
 /** How long after the open chat shows the other projects' latest chats are read ahead. */
 const PROJECTS_READ_AHEAD_DELAY_MS = 1_500;
@@ -598,6 +615,34 @@ export function WorkspaceHome({
 		project,
 		chats: projectChatLists[index]?.data ?? [],
 	}));
+	// Every repository connected to a project: the Pull requests and Issues pages
+	// list these, and the sidebar badge counts what waits on the user in them.
+	const workRepositories = useMemo(
+		() => connectedRepositories(projects.data ?? []),
+		[projects.data],
+	);
+	const workPullRequests = useQueries({
+		queries: workRepositories.map((repository) => ({
+			queryKey: pullRequestsKey(repository.repositoryId, "open"),
+			queryFn: () => pullRequestsRequest(repository, "open"),
+			staleTime: 60_000,
+			refetchInterval: 120_000,
+		})),
+	});
+	const workIssues = useQueries({
+		queries: workRepositories.map((repository) => ({
+			queryKey: issuesKey(repository.repositoryId, "open"),
+			queryFn: () => issuesRequest(repository, "open"),
+			staleTime: 60_000,
+			refetchInterval: 120_000,
+		})),
+	});
+	const waitingOnYou = {
+		pullRequests: waitingCount(
+			workPullRequests.map((query) => query.data?.pullRequests),
+		),
+		issues: waitingCount(workIssues.map((query) => query.data?.issues)),
+	};
 	// Chats the server no longer lists (deleted elsewhere) leave the browser's cache.
 	const listedChatIds = JSON.stringify(
 		projectChats.flatMap(({ project }, index) =>
@@ -614,11 +659,19 @@ export function WorkspaceHome({
 	}, [chatCache, listedChatIds]);
 	/** The full-page Memory view from the left sidebar, in place of the chat. */
 	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
+	/** The full-page Pull requests or Issues view from the left sidebar, in place of the chat. */
+	const [workPage, setWorkPage] = useState<WorkItemsKind | null>(null);
+	/** Leaves whichever full page (Memory, Pull requests, Issues) is open. */
+	const closeFullPages = () => {
+		setMemoryPageOpen(false);
+		setWorkPage(null);
+	};
 	/** The Memory page's view: Blocks first, then this browser's last choice. */
 	const [memoryView, setMemoryView] = useState<MemoryView>(DEFAULT_MEMORY_VIEW);
 	/** Opens the Memory page in its saved view, in one update: no snap. */
 	const openMemoryPage = () => {
 		setMemoryView(readSavedMemoryView());
+		setWorkPage(null);
 		setMemoryPageOpen(true);
 	};
 	const startSession = useServerFn(startProjectAgentSession);
@@ -1141,6 +1194,32 @@ export function WorkspaceHome({
 			title: chat.title,
 			working: chat.turnStatus === "running",
 		});
+	}
+	// The same for every project's chats, by repository: the Pull requests page.
+	const pullRequestChatsByRepository = new Map<
+		number,
+		Map<string, PullRequestChat>
+	>();
+	for (const { project, chats: listed } of projectChats) {
+		for (const repository of repositoriesForProject(project)) {
+			const byHead =
+				pullRequestChatsByRepository.get(repository.repositoryId) ??
+				new Map<string, PullRequestChat>();
+			for (const chat of listed) {
+				const head =
+					chat.workingBranch ||
+					(chat.workspaceId
+						? workspacePublicationBranch(chat.workspaceId)
+						: null);
+				if (!head || byHead.has(head)) continue;
+				byHead.set(head, {
+					id: chat.id,
+					title: chat.title,
+					working: chat.turnStatus === "running",
+				});
+			}
+			pullRequestChatsByRepository.set(repository.repositoryId, byHead);
+		}
 	}
 	// The next page load renders the rows with the PRs read now.
 	const livePrMarks =
@@ -1833,6 +1912,7 @@ export function WorkspaceHome({
 		onOpenMemory: (path) => {
 			setMemoryFocus({ path });
 			setMemoryView("files");
+			setWorkPage(null);
 			setMemoryPageOpen(true);
 		},
 		onOpenChat: (chatId) => {
@@ -2472,7 +2552,7 @@ export function WorkspaceHome({
 
 	/** Opening another project leaves nothing of the previous project's chat on screen. */
 	function selectProject(projectId: string) {
-		setMemoryPageOpen(false);
+		closeFullPages();
 		if (projectId === selectedProject?.id) return;
 		setSelectedProjectId(projectId);
 		// The project change below is this one: it keeps the chat opened here.
@@ -2538,7 +2618,7 @@ export function WorkspaceHome({
 	}
 
 	function startNewChat(projectId?: string) {
-		setMemoryPageOpen(false);
+		closeFullPages();
 		const targetProjectId = projectId ?? selectedProject?.id;
 		if (!targetProjectId) {
 			openAddProject();
@@ -2696,7 +2776,7 @@ export function WorkspaceHome({
 
 	function openChat(id: string) {
 		startInteraction("chat_switch");
-		setMemoryPageOpen(false);
+		closeFullPages();
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		selectedSessionIdRef.current = id;
@@ -3527,6 +3607,16 @@ export function WorkspaceHome({
 								selectProject(projectId);
 								openChat(chatId);
 							}}
+							onOpenWorkItems={(kind) => {
+								setMemoryPageOpen(false);
+								setWorkPage(kind);
+								if (compact) setProjectsOpen(false);
+							}}
+							workItemsActive={workPage}
+							waitingOnYou={waitingOnYou}
+							onWorkItemsIntent={() => {
+								void import("./work-items-page");
+							}}
 							onOpenMemory={() => {
 								openMemoryPage();
 								if (compact) setProjectsOpen(false);
@@ -3566,6 +3656,7 @@ export function WorkspaceHome({
 							ref={workspaceMainRef}
 							className="workspace-main"
 							data-memory-page={memoryPageOpen ? "true" : undefined}
+							data-work-page={workPage ? "true" : undefined}
 							inert={layoutCompact && shownProjectsOpen}
 							data-can-expand-inspector={
 								inspectorOpen && !layoutCompact && !inspectorCompact
@@ -3618,6 +3709,28 @@ export function WorkspaceHome({
 									focus={memoryFocus}
 									onOpenChat={openMemoryChat}
 								/>
+							) : null}
+							{workPage ? (
+								<Suspense fallback={null}>
+									<WorkItemsPage
+										kind={workPage}
+										repositories={workRepositories}
+										chatsOf={(repositoryId) =>
+											pullRequestChatsByRepository.get(repositoryId) ??
+											new Map<string, PullRequestChat>()
+										}
+										onOpenChat={openChat}
+										harnessId={harnessId}
+										modelId={session.listedModelId}
+										currentSessionId={activeSessionId}
+										onChatStarted={(sessionId, projectId) => {
+											if (projectId && projectId !== selectedProject?.id)
+												selectProject(projectId);
+											void chats.refetch();
+											openChat(sessionId);
+										}}
+									/>
+								</Suspense>
 							) : null}
 							<WorkspacePanes
 								open={inspectorOpen}

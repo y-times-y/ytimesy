@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { checksCountFrom, reviewMarkFrom } from "./pull-request-review";
+import {
+	checksCountFrom,
+	pullRequestWaitingOnYou,
+	reviewMarkFrom,
+} from "./pull-request-review";
 
 const person = (login: string) => ({ login, avatarUrl: null, bot: false });
 
@@ -84,5 +88,75 @@ describe("check counts", () => {
 		expect(
 			checksCountFrom([{ status: "completed", conclusion: "skipped" }]),
 		).toEqual({ passed: 0, failed: 0, pending: 0 });
+	});
+});
+
+describe("pullRequestWaitingOnYou", () => {
+	const you = { login: "riley", avatarUrl: null, bot: false };
+	const other = { login: "jules", avatarUrl: null, bot: false };
+	const green = { passed: 5, failed: 0, pending: 0 };
+	const base = {
+		state: "open",
+		author: "morgan",
+		viewer: "riley",
+		review: null,
+		checks: green,
+	} as const;
+	it("counts a review asked of you", () => {
+		expect(
+			pullRequestWaitingOnYou({
+				...base,
+				review: { kind: "requested", from: you, you: true },
+			}),
+		).toBe(true);
+	});
+	it("does not count a review asked of someone else", () => {
+		expect(
+			pullRequestWaitingOnYou({
+				...base,
+				review: { kind: "requested", from: other, you: false },
+			}),
+		).toBe(false);
+	});
+	it("counts your own approved pull request once every check passed", () => {
+		const mine = {
+			...base,
+			author: "Riley",
+			review: { kind: "approved", by: other } as const,
+		};
+		expect(pullRequestWaitingOnYou(mine)).toBe(true);
+		expect(
+			pullRequestWaitingOnYou({
+				...mine,
+				checks: { passed: 4, failed: 1, pending: 0 },
+			}),
+		).toBe(false);
+		expect(
+			pullRequestWaitingOnYou({
+				...mine,
+				checks: { passed: 4, failed: 0, pending: 1 },
+			}),
+		).toBe(false);
+		expect(pullRequestWaitingOnYou({ ...mine, checks: null })).toBe(false);
+	});
+	it("never counts someone else's approved pull request, a closed one, or an unknown viewer", () => {
+		const approved = { kind: "approved", by: other } as const;
+		expect(pullRequestWaitingOnYou({ ...base, review: approved })).toBe(false);
+		expect(
+			pullRequestWaitingOnYou({
+				...base,
+				author: "riley",
+				state: "merged",
+				review: approved,
+			}),
+		).toBe(false);
+		expect(
+			pullRequestWaitingOnYou({
+				...base,
+				author: "riley",
+				viewer: null,
+				review: approved,
+			}),
+		).toBe(false);
 	});
 });
