@@ -35,7 +35,11 @@ import {
 	ALLOW_UNVERIFIED_SOURCE_VARIABLE,
 	deploySourceProblem,
 } from "./production-source";
-import { readRunningTurns, runningTurnsDecision } from "./running-turns-check";
+import {
+	readRunningTurns,
+	runningTurnsDecision,
+	waitForClaudeTurns,
+} from "./running-turns-check";
 import { supabaseCertificate } from "./supabase-certificate";
 
 /**
@@ -53,7 +57,9 @@ import { supabaseCertificate } from "./supabase-certificate";
  * It also refuses unless the checkout is exactly origin/main with no changed
  * tracked files (production-source.ts); --allow-unverified-source overrides.
  *
- * A deploy reports the chats running a turn and goes ahead: they resume from
+ * A deploy reports the chats running a turn, waits up to 10 minutes for the
+ * Claude ones (they cannot resume after a Durable Object reset; pass
+ * --no-wait-for-turns to skip) and then goes ahead: API turns resume from
  * their checkpoint on the new version.
  *
  * .secrets/production.env holds production values only (fresh secrets, the
@@ -188,6 +194,20 @@ if (!preflightOnly) {
 	);
 	console.log(decision.message);
 	if (!decision.proceed) throw new Error(decision.message);
+	// A Claude turn does not resume after a Durable Object reset; give them
+	// time to finish (--no-wait-for-turns deploys at once).
+	if (!process.argv.includes("--no-wait-for-turns")) {
+		const waited = await waitForClaudeTurns(() =>
+			readRunningTurns(secrets.DATABASE_URL),
+		);
+		console.log(
+			waited.remaining.length === 0
+				? waited.waitedMs === 0
+					? "No Claude turn is running."
+					: `Claude turns finished after ${Math.round(waited.waitedMs / 1000)} s.`
+				: `Still running after the wait: ${waited.remaining.join(", ")}. Deploying anyway; those turns may need a retry.`,
+		);
+	}
 }
 
 secrets.GITHUB_PRIVATE_KEY = createPrivateKey(
