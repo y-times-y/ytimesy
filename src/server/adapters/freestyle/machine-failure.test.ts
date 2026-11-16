@@ -196,6 +196,20 @@ it("counts only the VM's own failed starts as unstartable", () => {
 	expect(
 		machineStartUnstartable(api(504, "PROVIDER_TIMEOUT", "gateway timeout")),
 	).toBe(true);
+	// The VM's host is full (a 429 for this VM, not an account limit).
+	expect(
+		machineStartUnstartable(
+			api(429, "TOO_MANY_REQUESTS", "server is at capacity; try again shortly"),
+		),
+	).toBe(true);
+	// A VM the provider runs whose guest never answers a command.
+	expect(
+		machineStartUnstartable(
+			new Error(
+				"Workspace VM started but is not answering yet. Try again in a minute.",
+			),
+		),
+	).toBe(true);
 	// The wrapped form the adapter throws: public message, raw detail.
 	expect(
 		machineStartUnstartable(
