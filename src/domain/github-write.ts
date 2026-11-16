@@ -117,7 +117,9 @@ export function githubWriteFailure(
 					? `GitHub refused this: ${detail}`
 					: permission === "Actions: write"
 						? "GitHub did not accept the re-run. Usually GitHub Actions is blocked for the account (a failed payment or a spending limit), or the workflow no longer exists. Open the check on GitHub for the reason."
-						: "GitHub refused this change.",
+						: permission === "Actions: read"
+							? "GitHub has no log for this job. It may not have started (Actions blocked for the account, or the workflow no longer exists), or its log has expired."
+							: "GitHub refused this change.",
 		};
 	return null;
 }
