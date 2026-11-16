@@ -1150,3 +1150,71 @@ export async function expireApiTurnLeases() {
 	/** How many turns were abandoned, for the owner's alert. */
 	return result.rows?.length ?? 0;
 }
+
+/**
+ * The Freestyle identity the turn's runner box uses for its workspace tools
+ * (claude-box-tool-grant.ts), or null. Only its id is kept; never the token.
+ */
+export async function turnBoxToolIdentity(
+	turnId: string,
+	/** Only while this lease still owns the turn: a lost attempt never revokes its successor's grant. */
+	leaseId?: string | null,
+): Promise<string | null> {
+	const result = await database().query<{ box_tool_identity: string | null }>(
+		"select box_tool_identity from api_turn where id=$1 and ($2::text is null or lease_id::text=$2::text)",
+		[turnId, leaseId ?? null],
+	);
+	return result.rows[0]?.box_tool_identity ?? null;
+}
+
+/**
+ * Records a new identity on a turn this lease still runs and that holds none;
+ * false otherwise (the identity must then be deleted, not used).
+ */
+export async function recordTurnBoxToolIdentity(
+	turnId: string,
+	leaseId: string,
+	identityId: string,
+): Promise<boolean> {
+	const result = await database().query(
+		`update api_turn set box_tool_identity=$3
+		 where id=$1 and lease_id=$2 and state='running' and box_tool_identity is null`,
+		[turnId, leaseId, identityId],
+	);
+	return (result.rowCount ?? 0) > 0;
+}
+
+/** Forgets a deleted identity, only if the turn still names that one. */
+export async function clearTurnBoxToolIdentity(
+	turnId: string,
+	identityId: string,
+): Promise<void> {
+	await database().query(
+		"update api_turn set box_tool_identity=null where id=$1 and box_tool_identity=$2",
+		[turnId, identityId],
+	);
+}
+
+/**
+ * Identities of turns that no longer run: settled, or whose lease lapsed
+ * (no renewal for 3 minutes, as expireApiTurnLeases counts it). A step that
+ * still owns its turn deletes its own identity; these are what it could not.
+ */
+export async function staleTurnBoxToolIdentities(
+	limit = 50,
+): Promise<{ turnId: string; identityId: string }[]> {
+	const result = await database().query<{
+		id: string;
+		box_tool_identity: string;
+	}>(
+		`select id,box_tool_identity from api_turn
+		 where box_tool_identity is not null
+		 and (state<>'running' or heartbeat_at < now()-interval '3 minutes')
+		 order by updated_at limit $1`,
+		[limit],
+	);
+	return result.rows.map((row) => ({
+		turnId: row.id,
+		identityId: row.box_tool_identity,
+	}));
+}

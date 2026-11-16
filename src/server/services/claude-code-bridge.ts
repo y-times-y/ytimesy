@@ -1,10 +1,12 @@
-import { asSchema, type Tool, type ToolSet } from "ai";
+import type { ToolSet } from "ai";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import type {
 	McpCallResult,
-	McpContentBlock,
 	McpToolDefinition,
 } from "#/domain/claude-code-mcp";
+import { runToolForMcp } from "./mcp-tool-call";
+
+export { mcpToolDefinitions } from "./mcp-tool-call";
 
 /**
  * ytimesy's own tools for a running Claude Code turn, served to the VM's
@@ -16,8 +18,6 @@ import type {
  * context (shown in the timeline like any tool call) and answers.
  * Between steps calls wait for the next step.
  */
-type ExecuteOptions = Parameters<NonNullable<Tool["execute"]>>[1];
-
 export type ClaudeCodeCallReply = McpCallResult;
 
 export type ClaudeCodeCall = {
@@ -166,70 +166,6 @@ export async function waitForClaudeCodeCall(turnId: string, ms: number) {
 	await waitFor(entry, () => entry.queue.length > 0, ms);
 }
 
-export async function mcpToolDefinitions(
-	tools: ToolSet,
-): Promise<McpToolDefinition[]> {
-	return Promise.all(
-		Object.entries(tools)
-			.filter(([, definition]) => typeof definition.execute === "function")
-			.map(async ([name, definition]) => ({
-				name,
-				description:
-					typeof definition.description === "string"
-						? definition.description
-						: name,
-				inputSchema: (await asSchema(definition.inputSchema)
-					.jsonSchema) as Record<string, unknown>,
-			})),
-	);
-}
-
-/**
- * What the tool's own model conversion says the model should see: text and
- * image blocks, so a screenshot reaches Claude as pixels instead of its
- * base64 written out as text. Other shapes use the plain text reply.
- */
-export async function modelContentBlocks(
-	definition: Tool,
-	options: { toolCallId: string; input: unknown; output: unknown },
-): Promise<McpContentBlock[] | undefined> {
-	if (!definition.toModelOutput) return undefined;
-	const converted = (await definition.toModelOutput(options as never)) as {
-		type?: string;
-		value?: unknown;
-	};
-	if (converted?.type !== "content" || !Array.isArray(converted.value))
-		return undefined;
-	const blocks: McpContentBlock[] = [];
-	for (const part of converted.value as Record<string, unknown>[]) {
-		if (part.type === "text" && typeof part.text === "string")
-			blocks.push({ type: "text", text: part.text });
-		else if (
-			(part.type === "file" || part.type === "image") &&
-			typeof part.mediaType === "string" &&
-			part.mediaType.startsWith("image/")
-		) {
-			const data = part.data as { type?: string; data?: unknown } | undefined;
-			if (data?.type === "data" && typeof data.data === "string")
-				blocks.push({
-					type: "image",
-					data: data.data,
-					mimeType: part.mediaType,
-				});
-		}
-	}
-	return blocks.some((block) => block.type === "image") ? blocks : undefined;
-}
-
-function outputText(output: unknown) {
-	if (typeof output === "string") return output;
-	try {
-		return JSON.stringify(output) ?? "";
-	} catch {
-		return String(output);
-	}
-}
-
 /**
  * Runs one queued call in the step's context: validated like a model's
  * call, shown in the timeline (tool-call, then tool-result) under an id of
@@ -259,45 +195,18 @@ export async function runClaudeCodeCall(
 			name: call.name,
 			input: call.args,
 		});
-		const validate = asSchema(definition.inputSchema).validate;
-		const parsed = validate ? await validate(call.args) : undefined;
-		if (parsed && !parsed.success)
-			throw new Error(
-				`Invalid arguments for ${call.name}: ${parsed.error.message}`,
-			);
-		const output = await (definition.execute as NonNullable<Tool["execute"]>)(
-			parsed?.success ? parsed.value : call.args,
-			{
-				toolCallId: id,
-				messages: [],
-				abortSignal: context.signal,
-				context: {},
-			} as ExecuteOptions,
-		);
-		if (output && typeof output === "object" && Symbol.asyncIterator in output)
-			throw new Error(`${call.name} streams and cannot run here.`);
-		const failed =
-			(output as { blocked?: unknown } | null | undefined)?.blocked === true;
+		const ran = await runToolForMcp(definition, call.name, call.args, {
+			toolCallId: id,
+			signal: context.signal,
+		});
 		await context.onEvent({
 			type: "tool-result",
 			id,
 			name: call.name,
-			output,
-			...(failed ? { failed: true } : {}),
+			output: ran.output,
+			...(ran.failed ? { failed: true } : {}),
 		});
-		const parsedInput = parsed?.success ? parsed.value : call.args;
-		const content = failed
-			? undefined
-			: await modelContentBlocks(definition, {
-					toolCallId: id,
-					input: parsedInput,
-					output,
-				}).catch(() => undefined);
-		call.reply({
-			text: content ? "" : outputText(output),
-			isError: failed,
-			...(content ? { content } : {}),
-		});
+		call.reply(ran.reply);
 	} catch (error) {
 		const message =
 			error instanceof Error ? error.message : "The tool call failed.";

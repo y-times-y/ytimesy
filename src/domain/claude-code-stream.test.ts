@@ -416,3 +416,53 @@ describe("Claude Code context size", () => {
 		});
 	});
 });
+
+describe("Claude Code stream-json with box tools", () => {
+	const assistant = (name: string, input: unknown) =>
+		line({
+			type: "assistant",
+			message: {
+				content: [{ type: "tool_use", id: "toolu_box", name, input }],
+			},
+		});
+	const boxTools = new Set(["bash", "read"]);
+
+	it("shows the calls the runner box ran itself, under the tool's own name", () => {
+		expect(
+			claudeCodeEffects(
+				assistant("mcp__ytimesy__read", { path: "a.ts" }),
+				"k",
+				{ ...context, boxTools },
+			),
+		).toEqual([
+			{
+				kind: "event",
+				event: {
+					type: "tool-call",
+					id: "toolu_box",
+					name: "read",
+					input: { path: "a.ts" },
+				},
+			},
+		]);
+	});
+
+	it("leaves the calls the edge's bridge shows: other tools, edge-bound calls, runs without box tools", () => {
+		for (const [name, input, tools] of [
+			["mcp__ytimesy__agent", {}, boxTools],
+			[
+				"mcp__ytimesy__bash",
+				{ command: "npm start", background: true },
+				boxTools,
+			],
+			["mcp__ytimesy__bash", { command: "ytimesy-browser open x" }, boxTools],
+			["mcp__ytimesy__read", { path: "a.ts" }, undefined],
+		] as const)
+			expect(
+				claudeCodeEffects(assistant(name, input), "k", {
+					...context,
+					...(tools ? { boxTools: tools } : {}),
+				}),
+			).toEqual([]);
+	});
+});
