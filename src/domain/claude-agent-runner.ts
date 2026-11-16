@@ -1,3 +1,4 @@
+import { CLAUDE_BOX_TOOLS_ACTIVE } from "./claude-box-tools";
 import { CLAUDE_FEED_SENDER_SOURCE } from "./claude-feed-sender";
 
 /**
@@ -22,8 +23,17 @@ import { CLAUDE_FEED_SENDER_SOURCE } from "./claude-feed-sender";
  * When options.json names a feed (YTIMESY_CLAUDE_FEED), it also pushes each
  * line to the chat's object over a WebSocket (claude-feed-sender.ts), where
  * Node has one; stdout is written first and stays complete either way.
+ *
+ * When options.json names box tools (a runner box run with
+ * YTIMESY_CLAUDE_BOX_TOOLS, claude-box-tools.ts), it imports that module,
+ * which reads and deletes the run's grant file and serves ytimesy's tools on
+ * 127.0.0.1: the lean workspace tools run there against the chat's VM, the
+ * rest go on to the edge. Claude Code's "ytimesy" server is then that local
+ * one; the inbox, the feed and the forwarded calls keep the edge's address.
+ * It writes the served tools' names to box-tools-active for the step. If
+ * they do not start, every tool stays on the edge, as without them.
  */
-export const CLAUDE_AGENT_RUNNER_SCRIPT = `import { readFileSync, writeFileSync } from "node:fs";
+export const CLAUDE_AGENT_RUNNER_SCRIPT = `import { readFileSync, rmSync, writeFileSync } from "node:fs";
 ${CLAUDE_FEED_SENDER_SOURCE}
 const [sdkModule, inputs, cwd] = process.argv.slice(2);
 const { query } = await import(sdkModule);
@@ -46,6 +56,23 @@ const options = {
 if (settings.resume) options.resume = settings.resume;
 if (settings.effort) options.effort = settings.effort;
 const inboxServer = mcpServers?.ytimesy;
+let boxTools = null;
+if (settings.boxTools?.module && inboxServer?.url) {
+	try {
+		const { startBoxTools } = await import(settings.boxTools.module);
+		boxTools = await startBoxTools({
+			configPath: inputs + "/" + settings.boxTools.config,
+			edge: { url: inboxServer.url, headers: inboxServer.headers ?? {} },
+		});
+		options.mcpServers = { ...mcpServers, ytimesy: { type: "http", url: boxTools.url, headers: boxTools.headers } };
+		writeFileSync(inputs + "/${CLAUDE_BOX_TOOLS_ACTIVE}", JSON.stringify(boxTools.local), { mode: 0o600 });
+	} catch (error) {
+		boxTools = null;
+		process.stderr.write("ytimesy box tools did not start; the edge serves them: " + String(error?.message ?? error).slice(0, 300) + "\\n");
+	}
+	// The grant file is never left behind, whether the module read it or not.
+	try { rmSync(inputs + "/" + settings.boxTools.config, { force: true }); } catch {}
+}
 const inbox = async () => {
 	if (!inboxServer?.url) return "";
 	try {
@@ -106,4 +133,5 @@ try {
 }
 process.exitCode = finished && !failed ? 0 : 1;
 await feed?.finish(process.exitCode);
+await boxTools?.close().catch(() => {});
 `;

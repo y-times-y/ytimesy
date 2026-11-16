@@ -353,3 +353,95 @@ the double-signed rollout request on HMAC-only and Ed25519 boxes, replay,
 expiry, and tampered body, path, expiry, nonce and signature). Ed25519 PKCS8
 signing under local workerd (`wrangler dev`) verifies with the printed public
 key. Not done: nothing is deployed, and no live box was changed.
+
+## Workspace tools on the box (phase 2a, 2026-11-16, flag off, not deployed)
+
+Each ytimesy MCP tool call of a runner-box run used to go box → edge MCP route
+→ the chat's Durable Object, which ran the tool against the Freestyle VM: about
+1.5 s awake per call, ~240 calls per turn-hour. Behind
+`YTIMESY_CLAUDE_BOX_TOOLS` (`1`/`true`; default off, and off means the old path
+unchanged) the box runs the lean workspace tools itself, straight against the
+VM, and the object is not woken for them.
+
+**What runs where.**
+
+- **On the box** (`src/server/claude-box-tools/`): the lean shape's own tools
+  the turn offers (core: `bash`, `read`, `write`, `edit`; the Claude shape adds
+  glob and grep). Same code as the edge: `lean-shape-surface.ts` over
+  `apiAgentCommandTools` and `agentOutputArtifacts`, answered through
+  `runToolForMcp` (`mcp-tool-call.ts`, shared with the bridge). Nothing is
+  copied; to make that possible the lean engine no longer imports its durable
+  journal and helper installer (they are given to it: `lean-tools.ts` on the
+  edge, in-memory and no-op on the box) and the edit Python moved to
+  `edit-scripts.ts`. The bundle (`scripts/build-claude-box-tools.ts`, ~0.9 MB)
+  is inlined in the Worker at build time and written once per version to
+  `~/.ytimesy/claude-box-tools/<hash>.mjs` on each box.
+- **Still on the edge**, through the unchanged MCP route: every other tool
+  (agents, plan, canvas, secrets, questions, MCP, web, `run_code`), a command
+  started in the background (its exit callback is signed with the edge's
+  secret, and raising the VM's idle timeout needs the account key), any
+  `ytimesy-browser` or `ytimesy-job` command (captures go to R2/Postgres), the
+  inbox and the feed, and a box call the provider refused before running
+  anything (paused or replaced VM, revoked grant). `boxCallRunsOnEdge`
+  (`src/domain/claude-box-tools.ts`) decides, for the box and for the
+  timeline alike.
+- **Not offered at all** (all on the edge, as before) when the turn has
+  project secrets (their values would have to be on the box to be redacted),
+  repository tool hooks (`toolHooksConfigured`), a read-only helper, a
+  non-lean surface, or no runner box.
+
+**The grant, per run** (`claude-box-tool-grant.ts`, `box-tool-identity.ts`).
+At each launch the edge deletes the turn's previous identity, starts the VM
+(identity requests are not background requests), reads its default Linux user
+(`id -un`), creates a Freestyle identity, records its id in
+`api_turn.box_tool_identity` (only while this lease owns the running turn),
+grants it that one VM as that one user, and mints a token. Any failure leaves
+the run on the edge's tools. The token goes only into the run's 0600
+`box-tools.json`, is added to the turn's redaction list, and is never logged.
+`runner.mjs` imports the bundle, which reads and deletes that file at once;
+from then on the token lives only in that process. The edge's step cleanup
+also deletes the file.
+
+**Revocation.** Tokens never expire; deleting the identity revokes them. It is
+deleted at turn end (both finalize paths), lease loss (renewal refused), Stop
+and failover (`stopClaudeCodeRun`), VM replacement (`replacedFrom`, the box's
+calls then go to the edge, which has the new VM), and before every new run.
+The id is cleared only after a successful delete, so a failed delete is
+retried by the sweep: the per-minute `supervise` job deletes identities of
+turns that are settled or whose lease lapsed 3 minutes ago
+(`staleTurnBoxToolIdentities`).
+
+**Security properties.**
+
+- The box holds no production secret: no Freestyle API key, database URL,
+  vault key or account key. It holds per-run grants only (as before, the
+  Claude grant), now including one Freestyle identity token.
+- That token reaches only that VM's exec and terminal routes, as one Linux
+  user. That user has `sudo` on the VM, so it is equivalent to what the run
+  could already do through `bash` there: the blast radius is the chat's own
+  VM, which already runs untrusted repository code. It cannot start, delete,
+  snapshot, route or resize the VM, or reach any other VM or account API.
+- The local server listens on 127.0.0.1 behind a 256-bit random bearer that
+  exists only in the runner process and the Claude Code it starts. Other runs
+  on the same box run as the same Unix user and could read a run's files
+  before the runner deletes them, or its process memory; this is the same
+  exposure the per-turn Claude grant already has there.
+- Results are redacted on the box of the turn's VM tokens (machine git,
+  ~/memory) known at launch. A token placed on the VM after the run started
+  (the memory clone finishing late) is not in that list in phase 2a.
+
+**What the user sees.** Box calls are shown from the run's stream
+(`claude-code-stream.ts`, `boxTools`): the call with its input, and the result
+as the text the model got (the edge's bridge records the tool's structured
+output instead). A call the box handed to the edge after a refusal is shown
+twice (stream and bridge); rare.
+
+**Phase 2b (not built):** mirror the box's calls into the turn's journal
+(today the box's run-once is in memory: a restarted runner process starts
+over, and Postgres has no record of box calls); an edge Worker route that runs
+the rare edge tools without waking the object, or batches them; failover of a
+running turn to another box or back to the edge; collecting agent captures and
+background exit callbacks without the edge; redacting tokens added after
+launch (or the model proxy redacting tool results); measuring call latency
+and the object's awake time on a real box. Nothing here was run against a live
+box or VM: the tests use fakes and a local shell standing in for the VM.

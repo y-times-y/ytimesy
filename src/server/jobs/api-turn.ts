@@ -26,6 +26,7 @@ import {
 	hasCheckerFinalNotice,
 } from "#/domain/checker-brief";
 import { latestUserRequestText } from "#/domain/child-task-activity";
+import { claudeBoxToolsEnabled } from "#/domain/claude-box-tools";
 import {
 	claudeSubscriptionEnabled,
 	isClaudeCodeRevision,
@@ -143,10 +144,13 @@ import {
 	type ApiTurn,
 	apiTurnCancelRequested,
 	checkpointApiTurn,
+	clearTurnBoxToolIdentity,
 	finalizeApiTurn,
 	publishApiTurnProgress,
+	recordTurnBoxToolIdentity,
 	renewApiTurn,
 	replaceSettledTurnItem,
+	turnBoxToolIdentity,
 } from "../adapters/api-turns";
 import { reserveApiTokens } from "../adapters/api-usage-budget";
 import { pinnedClaudeRunner } from "../adapters/claude-runner-placement";
@@ -217,9 +221,16 @@ import {
 } from "../services/background-command-context";
 import { withBackgroundCommandNotices } from "../services/background-command-notices";
 import { settleIdleTimeoutAfterTurn } from "../services/background-idle-timeout";
-import { builderToolSurface } from "../services/builder-shell-surface";
+import {
+	builderToolSurface,
+	leanSurfaceToolNames,
+} from "../services/builder-shell-surface";
 import { canvasTools } from "../services/canvas-tool";
 import { checkerPairGate } from "../services/checker-pair-gate";
+import {
+	type BoxToolIdentityStore,
+	releaseClaudeBoxToolIdentity,
+} from "../services/claude-box-tool-grant";
 import {
 	claudeCodeBridgeToolSet,
 	claudeCodeSentMessagesText,
@@ -570,6 +581,29 @@ async function runApiTurnAttempt(
 		| undefined;
 	/** A Claude Code turn: stops its CLI when the turn moves to another model. */
 	let stopClaudeCodeRun: (() => Promise<void>) | undefined;
+	/**
+	 * The Freestyle identity a Claude runner box uses for this turn's workspace
+	 * tools (claude-box-tool-grant.ts), recorded on the turn row.
+	 */
+	const boxToolStore: BoxToolIdentityStore = {
+		current: () => turnBoxToolIdentity(turn.id, turn.lease_id ?? null),
+		record: (identityId) =>
+			turn.lease_id
+				? recordTurnBoxToolIdentity(turn.id, turn.lease_id, identityId)
+				: Promise.resolve(false),
+		clear: (identityId) => clearTurnBoxToolIdentity(turn.id, identityId),
+	};
+	/**
+	 * Deletes that identity: at turn end, lease loss and failover. Only Claude
+	 * Code turns with box tools on ask; the sweep covers the rest. Never throws.
+	 */
+	const releaseBoxTools = () =>
+		stopClaudeCodeRun && claudeBoxToolsEnabled(process.env)
+			? releaseClaudeBoxToolIdentity({
+					machines: unscopedMachines,
+					store: boxToolStore,
+				})
+			: Promise.resolve();
 	let failedAttempt:
 		| {
 				committed: ModelMessage[];
@@ -810,10 +844,13 @@ async function runApiTurnAttempt(
 			"database-renewal",
 			renewApiTurn(turn).then(async (alive) => {
 				lastDatabaseRenewal = Date.now();
-				if (!alive && !turnSettled)
+				if (!alive && !turnSettled) {
 					abort.abort(
 						new Error("Turn ownership or cancellation state changed."),
 					);
+					// The lease is lost: its runner box loses its VM grant.
+					void releaseBoxTools();
+				}
 				// Send on a queued message: a model call still sampling (no tool
 				// started) is dropped like a soft deadline, so the next step
 				// reads the message now. A running tool is never interrupted.
@@ -1007,16 +1044,20 @@ async function runApiTurnAttempt(
 			});
 			activeClaudeRunner = candidate ? pinnedClaudeRunner(candidate) : null;
 			stopClaudeCodeRun = () =>
-				stopClaudeCodeTurnRun({
-					machines: unscopedMachines,
-					vm:
-						execution?.vm ??
-						(claudeCodeOwner.providerRef
-							? WorkspaceId(claudeCodeOwner.providerRef)
-							: null),
-					turnId: turn.id,
-					runner: activeClaudeRunner,
-				});
+				Promise.all([
+					stopClaudeCodeTurnRun({
+						machines: unscopedMachines,
+						vm:
+							execution?.vm ??
+							(claudeCodeOwner.providerRef
+								? WorkspaceId(claudeCodeOwner.providerRef)
+								: null),
+						turnId: turn.id,
+						runner: activeClaudeRunner,
+					}),
+					// The stopped run's box loses its grant with it.
+					releaseBoxTools(),
+				]).then(() => undefined);
 			// A refused or removed token is a route failure: the turn fails over.
 			const status = await claudeSubscriptionStatus(turn.user_id);
 			if (status.status === "disconnected" || status.status === "refused") {
@@ -1108,6 +1149,12 @@ async function runApiTurnAttempt(
 		// Values every tool result is redacted of. The memory clone's token
 		// joins once it is on the VM, so tools read this list at call time.
 		const redact: string[] = [...(projectSecrets?.redact ?? [])];
+		/**
+		 * The turn's own tokens this step put on the VM (machine git, ~/memory):
+		 * a Claude runner box serving tools itself redacts these (never the
+		 * project's secrets or the user's Claude token, which stay here).
+		 */
+		const vmTokens: string[] = [];
 		/** Told to the agent once, on its first tool result, when its machine was replaced. */
 		let workspaceNote: string | null = null;
 		// Readers' commands run as another user without the network; evaluations never reach GitHub.
@@ -1171,6 +1218,7 @@ async function runApiTurnAttempt(
 				if (!memory) return;
 				const redacted = (token: string) => {
 					if (!redact.includes(token)) redact.push(token);
+					if (!vmTokens.includes(token)) vmTokens.push(token);
 				};
 				memoryCloned ??= memory.prepareVm(ready, redacted).then(() => {
 					for (const token of memory.vmTokens()) redacted(token);
@@ -1211,6 +1259,7 @@ async function runApiTurnAttempt(
 				? turnSpan("turn:machineGit", () =>
 						git.prepareVm(ready, (token) => {
 							if (!redact.includes(token)) redact.push(token);
+							if (!vmTokens.includes(token)) vmTokens.push(token);
 						}),
 					)
 				: undefined;
@@ -2652,6 +2701,28 @@ async function runApiTurnAttempt(
 									runner: {
 										box: claudeRunner,
 										workspaceTools: Object.keys(surfaceTools),
+										// The lean workspace tools run on the box itself, with
+										// a per-run VM grant, when the flag is on and nothing
+										// needs this object around them: no project secrets to
+										// redact, no repository tool hooks (checked per grant).
+										...(surface.lean &&
+										!reader &&
+										!projectSecrets?.redact.length &&
+										claudeBoxToolsEnabled(process.env)
+											? {
+													boxTools: {
+														tools: leanSurfaceToolNames(
+															surface.lean.shape,
+															surfaceTools,
+														),
+														shape: surface.lean.shape,
+														redact: () => [...vmTokens],
+														eligible: async () =>
+															!(await hooks.toolHooksConfigured()),
+														store: boxToolStore,
+													},
+												}
+											: {}),
 									},
 								}
 							: {}),
@@ -3005,6 +3076,11 @@ async function runApiTurnAttempt(
 		const saved = await timed("turn:finalize", () =>
 			finalizeApiTurn(turn, "completed", items),
 		);
+		// Bounded: a slow provider never holds the turn's settled state back.
+		await Promise.race([
+			releaseBoxTools(),
+			new Promise((resolve) => setTimeout(resolve, 3_000)),
+		]);
 		if (saved !== "completed") {
 			// A stop that raced completion still hands off what was committed.
 			if (saved === "cancelled" && committed?.publish)
@@ -3442,6 +3518,11 @@ async function runApiTurnAttempt(
 		const saved = await (failedAttempt?.inFlight
 			? finalizeApiTurn(turn, settledState, items, failedAttempt.inFlight)
 			: finalizeApiTurn(turn, settledState, items));
+		// Bounded: a slow provider never holds the turn's settled state back.
+		await Promise.race([
+			releaseBoxTools(),
+			new Promise((resolve) => setTimeout(resolve, 3_000)),
+		]);
 		if (saved)
 			await publishProgress?.(saved === "cancelled" ? "idle" : "failed").catch(
 				() => {},

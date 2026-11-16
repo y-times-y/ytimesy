@@ -44,6 +44,9 @@ export function productionRuntimeSettings(
 		// Claude Code runs push their output to the chat object, which sleeps
 		// between batches (src/domain/claude-feed.ts). "0" turns it off.
 		YTIMESY_CLAUDE_FEED: env.YTIMESY_CLAUDE_FEED === "0" ? "0" : "1",
+		// A Claude run on a runner box serves its workspace tools itself, with
+		// a token for that one VM (docs/claude-code-placement.md). "0" turns it off.
+		YTIMESY_CLAUDE_BOX_TOOLS: env.YTIMESY_CLAUDE_BOX_TOOLS === "0" ? "0" : "1",
 	};
 }
 

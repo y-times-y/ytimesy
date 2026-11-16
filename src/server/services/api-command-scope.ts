@@ -5,6 +5,8 @@ import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 const RUN = `import base64, json, os, pathlib, signal, subprocess, sys
 root=pathlib.Path(sys.argv[1]); root.mkdir(parents=True,exist_ok=True)
+try: os.chmod(root,0o1777)
+except OSError: pass
 if (root/'stopped').exists() or (root/(sys.argv[2]+'.stopped')).exists(): sys.exit(130)
 record=root/(sys.argv[2]+'.json')
 environment=os.environ.copy()

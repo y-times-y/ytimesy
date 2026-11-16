@@ -149,4 +149,19 @@ export interface WorkspaceMachines {
 		slug: string,
 		machineSize?: MachineSizeId,
 	) => Promise<{ vm: WorkspaceId; forkMs: number }>;
+	/**
+	 * Identities that may only run commands on one VM as one Linux user, for
+	 * the Claude runner box's workspace tools (claude-box-tool-grant.ts).
+	 * `mint` has `record` store the identity's id before it gets any
+	 * permission or token (false: grant nothing, null). Providers without it
+	 * leave those tools on the edge.
+	 */
+	readonly boxToolIdentities?: {
+		readonly mint: (
+			workspaceId: WorkspaceId,
+			linuxUser: string,
+			record: (identityId: string) => Promise<boolean>,
+		) => Promise<{ identityId: string; token: string } | null>;
+		readonly revoke: (identityId: string) => Promise<void>;
+	};
 }

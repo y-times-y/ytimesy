@@ -1,4 +1,4 @@
-import { LOCKED_APPLY_EDIT } from "./api-agent-file-tools";
+import { LOCKED_APPLY_EDIT } from "./edit-scripts";
 
 /**
  * The Python the lean engine (lean-engine.ts) runs on the workspace VM:
