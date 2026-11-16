@@ -35,6 +35,12 @@ export interface WorkspaceMachines {
 	 * without it never pause on their own.
 	 */
 	readonly settleIdleTimeout?: (workspaceId: WorkspaceId) => Promise<void>;
+	/**
+	 * Freezes a running VM now, keeping memory and disk; the next
+	 * ensureRunning resumes it in place. Used to stop billing while a turn's
+	 * model thinks (thinking-pause.ts). Providers without it never pause early.
+	 */
+	readonly pause?: (workspaceId: WorkspaceId) => Promise<void>;
 	readonly runCapability?: (
 		workspaceId: WorkspaceId,
 		request: {
