@@ -1,15 +1,18 @@
 """Launches one runner box (run with boto3 and the repo checked out).
 
   python3 infra/claude-runner-box/provision.py --name runner-1 --region us-east-2 \
-      --signing-key-file KEY --size-gb 100 [--tunnel-token-file TOKEN]
+      --public-key PUBLIC_KEY --size-gb 100 [--tunnel-token-file TOKEN]
 
-Prints the instance id. The disk is large on purpose: a chat's Claude session
+PUBLIC_KEY is the edge's Ed25519 public key that
+scripts/generate-claude-runner-keypair.ts prints (base64 SPKI); the box gets
+no key that can sign a request. Prints the instance id. The disk is large on purpose: a chat's Claude session
 file can be hundreds of MB and the box keeps it between turns; cleanup.mjs
 evicts old ones. With --tunnel-token-file the box makes an outbound
 Cloudflare Tunnel connection and needs no inbound port; without it the
 security group is created with no ingress rules.
 """
 import argparse
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,14 +24,15 @@ ROOT = HERE.parent.parent
 parser = argparse.ArgumentParser()
 parser.add_argument("--name", required=True)
 parser.add_argument("--region", default="us-east-2")
-parser.add_argument("--signing-key-file", required=True)
+parser.add_argument("--public-key", required=True)
 parser.add_argument("--tunnel-token-file")
 parser.add_argument("--size-gb", type=int, default=100)
 parser.add_argument("--instance-type", default="t3.small")
 args = parser.parse_args()
 
-key = Path(args.signing_key_file).read_text().strip()
-assert len(key) >= 32, "signing key must be 32+ characters"
+key = args.public_key.strip()
+# An Ed25519 SPKI DER is 44 bytes: 60 base64 characters ending in "=".
+assert re.fullmatch(r"[A-Za-z0-9+/]{59}=", key), "--public-key must be the base64 SPKI the keypair script prints"
 token = Path(args.tunnel_token_file).read_text().strip() if args.tunnel_token_file else ""
 sdk_install = subprocess.check_output(
     ["node", "--import", "tsx", "-e",
@@ -36,7 +40,7 @@ sdk_install = subprocess.check_output(
     cwd=ROOT, text=True)
 script = (HERE / "bootstrap.sh").read_text()
 for placeholder, value in {
-    "__SIGNING_KEY__": key,
+    "__PUBLIC_KEY__": key,
     "__TUNNEL_TOKEN__": token,
     "__SERVER_MJS__": (HERE / "server.mjs").read_text(),
     "__CLEANUP_MJS__": (HERE / "cleanup.mjs").read_text(),
