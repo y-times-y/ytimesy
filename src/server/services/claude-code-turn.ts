@@ -44,8 +44,10 @@ import {
 	stopClaudeCodeRun,
 } from "./claude-code-runner";
 import {
+	claudeFeedStepMayPause,
 	claudeTurnFeed,
 	claudeTurnMayPause,
+	rememberClaudeTurnRedaction,
 	requestClaudeStepPause,
 } from "./claude-step-pause";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -136,10 +138,13 @@ export async function runClaudeCodeTurnStep(input: {
 	const reader = isReaderRole(input.agentRole);
 	let ended = true;
 	const feed = claudeTurnFeed(input.turnId);
+	// The chat's object previews the run's text between steps, redacted alike.
+	if (feed) rememberClaudeTurnRedaction(input.turnId, input.redact);
 	try {
 		const result = await runClaudeCodeStep({
 			...(feed ? { feed } : {}),
 			mayPause: () => claudeTurnMayPause(input.turnId),
+			mayPauseOnFeed: () => claudeFeedStepMayPause(input.turnId),
 			requestPause: (ms) => requestClaudeStepPause(input.turnId, ms),
 			shell:
 				box?.shell ??

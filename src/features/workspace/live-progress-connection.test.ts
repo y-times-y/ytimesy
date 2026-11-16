@@ -27,11 +27,13 @@ function fixture() {
 	const sockets: TestSocket[] = [];
 	const streams: TestStream[] = [];
 	const onProgress = vi.fn();
+	const onPreview = vi.fn();
 	const stop = openLiveProgress({
 		projectId: "project",
 		sessionId,
 		location: { protocol: "https:", host: "example.test" },
 		onProgress,
+		onPreview,
 		onOpen: vi.fn(),
 		onDrop: vi.fn(),
 		createSocket: () => {
@@ -63,7 +65,7 @@ function fixture() {
 			return stream;
 		},
 	});
-	return { sockets, streams, onProgress, stop };
+	return { sockets, streams, onProgress, onPreview, stop };
 }
 const progress = {
 	sessionId,
@@ -119,5 +121,26 @@ it("reconnects for a full snapshot when a socket delta is missed", () => {
 	expect(f.onProgress).not.toHaveBeenCalled();
 	vi.advanceTimersByTime(10000);
 	expect(f.sockets.length).toBeGreaterThan(1);
+	f.stop();
+});
+it("hands preview frames over a delivered copy to the page, never as progress", () => {
+	const f = fixture();
+	const socket = f.sockets[0];
+	socket.onopen?.();
+	const preview = {
+		type: "preview",
+		turnId: "22222222-2222-4222-8222-222222222222",
+		events: [{ type: "text-delta", id: "cc-0-0", text: "Working on it." }],
+	};
+	// Before the first snapshot there is nothing to show it in.
+	socket.onmessage?.({ data: JSON.stringify(preview) });
+	expect(f.onPreview).not.toHaveBeenCalled();
+	socket.onmessage?.({ data: JSON.stringify({ revision: "10", progress }) });
+	socket.onmessage?.({ data: JSON.stringify(preview) });
+	expect(f.onPreview).toHaveBeenCalledWith(preview);
+	expect(f.onProgress).toHaveBeenCalledTimes(1);
+	// A later delta still applies on the same copy.
+	socket.onmessage?.({ data: JSON.stringify({ revision: "11", delta }) });
+	expect(f.onProgress.mock.calls[1][1].items).toHaveLength(2);
 	f.stop();
 });

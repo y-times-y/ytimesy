@@ -21,6 +21,10 @@ import {
 	feedWakeAt,
 	isUrgentFeedLine,
 } from "../../domain/claude-feed";
+import {
+	claudeFeedPreview,
+	livePreviewFrame,
+} from "../../domain/claude-feed-preview";
 import { claimConversationStep } from "../../domain/conversation-step-receipts";
 import { turnControlSchema } from "../../domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../../domain/delivery-auth";
@@ -87,6 +91,8 @@ import {
 import { pendingClaudeCodeCalls } from "../services/claude-code-bridge";
 import type { ClaudeCodeFeed } from "../services/claude-code-runner";
 import {
+	claudeTurnRedaction,
+	forgetClaudeTurn,
 	registerClaudeTurn,
 	takeClaudeStepPause,
 } from "../services/claude-step-pause";
@@ -639,6 +645,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		}
 		// The step's checkpoint is saved: so is where it read the run's feed.
 		feed?.commit();
+		// The lines that arrived during the step were read: the next batch's
+		// wait counts from its own arrival, not theirs.
+		if (feed && !feed.unread()) this.feedPending = null;
 		if (outcome === "continue") {
 			this.ctx.storage.sql.exec(
 				"update turn_loop set step_index=step_index+1,resumes=0",
@@ -651,12 +660,16 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				now +
 				(pause > 0 && pendingClaudeCodeCalls(step.turnId) === 0 ? pause : 0);
 			// Lines that arrived after the step's last read wake the next sooner.
+			// While watched, at once: they came in while the step ran, so the
+			// object did not preview them.
 			return this.wake(
 				"turn",
 				feed?.unread()
 					? feedWakeAt({
 							now,
-							urgent: this.pendingFeed()?.urgent ?? true,
+							urgent:
+								this.feedMode() === "live" ||
+								(this.pendingFeed()?.urgent ?? true),
 							mode: this.feedMode(),
 							pendingSince: this.pendingFeed()?.since ?? now,
 							scheduledAt: at,
@@ -1017,12 +1030,17 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			if (decision.kind === "need")
 				return reply({ type: "need", from: decision.from });
 			reply({ type: "ack", receivedTo: decision.receivedTo, mode });
-			if (decision.kind === "accept")
-				await this.claudeFeedArrived(
-					data.entries.some(([, line]) => isUrgentFeedLine(line)),
-					mode,
-					now,
-				);
+			if (decision.kind === "accept") {
+				const urgent = data.entries.some(([, line]) => isUrgentFeedLine(line));
+				// Watched with no step running: the object shows the text itself
+				// and the step sleeps on; what it cannot show wakes the step now.
+				const unshown =
+					mode === "live" &&
+					!urgent &&
+					!this.stepping &&
+					!this.previewClaudeFeed(turn, data.entries);
+				await this.claudeFeedArrived(urgent || unshown, mode, now);
+			}
 			return;
 		}
 		if (data.type === "exit") {
@@ -1034,8 +1052,33 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		reply({ type: "ack", receivedTo: state.receivedTo, mode });
 	}
 	/**
+	 * Previews a batch's text to the chat's live sockets, redacted with the
+	 * turn's list as its last step left it (claude-feed-preview.ts). False
+	 * when it could not be shown to every viewer: no list in this isolate (it
+	 * restarted), a frame too large, or a viewer on the event stream. Never
+	 * touches the chat's copy or its revision.
+	 */
+	private previewClaudeFeed(
+		turnId: string,
+		entries: readonly (readonly [number, string])[],
+	) {
+		const redact = claudeTurnRedaction(turnId);
+		if (!redact) return false;
+		try {
+			const preview = claudeFeedPreview(turnId, entries, redact());
+			if (!preview.events.length) return true;
+			const frame = livePreviewFrame(preview);
+			return frame !== null && this.room.preview(frame);
+		} catch (error) {
+			console.warn("Claude feed preview was not sent.", {
+				cause: stepFailureCause(error),
+			});
+			return false;
+		}
+	}
+	/**
 	 * Lines (or the exit) arrived: a waiting step reads them now; a sleeping
-	 * turn is woken at once for urgent ones, else at the mode's cadence.
+	 * turn is woken at once for urgent ones, else at the mode's wake cadence.
 	 */
 	private async claudeFeedArrived(
 		urgent: boolean,
@@ -1065,6 +1108,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 	/** The turn ended: its feed's lines go, and its runner stops sending. */
 	private endClaudeFeed(turnId: string) {
+		forgetClaudeTurn(turnId);
 		try {
 			this.claudeFeed.clearTurn(turnId);
 			for (const socket of this.ctx.getWebSockets(turnId)) {

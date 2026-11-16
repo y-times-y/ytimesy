@@ -126,6 +126,12 @@ export type ClaudeCodeStepInput = {
 	 * Claude works on its own (claude-step-pause.ts); absent: never.
 	 */
 	readonly mayPause?: () => boolean;
+	/**
+	 * The same for a step following the run's feed, which may end whether or
+	 * not someone watches (the object previews the text meanwhile); absent:
+	 * `mayPause` decides.
+	 */
+	readonly mayPauseOnFeed?: () => boolean;
 	/** The step ended early: its next one should start after `ms`. */
 	readonly requestPause?: (ms: number) => void;
 	/** Runs a command on the VM as its default (builder) user. */
@@ -230,7 +236,9 @@ const UNREADABLE_POLL_PAUSE_MS = 1_500;
 /**
  * Reports a run's state and the complete lines since its saved offset,
  * after saving the offset the runner finished (argv: run dir, offset to
- * save or -1, byte limit). Header line: {"offset","next","status","size"};
+ * save or -1, byte limit). The saved offset only moves forward: a step
+ * that starts from an older position (a feed step's) never moves it back.
+ * Header line: {"offset","next","status","size"};
  * then one "<byte offset>\t<line>" per line. A line longer than the limit
  * is skipped and reported as {"type":"ytimesy_oversize"}.
  */
@@ -401,13 +409,42 @@ function systemPrompt(
 		.join("\n");
 }
 
+/** What one step did, logged when it ends to compare feed and poll steps. */
+type StepMeasure = { source: "feed" | "poll"; lines: number };
+
 export async function runClaudeCodeStep(
 	input: ClaudeCodeStepInput,
 ): Promise<ClaudeCodeStepResult> {
 	const now = input.now ?? Date.now;
+	if (!/^[a-f0-9-]{36}$/.test(input.turnId))
+		throw new Error("Invalid turn id.");
+	const measure: StepMeasure = { source: "poll", lines: 0 };
+	const startedAt = now();
+	try {
+		return await claudeCodeStep(input, measure);
+	} finally {
+		// One line per step where the feed is on: how long the chat's object
+		// was kept awake for it, to compare feed and poll steps.
+		if (input.feed)
+			console.info(
+				JSON.stringify({
+					event: "claude.step_end",
+					turnId: input.turnId,
+					source: measure.source,
+					awakeMs: Math.max(0, now() - startedAt),
+					linesConsumed: measure.lines,
+				}),
+			);
+	}
+}
+
+async function claudeCodeStep(
+	input: ClaudeCodeStepInput,
+	measure: StepMeasure,
+): Promise<ClaudeCodeStepResult> {
+	const now = input.now ?? Date.now;
 	const sleep = input.sleep ?? input.bridge.wait;
 	const { shell, turnId } = input;
-	if (!/^[a-f0-9-]{36}$/.test(turnId)) throw new Error("Invalid turn id.");
 	input.signal.throwIfAborted();
 	let machineState: Awaited<ReturnType<typeof readMachineAndRunState>> | null =
 		null;
@@ -456,7 +493,7 @@ export async function runClaudeCodeStep(
 		run = launched.run;
 	}
 	const runDirectory = `${turnDirectory}/${run}`;
-	const reader = new ClaudeLineReader(input, claudeSessionId);
+	const reader = new ClaudeLineReader(input, claudeSessionId, measure);
 	const backups = new TranscriptBackups(input, home, now);
 	/** The run reported its result: save its session, then the turn's answer. */
 	const finishResult = async (result: ClaudeCodeResult, commit: number) => {
@@ -486,7 +523,8 @@ export async function runClaudeCodeStep(
 	};
 	// The run's runner pushes its lines to the chat's object: read them there
 	// instead of polling the machine (claude-feed.ts).
-	if (input.feed && claudeStepSource(input.feed.state(run), now()) === "feed")
+	if (input.feed && claudeStepSource(input.feed.state(run), now()) === "feed") {
+		measure.source = "feed";
 		return followFeed({
 			input,
 			feed: input.feed,
@@ -497,9 +535,13 @@ export async function runClaudeCodeStep(
 			exitedFailure,
 			now,
 		});
-	// Where a feed step left off (it does not write the machine's offset).
+	}
+	// Where a feed step left off (it does not write the machine's offset; the
+	// poll never moves that offset back when the machine is further along).
 	const fed = input.feed?.state(run)?.consumedTo ?? 0;
+	/** How far this step has read the run's output (-1: nothing known yet). */
 	let readTo = fed > 0 ? fed : -1;
+	/** The offset the next poll saves on the machine (-1: nothing new). */
 	let commit = readTo;
 	let wait = POLL_MIN_MS;
 	let unreadablePolls = 0;
@@ -623,6 +665,8 @@ export async function runClaudeCodeStep(
 			if (read) result = read;
 		}
 		if (polled.next !== polled.offset) commit = polled.next;
+		// Everything before `next` is read, by this poll or (the machine's saved
+		// offset) an earlier one: an empty poll still counts it.
 		readTo = Math.max(readTo, polled.next);
 		if (result) {
 			input.feed?.consume(run, readTo);
@@ -683,12 +727,14 @@ const FEED_IDLE_WAIT_MS = 1_000;
 /**
  * The step reading the run's feed: lines from the chat's own storage, in
  * offset order from where the last committed step stopped, through the same
- * mapping as a poll. It ends as soon as there is nothing to read or answer
- * and nobody watches; the object wakes the next step when lines arrive (or
- * after the pause, which renews the turn's lease). While someone watches it
- * stays, waiting on the feed rather than the machine. The read position is
- * saved once the step's checkpoint commits, so an interrupted step reads
- * those lines again, as a restarted poll does.
+ * mapping as a poll. It ends as soon as it has read what is stored and no
+ * ytimesy tool call is in flight, whether or not someone watches: the
+ * object previews the run's text to viewers itself and wakes the next step
+ * for a tool call, the result or the exit at once, for other lines once
+ * they have waited (claude-feed.ts), and after the pause, which renews the
+ * turn's lease. The read position is saved once the step's checkpoint
+ * commits, so an interrupted step reads those lines again, as a restarted
+ * poll does.
  */
 async function followFeed(ctx: {
 	readonly input: ClaudeCodeStepInput;
@@ -743,8 +789,8 @@ async function followFeed(ctx: {
 		)
 			return yieldStep();
 		if (lines.length) continue;
-		// Nothing to read or answer and nobody watching: the object sleeps.
-		if (!busy && backups.idle() && input.mayPause?.())
+		// Nothing to read or answer: the object sleeps, watched or not.
+		if (!busy && backups.idle() && (input.mayPauseOnFeed ?? input.mayPause)?.())
 			return yieldStep(CLAUDE_STEP_PAUSE_MS);
 		await Promise.race([
 			feed.wait(FEED_IDLE_WAIT_MS),
@@ -765,9 +811,11 @@ class ClaudeLineReader {
 	constructor(
 		private readonly input: ClaudeCodeStepInput,
 		public sessionId: string | null,
+		private readonly measure: StepMeasure,
 	) {}
 	/** One line; its result, if it is the run's last. */
 	async read(line: string, key: string): Promise<ClaudeCodeResult | null> {
+		this.measure.lines++;
 		let result: ClaudeCodeResult | null = null;
 		for (const effect of claudeCodeEffects(line, key, {
 			toolName: this.input.toolName,
