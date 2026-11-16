@@ -362,3 +362,19 @@ export function missingDeployedSettings(input: {
 	const present = new Set([...input.secrets, ...input.vars]);
 	return input.required.filter((name) => !present.has(name));
 }
+
+/**
+ * Why `wrangler secret list` failed, from its output: a Worker that was never
+ * deployed has no secrets (the first deploy), a rate limit is worth waiting
+ * out, and anything else (auth, network) must stop the deploy. Reading any of
+ * them as "no secrets" made a rate-limited listing report hand-set secrets as
+ * missing.
+ */
+export function secretListFailure(
+	output: string,
+): "not-deployed" | "rate-limited" | "other" {
+	if (/\b10429\b|rate limited/i.test(output)) return "rate-limited";
+	if (/\b10007\b|script not found|workers?\.?.*does not exist/i.test(output))
+		return "not-deployed";
+	return "other";
+}

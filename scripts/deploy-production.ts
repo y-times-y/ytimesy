@@ -19,6 +19,7 @@ import {
 	missingDeployedSettings,
 	productionPreflightProblems,
 	requiredSettingNames,
+	secretListFailure,
 } from "./production-preflight";
 import {
 	assertProductionRoutes,
@@ -307,17 +308,38 @@ const EDGE_CONFIG = [
 // takes no --env (deploying wrangler.web.jsonc would bundle raw source).
 const WEB_CONFIG = ["--config", "dist/server/wrangler.json"];
 
-/** Secret names on a deployed Worker (names only; empty before its first deploy). */
+/**
+ * Secret names on a deployed Worker (names only; empty before its first
+ * deploy). A rate-limited listing is retried, and any other failure stops the
+ * deploy: an unread list must never look like "no secrets", or the preflight
+ * reports every hand-set secret as missing.
+ */
 function deployedSecretNames(config: string[]): string[] {
-	try {
-		const listed = execFileSync(
-			"pnpm",
-			["exec", "wrangler", "secret", "list", "--format", "json", ...config],
-			{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-		);
-		return (JSON.parse(listed) as { name: string }[]).map((row) => row.name);
-	} catch {
-		return [];
+	const attempts = 6;
+	for (let attempt = 1; ; attempt++) {
+		try {
+			const listed = execFileSync(
+				"pnpm",
+				["exec", "wrangler", "secret", "list", "--format", "json", ...config],
+				{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+			);
+			return (JSON.parse(listed) as { name: string }[]).map((row) => row.name);
+		} catch (error) {
+			const output = `${(error as { stdout?: unknown }).stdout ?? ""}${(error as { stderr?: unknown }).stderr ?? ""}${(error as Error).message}`;
+			const failure = secretListFailure(output);
+			if (failure === "not-deployed") return [];
+			if (failure === "rate-limited" && attempt < attempts) {
+				const waitMs = 15_000 * attempt;
+				console.warn(
+					`Cloudflare rate-limited the secret list; retrying in ${waitMs / 1000}s (${attempt}/${attempts - 1}).`,
+				);
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+				continue;
+			}
+			throw new Error(
+				`Could not read the Worker's secret names (${failure === "rate-limited" ? "Cloudflare is still rate limiting" : "wrangler secret list failed"}); nothing was deployed. Try again shortly.`,
+			);
+		}
 	}
 }
 

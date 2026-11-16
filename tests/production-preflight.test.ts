@@ -6,6 +6,7 @@ import {
 	type PreflightInput,
 	productionPreflightProblems,
 	requiredSettingNames,
+	secretListFailure,
 } from "../scripts/production-preflight";
 
 const root = "r".repeat(64);
@@ -313,5 +314,28 @@ describe("edge signing secrets", () => {
 				YTIMESY_GIT_PROXY_SECRET: derived("git-proxy"),
 			}),
 		).toBe(derived("git-proxy"));
+	});
+});
+
+describe("reading why a secret list failed", () => {
+	it("calls a Cloudflare rate limit a rate limit, never an empty list", () => {
+		expect(
+			secretListFailure(
+				"Rate limited. Please wait and consider throttling your request speed [code: 10429]",
+			),
+		).toBe("rate-limited");
+	});
+	it("treats a Worker that does not exist yet as having no secrets", () => {
+		expect(
+			secretListFailure(
+				"This Worker does not exist on your account. [code: 10007]",
+			),
+		).toBe("not-deployed");
+	});
+	it("stops on anything else, such as bad credentials", () => {
+		expect(secretListFailure("Authentication error [code: 10000]")).toBe(
+			"other",
+		);
+		expect(secretListFailure("fetch failed")).toBe("other");
 	});
 });
