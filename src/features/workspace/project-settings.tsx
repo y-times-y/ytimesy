@@ -43,6 +43,7 @@ import {
 import {
 	type XaiSubscriptionView,
 	xaiSubscriptionMessage,
+	xaiSubscriptionNeedsSignIn,
 } from "#/domain/xai-subscription";
 import { ReplayChoiceSection } from "#/features/analytics/replay-choice-setting";
 import { authClient } from "../auth/client";
@@ -1228,7 +1229,7 @@ function XaiSubscriptionRow({
 				</div>
 			</div>
 			<div className="settings-row-actions">
-				{status === "ready" ? (
+				{!xaiSubscriptionNeedsSignIn(status) ? (
 					confirming ? (
 						<>
 							<button
@@ -1250,8 +1251,12 @@ function XaiSubscriptionRow({
 						</>
 					) : (
 						<>
-							<span className="settings-badge" data-tone="ok">
-								Connected
+							{/* A refused plan is retried by the next Grok turn, not by signing in. */}
+							<span
+								className="settings-badge"
+								data-tone={status === "ready" ? "ok" : undefined}
+							>
+								{status === "ready" ? "Connected" : "Retrying"}
 							</span>
 							<button
 								type="button"

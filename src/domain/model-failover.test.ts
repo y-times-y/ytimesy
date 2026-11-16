@@ -850,10 +850,20 @@ describe("SuperGrok subscription", () => {
 	});
 
 	it("moves a rejected sign-in to the same Grok on an xAI key, with a notice", () => {
-		for (const reason of ["reconnect", "not-eligible"] as const)
-			expect(failoverReason(new XaiSubscriptionUnavailable(reason))).toBe(
-				"plan-access",
-			);
+		expect(failoverReason(new XaiSubscriptionUnavailable("reconnect"))).toBe(
+			"plan-access",
+		);
+		// A refused plan is retried on its own: the notice must not ask for sign-in.
+		expect(failoverReason(new XaiSubscriptionUnavailable("not-eligible"))).toBe(
+			"plan-refused",
+		);
+		expect(
+			failoverNotice(
+				{ model: "Grok 4.7", connection: "SuperGrok" },
+				{ model: "Grok 4.7", connection: "xAI" },
+				"plan-refused",
+			),
+		).not.toMatch(/reconnect|sign/i);
 		// Wrapped by the SDK's safe failure, the cause still decides.
 		expect(
 			failoverReason(
@@ -862,6 +872,10 @@ describe("SuperGrok subscription", () => {
 		).toBe("plan-access");
 		expect(failoverReason(new XaiSubscriptionUnavailable("unavailable"))).toBe(
 			"outage",
+		);
+		// A spent plan is a usage limit, not a sign-in to renew.
+		expect(failoverReason(new XaiSubscriptionUnavailable("usage-limit"))).toBe(
+			"usage-limit",
 		);
 		expect(
 			retriesSameRoute(

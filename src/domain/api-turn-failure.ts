@@ -570,18 +570,28 @@ export class CodexReconnectRequired extends Error {
 
 /**
  * The SuperGrok subscription could not serve a request: its sign-in was
- * rejected ("reconnect"), xAI refused the plan ("not-eligible"), or xAI's
- * sign-in service was briefly unreachable ("unavailable"). The first two wait
- * for the user; every reason lets the turn continue on another connection.
+ * rejected ("reconnect", waits for the user), xAI refused the plan
+ * ("not-eligible", retried after a cooldown), xAI says the plan's usage is
+ * spent ("usage-limit", nothing recorded), or xAI was briefly unreachable or
+ * refused for another reason ("unavailable"). Every reason lets the turn
+ * continue on another connection.
  */
 export class XaiSubscriptionUnavailable extends Error {
-	constructor(readonly reason: "reconnect" | "not-eligible" | "unavailable") {
+	constructor(
+		readonly reason:
+			| "reconnect"
+			| "not-eligible"
+			| "usage-limit"
+			| "unavailable",
+	) {
 		super(
 			reason === "reconnect"
 				? "Your Grok sign-in expired. Reconnect it in Settings > Agents, then retry."
 				: reason === "not-eligible"
 					? "Your xAI plan can't use Grok here. Check your SuperGrok or X subscription, or pick another model."
-					: "xAI sign-in is unavailable right now. Retry in a few minutes.",
+					: reason === "usage-limit"
+						? "Your Grok plan's usage is used up for now. Retry later or pick another model."
+						: "xAI is unavailable right now. Retry in a few minutes.",
 		);
 		this.name = "XaiSubscriptionUnavailable";
 	}
