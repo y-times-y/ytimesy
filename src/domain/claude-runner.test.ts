@@ -35,6 +35,30 @@ describe("claudeRunnerFor", () => {
 		).toBeNull();
 	});
 
+	it("signs with the Ed25519 key, the legacy shared key, or both during the rollout", () => {
+		const base = { userId: "u1", sessionId: chat, reader: false };
+		const signingKey = "A".repeat(64);
+		const { YTIMESY_CLAUDE_RUNNER_SECRET: _, ...keyOnly } = env;
+		const only = claudeRunnerFor({
+			...base,
+			env: { ...keyOnly, YTIMESY_CLAUDE_RUNNER_SIGNING_KEY: signingKey },
+		});
+		expect(only).toMatchObject({ signingKey });
+		expect(only).not.toHaveProperty("secret");
+		expect(
+			claudeRunnerFor({
+				...base,
+				env: { ...env, YTIMESY_CLAUDE_RUNNER_SIGNING_KEY: signingKey },
+			}),
+		).toMatchObject({ signingKey, secret: "s".repeat(40) });
+		expect(
+			claudeRunnerFor({
+				...base,
+				env: { ...keyOnly, YTIMESY_CLAUDE_RUNNER_SIGNING_KEY: "not-a-key" },
+			}),
+		).toBeNull();
+	});
+
 	it("gives one chat the same box every time, and spreads chats over the boxes", () => {
 		const pick = (sessionId: string) =>
 			claudeRunnerFor({ env, userId: "u2", sessionId, reader: false })?.baseUrl;

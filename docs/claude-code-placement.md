@@ -77,8 +77,11 @@ with `sudo`. Nothing is enabled or provisioned until the settings below exist.
   run on the VM. Claude's own TodoWrite stays; the chat already shows it
   (`claude-code-stream.ts`), so ytimesy's `update_plan` is not offered.
 - **Settings** (`src/domain/claude-runner.ts`): `YTIMESY_CLAUDE_RUNNER_URLS`
-  (comma-separated HTTPS origins), `YTIMESY_CLAUDE_RUNNER_SECRET` (32+ chars,
-  the same as the boxes' `RUNNER_SIGNING_KEY`), `YTIMESY_CLAUDE_RUNNER_USERS`
+  (comma-separated HTTPS origins), `YTIMESY_CLAUDE_RUNNER_SIGNING_KEY` (the
+  edge's Ed25519 private key; the boxes hold only its public key, see
+  "Runner box signatures" below) and, until the rollout there is finished,
+  the legacy `YTIMESY_CLAUDE_RUNNER_SECRET` (32+ chars, the same as the boxes'
+  `RUNNER_SIGNING_KEY`), `YTIMESY_CLAUDE_RUNNER_USERS`
   (user ids, or `*`). A chat always maps to the same box (hash of its session id): the
   chat's Claude session file lives on that box between turns and can reach
   hundreds of MB, far past the 20 MiB saved to storage, and each step of a
@@ -136,6 +139,8 @@ installed, `/health` reports the disk. Round trip from the build machine
 through Cloudflare was 270-630 ms for a trivial command (not measured from the
 edge Workers). The signing key is only on the boxes (`/etc/ytimesy-runner.env`)
 and, once the flag is turned on, in the Workers' `YTIMESY_CLAUDE_RUNNER_SECRET`.
+(Superseded 2026-11-16: the key is also in each box's EC2 user data, and the
+boxes move to Ed25519; see "Runner box signatures".)
 
 ### Workspace tool lifecycle hardening (2026-11-10, pending deployment)
 
@@ -229,3 +234,122 @@ runners, or the owner has explicitly accepted starting them without that state.
 Canary-gate validation: 59 targeted runner/placement/turn/API/cleanup tests,
 full typecheck and production build passed. The gate has not yet been deployed
 or activated; no real Claude inference is claimed for this maintenance stage.
+
+### Runner box signatures: Ed25519, no signing key on a box (2026-11-16, not deployed)
+
+Owner's rule: no production secret on any AWS box. Until now the boxes checked
+requests with a shared HMAC key (`RUNNER_SIGNING_KEY`, equal to the Workers'
+`YTIMESY_CLAUDE_RUNNER_SECRET`): anyone who read it on one box could sign
+`/exec` for every box, and it was a Worker secret too. Now the edge signs
+each request with an Ed25519 private key that only the Workers hold
+(`YTIMESY_CLAUDE_RUNNER_SIGNING_KEY`, base64 PKCS8 DER), and a box holds only
+the public key (`RUNNER_PUBLIC_KEY`, base64 SPKI DER).
+
+- **What is signed** is unchanged: `POST`, the path, the expiry (at most 65 s
+  ahead), the body's SHA-256 and a 32-hex nonce (`runnerSignedMaterial` in
+  `infra/claude-runner-box/server.mjs`, `signedMaterial` in
+  `src/server/adapters/claude-runner-box.ts`). The Ed25519 signature travels
+  as `x-ytimesy-runner-signature-ed25519` (base64url, 86 characters); the HMAC
+  stays in `x-ytimesy-delivery-signature`. A nonce is accepted once until its
+  expiry, whichever signature carried it.
+- **Edge** (`claudeRunnerFor`, `runnerRequestHeaders`): signs with every key
+  it has. With both settings each request carries both signatures; with only
+  the Ed25519 key, only that one. A value that is not 64 base64 characters is
+  ignored; a well-formed value that does not import fails the call before
+  anything is sent (not retried as a network error).
+- **Box** (`createRunnerServer`): with `RUNNER_PUBLIC_KEY` it accepts only a
+  valid Ed25519 signature, even if `RUNNER_SIGNING_KEY` is still set. Without
+  it, it checks the HMAC as before. It logs which one at start
+  (`"Runner API verifies"`).
+- **Keys:** `node --import tsx scripts/generate-claude-runner-keypair.ts
+  --private-key-out <file>` prints the public key and writes the private key to
+  a new owner-only file. The owner puts it in the production secret bundle
+  (`PRODUCTION_ENV_FILE`) as `YTIMESY_CLAUDE_RUNNER_SIGNING_KEY`;
+  `scripts/deploy-production.ts` forwards it to the Workers when present.
+  `provision.py --public-key <base64>` gives new boxes only the public key.
+
+**Rollout, in this order:**
+
+1. **Edge sends both.** Add `YTIMESY_CLAUDE_RUNNER_SIGNING_KEY` to the bundle
+   and deploy (the usual production deploy). The old secret stays, so every
+   request carries both signatures; the boxes, still on HMAC, ignore the new
+   header.
+2. **Each box: public key in, shared key out.** Per box, in one stop window
+   (procedure below): install the new `server.mjs`, replace the
+   `RUNNER_SIGNING_KEY=` line of `/etc/ytimesy-runner.env` with
+   `RUNNER_PUBLIC_KEY=<public key>`, and clear the copies of the old user data
+   (below). Both files must change together: the old `server.mjs` ignores
+   `RUNNER_PUBLIC_KEY` and, without `RUNNER_SIGNING_KEY`, will not start.
+   Check afterwards that a signed call works and that an HMAC-only request
+   gets 403.
+3. **Edge drops the HMAC.** Remove `YTIMESY_CLAUDE_RUNNER_SECRET` from the
+   bundle and delete it from the Worker:
+   `pnpm exec wrangler secret delete YTIMESY_CLAUDE_RUNNER_SECRET --config
+   wrangler.edge-executor.jsonc --env production`. Removing it from the bundle
+   alone does nothing, because `deploy --secrets-file` only adds and updates
+   (`scripts/production-deploy-steps.ts`). The old key is then worthless
+   everywhere; treat it as leaked, because it is still in the boxes' user
+   data until step 2's cleanup.
+
+**How boxes are built and updated (checked 2026-11-16, read-only).** A box is
+stock Ubuntu 24.04 plus `bootstrap.sh` run once as EC2 user data
+(`provision.py`). There is no AMI of our own, no SSH (no key pair, a security
+group with no ingress), and no SSM (no instance profile; the IAM user here is
+also denied `ssm:DescribeInstanceInformation`). The 2026-11-10 update was done
+by hand with temporary repair instances. That procedure is not in the repo:
+stop the box, move its root volume to a helper in the same AZ, edit, move it
+back, start. The signed `/exec` cannot do it: it runs as `ytimesy-runner`, and
+the env file is root-owned with `NoNewPrivileges`. The AWS credentials on the
+build machine (IAM user `ytimesy_prod_for_codex`, account 703705584492) pass
+`DryRun` for StopInstances, StartInstances, DetachVolume, AttachVolume,
+ModifyInstanceAttribute and CreateSnapshot on these boxes. So step 2 can be
+run from there, after installing boto3 or the AWS CLI (neither is installed).
+RunInstances for the helper was not proven. Per box:
+
+1. Make sure no Claude run is live on it. Stopping the box ends its detached
+   `claude` processes.
+2. Take a CreateSnapshot of the root volume.
+3. Stop the box. Move its volume to the helper and mount it. Replace
+   `opt/ytimesy-runner/server.mjs` and edit `etc/ytimesy-runner.env`. Delete
+   cloud-init's cached user data: `var/lib/cloud/instances/*/user-data.txt*`
+   and `var/lib/cloud/instances/*/scripts/part-*`.
+4. While the box is stopped, clear its user data with ModifyInstanceAttribute.
+   Move the volume back and start the box. Terminate the helper.
+
+**What a box still holds after the rollout:**
+
+- **Cloudflare Tunnel token**, one per box (`ytimesy-runner-1/2`). It is in
+  the user data (until cleared), in cloud-init's cache, and in the
+  `cloudflared` systemd unit, which passes it as `--token` on the command line.
+  Every local user can read that command line through `/proc`. (That is how
+  `cloudflared service install` sets up the unit on Linux; it was not checked
+  on the boxes.) With the token,
+  someone can run a connector for that box's tunnel and receive the edge's
+  requests for that box only. They then see the run files the edge writes
+  there, including per-turn grants. They still cannot sign a request to any
+  box. It is per box, not shared, but it is a production credential. Removing
+  it needs a different ingress, for example a public origin restricted to
+  Cloudflare with authenticated origin pulls; the box would then hold that
+  origin's TLS key instead. Not done.
+- **Per-turn Claude grants**: a signed token valid for 6 hours
+  (`CLAUDE_CODE_GRANT_TTL_MS`), in `runs/<run>/env` and `mcp.json`. It lets
+  the holder call the edge model proxy and that chat's MCP tools. `claude`
+  needs it to work, and cleanup deletes run directories after 3 days. Users'
+  Claude tokens themselves stay on the edge.
+- **Users' session transcripts**: user data, not credentials.
+- **No AWS credentials**: there is no instance profile. IMDS (v2, hop limit
+  2) is still enabled, and any process on the box can read the user data
+  through it, which is why step 2 clears it. Disabling the metadata endpoint
+  (ModifyInstanceMetadataOptions, which can be done without a stop) would
+  also close that.
+
+Until step 2, any process running as `ytimesy-runner`, `claude` included, can
+read `RUNNER_SIGNING_KEY`. It is in `/proc/<API pid>/environ` (same uid) and
+in IMDS user data. Removing it from the spawned commands' environment did not
+hide it.
+
+Checked: box and edge tests (sign and verify across both implementations,
+the double-signed rollout request on HMAC-only and Ed25519 boxes, replay,
+expiry, and tampered body, path, expiry, nonce and signature). Ed25519 PKCS8
+signing under local workerd (`wrangler dev`) verifies with the printed public
+key. Not done: nothing is deployed, and no live box was changed.
