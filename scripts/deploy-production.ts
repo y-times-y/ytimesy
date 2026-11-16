@@ -336,8 +336,17 @@ function deployedSecretNames(config: string[]): string[] {
 				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
 				continue;
 			}
+			// What wrangler said, without colour codes (it names no secret values).
+			const said = output
+				// biome-ignore lint/suspicious/noControlCharactersInRegex: strips terminal colour codes
+				.replace(/\u001b\[[0-9;]*m/g, "")
+				.split("\n")
+				.filter((line) => line.trim())
+				.slice(0, 12)
+				.join(" | ")
+				.slice(0, 700);
 			throw new Error(
-				`Could not read the Worker's secret names (${failure === "rate-limited" ? "Cloudflare is still rate limiting" : "wrangler secret list failed"}); nothing was deployed. Try again shortly.`,
+				`Could not read the Worker's secret names (${failure === "rate-limited" ? "Cloudflare is still rate limiting" : "wrangler secret list failed"}); nothing was deployed. Try again shortly. wrangler said: ${said}`,
 			);
 		}
 	}
