@@ -47,6 +47,9 @@ export function productionRuntimeSettings(
 		// A Claude run on a runner box serves its workspace tools itself, with
 		// a token for that one VM (docs/claude-code-placement.md). "0" turns it off.
 		YTIMESY_CLAUDE_BOX_TOOLS: env.YTIMESY_CLAUDE_BOX_TOOLS === "0" ? "0" : "1",
+		// A turn's VM pauses while the model thinks (thinking-pause.ts). "false" turns it off.
+		YTIMESY_PAUSE_VM_WHILE_THINKING:
+			env.YTIMESY_PAUSE_VM_WHILE_THINKING === "false" ? "false" : "true",
 	};
 }
 
