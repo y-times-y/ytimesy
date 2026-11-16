@@ -1754,6 +1754,25 @@ describe("Claude Code runner: feed or poll", () => {
 		expect(firstPoll).toMatch(new RegExp(` ${read} 524288$`));
 	});
 
+	it("parks the turn instead of pausing it where the executor can park", async () => {
+		const vm = attached();
+		const fed = fakeFeed(() => 1_000_000);
+		fed.push(init, ...work);
+		const requestPause = vi.fn();
+		const requestPark = vi.fn();
+		const step = input(vm, {
+			feed: fed.feed,
+			mayPause: () => true,
+			requestPause,
+			requestPark,
+		});
+		const result = await runClaudeCodeStep(step);
+		expect(result.outcome).toBe("continue");
+		expect(requestPark).toHaveBeenCalledOnce();
+		expect(requestPause).not.toHaveBeenCalled();
+		expect(fed.consumed.at(-1)).toEqual([1, fed.stored.at(-1)?.next]);
+	});
+
 	it("ends at once with nothing to read and nobody watching, keeping its place", async () => {
 		const vm = attached();
 		const fed = fakeFeed(() => 1_000_000);

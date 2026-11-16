@@ -9,6 +9,7 @@
  * Keyed by turn: chat objects can share an isolate.
  */
 
+import type { ClaudeStepPause } from "#/domain/claude-parked-turn";
 import type { ClaudeCodeFeed } from "./claude-code-runner";
 
 /** How long a quiet, unwatched turn sleeps between looks at its run. */
@@ -24,7 +25,7 @@ type TurnHooks = {
 };
 
 const hooks = new Map<string, TurnHooks>();
-const pauses = new Map<string, number>();
+const pauses = new Map<string, ClaudeStepPause>();
 /**
  * Each turn's redaction list as its last step left it, kept in this isolate
  * so the chat's object can redact a preview between steps
@@ -90,12 +91,21 @@ export function claudeTurnFeed(turnId: string) {
 
 /** The step ends early; its next one should start after `ms`. */
 export function requestClaudeStepPause(turnId: string, ms: number) {
-	pauses.set(turnId, ms);
+	pauses.set(turnId, { kind: "pause", ms });
 }
 
-/** The pause the step that just ended asked for (taken once), else 0. */
-export function takeClaudeStepPause(turnId: string) {
-	const ms = pauses.get(turnId) ?? 0;
+/**
+ * A feed step ends with nothing to do: the turn parks, its object waking
+ * only to renew its leases until the feed or a call needs a step
+ * (claude-parked-turn.ts).
+ */
+export function requestClaudeStepPark(turnId: string) {
+	pauses.set(turnId, { kind: "park" });
+}
+
+/** How the step that just ended asked to sleep (taken once), else null. */
+export function takeClaudeStepPause(turnId: string): ClaudeStepPause | null {
+	const pause = pauses.get(turnId) ?? null;
 	pauses.delete(turnId);
-	return ms;
+	return pause;
 }

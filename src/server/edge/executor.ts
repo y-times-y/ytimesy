@@ -17,6 +17,7 @@ import {
 	CLAUDE_FEED_PROTOCOL,
 	CLAUDE_FEED_SOCKET_TAG,
 	type ClaudeFeedMode,
+	type ClaudeFeedState,
 	claudeFeedEnabled,
 	claudeFeedMessage,
 	claudeInboxKey,
@@ -30,6 +31,12 @@ import {
 	claudeFeedPreview,
 	livePreviewFrame,
 } from "../../domain/claude-feed-preview";
+import {
+	CLAUDE_PARKED_RENEW_MS,
+	CLAUDE_PARKED_ROOM_LEASE_MS,
+	claudeStepWake,
+	parkedTurnRenewal,
+} from "../../domain/claude-parked-turn";
 import { claimConversationStep } from "../../domain/conversation-step-receipts";
 import { turnControlSchema } from "../../domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../../domain/delivery-auth";
@@ -62,8 +69,10 @@ import {
 import {
 	type ApiTurn,
 	abandonApiTurn,
+	apiTurnLeaseFreshSql,
 	cancelWaitingApiTurn,
 	refreshWaitingApiTurns,
+	renewParkedClaudeTurn,
 	turnPastDeadlineSql,
 } from "../adapters/api-turns";
 import {
@@ -101,6 +110,7 @@ import {
 import { pendingClaudeCodeCalls } from "../services/claude-code-bridge";
 import type { ClaudeCodeFeed } from "../services/claude-code-runner";
 import {
+	CLAUDE_STEP_PAUSE_MS,
 	claudeTurnRedaction,
 	forgetClaudeTurn,
 	registerClaudeTurn,
@@ -316,7 +326,12 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (!this.bindIdentity(scope)) return false;
 		const active = this.activeTurn();
 		if (active?.turnId === turn.turnId) return active.leaseId === turn.leaseId;
-		if (active) return this.queue.add({ ...scope, ...turn });
+		if (active) {
+			const queued = this.queue.add({ ...scope, ...turn });
+			// Only steps keep a waiting turn's lease fresh: a parked turn steps now.
+			if (queued) await this.wakeSleepingTurn();
+			return queued;
+		}
 		await this.beginTurn({ ...scope, ...turn });
 		return true;
 	}
@@ -372,6 +387,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	 * call is answered without waiting out the pause.
 	 */
 	private async wakeSleepingTurn() {
+		this.unpark();
 		if (this.stepping || !this.activeTurn()) return;
 		const at = this.ctx.storage.sql
 			.exec<{ at: number }>(
@@ -381,9 +397,26 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (at !== undefined && at > Date.now())
 			await this.wake("turn", Date.now());
 	}
-	/** The turn loop and the room's lease expiry share this object's single alarm. */
-	private async wake(purpose: "turn" | "room", at: number | null) {
+	/**
+	 * The turn loop and the room's lease expiry share this object's single
+	 * alarm. A turn wake set with `parkedTurn` is that Claude Code turn's
+	 * parked renewal (claude-parked-turn.ts); any other turn wake unparks it,
+	 * so the wake runs a step.
+	 */
+	private async wake(
+		purpose: "turn" | "room",
+		at: number | null,
+		parkedTurn?: string,
+	) {
 		if (this.purged) return;
+		if (purpose === "turn") {
+			if (parkedTurn !== undefined && at !== null)
+				this.ctx.storage.sql.exec(
+					"insert into claude_park(id,turn_id) values(1,?) on conflict(id) do update set turn_id=excluded.turn_id",
+					parkedTurn,
+				);
+			else this.unpark();
+		}
 		if (at === null)
 			this.ctx.storage.sql.exec(
 				"delete from conversation_wake where purpose=?",
@@ -457,9 +490,118 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (turnAt === undefined || this.stepping) return;
 		this.stepping = true;
 		try {
+			if (await this.renewParkedTurn()) return;
 			await this.advanceTurn(now - turnAt);
 		} finally {
 			this.stepping = false;
+		}
+	}
+	/** The Claude Code turn parked here, if any (its next turn wake only renews). */
+	private parkedTurnId() {
+		return (
+			this.ctx.storage.sql
+				.exec<{ turnId: string }>("select turn_id as turnId from claude_park")
+				.toArray()[0]?.turnId ?? null
+		);
+	}
+	/**
+	 * Something needs the parked turn's step (feed lines, an MCP call, Stop,
+	 * a turn queued behind it): its next wake, even one already due, runs a
+	 * step; a renewal in progress does not sleep again.
+	 */
+	private unpark() {
+		if (this.renewingParked) this.parkInterrupted = true;
+		if (this.purged) return;
+		try {
+			this.ctx.storage.sql.exec("delete from claude_park");
+		} catch (error) {
+			console.warn("Parked turn was not unparked.", {
+				cause: stepFailureCause(error),
+			});
+		}
+	}
+	/** A parked turn's renewal is running (it awaits Postgres and the room). */
+	private renewingParked = false;
+	/** Something unparked the turn while its renewal ran. */
+	private parkInterrupted = false;
+	/**
+	 * A parked Claude Code turn's wake (claude-parked-turn.ts): renews its
+	 * Postgres lease (one statement) and its room lease (this object's own
+	 * storage) and sleeps again, without a step's claim, workspace or
+	 * metadata. False, and a step runs, when anything needs one, a renewal
+	 * is refused, or it fails.
+	 */
+	private async renewParkedTurn() {
+		const active = this.activeTurn();
+		const parkedTurn = this.parkedTurnId();
+		if (!active || parkedTurn === null) return false;
+		const lease = { turnId: active.turnId, leaseId: active.currentLeaseId };
+		this.renewingParked = true;
+		this.parkInterrupted = false;
+		try {
+			const decision = parkedTurnRenewal({
+				parked: parkedTurn === active.turnId,
+				now: Date.now(),
+				feed: this.heardFeedState(active.turnId),
+				pendingCalls: pendingClaudeCodeCalls(active.turnId),
+				waitingTurns: this.queue.waiting().length,
+				room: await this.room.heldTurn(lease),
+			});
+			if (!decision.renew) {
+				console.info(
+					JSON.stringify({
+						event: "claude.parked_step",
+						turnId: active.turnId,
+						reason: decision.reason,
+					}),
+				);
+				return false;
+			}
+			const renewed = await withDatabaseScope(
+				this.env.HYPERDRIVE.connectionString,
+				() => renewParkedClaudeTurn(lease.turnId, lease.leaseId),
+				null,
+			);
+			if (renewed !== "renewed") return false;
+			if (!(await this.room.renewParked(lease, CLAUDE_PARKED_ROOM_LEASE_MS)))
+				return false;
+			if (this.parkInterrupted) return false;
+			await this.wake(
+				"turn",
+				Date.now() + CLAUDE_PARKED_RENEW_MS,
+				active.turnId,
+			);
+			console.info(
+				JSON.stringify({ event: "claude.parked_renew", turnId: active.turnId }),
+			);
+			return true;
+		} catch (error) {
+			console.warn("Parked turn renewal failed; running a step.", {
+				cause: stepFailureCause(error),
+			});
+			return false;
+		} finally {
+			this.renewingParked = false;
+		}
+	}
+	/**
+	 * Parks the turn whose step just asked to (claudeStepWake): its room
+	 * lease first outlasts the sleep, or the room's own alarm would lapse it.
+	 * False when the room no longer holds it uncancelled or the write fails.
+	 */
+	private async parkTurn(turnId: string) {
+		const leaseId = this.activeTurn()?.currentLeaseId;
+		if (!leaseId) return false;
+		try {
+			return await this.room.renewParked(
+				{ turnId, leaseId },
+				CLAUDE_PARKED_ROOM_LEASE_MS,
+			);
+		} catch (error) {
+			console.warn("Claude turn was not parked.", {
+				cause: stepFailureCause(error),
+			});
+			return false;
 		}
 	}
 	/** A step of this object's turn is running in this instance. */
@@ -589,6 +731,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			).catch(() => console.warn("Abandoned turn could not be failed now."));
 			return this.endTurn("failed");
 		}
+		// A step runs: nothing of an earlier park holds.
+		this.unpark();
 		const resume = this.steps.read(step)?.state === "processing";
 		// Counts consecutive attempts that did not finish this step.
 		this.ctx.storage.sql.exec("update turn_loop set resumes=resumes+1");
@@ -672,30 +816,33 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			this.ctx.storage.sql.exec(
 				"update turn_loop set step_index=step_index+1,resumes=0",
 			);
-			// A Claude Code step that paused (nothing to answer, nobody
-			// watching) sleeps before the next; a call already waiting does not.
-			const pause = takeClaudeStepPause(step.turnId);
-			const now = Date.now();
-			const at =
-				now +
-				(pause > 0 && pendingClaudeCodeCalls(step.turnId) === 0 ? pause : 0);
+			// A Claude Code step that paused sleeps before the next; a feed step
+			// with nothing to do parks (only its leases are renewed until the
+			// feed or a call wakes it); a call already waiting does not sleep.
 			// Lines that arrived after the step's last read wake the next sooner.
 			// While watched, at once: they came in while the step ran, so the
 			// object did not preview them.
-			return this.wake(
-				"turn",
-				feed?.unread()
-					? feedWakeAt({
-							now,
+			const now = Date.now();
+			const next = claudeStepWake({
+				now,
+				pause: takeClaudeStepPause(step.turnId),
+				pendingCalls: pendingClaudeCodeCalls(step.turnId),
+				waitingTurns: this.queue.waiting().length,
+				unread: feed?.unread()
+					? {
 							urgent:
 								this.feedMode() === "live" ||
 								(this.pendingFeed()?.urgent ?? true),
 							mode: this.feedMode(),
 							pendingSince: this.pendingFeed()?.since ?? now,
-							scheduledAt: at,
-						})
-					: at,
-			);
+						}
+					: null,
+				fallbackPauseMs: CLAUDE_STEP_PAUSE_MS,
+			});
+			if (!next.parked) return this.wake("turn", next.at);
+			if (await this.parkTurn(step.turnId))
+				return this.wake("turn", next.at, step.turnId);
+			return this.wake("turn", Date.now());
 		}
 		await this.endTurn(settledHubTurnStatus(outcome));
 		if (
@@ -837,7 +984,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				`select t.id,t.session_id,t.user_id,t.connection_id,t.connection_revision,t.model_id,t.settings,t.failover,
 			 t.state,t.lease_id,t.cancel_requested,t.updated_at::text as version,t.items->>'from' as items_from,
 			 (extract(epoch from t.created_at)*1000)::float8 as queued_at_ms,
-			 heartbeat_at>=now()-interval '45 seconds' as fresh,
+			 ${apiTurnLeaseFreshSql("t")} as fresh,
 			 ${turnPastDeadlineSql("t")} as past_deadline,
 			 exists(select 1 from model_workflow_step s where s.turn_id=t.id) as legacy
 			 from api_turn t where t.id=$1 and t.lease_id=$2 and t.executor='durable-object'`,
@@ -911,14 +1058,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private claudeFeedHook(turnId: string) {
 		let consumed: { run: number; to: number } | null = null;
 		const feed: ClaudeCodeFeed = {
-			state: (run) => {
-				const state = this.claudeFeed.state(turnId, run);
-				if (!state || state.lastSeen === 0) return state;
-				return {
-					...state,
-					lastSeen: feedLastHeard(state.lastSeen, this.feedPongAt(turnId, run)),
-				};
-			},
+			state: (run) => this.heard(turnId, this.claudeFeed.state(turnId, run)),
 			lines: (run, from, limit) =>
 				this.claudeFeed.lines(turnId, run, from, limit),
 			consume: (run, to) => {
@@ -959,6 +1099,21 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				);
 			},
 		};
+	}
+	/** A run's feed record, `lastSeen` as the runner was last heard (its pings too). */
+	private heard(turnId: string, state: ClaudeFeedState | null) {
+		if (!state || state.lastSeen === 0) return state;
+		return {
+			...state,
+			lastSeen: feedLastHeard(
+				state.lastSeen,
+				this.feedPongAt(turnId, state.run),
+			),
+		};
+	}
+	/** The turn's current run's feed, as last heard; null without one. */
+	private heardFeedState(turnId: string) {
+		return this.heard(turnId, this.claudeFeed.currentState(turnId));
 	}
 	/**
 	 * When the runtime last answered a ping on one of the run's feed sockets
@@ -1179,6 +1334,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		now: number,
 	) {
 		for (const done of [...this.feedWaiters]) done();
+		// A parked turn's next wake reads them (a step, not a renewal).
+		this.unpark();
 		this.feedPending = {
 			since: this.feedPending?.since ?? now,
 			urgent: urgent || Boolean(this.feedPending?.urgent),
@@ -1258,9 +1415,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 						if (control.success && (await this.cancelWaiting(control.data)))
 							return new Response(null, { status: 204 });
 						const response = await this.room.fetch(authenticated);
-						// The room holds the stop; the turn running here stops now.
-						if (control.success && response.status === 204)
+						// The room holds the stop; the turn running here stops now, and
+						// one sleeping between steps (parked or paused) wakes to stop.
+						if (control.success && response.status === 204) {
 							abortLiveTurn(control.data.turnId);
+							if (this.activeTurn()?.turnId === control.data.turnId)
+								await this.wakeSleepingTurn();
+						}
 						return response;
 					}
 					const response = await this.room.fetch(authenticated);
@@ -1372,6 +1533,10 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			step_index integer not null, resumes integer not null)`);
 		ctx.storage.sql.exec(
 			"create table if not exists conversation_wake(purpose text primary key,at integer not null)",
+		);
+		// The Claude Code turn parked between steps (claude-parked-turn.ts).
+		ctx.storage.sql.exec(
+			"create table if not exists claude_park(id integer primary key check(id=1),turn_id text not null)",
 		);
 		ctx.storage.sql.exec(PURGE_TOMBSTONE_TABLE);
 		this.purged =

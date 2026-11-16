@@ -48,6 +48,7 @@ import {
 	claudeTurnFeed,
 	claudeTurnMayPause,
 	rememberClaudeTurnRedaction,
+	requestClaudeStepPark,
 	requestClaudeStepPause,
 } from "./claude-step-pause";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -146,6 +147,7 @@ export async function runClaudeCodeTurnStep(input: {
 			mayPause: () => claudeTurnMayPause(input.turnId),
 			mayPauseOnFeed: () => claudeFeedStepMayPause(input.turnId),
 			requestPause: (ms) => requestClaudeStepPause(input.turnId, ms),
+			requestPark: () => requestClaudeStepPark(input.turnId),
 			shell:
 				box?.shell ??
 				(async (command, timeoutMs) => {
