@@ -183,9 +183,12 @@ bridge reset tests verify stable identity only, not execution deduplication.
 The final targeted run exited 0 (36 tests in four files); both application and
 edge TypeScript checks and both edge/box bundle builds exited 0.
 
-This remains **per-process protection**, not a durable box journal. It does not
-prove SDK restart/resume behavior, retain outcomes after a process loss, or stop
-a model intentionally issuing a new invocation after an unknown outcome.
+This remains **per-process protection**, not a durable box journal. A separate
+pinned-SDK probe now verifies that plain resume after SIGKILL does not reissue
+a pending mock MCP call and instead gives the model interrupted error results.
+All three probe modes passed a clean-copy run (exit 0). This does not retain
+outcomes after a process loss, restore actual VM-command results, or stop a
+model intentionally issuing a new invocation after an unknown outcome.
 
 ## Remaining gates
 
@@ -196,8 +199,9 @@ a model intentionally issuing a new invocation after an unknown outcome.
 - Box tool journaling is not durable across a restarted runner process. An
   atomic file upload does not make an uncertain tool call safe to replay. The
   pinned-SDK private invocation-ID transport probe now passes (including two
-  identical parallel calls and strict tool schemas), but restart/resume identity,
-  persisted receipts and fault-injected recovery remain unproven; see
+  identical calls in one model response and strict tool schemas). Plain SDK
+  resume after SIGKILL is tested narrowly, but persisted receipts, restored VM
+  outcomes and full product fault recovery remain unproven; see
   `research/claude-tool-identity-2026-11-16.md`.
 - Runtime-secret box tools remain opt-in/off: VM-side output redaction is not
   access control. A VM exec token can bypass the wrapper and read VM secrets.
