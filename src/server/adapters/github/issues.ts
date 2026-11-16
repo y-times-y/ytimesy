@@ -1,6 +1,7 @@
 import type {
 	IssueDetail,
 	IssueLinkedPullRequest,
+	IssuePullRequestRef,
 	IssueState,
 	IssueSummary,
 	IssueWriteAction,
@@ -52,7 +53,7 @@ export async function listIssues(
 ): Promise<IssueSummary[]> {
 	const { owner, repo } = repositoryOwnerName(fullName);
 	const github = githubClient(token);
-	const [data, viewer] = await Promise.all([
+	const [data, viewer, links] = await Promise.all([
 		github.paginate(github.issues.listForRepo, {
 			owner,
 			repo,
@@ -61,6 +62,9 @@ export async function listIssues(
 			per_page: 100,
 		}),
 		signedInLogin(github),
+		state === "closed"
+			? new Map<number, IssuePullRequestRef[]>()
+			: issuePullRequestLinks(github, owner, repo),
 	]);
 	return data
 		.filter((issue) => !issue.pull_request)
@@ -69,6 +73,9 @@ export async function listIssues(
 			const mine = viewer?.toLowerCase();
 			return {
 				...summary,
+				...(summary.state === "open" && links.has(summary.number)
+					? { pullRequests: links.get(summary.number) }
+					: {}),
 				waiting:
 					summary.state === "open" &&
 					Boolean(mine) &&
@@ -77,6 +84,63 @@ export async function listIssues(
 					),
 			};
 		});
+}
+
+/**
+ * The pull requests that close each of the repository's latest open issues,
+ * in one read. Empty when GitHub will not say: the table then shows no links.
+ */
+async function issuePullRequestLinks(
+	github: Github,
+	owner: string,
+	repo: string,
+): Promise<Map<number, IssuePullRequestRef[]>> {
+	const links = new Map<number, IssuePullRequestRef[]>();
+	try {
+		const result = await github.graphql<{
+			repository: {
+				issues: {
+					nodes: {
+						number: number;
+						closedByPullRequestsReferences: {
+							nodes: {
+								number: number;
+								state: "OPEN" | "CLOSED" | "MERGED";
+								isDraft: boolean;
+								headRefName: string;
+							}[];
+						};
+					}[];
+				};
+			} | null;
+		}>(
+			"query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { issues(first: 100, states: [OPEN], orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { number closedByPullRequestsReferences(first: 3, includeClosedPrs: true) { nodes { number state isDraft headRefName } } } } } }",
+			{ owner, repo },
+		);
+		for (const issue of result.repository?.issues.nodes ?? []) {
+			const pulls = issue.closedByPullRequestsReferences.nodes.map(
+				(pull): IssuePullRequestRef => ({
+					number: pull.number,
+					head: pull.headRefName,
+					state:
+						pull.state === "MERGED"
+							? "merged"
+							: pull.state === "CLOSED"
+								? "closed"
+								: pull.isDraft
+									? "draft"
+									: "open",
+				}),
+			);
+			if (pulls.length) links.set(issue.number, pulls);
+		}
+	} catch (error) {
+		console.warn(
+			"Issue pull request links unavailable",
+			error instanceof Error ? error.message : String(error),
+		);
+	}
+	return links;
 }
 
 /** Everything the Issues panel shows for one issue. */

@@ -49,6 +49,9 @@ import {
 	useRepositoryChoices,
 } from "./github-ui";
 import "./pull-request-inspector.css";
+import { PullStateIcon } from "./pull-request-list";
+import { ChatRail, type PullRequestChat } from "./pull-request-marks";
+import { WorkChain } from "./work-chain";
 import { issuesKey, issuesRequest } from "./work-items-queries";
 
 type Filter = IssueState | "all";
@@ -152,8 +155,21 @@ export function IssueList({
 	onFilter,
 	onOpen,
 	onNew,
+	chatFor,
+	onOpenChat,
+	onOpenPullRequest,
 }: {
 	repositories: readonly (GithubRepositoryRef & { readonly name: string })[];
+	/** The chat working on an issue (through its pull request, or started for it). */
+	chatFor?: (
+		repository: GithubRepositoryRef,
+		issue: IssueSummary,
+	) => PullRequestChat | undefined;
+	onOpenChat?: (chatId: string) => void;
+	onOpenPullRequest?: (
+		number: number,
+		repository: GithubRepositoryRef & { readonly name: string },
+	) => void;
 	/** Adds a Repo column: the table spans repositories. */
 	showRepository?: boolean;
 	/** Beside the state tabs (the repository filter). */
@@ -163,6 +179,7 @@ export function IssueList({
 	onOpen: (
 		number: number,
 		repository: GithubRepositoryRef & { readonly name: string },
+		chat?: PullRequestChat,
 	) => void;
 	onNew: () => void;
 }) {
@@ -266,6 +283,8 @@ export function IssueList({
 							<tr>
 								<th scope="col">Issue</th>
 								{showRepository ? <th scope="col">Repo</th> : null}
+								{chatFor ? <th scope="col">Chat</th> : null}
+								<th scope="col">Pull request</th>
 								<th scope="col">Assignees / comments</th>
 							</tr>
 						</thead>
@@ -276,7 +295,13 @@ export function IssueList({
 										<button
 											type="button"
 											className="gh-issue-row"
-											onClick={() => onOpen(issue.number, repository)}
+											onClick={() =>
+												onOpen(
+													issue.number,
+													repository,
+													chatFor?.(repository, issue),
+												)
+											}
 										>
 											<IssueStateIcon issue={issue} />
 											<span className="gh-issue-main">
@@ -298,6 +323,35 @@ export function IssueList({
 											<span className="gh-table-repo">{repository.name}</span>
 										</td>
 									) : null}
+									{chatFor ? (
+										<td>
+											<ChatRail
+												chat={chatFor(repository, issue)}
+												onOpen={onOpenChat}
+											/>
+										</td>
+									) : null}
+									<td>
+										{issue.pullRequests?.length ? (
+											<span className="gh-issue-pulls">
+												{issue.pullRequests.map((pull) => (
+													<button
+														key={pull.number}
+														type="button"
+														className="gh-chain-pull"
+														title={`Pull request #${pull.number} (${pull.state})`}
+														onClick={() =>
+															onOpenPullRequest?.(pull.number, repository)
+														}
+													>
+														<PullStateIcon state={pull.state} />#{pull.number}
+													</button>
+												))}
+											</span>
+										) : (
+											<span className="gh-mark-none">—</span>
+										)}
+									</td>
 									<td>
 										<span className="gh-issue-side">
 											{issue.assignees.length ? (
@@ -393,10 +447,15 @@ export function IssuePage({
 	modelId,
 	onChatStarted,
 	onOpenPullRequest,
+	chat,
+	onOpenChat,
 }: {
 	repository: GithubRepositoryRef;
 	number: number;
 	onBack: () => void;
+	/** The chat working on this issue, when there is one. */
+	chat?: PullRequestChat;
+	onOpenChat?: (chatId: string) => void;
 } & ChatStart) {
 	const cache = useQueryClient();
 	const key = ["issue", repository.repositoryId, number] as const;
@@ -475,6 +534,18 @@ export function IssuePage({
 					<IssueTitle
 						title={issue.title}
 						onSave={(title) => write({ action: "edit", number, title })}
+					/>
+				) : null}
+				{issue ? (
+					<WorkChain
+						issue={issue}
+						chat={chat}
+						pulls={issue.linkedPullRequests.map((pull) => ({
+							number: pull.number,
+							state: pull.state,
+						}))}
+						onOpenChat={onOpenChat}
+						onOpenPullRequest={onOpenPullRequest}
 					/>
 				) : null}
 				{issue ? (

@@ -186,6 +186,14 @@ export function PullRequestList({
 												<span className="gh-table-meta">
 													#{pull.number}
 													{pull.state === "draft" ? " · Draft" : ""}
+													{pull.closes?.length ? (
+														<span className="gh-pr-closes">
+															Closes{" "}
+															{pull.closes
+																.map((number) => `#${number}`)
+																.join(", ")}
+														</span>
+													) : null}
 													{pull.labels.map((label) => (
 														<LabelChip key={label.name} label={label} />
 													))}

@@ -21,7 +21,47 @@ export type IssueSummary = {
 	readonly updatedAt: string;
 	/** An open issue assigned to the signed-in user: the sidebar badge counts it. */
 	readonly waiting?: boolean;
+	/** Pull requests that close it (read for open issues; absent when GitHub would not say). */
+	readonly pullRequests?: readonly IssuePullRequestRef[];
 };
+
+/** A pull request that closes an issue, as the Issues table shows it. */
+export type IssuePullRequestRef = {
+	readonly number: number;
+	readonly state: "open" | "draft" | "merged" | "closed";
+	/** Its branch: how the chat working on it is found. */
+	readonly head: string;
+};
+
+/** The title a chat started from an issue gets (see startIssueChat). */
+export const ISSUE_CHAT_TITLE = /^Issue #(\d+):/;
+
+/**
+ * The issue a chat was started for, from its title. A chat renamed by hand
+ * no longer says; one with a pull request is found through its branch too.
+ */
+export function issueNumberFromChatTitle(title: string): number | null {
+	const match = ISSUE_CHAT_TITLE.exec(title);
+	return match ? Number(match[1]) : null;
+}
+
+/**
+ * The chat working on an issue: the one on a pull request that closes it
+ * (by branch), else the one started for it (by title). Newest-first lists
+ * mean the first match is the freshest.
+ */
+export function chatForIssue<Chat>(input: {
+	readonly pullRequests: readonly IssuePullRequestRef[] | undefined;
+	readonly byHead: ReadonlyMap<string, Chat> | undefined;
+	readonly byIssue: ReadonlyMap<number, Chat> | undefined;
+	readonly number: number;
+}): Chat | undefined {
+	for (const pull of input.pullRequests ?? []) {
+		const chat = input.byHead?.get(pull.head);
+		if (chat) return chat;
+	}
+	return input.byIssue?.get(input.number);
+}
 
 export type IssueComment = {
 	readonly id: number;
