@@ -514,8 +514,13 @@ export async function previousTurnMessages(
 	// Both reads at once; the latest turn is used only without a restored point.
 	const [recovered, result] = await Promise.all([
 		recoveredConversation(userId, sessionId),
-		database().query<ApiTurn>(
-			"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
+		database().query<
+			Pick<
+				ApiTurn,
+				"messages" | "model_id" | "connection_revision" | "state" | "failover"
+			>
+		>(
+			"select messages,model_id,connection_revision,state,failover from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
 			[userId, sessionId],
 		),
 	]);

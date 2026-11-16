@@ -7,6 +7,7 @@ const provider = vi.hoisted(() => ({
 	existing: false,
 	metadata: {} as Record<string, string>,
 	resize: vi.fn(),
+	update: vi.fn(),
 	remove: vi.fn(),
 	create: vi.fn(),
 	exec: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("freestyle", async (importOriginal) => {
 			autoDeleteSeconds: 7_776_000,
 		}),
 		resize: provider.resize,
+		update: provider.update,
 		delete: provider.remove,
 		exec: provider.exec,
 	};
@@ -49,6 +51,8 @@ beforeEach(() => {
 	provider.metadata = {};
 	vi.clearAllMocks();
 	provider.resize.mockResolvedValue(undefined);
+	provider.update.mockResolvedValue(undefined);
+	provider.remove.mockResolvedValue(undefined);
 	provider.exec.mockResolvedValue({ statusCode: 0 });
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -92,6 +96,9 @@ it("preserves legacy Extra Large machines when reconnecting", async () => {
 	);
 	expect(provider.resize).not.toHaveBeenCalled();
 	expect(provider.create).not.toHaveBeenCalled();
+	expect(provider.update).toHaveBeenCalledWith({
+		autoDeleteSeconds: 2_592_000,
+	});
 });
 it("honors Small and keeps larger snapshot resources", async () => {
 	await createFreestyleWorkspaceMachines("test").provisionSession(
