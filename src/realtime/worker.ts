@@ -137,6 +137,8 @@ export class ConversationRoom {
 	>();
 	/** Publications run one at a time: a delta merges into the snapshot the last one left. */
 	private publications: Promise<unknown> = Promise.resolve();
+	/** The host object's listener for a newer snapshot (the chat DO tells its Claude Code runner). */
+	private adopted: (() => void) | null = null;
 	/**
 	 * `schedule` lets a host object that also uses the alarm (the chat DO's turn
 	 * loop) multiplex it; by default the room owns the alarm.
@@ -201,6 +203,14 @@ export class ConversationRoom {
 	}
 	get isPurged() {
 		return this.purged;
+	}
+	/** Called after each newer snapshot is kept; a throwing listener is ignored. */
+	onAdopted(listener: () => void) {
+		this.adopted = listener;
+	}
+	/** The latest snapshot's timeline items (queued messages last), none without one. */
+	latestItems(): readonly unknown[] {
+		return this.latest?.progress.items ?? [];
 	}
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
@@ -549,6 +559,9 @@ export class ConversationRoom {
 				// No viewer: no frame is built and nothing is sent.
 				const viewers = this.viewers();
 				if (viewers.length) this.pushToViewers(viewers, incoming, delta);
+				try {
+					this.adopted?.();
+				} catch {}
 			}
 		}
 		return null;

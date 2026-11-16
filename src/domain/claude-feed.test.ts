@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
 	CLAUDE_FEED_PROTOCOL,
+	CLAUDE_FEED_QUIET_MS,
 	CLAUDE_FEED_STALE_MS,
 	CLAUDE_FEED_WAKE_LIVE_MS,
 	CLAUDE_FEED_WAKE_QUIET_MS,
+	claudeFeedMessage,
+	claudeInboxKey,
 	claudeStepSource,
 	feedBatchDecision,
 	feedEntriesWithEnds,
+	feedLastHeard,
+	feedSyncFrames,
 	feedWakeAt,
 	isStaleFeedRun,
 	isUrgentFeedLine,
@@ -110,7 +115,9 @@ describe("Claude feed step source and wake", () => {
 			}),
 		).toBe(48_000 + CLAUDE_FEED_WAKE_LIVE_MS);
 		expect(CLAUDE_FEED_WAKE_LIVE_MS).toBe(10_000);
-		expect(CLAUDE_FEED_WAKE_QUIET_MS).toBe(20_000);
+		// Unwatched, lines come every 30 s and wake the step at that cadence.
+		expect(CLAUDE_FEED_QUIET_MS).toBe(30_000);
+		expect(CLAUDE_FEED_WAKE_QUIET_MS).toBe(30_000);
 		expect(
 			feedWakeAt({
 				...base,
@@ -168,5 +175,75 @@ describe("Claude feed step source and wake", () => {
 				new Headers({ "sec-websocket-protocol": "other, ytcc1.a.b" }),
 			),
 		).toBeNull();
+	});
+});
+
+describe("Claude feed keep-alive and inbox", () => {
+	const state = (lastSeen: number) => ({
+		run: 1,
+		receivedTo: 10,
+		consumedTo: 0,
+		lastSeen,
+		exitStatus: null,
+	});
+	it("counts the runtime's answer to a ping as hearing the runner", () => {
+		expect(feedLastHeard(1_000, null)).toBe(1_000);
+		expect(feedLastHeard(1_000, 500)).toBe(1_000);
+		expect(feedLastHeard(1_000, 90_000)).toBe(90_000);
+		// Lines stopped long ago, pings kept coming: still followed.
+		const now = 100_000;
+		expect(claudeStepSource(state(1_000), now)).toBe("poll");
+		expect(
+			claudeStepSource(state(feedLastHeard(1_000, now - 20_000)), now),
+		).toBe("feed");
+	});
+	it("keys the queued messages the user sent, not those still waiting for Send", () => {
+		expect(claudeInboxKey([])).toBe("");
+		const items = [
+			{ kind: "userMessage", id: "old", text: "sent before" },
+			{ kind: "agentMessage", id: "a", queued: true, released: true },
+			{ kind: "userMessage", id: "m1", queued: true, released: true },
+			{ kind: "userMessage", id: "m2", queued: true },
+			{ kind: "userMessage", id: "m3", queued: true, released: true },
+			null,
+			"junk",
+		];
+		expect(claudeInboxKey(items)).toBe("m1,m3");
+		// Taking m1 changes the key, and so does a new send.
+		expect(claudeInboxKey(items.slice(4))).toBe("m3");
+	});
+	it("tells a runner only what changed: the mode, then the inbox key", () => {
+		expect(feedSyncFrames(null, { mode: "quiet", inbox: "" })).toEqual([
+			{ type: "mode", mode: "quiet" },
+			{ type: "inbox", key: "" },
+		]);
+		expect(
+			feedSyncFrames(
+				{ mode: "quiet", inbox: "" },
+				{ mode: "quiet", inbox: "" },
+			),
+		).toEqual([]);
+		expect(
+			feedSyncFrames(
+				{ mode: "quiet", inbox: "" },
+				{ mode: "live", inbox: "m1" },
+			),
+		).toEqual([
+			{ type: "mode", mode: "live" },
+			{ type: "inbox", key: "m1" },
+		]);
+	});
+	it("takes hellos and beats from old and new runners alike", () => {
+		const hello = {
+			type: "hello",
+			turnId: "22222222-2222-4222-8222-222222222222",
+			run: 1,
+		};
+		expect(claudeFeedMessage.parse(hello)).toEqual(hello);
+		expect(claudeFeedMessage.parse({ ...hello, inbox: true })).toEqual({
+			...hello,
+			inbox: true,
+		});
+		expect(claudeFeedMessage.safeParse({ type: "beat" }).success).toBe(true);
 	});
 });
