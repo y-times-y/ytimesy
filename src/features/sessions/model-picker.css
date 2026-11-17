@@ -692,3 +692,33 @@
 		animation: none;
 	}
 }
+
+.model-section-refresh {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--muted-foreground, currentColor);
+	cursor: pointer;
+}
+.model-section-refresh:hover:not(:disabled) {
+	background: var(--accent, rgba(127, 127, 127, 0.15));
+}
+.model-section-refresh:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.model-section-refresh[data-refreshing="true"] svg {
+	animation: model-section-refresh-spin 0.9s linear infinite;
+}
+@keyframes model-section-refresh-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}

@@ -60,6 +60,7 @@ import {
 	shortcutMatches,
 	titleWithShortcut,
 } from "#/domain/keyboard-shortcuts";
+import type { ListedModel } from "#/domain/listed-model";
 import {
 	composerModelIdForCatalog,
 	listedModelDisplayName,
@@ -182,6 +183,10 @@ import { SideChatFrame, useSideChat } from "./side-chat-panel";
 import { SlashCommandPalette } from "./slash-command-palette";
 import { useStableCallback } from "./stable-callbacks";
 import { TaskInput } from "./task-input";
+import {
+	useCodexCatalog,
+	useRecheckCodexCatalogOnUnavailable,
+} from "./use-codex-catalog";
 
 type InspectorView = "files" | "diff" | "terminal" | "desktop" | "side";
 
@@ -382,6 +387,8 @@ export function SessionLauncher({
 		if (
 			!identity.data?.user.id ||
 			connectedProviderId(session.connection) !== harnessId ||
+			// Codex's list is the account's own saved copy (use-codex-catalog).
+			harnessId === "codex" ||
 			session.models.length === 0
 		)
 			return;
@@ -396,14 +403,39 @@ export function SessionLauncher({
 		session.models,
 		queryClient,
 	]);
-	const catalog = useQuery({
+	const otherCatalog = useQuery({
 		queryKey: ["agent-model-catalog", identity.data?.user.id, harnessId],
-		enabled: Boolean(identity.data?.user.id),
+		enabled: Boolean(identity.data?.user.id) && harnessId !== "codex",
 		queryFn: () => loadCatalog({ data: { provider: harnessId } }),
 		staleTime: 60_000,
 		placeholderData:
 			loadedCatalog?.harnessId === harnessId ? loadedCatalog.models : undefined,
 	});
+	// Codex: the saved copy of the account's list; one shared read, re-asked
+	// only on a real trigger (see codex-catalog-store).
+	const codexCatalog = useCodexCatalog();
+	const codexQuery = codexCatalog.query;
+	const codexStandIn =
+		loadedCatalog?.harnessId === harnessId ? loadedCatalog.models : undefined;
+	const catalog: {
+		data: readonly ListedModel[] | undefined;
+		isError: boolean;
+		isPending: boolean;
+		isFetched: boolean;
+		isPlaceholderData: boolean;
+		refetch: () => unknown;
+	} =
+		harnessId === "codex"
+			? {
+					data: (codexQuery.data as ListedModel[] | undefined) ?? codexStandIn,
+					isError: codexQuery.isError,
+					isPending: codexQuery.isPending && !codexStandIn,
+					// A saved copy is data that was really read, just not now.
+					isFetched: codexQuery.isFetched || codexQuery.data !== undefined,
+					isPlaceholderData: codexQuery.data === undefined && !!codexStandIn,
+					refetch: () => codexQuery.refetch(),
+				}
+			: otherCatalog;
 	// Y² has no machine for the Claude CLI: the Claude models are offered to
 	// it only when the user has a Claude runner box (one flag on the Claude
 	// subscription view the picker already reads, not a request of its own).
@@ -713,6 +745,7 @@ export function SessionLauncher({
 		[session.items, optimisticItems],
 	);
 	useMarkPlanLimitFromSwitches(items);
+	useRecheckCodexCatalogOnUnavailable(items, harnessId);
 	// The message held for setup shows in the setup block (with its own
 	// Edit and Remove), not again as a queued message.
 	const heldMessageId = setupHold?.messageId;

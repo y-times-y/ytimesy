@@ -8,9 +8,10 @@ import { apiModelCatalog } from "./api-workspace-session";
 export async function agentModelCatalog(
 	userId: string,
 	provider: AgentProviderId,
+	options: { force?: boolean } = {},
 ) {
 	if (provider === "api") return apiModelCatalog(userId);
 	if (provider === "codex" && (await hasManagedCodexAuth(userId)))
-		return codexSubscriptionCatalog(userId);
+		return codexSubscriptionCatalog(userId, options);
 	return loadAgentModelCatalog(userId, provider);
 }
