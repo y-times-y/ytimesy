@@ -709,6 +709,7 @@ describe("agents list rows", () => {
 		expect(card).toEqual({
 			name: "build-1",
 			verb: "finished",
+			label: "finished",
 			task: "Fix pricing rounding",
 			duration: "1m 12s",
 			line: "Totals now round half up.",
