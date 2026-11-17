@@ -4,6 +4,7 @@ import { claudeSubscriptionMeta } from "./claude-subscription-settings";
 const view = {
 	enabled: true as const,
 	limitedUntil: null,
+	ySquaredRunner: false,
 	models: [],
 };
 

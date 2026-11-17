@@ -103,6 +103,10 @@ import {
 import { turnSavingChanges } from "#/domain/turn-saving";
 import { hubTopic } from "#/domain/user-hub";
 import type { SettingsSection } from "#/domain/workspace-settings";
+import {
+	withoutClaudeCodeModels,
+	Y_SQUARED_CLAUDE_CODE_NOTE,
+} from "#/domain/y-squared";
 import { captureAnalytics } from "#/features/analytics/client";
 import { startInteraction } from "#/features/analytics/web-vitals";
 import {
@@ -145,6 +149,7 @@ import {
 	sentFileFields,
 } from "./attachment-tile";
 import { chatSideKeys } from "./chat-side-queries";
+import { getClaudeSubscription } from "./claude-subscription.fn";
 import { ContextUsage } from "./context-usage";
 import {
 	ConversationRecovery,
@@ -399,26 +404,38 @@ export function SessionLauncher({
 		placeholderData:
 			loadedCatalog?.harnessId === harnessId ? loadedCatalog.models : undefined,
 	});
-	const models = useMemo(
-		() =>
-			sessionModelsFromListed(
-				composerListedModels({
-					sessionModels: session.models,
-					catalogModels: catalog.data ?? [],
-					rememberedModels: listedCatalog,
-					sessionConnected:
-						connectedProviderId(session.connection) === harnessId,
-					harnessId,
-				}),
-			),
-		[
-			session.models,
-			session.connection,
-			harnessId,
-			listedCatalog,
-			catalog.data,
-		],
-	);
+	// Y² has no machine for the Claude CLI: the Claude models are offered to
+	// it only when the user has a Claude runner box (one flag on the Claude
+	// subscription view the picker already reads, not a request of its own).
+	const loadClaudeView = useServerFn(getClaudeSubscription);
+	const claudeView = useQuery({
+		queryKey: ["claude-subscription"],
+		queryFn: () => loadClaudeView(),
+		staleTime: 30_000,
+		enabled: branchless,
+	});
+	const withoutClaudeCode =
+		branchless && !(claudeView.data?.enabled && claudeView.data.ySquaredRunner);
+	const models = useMemo(() => {
+		const listed = sessionModelsFromListed(
+			composerListedModels({
+				sessionModels: session.models,
+				catalogModels: catalog.data ?? [],
+				rememberedModels: listedCatalog,
+				sessionConnected: connectedProviderId(session.connection) === harnessId,
+				harnessId,
+			}),
+		);
+		// Y² has no machine for the Claude CLI: no Claude subscription models.
+		return withoutClaudeCode ? withoutClaudeCodeModels(listed) : listed;
+	}, [
+		withoutClaudeCode,
+		session.models,
+		session.connection,
+		harnessId,
+		listedCatalog,
+		catalog.data,
+	]);
 	const [attachments, setAttachments] = useState<File[]>([]);
 	/** The branch picked for a new chat, for the project it was picked in. */
 	const [basePick, setBasePick] = useState<{
@@ -1534,6 +1551,14 @@ export function SessionLauncher({
 							) : null}
 						</div>
 					) : null}
+					{withoutClaudeCode &&
+					[modelId, session.listedModelId, lastModelByHarness.api].some(
+						(id) => id && isClaudeCodeRoute(id),
+					) ? (
+						<p className="session-attachment-error" role="status">
+							{Y_SQUARED_CLAUDE_CODE_NOTE}
+						</p>
+					) : null}
 					<div className="session-composer">
 						{visibleMentions.length > 0 ? (
 							<MentionPopover
@@ -1724,6 +1749,7 @@ export function SessionLauncher({
 								harnessId={harnessId}
 								onHarnessIdChange={onHarnessIdChange}
 								models={models}
+								withoutClaudeCode={withoutClaudeCode}
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
 								onModelIdChange={setModelId}

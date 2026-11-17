@@ -351,6 +351,9 @@ button:enabled:active {
 	font-weight: var(--list-heading-weight);
 	letter-spacing: 0.02em;
 }
+.sidebar-y2-heading {
+	color: var(--list-text-strong);
+}
 .sidebar-status-group:first-child .sidebar-status-heading {
 	margin-top: 0;
 }
@@ -843,6 +846,10 @@ button:enabled:active {
    hydration the boot sheet folds a saved branch through --y2-branch,
    --y2-chevron and --y2-toggle-shown (src/features/app/first-paint.ts). */
 .sidebar-y2 {
+	/* A child of its project: one icon column in from the project's folder
+	   row, so the Y² mark sits under the folder icon's right edge, not level
+	   with it. The threads' branch and guide line sit inside, one level deeper. */
+	padding-left: var(--list-icon-size);
 	display: flex;
 	flex-direction: column;
 	gap: 2px;

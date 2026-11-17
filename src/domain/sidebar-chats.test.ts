@@ -16,6 +16,7 @@ import {
 	projectsByRecentActivity,
 	projectsLatestChatsToReadAhead,
 	recentSidebarChats,
+	recentY2Chats,
 	type SidebarChat,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
@@ -440,6 +441,48 @@ describe("sidebar sort", () => {
 		expect(
 			recentSidebarChats(groups, ["a1"]).map((row) => row.chat.id),
 		).toEqual(["a1", "b1", "a2"]);
+	});
+
+	it("keeps Y² chats out of the chat list and groups them by activity", () => {
+		const y2 = (id: string, updatedAt: string) => ({
+			id,
+			title: "Y²",
+			role: "y2" as const,
+			updatedAt,
+		});
+		const mixed = [
+			{
+				project: a,
+				chats: [
+					y2("a-y2", "2026-10-20T00:00:00Z"),
+					{ id: "a1", title: "Old", updatedAt: "2026-10-01T00:00:00Z" },
+				],
+			},
+			{
+				project: b,
+				chats: [
+					y2("b-y2", "2026-10-25T00:00:00Z"),
+					{ id: "b1", title: "New", updatedAt: "2026-10-19T00:00:00Z" },
+				],
+			},
+			{ project: c, chats: [{ id: "c1", title: "Plain" }] },
+		];
+		expect(
+			recentY2Chats(mixed).map((row) => [row.chat.id, row.project.id]),
+		).toEqual([
+			["b-y2", "b"],
+			["a-y2", "a"],
+		]);
+		expect(recentSidebarChats(mixed).map((row) => row.chat.id)).toEqual([
+			"b1",
+			"a1",
+			"c1",
+		]);
+		// Pinning reorders threads only; a stale pin on a Y² id never lists it twice.
+		expect(
+			recentSidebarChats(mixed, ["a1", "a-y2"]).map((row) => row.chat.id),
+		).toEqual(["a1", "b1", "c1"]);
+		expect(recentY2Chats(groups)).toEqual([]);
 	});
 
 	it("orders projects by their newest chat, empty projects last in their order", () => {

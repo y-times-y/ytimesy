@@ -53,6 +53,7 @@ const options = {
 	systemPrompt: { type: "preset", preset: "claude_code", append: read("system") },
 	stderr: (data) => process.stderr.write(data),
 };
+if (Array.isArray(settings.builtInTools)) options.tools = settings.builtInTools;
 if (settings.resume) options.resume = settings.resume;
 if (settings.effort) options.effort = settings.effort;
 const inboxServer = mcpServers?.ytimesy;

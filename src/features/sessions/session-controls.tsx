@@ -23,6 +23,8 @@ interface SessionControlsProps {
 	onConnect: () => void;
 	catalogStatus: "loading" | "error" | "ready";
 	providerConnected: boolean;
+	/** Y²: the picker leaves the Claude subscription out. */
+	withoutClaudeCode?: boolean;
 }
 
 export function SessionControls({
@@ -44,6 +46,7 @@ export function SessionControls({
 	onConnect,
 	catalogStatus,
 	providerConnected,
+	withoutClaudeCode,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const model = models.find((candidate) => candidate.id === modelId);
@@ -82,6 +85,7 @@ export function SessionControls({
 					onConnect={onConnect}
 					catalogStatus={catalogStatus}
 					providerConnected={providerConnected}
+					withoutClaudeCode={withoutClaudeCode}
 					reasoningId={reasoningId}
 					onReasoningIdChange={onReasoningIdChange}
 					speed={speed}

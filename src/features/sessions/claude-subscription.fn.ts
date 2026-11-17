@@ -10,6 +10,7 @@ import {
 	disconnectClaudeSubscription,
 	saveClaudeSubscriptionToken,
 } from "#/server/adapters/claude-subscription";
+import { claudeCodeYSquaredAvailable } from "#/server/adapters/y-mode";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 
@@ -20,6 +21,11 @@ export type ClaudeSubscriptionView =
 			readonly enabled: true;
 			readonly status: "disconnected" | "connected" | "refused" | "limited";
 			readonly limitedUntil: number | null;
+			/**
+			 * Y² (no machine) may use these models: the user has a Claude
+			 * runner box (y-mode.ts claudeCodeYSquaredAvailable).
+			 */
+			readonly ySquaredRunner: boolean;
 			readonly models: readonly {
 				readonly id: string;
 				readonly label: string;
@@ -34,6 +40,9 @@ async function readView(userId: string): Promise<ClaudeSubscriptionView> {
 		enabled: true,
 		status: status.status,
 		limitedUntil: status.status === "disconnected" ? null : status.limitedUntil,
+		ySquaredRunner: usable
+			? await claudeCodeYSquaredAvailable(userId).catch(() => false)
+			: false,
 		models: usable
 			? claudeCodeListedModels().map(({ id, label }) => ({ id, label }))
 			: [],

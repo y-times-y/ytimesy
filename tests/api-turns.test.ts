@@ -1703,3 +1703,79 @@ it("renews a parked Claude Code turn in one statement, asking for a step when an
 	await cancelApiTurn("alice", sessionId);
 	expect(await renewParkedClaudeTurn(turn.id, lease)).toBe("lost");
 });
+
+it("never queues a Claude Code turn for Y², and leaves other routes alone", async () => {
+	await db.exec(
+		"create table if not exists claude_subscription(user_id text, status text); alter table agent_session add column if not exists chat_role text; alter table agent_session add column if not exists archived_at timestamptz; alter table project add column if not exists y_enabled boolean not null default false",
+	);
+	await db.exec("delete from claude_subscription");
+	await db.query("insert into claude_subscription values('alice','connected')");
+	const projectId = randomUUID();
+	const ySquaredId = randomUUID();
+	await db.query(
+		"insert into project(id,user_id,y_enabled) values($1,'alice',true)",
+		[projectId],
+	);
+	await db.query(
+		"insert into agent_session(id,user_id,harness,turn_status,project_id,chat_role) values($1,'alice','codex','idle',$2,'y2')",
+		[ySquaredId, projectId],
+	);
+	await db.query("update agent_session set project_id=$2 where id=$1", [
+		sessionId,
+		projectId,
+	]);
+	const claude = (id: string) =>
+		enqueueApiTurn({
+			sessionId: id,
+			userId: "alice",
+			connectionId: null,
+			revision: claudeCodeTurnRevision(),
+			modelId: "claude-sonnet-5-5",
+			routeId: "claude-code/claude-sonnet-5-5",
+			messages: [{ role: "user", content: "status?" }],
+			items: [],
+		});
+	await expect(claude(ySquaredId)).rejects.toThrow(
+		"Y² on a Claude subscription needs the Claude runner, which isn't enabled for your account. Pick a Codex, Grok or API-key model for this chat.",
+	);
+	const turns = async () =>
+		(await query("select count(*)::int as n from api_turn")).rows[0];
+	expect(await turns()).toEqual({ n: 0 });
+	expect(
+		(
+			await query("select turn_status from agent_session where id=$1", [
+				ySquaredId,
+			])
+		).rows[0],
+	).toEqual({ turn_status: "idle" });
+	// Y² on an API-key route, and a normal chat on Claude Code: unchanged.
+	await submit("alice", ySquaredId);
+	await claude(sessionId);
+	expect(await turns()).toEqual({ n: 2 });
+	// With a Claude runner for this user, Y² may queue a Claude Code turn.
+	await db.exec("delete from api_turn");
+	await db.query("update agent_session set turn_status='idle' where id=$1", [
+		ySquaredId,
+	]);
+	const saved = { ...process.env };
+	process.env.YTIMESY_CLAUDE_RUNNER_URLS = "https://runner.example";
+	process.env.YTIMESY_CLAUDE_RUNNER_SIGNING_KEY = "A".repeat(64);
+	process.env.YTIMESY_CLAUDE_RUNNER_USERS = "alice";
+	delete process.env.YTIMESY_CLAUDE_RUNNER_SESSIONS;
+	try {
+		await claude(ySquaredId);
+		expect(await turns()).toEqual({ n: 1 });
+	} finally {
+		for (const key of [
+			"YTIMESY_CLAUDE_RUNNER_URLS",
+			"YTIMESY_CLAUDE_RUNNER_SIGNING_KEY",
+			"YTIMESY_CLAUDE_RUNNER_USERS",
+		] as const) {
+			if (saved[key] === undefined) delete process.env[key];
+			else process.env[key] = saved[key];
+		}
+	}
+	await db.exec(
+		"update agent_session set project_id=null; delete from project",
+	);
+});

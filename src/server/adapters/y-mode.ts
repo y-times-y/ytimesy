@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { claudeRunnerFor } from "#/domain/claude-runner";
 import { Y_SQUARED_TITLE } from "#/domain/y-squared";
 import { database } from "./database";
 
@@ -58,6 +59,59 @@ export async function isActiveYSquaredChat(
 	if (session.parentSessionId) return false;
 	const yMode = await projectYMode(userId, projectId).catch(() => null);
 	return !!yMode?.enabled && yMode.ySquaredId === session.id;
+}
+
+/**
+ * Whether this session is its project's live Y² chat. Strict: a failed read
+ * throws, so a send that must never reach a Y² turn on the wrong route fails
+ * rather than guessing.
+ */
+export async function isYSquaredSession(
+	userId: string,
+	sessionId: string,
+): Promise<boolean> {
+	const result = await database().query(
+		`select 1 from agent_session s
+		 join project p on p.id=s.project_id and p.user_id=s.user_id
+		 where s.id=$1 and s.user_id=$2 and s.chat_role='y2'
+		   and s.archived_at is null and p.y_enabled`,
+		[sessionId, userId],
+	);
+	return result.rows.length > 0;
+}
+
+/**
+ * Whether a Y² chat of this user may run on a Claude subscription: only on a
+ * Claude runner box (claude-runner.ts; no machine hosts the CLI for Y²), so
+ * this is true exactly when the user has one. The one place that decides it:
+ * the send gates, the failover plan and the picker's capability flag.
+ *
+ * With a session id the runner's per-chat rollout list is honoured. Without
+ * one (the picker's flag) a rollout list is checked against the user's live
+ * Y² chats, so the flag never promises what the send would refuse.
+ */
+export async function claudeCodeYSquaredAvailable(
+	userId: string,
+	sessionId?: string,
+): Promise<boolean> {
+	const runner = (session: string) =>
+		claudeRunnerFor({
+			env: process.env,
+			userId,
+			sessionId: session,
+			reader: false,
+		}) !== null;
+	if (sessionId) return runner(sessionId);
+	// A throwaway id passes only when no per-chat rollout list is set.
+	if (runner("00000000-0000-4000-8000-000000000000")) return true;
+	if (process.env.YTIMESY_CLAUDE_RUNNER_SESSIONS === undefined) return false;
+	const result = await database().query<{ id: string }>(
+		`select s.id from agent_session s
+		 join project p on p.id=s.project_id and p.user_id=s.user_id
+		 where s.user_id=$1 and s.chat_role='y2' and s.archived_at is null and p.y_enabled`,
+		[userId],
+	);
+	return result.rows.some((row) => runner(row.id));
 }
 
 export async function setProjectYMode(

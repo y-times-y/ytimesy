@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { claudeCodeListedModels } from "./claude-code-route";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 import { chatsWithPinnedFirst } from "./sidebar-chats";
@@ -7,6 +8,7 @@ import {
 	threadDigest,
 	threadHistoryFacts,
 	threadsOverview,
+	withoutClaudeCodeModels,
 	Y_SQUARED_THREADS_TOOL,
 	Y_SQUARED_TOOLS,
 	ySquaredInstructions,
@@ -193,5 +195,67 @@ describe("Y² write tools", () => {
 				),
 			).toBe(false);
 		}
+	});
+});
+
+describe("Y² model picker", () => {
+	it("leaves the Claude Code models out and keeps Codex, Grok and API-key ones", () => {
+		const grok = "api/0f8fad5b-d9cb-469f-a165-70867728950e/x-ai/grok-4";
+		const key = "api/0f8fad5b-d9cb-469f-a165-70867728950e/openai/gpt-6";
+		const models = [
+			...claudeCodeListedModels(),
+			{ id: "gpt-5.3-codex-spark", label: "Codex" },
+			{ id: grok, label: "Grok plan" },
+			{ id: key, label: "API key" },
+		];
+		expect(withoutClaudeCodeModels(models).map((model) => model.id)).toEqual([
+			"gpt-5.3-codex-spark",
+			grok,
+			key,
+		]);
+		expect(withoutClaudeCodeModels(claudeCodeListedModels())).toEqual([]);
+	});
+});
+
+describe("Y² on a Claude runner", () => {
+	it("words the refusal and the outage for the person, never as a bug", async () => {
+		const {
+			apiTurnFailureMessage,
+			ClaudeRunnerRequired,
+			YSquaredClaudeRunnerUnreachable,
+		} = await import("./api-turn-failure");
+		const { failoverReason } = await import("./model-failover-reason");
+		const { ClaudeRunnerTransportFailure } = await import("./api-turn-failure");
+		expect(new ClaudeRunnerRequired().message).toBe(
+			"Y² on a Claude subscription needs the Claude runner, which isn't enabled for your account. Pick a Codex, Grok or API-key model for this chat.",
+		);
+		const down = new YSquaredClaudeRunnerUnreachable();
+		expect(down.message).toBe(
+			"The Claude runner is unreachable right now; try again or pick another model for Y².",
+		);
+		expect(apiTurnFailureMessage("model", down)).toBe(down.message);
+		expect(
+			apiTurnFailureMessage("model", new ClaudeRunnerRequired()),
+		).toContain("needs the Claude runner");
+		expect(failoverReason(down)).toBe("outage");
+		expect(failoverReason(new ClaudeRunnerRequired())).toBeNull();
+		// A bare transport failure keeps its own (non-Y²) wording.
+		expect(
+			apiTurnFailureMessage(
+				"model",
+				new ClaudeRunnerTransportFailure("exec", "network"),
+			),
+		).toContain("outcome is unknown");
+	});
+
+	it("gives each chat its own runner directory and refuses a path-like id", async () => {
+		const { claudeRunnerSessionWorkdir, CLAUDE_RUNNER_WORKDIR } = await import(
+			"./claude-runner"
+		);
+		const id = "11111111-1111-4111-8111-111111111111";
+		expect(claudeRunnerSessionWorkdir(id)).toBe(
+			`${CLAUDE_RUNNER_WORKDIR}/${id}`,
+		);
+		expect(() => claudeRunnerSessionWorkdir("../etc")).toThrow();
 	});
 });

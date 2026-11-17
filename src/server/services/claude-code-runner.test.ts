@@ -21,6 +21,7 @@ import {
 } from "#/domain/api-turn-failure";
 import { CLAUDE_AGENT_RUNNER_SCRIPT } from "#/domain/claude-agent-runner";
 import { verifyClaudeCodeGrant } from "#/domain/claude-code-grant";
+import { claudeCodeProjectDirectory } from "#/domain/claude-code-stream";
 import {
 	CLAUDE_CODE_FEED_PATH,
 	type ClaudeFeedState,
@@ -2380,5 +2381,127 @@ export async function* query({ options }) {
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("Y² on a runner box (no machine)", () => {
+	const Y_CWD = `/var/lib/ytimesy-runner/work/${SESSION}`;
+	const instructions = "You are Y², the project's super agent.";
+	const ySquared = (vm: FakeVm, overrides: Partial<ClaudeCodeStepInput> = {}) =>
+		input(vm, {
+			cwd: Y_CWD,
+			remote: { repository: Y_CWD, workspaceTools: [] },
+			ySquared: { instructions },
+			...overrides,
+		});
+	const transcript = `${HOME}/.ytimesy/claude-code/projects/${claudeCodeProjectDirectory(Y_CWD)}/${CLAUDE_SESSION}.jsonl`;
+
+	it("writes its own prompt and an options file with every native tool off", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		vm.files.set(transcript, '{"type":"user"}\n');
+		await runClaudeCodeStep(ySquared(vm));
+		const options = JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "");
+		// No native tool at all, and a by-name list that also names the ones
+		// the shared list leaves on.
+		expect(options.builtInTools).toEqual([]);
+		expect(options.disallowedTools).toEqual(
+			expect.arrayContaining([
+				"Bash",
+				"Read",
+				"Task",
+				"WebFetch",
+				"WebSearch",
+				"TodoWrite",
+				"Skill",
+				"ExitPlanMode",
+			]),
+		);
+		const system = vm.files.get(`${RUNS}/1/system`) ?? "";
+		expect(system).toContain(instructions);
+		expect(system).toContain("mcp__ytimesy__*");
+		for (const gone of [
+			"The repository is at",
+			"run_code",
+			"ytimesy-browser",
+			"ytimesy-job",
+			"request_project_secret",
+			"agent_send",
+			"canvas",
+		])
+			expect(system).not.toContain(gone);
+		// Its own working directory, not the shared one.
+		expect(vm.launched[0]).toContain(`'${RUNS}/1/runner.mjs'`);
+		expect(vm.launched[0]).toContain(`'${Y_CWD}'`);
+		expect(vm.launched[0]).not.toContain("'/var/lib/ytimesy-runner/work'");
+	});
+
+	it("leaves a normal chat's options and prompt as they were", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		await runClaudeCodeStep(input(vm));
+		const options = JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "");
+		expect(options).not.toHaveProperty("builtInTools");
+		expect(options.disallowedTools).not.toContain("WebFetch");
+		expect(vm.files.get(`${RUNS}/1/system`)).toContain(
+			"mcp__ytimesy__run_code",
+		);
+	});
+
+	it("resumes the stored session from the per-chat transcript and saves it back there", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		vm.files.set(transcript, '{"type":"user"}\n');
+		const saveSession = vi.fn(async () => {});
+		await runClaudeCodeStep(
+			ySquared(vm, {
+				messages: [
+					{ role: "user", content: "first" },
+					{ role: "assistant", content: "ok" },
+					{ role: "user", content: "and now?" },
+				],
+				store: store({
+					readSession: vi.fn(async () => ({
+						claudeSessionId: CLAUDE_SESSION,
+						transcriptPath: "prefix/x.enc",
+						cwd: Y_CWD,
+					})),
+					saveSession,
+				}),
+			}),
+		);
+		const options = JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "");
+		expect(options.resume).toBe(CLAUDE_SESSION);
+		expect(vm.files.get(`${RUNS}/1/prompt`)).toBe("and now?");
+		expect(saveSession).toHaveBeenCalledWith(
+			expect.objectContaining({ claudeSessionId: CLAUDE_SESSION, cwd: Y_CWD }),
+		);
+	});
+
+	it("restores a stored session onto the box when the file is gone", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		const downloadTranscript = vi.fn(async () => '{"type":"user"}\n');
+		await runClaudeCodeStep(
+			ySquared(vm, {
+				store: store({
+					readSession: vi.fn(async () => ({
+						claudeSessionId: CLAUDE_SESSION,
+						transcriptPath: "prefix/x.enc",
+						cwd: Y_CWD,
+					})),
+					downloadTranscript,
+				}),
+			}),
+		);
+		expect(downloadTranscript).toHaveBeenCalledWith("prefix/x.enc");
+		expect(vm.files.get(transcript)).toBe('{"type":"user"}\n');
+		expect(
+			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").resume,
+		).toBe(CLAUDE_SESSION);
 	});
 });
