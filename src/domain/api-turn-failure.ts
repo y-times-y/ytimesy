@@ -859,6 +859,17 @@ const WORKSPACE_STEP_FAILURES = [
 const UNKNOWN_MODEL_FAILURE =
 	"The model request failed and the provider didn't say why. Retry, or pick another model. Your work is saved.";
 
+/** What a Y² turn's refused workspace rejects with (it has no machine). */
+export const Y_SQUARED_NO_WORKSPACE = "Y² has no workspace.";
+
+/** Whether this is the error a Y² turn's refused workspace rejects with. */
+export function isYSquaredNoWorkspace(error: unknown) {
+	return error instanceof Error && error.message === Y_SQUARED_NO_WORKSPACE;
+}
+
+const Y_SQUARED_NO_WORKSPACE_MESSAGE =
+	"Y² reached for a workspace, and it has none: it only reads and steers other chats. This is a ytimesy bug, not a model or provider failure. Nothing was sent to the model; report it, and use a normal chat in the meantime.";
+
 /** Fixed wording for a secret-file setup failure. `timeout` is only the diagnosed no-exit case. */
 export function projectSecretsUserMessage(timeout: boolean) {
 	const problem = timeout
@@ -883,6 +894,8 @@ export function visibleErrorMessage(item: {
 		cause.startsWith("ProjectSecretsPreparationFailure:")
 	)
 		return projectSecretsUserMessage(/\btimeout\b/.test(cause));
+	if (cause === `Error: ${Y_SQUARED_NO_WORKSPACE}`)
+		return Y_SQUARED_NO_WORKSPACE_MESSAGE;
 	if (/^Error: The runner box answered \d{3}\.$/.test(cause))
 		return "The Claude runner could not be reached. This is infrastructure, not a model provider error. Your work is saved; retry the turn.";
 	return item.message;
@@ -1043,6 +1056,8 @@ export function apiTurnFailureMessage(
 	if (reconnect) return reconnect.message;
 	const machine = machineFailureMessage(error);
 	if (machine) return machine;
+	if (error instanceof Error && error.message === Y_SQUARED_NO_WORKSPACE)
+		return Y_SQUARED_NO_WORKSPACE_MESSAGE;
 	switch (stage) {
 		case "connection":
 			return "The selected API connection changed or was removed. Select a model again; no fallback was used.";

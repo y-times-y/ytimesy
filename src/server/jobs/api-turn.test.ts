@@ -34,6 +34,10 @@ const mocks = vi.hoisted(() => ({
 	progress: vi.fn(),
 	/** The next message waiting in the chat, started at the turn's end. */
 	startQueued: vi.fn(async (..._args: unknown[]) => false),
+	/** The step's inbox read; a test may report a ready setup catch-up. */
+	peerInbox: vi.fn(),
+	/** Set by a test that needs the real tool set and shell surface. */
+	realSurface: false,
 	checkpoint: vi.fn(),
 	promptSubmit: vi.fn(),
 	cancelRequested: vi.fn(),
@@ -137,7 +141,10 @@ vi.mock("../adapters/plugin-installs", () => ({
 	enabledPluginSkillIndex: async () => [],
 	pluginSkillBody: async () => null,
 }));
-vi.mock("../services/api-agent-command-tools", () => ({
+vi.mock("../services/api-agent-command-tools", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../services/api-agent-command-tools")
+	>()),
 	completedAgentCommands: mocks.commandCompletions,
 }));
 vi.mock("../services/turn-commit", () => ({
@@ -376,7 +383,19 @@ vi.mock("../adapters/agent-task-events", () => ({
 }));
 vi.mock("./queue", () => ({ enqueueAgentTaskEvent: mocks.enqueue }));
 vi.mock("../adapters/server-peer-inbox", () => ({
-	injectServerPeerMessages: vi.fn(),
+	injectServerPeerMessages: mocks.peerInbox,
+}));
+// The real catch-up reads the database, then runs the install in the chat's VM.
+vi.mock("../services/fresh-machine-setup", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../services/fresh-machine-setup")>()),
+	withSetupCatchUp: async (
+		input: Parameters<
+			typeof import("../services/fresh-machine-setup").withSetupCatchUp
+		>[0],
+	) => {
+		await input.workspace();
+		return { messages: input.messages, changed: false };
+	},
 }));
 vi.mock("../adapters/api-usage-budget", () => ({ reserveApiTokens: vi.fn() }));
 vi.mock("../services/message-attachments", async (original) => ({
@@ -402,19 +421,36 @@ vi.mock("../services/codex-subscription-agent", () => ({
 	runCodexSubscriptionAgent: mocks.subscriptionRuntime,
 	runCodexSubscriptionAgentStep: mocks.subscriptionStepRuntime,
 }));
-vi.mock("../services/api-agent-tools", () => ({
-	apiAgentTools: (input: unknown) =>
-		Object.fromEntries(
-			Object.entries(input as Record<string, unknown>).filter(
-				([, value]) => value !== undefined,
-			),
-		),
-}));
+vi.mock("../services/api-agent-tools", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../services/api-agent-tools")>();
+	return {
+		apiAgentTools: (input: Parameters<typeof actual.apiAgentTools>[0]) =>
+			mocks.realSurface
+				? actual.apiAgentTools(input)
+				: Object.fromEntries(
+						Object.entries(input as Record<string, unknown>).filter(
+							([, value]) => value !== undefined,
+						),
+					),
+	};
+});
 // The mocked tool set carries probe fields; the shell filter has its own tests.
-vi.mock("../services/builder-shell-surface", () => ({
-	builderToolSurface: ({ tools }: { tools: unknown }) =>
-		mocks.lean ? { tools, lean: mocks.lean } : { tools },
-}));
+vi.mock("../services/builder-shell-surface", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../services/builder-shell-surface")>();
+	return {
+		...actual,
+		builderToolSurface: (
+			input: Parameters<typeof actual.builderToolSurface>[0],
+		) =>
+			mocks.realSurface
+				? actual.builderToolSurface(input)
+				: mocks.lean
+					? { tools: input.tools, lean: mocks.lean }
+					: { tools: input.tools },
+	};
+});
 vi.mock("../services/api-command-scope", () => ({
 	COMMAND_SCOPES_DIRECTORY: "/tmp/ytimesy-api-command-scopes",
 	stopApiTurnCommands: mocks.stop,
@@ -2187,6 +2223,54 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		expect(mocks.workspace).not.toHaveBeenCalled();
 		expect(mocks.checkedOut).not.toHaveBeenCalled();
 		expect(mocks.turnMemory).not.toHaveBeenCalled();
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
+
+	it("a Y² chat's first step never touches a workspace: hooks, memory, instructions, early request", async () => {
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			// What the real runtime does around every model request.
+			const prepared = await input.prepareMessages?.(input.messages);
+			await input.restoreInstructions?.(prepared ?? input.messages);
+			await input.afterTools?.(prepared ?? input.messages);
+			await input.compactionSnapshot?.(
+				prepared ?? input.messages,
+				new AbortController().signal,
+			);
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Hello." });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		mocks.realSurface = true;
+		// The project's setup finished while Y² has no machine: its inbox read
+		// still reports a ready catch-up (it must not wake a VM for it).
+		mocks.peerInbox.mockImplementation(
+			async (
+				_id: string,
+				history: unknown,
+				_checkpoint: unknown,
+				_delivered: unknown,
+				onSetupCatchUp?: () => void,
+			) => {
+				onSetupCatchUp?.();
+				return history;
+			},
+		);
+		mocks.yMode.mockResolvedValue({ enabled: true, ySquaredId: "session" });
+		// The real UserPromptSubmit hook runs in the checkout: Y² has none.
+		mocks.promptSubmit.mockResolvedValue(undefined);
+		const machines = new Proxy({} as WorkspaceMachines, {
+			get: (_target, name) => {
+				throw new Error(`Y² touched machines.${String(name)}`);
+			},
+		});
+		const outcome = await runApiTurn(
+			machines,
+			{ ...rootTurn, id: "turn-y2-first" },
+			{ index: 1, signal: new AbortController().signal },
+		);
+		mocks.realSurface = false;
+		expect(outcome).toBe("completed");
+		expect(mocks.workspace).not.toHaveBeenCalled();
+		expect(mocks.checkedOut).not.toHaveBeenCalled();
 		expect(mocks.commit).not.toHaveBeenCalled();
 	});
 
