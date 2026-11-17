@@ -190,6 +190,9 @@ import { meteredUserId, UsageMeter } from "./usage-meter";
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
 export { UserHub } from "./user-hub";
+
+import { SqliteCrewScope } from "./crew-scope-store";
+
 export { YSquaredCrew } from "./y-squared-crew";
 
 import { registerUserHubNotes } from "./user-hub-notes-binding";
@@ -379,62 +382,36 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if ("yEnabled" in scope) this.rememberCrewScope(scope);
 		return true;
 	}
-	/** The chat's project and Y switch, kept in SQLite only when they change. */
-	private crewScopeCache:
-		| {
-				projectId: string | null;
-				yEnabled: boolean;
-				ySquaredId: string | null;
-		  }
-		| null
-		| undefined;
+	private readonly crewScopes = new SqliteCrewScope(this.ctx.storage.sql);
 	private crewScope() {
-		if (this.crewScopeCache !== undefined) return this.crewScopeCache;
-		const sql = this.ctx.storage.sql;
-		sql.exec(
-			"create table if not exists crew_scope(id integer primary key check(id=1),project_id text,y_enabled integer not null,y2_id text)",
-		);
-		const row = sql
-			.exec<{
-				project_id: string | null;
-				y_enabled: number;
-				y2_id: string | null;
-			}>("select project_id,y_enabled,y2_id from crew_scope")
-			.toArray()[0];
-		this.crewScopeCache = row
-			? {
-					projectId: row.project_id,
-					yEnabled: row.y_enabled === 1,
-					ySquaredId: row.y2_id,
-				}
-			: null;
-		return this.crewScopeCache;
+		return this.crewScopes.read();
 	}
 	private rememberCrewScope(scope: {
 		projectId?: string | null;
 		yEnabled?: boolean | null;
 		ySquaredId?: string | null;
 	}) {
-		const next = {
-			projectId: scope.projectId ?? null,
-			yEnabled: !!scope.yEnabled,
-			ySquaredId: scope.ySquaredId ?? null,
-		};
-		const known = this.crewScope();
-		if (
-			known?.projectId === next.projectId &&
-			known.yEnabled === next.yEnabled &&
-			known.ySquaredId === next.ySquaredId
-		)
-			return;
-		if (!known && !next.yEnabled && !next.projectId) return;
-		this.ctx.storage.sql.exec(
-			"insert into crew_scope(id,project_id,y_enabled,y2_id) values(1,?,?,?) on conflict(id) do update set project_id=excluded.project_id,y_enabled=excluded.y_enabled,y2_id=excluded.y2_id",
-			next.projectId,
-			next.yEnabled ? 1 : 0,
-			next.ySquaredId,
-		);
-		this.crewScopeCache = next;
+		this.crewScopes.remember(scope);
+	}
+	/**
+	 * Turns are started with a bare identity (budget admission, /turn-start),
+	 * and their steps run here in process, never through the step route that
+	 * carries the Y switch: without this read the crew scope was never stored
+	 * and no thread ever told its crew anything.
+	 */
+	private async resolveCrewScope(turn: WorkflowTurn) {
+		try {
+			const resolved = await withDatabaseScope(
+				this.env.HYPERDRIVE.connectionString,
+				() => resolveModelConversation({ ...turn, index: 1 }),
+				null,
+			);
+			if (resolved) this.rememberCrewScope(resolved);
+		} catch (error) {
+			console.warn("Crew scope was not resolved.", {
+				cause: stepFailureCause(error),
+			});
+		}
 	}
 	private withLocalConversation<T>(
 		scope: { userId: string; sessionId: string },
@@ -510,6 +487,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				});
 			}
 		}
+		// The caller's scope carries no Y switch: read it once per turn start.
+		if (!("yEnabled" in scope)) await this.resolveCrewScope(turn);
 		const active = this.activeTurn();
 		if (active?.turnId === turn.turnId) return active.leaseId === turn.leaseId;
 		if (active) {
@@ -572,7 +551,20 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		try {
 			const crew = this.crewScope();
 			const projectId = crewProjectFor(crew, scope.sessionId);
-			if (!crew || !projectId) return;
+			if (!crew || !projectId) {
+				console.log(
+					`crew.note ${JSON.stringify({
+						session: scope.sessionId.slice(0, 8),
+						status: turnStatus,
+						skipped: !crew
+							? "no-scope"
+							: !crew.yEnabled || !crew.projectId
+								? "not-y"
+								: "is-y2",
+					})}`,
+				);
+				return;
+			}
 			let derived: ReturnType<typeof crewFromSettledItems> = {
 				state: "working",
 				waitingOn: null,
@@ -595,6 +587,15 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 					...derived,
 					lastRequest: crewRequestFromStartItems(items),
 				};
+			console.log(
+				`crew.note ${JSON.stringify({
+					session: scope.sessionId.slice(0, 8),
+					status: turnStatus,
+					state: derived.state,
+					skipped: null,
+					hasY2: !!crew.ySquaredId,
+				})}`,
+			);
 			this.ctx.waitUntil(
 				this.env.Y_SQUARED_CREWS.getByName(projectId, durableObjectLocation())
 					.noteThread({
@@ -977,6 +978,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		const next = this.queue.take();
 		if (next) {
 			await this.refreshWaiting([next]);
+			// The crew still hears how the ended turn settled (reply, card, pull
+			// request); the next turn's start note follows it.
+			if (ended) this.noteCrew(ended, settled);
 			await this.beginTurn(next);
 		} else {
 			if (ended) this.noteTurnStatus(ended, settled);

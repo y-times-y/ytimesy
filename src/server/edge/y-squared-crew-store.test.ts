@@ -769,3 +769,24 @@ describe("the start note's request", () => {
 		expect(crewRequestFromStartItems([msg("x".repeat(500))])?.length).toBe(200);
 	});
 });
+
+describe("a thread that ran queued turns wakes Y²", () => {
+	it("settle then the next turn's start still leaves a due wake aimed at Y²", () => {
+		const db = sql();
+		const crew = new SqliteYSquaredCrew(db as never);
+		crew.noteThread(note({ state: "working" }), T0);
+		// Turn one settles while turn two is queued: the settle note is still sent.
+		const settled = crew.noteThread(
+			note({ state: "finished", lastReply: "done" }),
+			T0 + 1_000,
+		);
+		expect(settled.alarmAt).toBe(T0 + 1_000 + CREW_WAKE_DELAY_MS);
+		crew.noteThread(
+			note({ state: "working", lastRequest: "second" }),
+			T0 + 1_001,
+		);
+		const decided = crew.takeWake(T0 + 1_000 + CREW_WAKE_DELAY_MS);
+		expect(decided.action).toBe("send");
+		expect(crew.target()).toEqual({ userId: "u", sessionId: "y2" });
+	});
+});

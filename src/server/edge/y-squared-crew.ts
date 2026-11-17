@@ -69,12 +69,28 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 
 	async alarm() {
 		const decided = this.store.takeWake(Date.now());
+		const log = (extra: Record<string, unknown>) =>
+			console.log(
+				`crew.wake ${JSON.stringify({
+					action: decided.action,
+					reason:
+						decided.action === "send"
+							? "due"
+							: decided.action === "capped"
+								? "hourly-cap"
+								: "nothing-due",
+					events: "eventsUpTo" in decided ? decided.eventsUpTo : null,
+					...extra,
+				})}`,
+			);
 		if (decided.action === "capped") {
+			log({ enqueued: false });
 			if (decided.retryAt !== undefined)
 				await this.ctx.storage.setAlarm(decided.retryAt);
 			return;
 		}
 		if (decided.action === "none") {
+			log({ enqueued: false });
 			if (decided.rearmAt !== null)
 				await this.ctx.storage.setAlarm(decided.rearmAt);
 			return;
@@ -83,11 +99,16 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 		if (decided.rearmAt !== null)
 			await this.ctx.storage.setAlarm(decided.rearmAt);
 		const target = this.store.target();
-		if (!target) return;
+		if (!target) {
+			log({ enqueued: false, skipped: "no-y2-target" });
+			return;
+		}
 		try {
 			await this.enqueueWake(target, decided.next.lastWakeAt, decided.body);
 			this.store.wakeSent(decided.eventsUpTo);
+			log({ enqueued: true });
 		} catch (error) {
+			log({ enqueued: false, error: stepFailureCause(error) });
 			console.warn("Y² was not woken.", { cause: stepFailureCause(error) });
 			this.store.returnWake();
 		}
