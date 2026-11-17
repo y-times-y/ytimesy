@@ -37,7 +37,35 @@ it("retains the latest three generations and all their variants", () => {
 	];
 	expect(
 		recentModelGenerations(ids.map((id) => ({ id }))).map((m) => m.id),
-	).toEqual(ids.slice(0, -1));
+	).toEqual(ids.slice(0, -2));
+});
+it("never lists retired models and does not let them use up a generation", () => {
+	const ids = [
+		"openai/gpt-6.1-sol",
+		"openai/gpt-5.6-sol",
+		"openai/gpt-5.5",
+		"openai/gpt-5-mini",
+		"anthropic/claude-fable-5.1",
+		"anthropic/claude-fable-5.2",
+		"openai/gpt-6-astra",
+	];
+	expect(
+		recentModelGenerations(ids.map((id) => ({ id }))).map((m) => m.id),
+	).toEqual([
+		"openai/gpt-6.1-sol",
+		"anthropic/claude-fable-5.2",
+		"openai/gpt-6-astra",
+	]);
+	expect(
+		visibleModelChoices(
+			[
+				{ label: "GPT-5.5", author: "openai" },
+				{ label: "Claude Fable 5.1", author: "anthropic" },
+				{ label: "GPT-6.1 Sol", author: "openai" },
+			],
+			"",
+		).map((m) => m.label),
+	).toEqual(["GPT-6.1 Sol"]);
 });
 it("keeps Claude tiers independent, handles older version ordering, and preserves unknown IDs", () => {
 	const ids = [

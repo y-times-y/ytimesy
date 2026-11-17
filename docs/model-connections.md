@@ -106,6 +106,24 @@ in Settings", so a refused request looked like an expired sign-in.
   from/to, cause, HTTP status and a redacted body snippet (`xaiLogSnippet`);
   a sign-in logs which status it replaced.
 
+## Retired from the pickers 2026-11-17
+
+Every GPT-5 variant (`gpt-5`, `gpt-5.x`, `-codex`, mini, nano; bare or
+`openai/`-prefixed) and Claude Fable 5.1 are no longer offered in any model
+picker. `isRetiredModel` (`src/domain/retired-model.ts`) is the one predicate;
+list builders use it (`OFFERED_API_MODELS`, `connectionModels`,
+`CLAUDE_CODE_MODELS`, the Codex subscription catalog and its browser saved copy (filtered on read), the saved agent catalog,
+`recentModelGenerations`, `sessionModelsFromListed`). Kept on purpose, so chats
+and usage history from before the retirement still work: pricing, context
+windows (including the `gpt-5.x` rule in `model-context.ts`), the failover
+equivalence maps, the `API_MODEL_LIST` entry for Fable 5.1 (label, speeds,
+long-context tier), and server acceptance of the ids. **Old chats**: a chat on a
+retired model keeps sending on the same id (no successor, no rewrite): the
+composer keeps the chat's own model, the send guard and the server's send paths
+accept it (`includeRetired`), and pricing, context and failover still resolve.
+The picker does not list it and shows no retired badge (the picker design is
+untouched); choosing another model replaces it. GPT-6.x, Fable 5.2, Mythos and
+Opus/Sonnet/Haiku are unaffected. Not covered: models from a custom endpoint.
 
 ## Codex model list: saved per account, re-checked on real triggers
 
@@ -120,5 +138,5 @@ The only authority on what a ChatGPT plan may use is ChatGPT's live catalog (`co
 
 1. Bump `CODEX_CATALOG_EPOCH` in src/domain/codex-catalog-epoch.ts. Every user then re-checks their own account once on their next visit (and only accounts that were rolled out the model will list it).
 2. Add the model to the places that know new OpenAI models: api-model-list, model-pricing, model-context-windows and model-failover (src/domain).
-3. Changing the pinned Codex CLI version (`PINNED_CODEX_CLI_VERSION`) also changes the key, so it needs no separate bump.
-
+3. Retiring a model is the same bump: filter the id (`isRetiredModel`) and bump the epoch so saved copies refresh (epoch 2: GPT-5 family retired).
+4. Changing the pinned Codex CLI version (`PINNED_CODEX_CLI_VERSION`) also changes the key, so it needs no separate bump.

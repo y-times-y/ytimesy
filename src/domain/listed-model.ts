@@ -5,6 +5,7 @@ import {
 } from "./claude-code-route";
 import type { ListedContextWindow } from "./context-window-option";
 import { parseModelRouteId } from "./model-connection";
+import { isRetiredModel } from "./retired-model";
 
 export type ListedReasoning = {
 	readonly levels: readonly [
@@ -308,7 +309,12 @@ export function preferredListedModelId(
 	options?: ListedModelPreference,
 ): string {
 	const excluded = new Set(options?.excludedIds ?? []);
-	const listed = models.filter((model) => model.id && !excluded.has(model.id));
+	const offerable = models.filter(
+		(model) => model.id && !excluded.has(model.id),
+	);
+	// Never default to a retired model while a current one is listed.
+	const current = offerable.filter((model) => !isRetiredModel(model.id));
+	const listed = current.length ? current : offerable;
 	const lastUsed = options?.lastUsedId?.trim();
 	if (lastUsed && !excluded.has(lastUsed)) {
 		if (listed.length === 0 || listed.some((model) => model.id === lastUsed)) {
@@ -316,7 +322,6 @@ export function preferredListedModelId(
 		}
 	}
 	return (
-		listed.find((model) => model.id === "gpt-5.3-codex-spark")?.id ??
 		listed.find(
 			(model) =>
 				model.id.startsWith("opencode/") && model.id.includes("muse-spark-1.3"),

@@ -1,5 +1,6 @@
 import type { AgentProviderId } from "#/domain/agent-provider";
 import type { ListedModel } from "#/domain/listed-model";
+import { withoutRetiredModels } from "#/domain/retired-model";
 import { database } from "./database";
 
 export async function loadAgentModelCatalog(
@@ -10,5 +11,6 @@ export async function loadAgentModelCatalog(
 		"select models from agent_model_catalog where user_id=$1 and provider=$2",
 		[userId, provider],
 	);
-	return result.rows[0]?.models ?? [];
+	// A saved catalog can predate a retirement.
+	return withoutRetiredModels(result.rows[0]?.models ?? []);
 }

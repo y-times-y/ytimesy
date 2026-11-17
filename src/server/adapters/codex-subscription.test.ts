@@ -251,6 +251,27 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 		"Connect Codex",
 	);
 });
+it("leaves retired GPT-5 models out of the catalog list but still runs them", async () => {
+	vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response(
+			JSON.stringify({
+				models: [
+					{ slug: "gpt-5.5", display_name: "GPT-5.5", context_window: 272000 },
+					{ slug: "gpt-5.3-codex-spark", display_name: "Spark" },
+					{
+						slug: "gpt-6-luna",
+						display_name: "GPT-6-Luna",
+						context_window: 272000,
+					},
+				],
+			}),
+		),
+	);
+	const models = await codexSubscriptionCatalog("retired-owner");
+	expect(models.map((model) => model.id)).toEqual(["gpt-6-luna"]);
+	const runtime = await codexSubscriptionModel("retired-owner", "gpt-5.5");
+	expect(runtime.contextWindow).toBe(272000);
+});
 it("offers fast mode where the plan's catalog lists the priority tier, and sends it", async () => {
 	vi.spyOn(globalThis, "fetch").mockResolvedValue(
 		new Response(

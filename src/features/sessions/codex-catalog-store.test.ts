@@ -106,6 +106,23 @@ describe("Codex catalog saved copy: request counts", () => {
 		expect(next).not.toHaveBeenCalled();
 	});
 
+	it("a saved copy from before the retirement never lists a GPT-5 model", () => {
+		storage.setItem(
+			codexCatalogStorageKey("u1"),
+			JSON.stringify({
+				models: [
+					{ id: "gpt-5.3-codex", label: "GPT-5.3-Codex" },
+					{ id: "gpt-5-codex-mini", label: "GPT-5 Codex Mini" },
+					...models,
+				],
+				savedAt: Date.now(),
+			}),
+		);
+		const ids = readSavedCodexCatalog("u1", storage)?.models.map((m) => m.id);
+		expect(ids).toEqual(models.map((m) => m.id));
+		expect(ids?.some((id) => id.startsWith("gpt-5"))).toBe(false);
+	});
+
 	it("an epoch bump is a different key: the old copy is ignored and 1 request is made", async () => {
 		storage.setItem(
 			codexCatalogStorageKey("u1", CODEX_CATALOG_EPOCH - 1),

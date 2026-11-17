@@ -67,13 +67,11 @@ it.each([
 describe("sessionModelsFromListed", () => {
 	it("keeps agent-listed names and does not invent reasoning, Fast or a larger window", () => {
 		expect(
-			sessionModelsFromListed([
-				{ id: "gpt-5.3-codex-spark", label: "GPT-5.3-Codex-Spark" },
-			]),
+			sessionModelsFromListed([{ id: "gpt-6-luna", label: "GPT-6-Luna" }]),
 		).toEqual([
 			{
-				id: "gpt-5.3-codex-spark",
-				label: "GPT-5.3-Codex-Spark",
+				id: "gpt-6-luna",
+				label: "GPT-6-Luna",
 				notice: null,
 				reasoning: null,
 				speeds: [],
@@ -86,8 +84,8 @@ describe("sessionModelsFromListed", () => {
 		expect(
 			sessionModelsFromListed([
 				{
-					id: "gpt-5.3-codex",
-					label: "GPT-5.3-Codex",
+					id: "gpt-6-luna",
+					label: "GPT-6-Luna",
 					supportsFastMode: true,
 				},
 			])[0]?.speeds,
@@ -137,15 +135,19 @@ describe("preferredSessionModelId", () => {
 		).toBe("opencode/muse-spark-1.2-contributor-free");
 	});
 
-	it("prefers listed Codex spark when the connected catalog includes it", () => {
-		expect(
-			preferredSessionModelId(
-				sessionModelsFromListed([
-					{ id: "gpt-6-astra", label: "GPT-6-Astra" },
-					{ id: "gpt-5.3-codex-spark", label: "GPT-5.3-Codex-Spark" },
-				]),
-			),
-		).toBe("gpt-5.3-codex-spark");
+	it("never offers or defaults to a retired model, even a former favourite", () => {
+		const listed = [
+			{ id: "gpt-5.3-codex-spark", label: "GPT-5.3-Codex-Spark" },
+			{ id: "gpt-6-astra", label: "GPT-6-Astra" },
+		];
+		expect(sessionModelsFromListed(listed).map((model) => model.id)).toEqual([
+			"gpt-6-astra",
+		]);
+		expect(preferredSessionModelId(sessionModelsFromListed(listed))).toBe(
+			"gpt-6-astra",
+		);
+		// Unfiltered input (a stale saved catalog) still defaults to a current model.
+		expect(preferredSessionModelId(listed as never)).toBe("gpt-6-astra");
 	});
 
 	it("prefers listed Zen spark 1.3 over other connected Zen models", () => {

@@ -23,8 +23,19 @@ export const CLAUDE_CODE_MODELS: readonly ListedModel[] = [
 	{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
 	{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
 	{ id: "claude-fable-5-2", label: "Claude Fable 5.2" },
+];
+
+/**
+ * Retired from the pickers (2026-11-17) but still accepted: chats that used
+ * them keep running and keep their label (see CLAUDE_CODE_MODEL_EQUIVALENTS).
+ */
+const RETIRED_CLAUDE_CODE_MODELS: readonly ListedModel[] = [
 	{ id: "claude-fable-5-1", label: "Claude Fable 5.1" },
 ];
+
+function knownClaudeCodeModels() {
+	return [...CLAUDE_CODE_MODELS, ...RETIRED_CLAUDE_CODE_MODELS];
+}
 
 /** Claude Code models as the OpenRouter ids failover compares (model-failover.ts). */
 export const CLAUDE_CODE_MODEL_EQUIVALENTS: Readonly<Record<string, string>> = {
@@ -50,7 +61,7 @@ export function claudeCodeRouteId(modelId: string) {
 export function parseClaudeCodeRouteId(value: string): string | null {
 	if (!value.startsWith(ROUTE_PREFIX)) return null;
 	const modelId = value.slice(ROUTE_PREFIX.length);
-	return CLAUDE_CODE_MODELS.some((model) => model.id === modelId)
+	return knownClaudeCodeModels().some((model) => model.id === modelId)
 		? modelId
 		: null;
 }
@@ -84,7 +95,8 @@ export function isClaudeCodeRevision(revision: string | null | undefined) {
 
 export function claudeCodeModelLabel(modelId: string) {
 	return (
-		CLAUDE_CODE_MODELS.find((model) => model.id === modelId)?.label ?? modelId
+		knownClaudeCodeModels().find((model) => model.id === modelId)?.label ??
+		modelId
 	);
 }
 

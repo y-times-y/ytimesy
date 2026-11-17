@@ -19,6 +19,7 @@ import {
 	type ListedModel,
 	listedReasoningFromRow,
 } from "#/domain/listed-model";
+import { isRetiredModel } from "#/domain/retired-model";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import {
 	recordStepTiming,
@@ -431,7 +432,7 @@ export async function codexSubscriptionCatalog(
 ): Promise<ListedModel[]> {
 	const catalog = await subscriptionCatalog(userId, options);
 	return catalog.models
-		.filter((row) => row.visibility !== "hide")
+		.filter((row) => row.visibility !== "hide" && !isRetiredModel(row.slug))
 		.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
 		.map((row) => ({
 			id: row.slug,

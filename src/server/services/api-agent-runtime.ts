@@ -125,9 +125,9 @@ async function prepareApiModel<T>(
 		);
 	if (
 		!connection ||
-		!(await availableApiModelRoutes([connection])).some(
-			(model) => model.id === modelRouteId(connection.id, input.modelId),
-		)
+		!(
+			await availableApiModelRoutes([connection], { includeRetired: true })
+		).some((model) => model.id === modelRouteId(connection.id, input.modelId))
 	)
 		throw new Error(
 			"The selected model is no longer available on this connection.",

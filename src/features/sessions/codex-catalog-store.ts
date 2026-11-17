@@ -15,6 +15,7 @@ import type {
 	ListedReasoning,
 	ListedSpeed,
 } from "#/domain/listed-model";
+import { isRetiredModel } from "#/domain/retired-model";
 
 /**
  * The user's own Codex (ChatGPT plan) model list, saved in this browser under
@@ -131,9 +132,10 @@ export function sanitizeCodexModels(value: unknown): ListedModel[] | null {
 	for (const entry of value) {
 		const model = sanitizeModel(entry);
 		if (!model) return null;
-		models.push(model);
+		// A copy saved before a retirement must not bring the model back.
+		if (!isRetiredModel(model.id)) models.push(model);
 	}
-	return models;
+	return models.length ? models : null;
 }
 
 /** The saved copy for this key; null when absent, oversized, corrupt or from the future. */

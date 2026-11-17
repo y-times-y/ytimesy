@@ -3,7 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { LockKeyhole } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { MenuSelect } from "#/components/ui/menu-select";
-import { API_MODEL_LIST } from "#/domain/api-model-list";
+import { API_MODEL_LIST, OFFERED_API_MODELS } from "#/domain/api-model-list";
 import { AUTHOR_LABELS, visibleModelChoices } from "#/domain/browse-models";
 import {
 	availableConnectionModels,
@@ -151,7 +151,7 @@ export function ApiModelBrowser({
 		},
 	});
 	const locked = visibleModelChoices(
-		API_MODEL_LIST.filter(
+		OFFERED_API_MODELS.filter(
 			(model) =>
 				!favoriteIds &&
 				!plan &&

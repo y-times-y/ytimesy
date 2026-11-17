@@ -292,9 +292,9 @@ export async function sendApiWorkspaceTask(
 	if (!selected) throw new Error("Select an API connection and model.");
 	if (
 		!connection ||
-		!(await availableApiModelRoutes([connection])).some(
-			(model) => model.id === input.modelId,
-		)
+		!(
+			await availableApiModelRoutes([connection], { includeRetired: true })
+		).some((model) => model.id === input.modelId)
 	)
 		throw new Error(
 			"The selected model is no longer available on this connection.",

@@ -6,6 +6,7 @@ import {
 	listedModelSupportsFastMode,
 	preferredListedModelId,
 } from "#/domain/listed-model";
+import { withoutRetiredModels } from "#/domain/retired-model";
 
 export function composerListedModels({
 	sessionModels,
@@ -94,7 +95,8 @@ export function sessionModelsFromListed(
 		readonly contextCapacity?: number;
 	}[],
 ): SessionModel[] {
-	return models.map((model) => ({
+	// Retired models are never offered; a chat on one is shown by the composer.
+	return withoutRetiredModels(models).map((model) => ({
 		id: model.id,
 		label: model.label,
 		notice: model.notice ?? null,

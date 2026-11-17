@@ -8,7 +8,7 @@ import { PINNED_CODEX_CLI_VERSION } from "./guest-cli-pin";
  * account may use, so each browser keeps the user's own copy and asks again
  * only on a real trigger (see docs/model-connections.md, "Codex model list").
  */
-export const CODEX_CATALOG_EPOCH = 1;
+export const CODEX_CATALOG_EPOCH = 2;
 
 /** Safety net only: a saved copy this old is re-read once in the background. */
 export const CODEX_CATALOG_REFRESH_AFTER_MS = 48 * 3600_000;

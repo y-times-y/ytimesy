@@ -76,6 +76,7 @@ import {
 	nextPastedTextNumber,
 } from "#/domain/pasted-text";
 import type { Project } from "#/domain/projects";
+import { keepsRetiredChatModel } from "#/domain/retired-model";
 import { secretsAnsweredText } from "#/domain/secret-request";
 import {
 	blockedSendAttempt,
@@ -1089,6 +1090,9 @@ export function SessionLauncher({
 			(connectedHarness === harnessId ? session.listedModelId : "");
 		setModelId((current) => {
 			if (current && !catalogSettled) return current;
+			// The chat's own retired model is no longer listed: keep sending on
+			// it until the person picks another.
+			if (keepsRetiredChatModel(current, session.listedModelId)) return current;
 			const next = composerModelIdForCatalog({
 				requestedId: current,
 				catalog: models,

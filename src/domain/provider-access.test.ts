@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { API_MODEL_LIST, apiModelSections } from "./api-model-list";
+import {
+	API_MODEL_LIST,
+	apiModelSections,
+	OFFERED_API_MODELS,
+} from "./api-model-list";
 import {
 	availableConnectionModels,
 	connectionModels,
@@ -220,7 +224,7 @@ describe("Settings key choices", () => {
 						: [],
 				),
 			} as PublicModelConnection;
-			const expected = API_MODEL_LIST.filter(
+			const expected = OFFERED_API_MODELS.filter(
 				(entry) => entry.author === author && entry.directId,
 			).map((entry) => entry.label);
 			expect(connectionModels(connection, []).map((row) => row.label)).toEqual(

@@ -10,7 +10,9 @@ import {
 } from "./api-turn-failure";
 import {
 	CLAUDE_CODE_KEY,
+	CLAUDE_CODE_MODEL_EQUIVALENTS,
 	claudeCodeListedModels,
+	claudeCodeModelLabel,
 	claudeCodeTurnRevision,
 	claudeSubscriptionEnabled,
 	parseClaudeCodeRouteId,
@@ -80,8 +82,15 @@ describe("Claude Code routes", () => {
 			"claude-code/claude-sonnet-5-5",
 			"claude-code/claude-haiku-5-5",
 			"claude-code/claude-fable-5-2",
-			"claude-code/claude-fable-5-1",
 		]);
+		// Retired from the picker, still accepted and still failover-comparable.
+		expect(parseClaudeCodeRouteId("claude-code/claude-fable-5-1")).toBe(
+			"claude-fable-5-1",
+		);
+		expect(claudeCodeModelLabel("claude-fable-5-1")).toBe("Claude Fable 5.1");
+		expect(CLAUDE_CODE_MODEL_EQUIVALENTS["claude-fable-5-1"]).toBe(
+			"anthropic/claude-fable-5.1",
+		);
 	});
 
 	it("fail over to the same model on an API key", () => {

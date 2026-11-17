@@ -7,7 +7,7 @@ import {
 } from "./send-blocked";
 
 const claudeModel = claudeCodeListedModels()[0]?.id ?? "";
-const keyModel = "api/3f1c2a4e-8b7d-4c1e-9f0a-1b2c3d4e5f60/openai%2Fgpt-5";
+const keyModel = "api/3f1c2a4e-8b7d-4c1e-9f0a-1b2c3d4e5f60/openai%2Fgpt-6-luna";
 
 describe("composerSendBlock", () => {
 	it("lets a listed API model send", () => {
@@ -46,7 +46,7 @@ describe("composerSendBlock", () => {
 		const block = composerSendBlock({
 			harnessId: "api",
 			blockers: ["claude_token"],
-			modelId: "api/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/openai%2Fgpt-5",
+			modelId: "api/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/openai%2Fgpt-6-luna",
 			availableModelIds: [keyModel],
 		});
 		expect(block?.message).toBe("Pick another model.");

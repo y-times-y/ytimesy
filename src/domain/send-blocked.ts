@@ -1,5 +1,6 @@
 import type { AgentProviderId } from "./agent-provider";
 import { parseClaudeCodeRouteId } from "./claude-code-route";
+import { isRetiredModel } from "./retired-model";
 import type { SettingsSection } from "./workspace-settings";
 
 /**
@@ -87,7 +88,13 @@ function apiModelBlock(
 ): ComposerSendBlock | null {
 	const modelId = input.modelId.trim();
 	const available = input.availableModelIds;
-	if (modelId && (available === null || available.includes(modelId))) {
+	// A chat's retired model is no longer listed but is still sent as chosen.
+	if (
+		modelId &&
+		(available === null ||
+			available.includes(modelId) ||
+			isRetiredModel(modelId))
+	) {
 		// The catalog is still loading: only the server's own facts decide.
 		if (available !== null || !blockers.includes("no_model")) return null;
 	}

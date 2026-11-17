@@ -1,4 +1,5 @@
 import type { ModelProvider } from "./model-connection";
+import { isRetiredModel } from "./retired-model";
 
 export type BrowseModel = {
 	id: string;
@@ -44,7 +45,9 @@ export function recentModelGenerations<T extends { id: string }>(
 	models: readonly T[],
 ): T[] {
 	const generations = new Map<string, Set<string>>();
-	for (const model of models) {
+	// Retired models neither show nor use up a retained generation.
+	const offered = models.filter((model) => !isRetiredModel(model.id));
+	for (const model of offered) {
 		const release = modelGeneration(model.id);
 		if (!release) continue;
 		const versions = generations.get(release.family) ?? new Set<string>();
@@ -59,7 +62,7 @@ export function recentModelGenerations<T extends { id: string }>(
 				.slice(0, RETAINED_MODEL_GENERATIONS),
 		]),
 	);
-	return models.filter((model) => {
+	return offered.filter((model) => {
 		const release = modelGeneration(model.id);
 		return !release || retained.get(release.family)?.includes(release.version);
 	});
@@ -79,7 +82,10 @@ export function matchesModelSearch(
 export function visibleModelChoices<
 	T extends Pick<BrowseModel, "label" | "author">,
 >(models: readonly T[], search: string): T[] {
-	const matching = models.filter((model) => matchesModelSearch(model, search));
+	const matching = models.filter(
+		(model) =>
+			!isRetiredModel(model.label) && matchesModelSearch(model, search),
+	);
 	return matching;
 }
 export const DIRECT_MODEL_ENDPOINTS: Record<string, string> = {

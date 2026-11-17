@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { API_MODEL_LIST, apiModelSections } from "./api-model-list";
+import {
+	API_MODEL_LIST,
+	apiModelSections,
+	OFFERED_API_MODELS,
+} from "./api-model-list";
 import { AUTHOR_LABELS } from "./browse-models";
 import { availableConnectionModels } from "./model-connection";
 
@@ -31,8 +35,31 @@ it("offers every listed model through an OpenRouter key, in list order", () => {
 		})),
 	);
 	expect(offered.map((model) => model.label)).toEqual(
-		API_MODEL_LIST.map((model) => `${model.label} · OpenRouter`),
+		OFFERED_API_MODELS.map((model) => `${model.label} · OpenRouter`),
 	);
+	expect(offered.map((model) => model.label).join()).not.toContain("Fable 5.1");
+	// The send path still resolves a retired model the person already uses.
+	expect(
+		availableConnectionModels(
+			[
+				{
+					id,
+					provider: "openrouter",
+					label: "OpenRouter",
+					baseUrl: "https://openrouter.ai/api/v1",
+					revision: "r",
+					models: [],
+				},
+			],
+			API_MODEL_LIST.map((model) => ({
+				id: model.openRouterId,
+				label: model.label,
+				author: model.openRouterId.split("/")[0] ?? "",
+				created: 0,
+			})),
+			{ includeRetired: true },
+		).some((model) => model.label.startsWith("Claude Fable 5.1")),
+	).toBe(true);
 });
 
 it("offers faster speeds only through an OpenRouter key", () => {

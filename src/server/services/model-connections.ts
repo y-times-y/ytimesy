@@ -28,11 +28,14 @@ import {
 
 export async function availableApiModelRoutes(
 	connections: readonly PublicModelConnection[],
+	/** Send paths keep accepting a chat's retired model; pickers never list it. */
+	options?: { readonly includeRetired?: boolean },
 ) {
 	const hasGateway = connections.some((row) => row.provider === "openrouter");
 	const routes = availableConnectionModels(
 		connections,
 		hasGateway ? await browseModels() : [],
+		options,
 	);
 	// Development only: offer every model a connection lists (e.g. free test models).
 	return devAllowsAnyModel()

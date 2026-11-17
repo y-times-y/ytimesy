@@ -5,6 +5,7 @@ import {
 	apiLongContextTier,
 	apiModelSpeeds,
 	directApiModelSpeeds,
+	OFFERED_API_MODELS,
 } from "./api-model-list";
 import { type BrowseModel, DIRECT_MODEL_ENDPOINTS } from "./browse-models";
 import {
@@ -271,9 +272,10 @@ export function isXaiDirectEndpoint(baseUrl: string) {
 export function availableConnectionModels(
 	connections: readonly PublicModelConnection[],
 	browseModels: readonly BrowseModel[],
+	options?: { readonly includeRetired?: boolean },
 ) {
 	return connections.flatMap((connection) =>
-		connectionModels(connection, browseModels).map((model) => {
+		connectionModels(connection, browseModels, options).map((model) => {
 			const reasoning = apiModelReasoning(
 				connection.provider,
 				model.id,
@@ -347,12 +349,16 @@ export function directAuthor(connection: {
 export function connectionModels(
 	connection: PublicModelConnection,
 	browseModels: readonly BrowseModel[],
+	/** Send paths accept a chat's retired model; pickers never list it. */
+	options?: { readonly includeRetired?: boolean },
 ): readonly ConnectedModel[] {
 	if (isCustomConnection(connection)) return connection.models;
 	const saved = new Map(connection.models.map((model) => [model.id, model]));
 	const browsed = new Map(browseModels.map((model) => [model.id, model]));
 	const author = directAuthor(connection);
-	return API_MODEL_LIST.flatMap((entry) => {
+	return (
+		options?.includeRetired ? API_MODEL_LIST : OFFERED_API_MODELS
+	).flatMap((entry) => {
 		const id =
 			connection.provider === "openrouter"
 				? entry.openRouterId

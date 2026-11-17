@@ -15,8 +15,9 @@ it("finds the connected Claude subscription's models in a picker search", () => 
 			label,
 		})),
 	).toEqual([{ id: "claude-code/claude-opus-5-5", label: "Claude Opus 5.5" }]);
-	expect(claudeCodeSearchMatches(models, "claude")).toHaveLength(5);
-	expect(claudeCodeSearchMatches(models, "anthropic")).toHaveLength(5);
+	expect(claudeCodeSearchMatches(models, "claude")).toHaveLength(4);
+	expect(claudeCodeSearchMatches(models, "anthropic")).toHaveLength(4);
+	expect(claudeCodeSearchMatches(models, "Fable 5.1")).toEqual([]);
 	expect(
 		claudeCodeSearchMatches(models, "Fable 5.2").map(({ id, label }) => ({
 			id,

@@ -27,9 +27,9 @@ export async function resolveEnvironmentModel(
 	if (
 		!route ||
 		!connection ||
-		!(await availableApiModelRoutes([connection])).some(
-			(model) => model.id === request.modelId,
-		)
+		!(
+			await availableApiModelRoutes([connection], { includeRetired: true })
+		).some((model) => model.id === request.modelId)
 	)
 		throw new Error(
 			"The selected model is no longer available on this connection.",

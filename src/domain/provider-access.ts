@@ -1,4 +1,8 @@
-import { API_MODEL_LIST, apiModelSections } from "./api-model-list";
+import {
+	API_MODEL_LIST,
+	apiModelSections,
+	OFFERED_API_MODELS,
+} from "./api-model-list";
 import {
 	AUTHOR_LABELS,
 	DIRECT_MODEL_ENDPOINTS,
@@ -114,7 +118,7 @@ export function keyProviderChoices(): readonly KeyProviderChoice[] {
 					{
 						id: author,
 						label: AUTHOR_LABELS[author] ?? author,
-						hint: `Unlocks ${API_MODEL_LIST.filter(
+						hint: `Unlocks ${OFFERED_API_MODELS.filter(
 							(model) => model.author === author && model.directId,
 						)
 							.map((model) => model.label)

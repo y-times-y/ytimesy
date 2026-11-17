@@ -10,6 +10,8 @@
  * fixed OpenAI-compatible endpoint). `speeds` are the maker's own faster
  * endpoints, offered through an OpenRouter key only.
  */
+import { isRetiredModel } from "./retired-model";
+
 export type ApiModelSpeedId = "fast" | "ultrafast";
 
 export type ApiModelSpeed = {
@@ -267,9 +269,22 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 	},
 ];
 
+/**
+ * What the pickers may offer: API_MODEL_LIST minus retired models (Fable 5.1).
+ * The retired entries stay in API_MODEL_LIST so chats that used them keep
+ * their label, speeds, long-context tier and failover equivalence.
+ */
+export const OFFERED_API_MODELS: readonly ListedApiModel[] =
+	API_MODEL_LIST.filter(
+		(model) =>
+			!isRetiredModel(model.openRouterId) &&
+			!isRetiredModel(model.directId) &&
+			!isRetiredModel(model.label),
+	);
+
 /** Selector sections in list order. */
 export function apiModelSections(): readonly string[] {
-	return [...new Set(API_MODEL_LIST.map((model) => model.author))];
+	return [...new Set(OFFERED_API_MODELS.map((model) => model.author))];
 }
 
 /**
