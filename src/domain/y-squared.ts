@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isClaudeCodeRoute } from "./claude-code-route";
 import type { SessionItem } from "./session-item";
 import type { ChatWaitingOn } from "./sidebar-chats";
 import { ASK_USER_TOOL } from "./user-question";
@@ -13,6 +14,24 @@ import { ASK_USER_TOOL } from "./user-question";
  */
 
 export const Y_SQUARED_TITLE = "Y²";
+
+/**
+ * Y² has no machine, and Claude Code (the user's Claude subscription) runs the
+ * `claude` CLI on one: a Y² turn is never started on that route. The picker
+ * leaves those models out, and the server refuses such a send up front.
+ */
+export const Y_SQUARED_CLAUDE_CODE_REFUSAL =
+	"Y² can't run on a Claude subscription yet. Pick a Codex, Grok or API-key model for this chat.";
+/** Shown in the composer when Y²'s remembered model is a Claude Code one. */
+export const Y_SQUARED_CLAUDE_CODE_NOTE =
+	"Y² runs on Codex, Grok or an API key, not a Claude subscription.";
+
+/** The models Y² may use: everything but the Claude Code routes. */
+export function withoutClaudeCodeModels<T extends { readonly id: string }>(
+	models: readonly T[],
+): T[] {
+	return models.filter((model) => !isClaudeCodeRoute(model.id));
+}
 export const Y_SQUARED_THREADS_TOOL = "threads";
 export const Y_SQUARED_THREAD_TOOL = "thread";
 export const Y_SQUARED_START_THREAD_TOOL = "start_thread";

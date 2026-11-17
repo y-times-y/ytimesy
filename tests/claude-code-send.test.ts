@@ -12,6 +12,10 @@ const fake = vi.hoisted(() => ({
 	connected: vi.fn(async () => true),
 	refused: vi.fn(async () => false),
 	failover: vi.fn(async () => true),
+	ySquared: vi.fn(async () => false),
+}));
+vi.mock("#/server/adapters/y-mode", () => ({
+	isYSquaredSession: fake.ySquared,
 }));
 vi.mock("#/server/adapters/model-failover-preferences", () => ({
 	loadModelFailoverPreferences: async () => ({
@@ -103,6 +107,7 @@ beforeEach(() => {
 	fake.connected.mockReset().mockResolvedValue(true);
 	fake.refused.mockReset().mockResolvedValue(false);
 	fake.failover.mockReset().mockResolvedValue(true);
+	fake.ySquared.mockReset().mockResolvedValue(false);
 	fake.owner.mockResolvedValue({
 		id: "s1",
 		projectId: "p1",
@@ -224,4 +229,29 @@ it("sends on a refused Claude token while failover is on: the turn moves elsewhe
 			modelId: "claude-code/claude-opus-5-5",
 		}),
 	).rejects.toThrow(/Settings > Agents/);
+});
+
+const Y2_REFUSAL =
+	"Y² can't run on a Claude subscription yet. Pick a Codex, Grok or API-key model for this chat.";
+
+it("refuses a Y² send on a Claude Code model before anything is queued", async () => {
+	fake.ySquared.mockResolvedValue(true);
+	await expect(
+		sendApiWorkspaceTask(scope, {
+			text: "What is going on?",
+			modelId: "claude-code/claude-sonnet-5-5",
+			idempotencyKey: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+		}),
+	).rejects.toThrow(Y2_REFUSAL);
+	expect(fake.enqueue).not.toHaveBeenCalled();
+});
+
+it("still sends a normal chat on Claude Code", async () => {
+	await sendApiWorkspaceTask(scope, {
+		text: "Fix it",
+		modelId: "claude-code/claude-sonnet-5-5",
+	});
+	expect(fake.enqueue.mock.calls[0]?.[0]).toMatchObject({
+		revision: "claude-code:v1:{}",
+	});
 });

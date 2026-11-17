@@ -103,6 +103,10 @@ import {
 import { turnSavingChanges } from "#/domain/turn-saving";
 import { hubTopic } from "#/domain/user-hub";
 import type { SettingsSection } from "#/domain/workspace-settings";
+import {
+	withoutClaudeCodeModels,
+	Y_SQUARED_CLAUDE_CODE_NOTE,
+} from "#/domain/y-squared";
 import { captureAnalytics } from "#/features/analytics/client";
 import { startInteraction } from "#/features/analytics/web-vitals";
 import {
@@ -399,26 +403,26 @@ export function SessionLauncher({
 		placeholderData:
 			loadedCatalog?.harnessId === harnessId ? loadedCatalog.models : undefined,
 	});
-	const models = useMemo(
-		() =>
-			sessionModelsFromListed(
-				composerListedModels({
-					sessionModels: session.models,
-					catalogModels: catalog.data ?? [],
-					rememberedModels: listedCatalog,
-					sessionConnected:
-						connectedProviderId(session.connection) === harnessId,
-					harnessId,
-				}),
-			),
-		[
-			session.models,
-			session.connection,
-			harnessId,
-			listedCatalog,
-			catalog.data,
-		],
-	);
+	const models = useMemo(() => {
+		const listed = sessionModelsFromListed(
+			composerListedModels({
+				sessionModels: session.models,
+				catalogModels: catalog.data ?? [],
+				rememberedModels: listedCatalog,
+				sessionConnected: connectedProviderId(session.connection) === harnessId,
+				harnessId,
+			}),
+		);
+		// Y² has no machine for the Claude CLI: no Claude subscription models.
+		return branchless ? withoutClaudeCodeModels(listed) : listed;
+	}, [
+		branchless,
+		session.models,
+		session.connection,
+		harnessId,
+		listedCatalog,
+		catalog.data,
+	]);
 	const [attachments, setAttachments] = useState<File[]>([]);
 	/** The branch picked for a new chat, for the project it was picked in. */
 	const [basePick, setBasePick] = useState<{
@@ -1534,6 +1538,14 @@ export function SessionLauncher({
 							) : null}
 						</div>
 					) : null}
+					{branchless &&
+					[modelId, session.listedModelId, lastModelByHarness.api].some(
+						(id) => id && isClaudeCodeRoute(id),
+					) ? (
+						<p className="session-attachment-error" role="status">
+							{Y_SQUARED_CLAUDE_CODE_NOTE}
+						</p>
+					) : null}
 					<div className="session-composer">
 						{visibleMentions.length > 0 ? (
 							<MentionPopover
@@ -1724,6 +1736,7 @@ export function SessionLauncher({
 								harnessId={harnessId}
 								onHarnessIdChange={onHarnessIdChange}
 								models={models}
+								withoutClaudeCode={branchless}
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
 								onModelIdChange={setModelId}
