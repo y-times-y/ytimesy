@@ -521,7 +521,7 @@ export function ProjectSidebar({
 		if (!rows.length) return null;
 		return (
 			<section
-				className="sidebar-section sidebar-y2-section"
+				className="sidebar-y-section sidebar-y2-section"
 				data-section="y2"
 				aria-labelledby="sidebar-section-y2"
 			>
@@ -627,7 +627,7 @@ export function ProjectSidebar({
 			: "";
 		return (
 			<section
-				className="sidebar-section sidebar-threads-section"
+				className="sidebar-y-section sidebar-threads-section"
 				data-section="threads"
 				aria-labelledby="sidebar-section-threads"
 			>
