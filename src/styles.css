@@ -6048,3 +6048,151 @@ details.environment-build[open] > summary .session-activity-chevron {
 .y-card-pr:hover {
 	color: var(--list-text-strong);
 }
+
+/* Thread ids (thread-label.ts) and the pull request / issue chips' extras
+   (agent-reference-chips.tsx). Colours come from the list variables, so the
+   id reads in whatever theme the list does. */
+.thread-id {
+	flex: 0 0 auto;
+	color: var(--list-text-muted);
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
+	line-height: 16px;
+	white-space: nowrap;
+}
+.session-title-copy > .thread-id {
+	font-size: 12px;
+	line-height: 18px;
+}
+.reference-chip-group {
+	display: inline-flex;
+	max-width: 100%;
+	align-items: baseline;
+	gap: 1px;
+	vertical-align: baseline;
+}
+.reference-chip-id {
+	margin-right: 5px;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 11px;
+	opacity: 0.75;
+}
+.session-markdown a.reference-chip-github {
+	display: inline-flex;
+	align-items: center;
+	height: 18px;
+	padding: 0 2px;
+	color: var(--list-text-muted);
+	opacity: 0.55;
+	text-decoration: none;
+}
+.session-markdown a.reference-chip-github:hover,
+.session-markdown a.reference-chip-github:focus-visible {
+	color: var(--list-text-strong);
+	opacity: 1;
+}
+.y-overview-id {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 11px;
+	letter-spacing: 0.02em;
+}
+.y-overview-dot {
+	margin: 0 4px;
+}
+
+/* Thread hover card (thread-hover-card.tsx). Surfaces use the list variables. */
+.thread-card {
+	z-index: 120;
+	width: min(288px, calc(100vw - 24px));
+	padding: 12px 14px;
+	border: 1px solid var(--list-border, #2c2c2c);
+	border-radius: 10px;
+	background: var(--list-surface, #161616);
+	color: var(--list-text);
+	font-size: 12px;
+	box-shadow: 0 8px 24px #000a;
+}
+.thread-card-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.thread-card-avatar {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 auto;
+	border-radius: 50%;
+	background: var(--list-text-muted);
+}
+.thread-card-status {
+	margin-left: auto;
+	color: var(--list-text-muted);
+	font-size: 11px;
+}
+.thread-card-title {
+	margin: 8px 0 10px;
+	color: var(--list-text-strong);
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+.thread-card-facts {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 4px 12px;
+	margin: 0;
+}
+.thread-card-facts dt {
+	color: var(--list-text-muted);
+}
+.thread-card-facts dd {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+.thread-card-section {
+	margin-top: 10px;
+	padding-top: 8px;
+	border-top: 1px solid var(--list-border, #2c2c2c);
+}
+.thread-card-section-title {
+	margin: 0 0 6px;
+	color: var(--list-text-muted);
+	font-size: 11px;
+}
+.thread-card-pr {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	color: var(--list-text);
+	font-variant-numeric: tabular-nums;
+	text-decoration: none;
+}
+.thread-card-pr:hover,
+.thread-card-pr:focus-visible {
+	color: var(--list-text-strong);
+}
+.thread-card-pr[data-pr="open"] svg {
+	color: #3fb950;
+}
+.thread-card-pr[data-pr="merged"] svg {
+	color: #a371f7;
+}
+.thread-card-pr-state {
+	margin-left: auto;
+	color: var(--list-text-muted);
+	font-size: 11px;
+}
+@media (hover: none) {
+	.thread-card {
+		display: none;
+	}
+}
+

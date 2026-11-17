@@ -78,6 +78,7 @@ import {
 	y2NeedsYouLabel,
 	y2Rows,
 } from "#/domain/sidebar-tree";
+import { threadLabel, threadLabelPrefix } from "#/domain/thread-label";
 import {
 	accountDisplayName,
 	accountInitials,
@@ -89,6 +90,7 @@ import {
 } from "../app/first-paint";
 import { useShortcutHint } from "../app/keyboard-shortcuts";
 import { requestJson } from "../projects/api";
+import { ThreadHoverCard } from "./thread-hover-card";
 import { YSquaredMark } from "./y-squared-mark";
 
 /** Who is signed in, as the account button shows them. */
@@ -781,6 +783,9 @@ export function ProjectSidebar({
 											aria-hidden="true"
 										/>
 										<span>{projectName}</span>
+										<span className="thread-id" data-in="sidebar">
+											{threadLabel(threadLabelPrefix(projectName), chat.id)}
+										</span>
 									</span>
 								) : null}
 								{chat.listedModelId ? (
@@ -890,6 +895,30 @@ export function ProjectSidebar({
 				) : null}
 			</li>
 		);
+		if (thread && project) {
+			return (
+				<ThreadHoverCard
+					key={chat.id}
+					data={{
+						id: threadLabel(threadLabelPrefix(projectName), chat.id),
+						title: chat.title,
+						projectName,
+						projectColor: projectColor(project.id),
+						status: label,
+						model: chat.listedModelId ?? null,
+						cloud: Boolean(chat.workspaceId),
+						pullRequest: chat.pr ?? null,
+					}}
+					onOpenPullRequest={
+						onOpenChatPullRequest
+							? () => onOpenChatPullRequest(project.id, chat.id)
+							: undefined
+					}
+				>
+					{row}
+				</ThreadHoverCard>
+			);
+		}
 		if (!label) return row;
 		return (
 			<TooltipPrimitive.Root key={chat.id}>

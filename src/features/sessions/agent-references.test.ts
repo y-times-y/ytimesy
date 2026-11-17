@@ -3,8 +3,11 @@ import {
 	EVENT_LINE_MAX_LENGTH,
 	eventMarker,
 	fitsEventLine,
+	issueReference,
 	pullRequestReference,
 	pullRequestSegments,
+	referenceKey,
+	referenceSegments,
 	statusMarker,
 	threadReference,
 	withEventLinesAsParagraphs,
@@ -108,5 +111,60 @@ describe("event lines", () => {
 		expect(fitsEventLine("All 3 threads finished")).toBe(true);
 		expect(fitsEventLine("x".repeat(EVENT_LINE_MAX_LENGTH))).toBe(true);
 		expect(fitsEventLine("x".repeat(EVENT_LINE_MAX_LENGTH + 1))).toBe(false);
+	});
+});
+
+describe("issueReference", () => {
+	it("reads issue URLs and issue: shorthand", () => {
+		expect(issueReference("https://github.com/acme/web/issues/12#c")).toEqual({
+			owner: "acme",
+			repo: "web",
+			number: 12,
+			url: "https://github.com/acme/web/issues/12",
+		});
+		expect(issueReference("issue:acme/web#7")?.number).toBe(7);
+		expect(issueReference("https://github.com/acme/web/pull/7")).toBeNull();
+		expect(issueReference("https://evil.com/acme/web/issues/7")).toBeNull();
+	});
+});
+
+describe("referenceSegments", () => {
+	const options: Parameters<typeof referenceSegments>[1] = {
+		defaultRepository: "acme/web",
+		threads: new Map([["WEB-3F9A", { id: ID, title: "Fix" }]]),
+	};
+	const kinds = (text: string, o = options) =>
+		referenceSegments(text, o).map((s) =>
+			s.kind === "text"
+				? s.text
+				: s.kind === "issue"
+					? `issue:${referenceKey(s.issue)}`
+					: s.kind === "pullRequest"
+						? `pr:${referenceKey(s.pullRequest)}`
+						: `thread:${s.label}`,
+		);
+
+	it("links bare numbers, qualified numbers, pr: and thread labels", () => {
+		expect(
+			kinds("Fixed #12, see org/repo#3 and pr:acme/web#8 via WEB-3F9A."),
+		).toEqual([
+			"Fixed ",
+			"issue:acme/web#12",
+			", see ",
+			"issue:org/repo#3",
+			" and ",
+			"pr:acme/web#8",
+			" via ",
+			"thread:WEB-3F9A",
+			".",
+		]);
+	});
+	it("leaves a bare number alone without a repository, and anchors, colours and words", () => {
+		expect(
+			kinds("#12", { defaultRepository: undefined, threads: new Map() }),
+		).toEqual(["#12"]);
+		expect(kinds("a&#12; x#12 ##12 v1.#12 abc#12")).toEqual([
+			"a&#12; x#12 ##12 v1.#12 abc#12",
+		]);
 	});
 });

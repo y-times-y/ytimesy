@@ -50,7 +50,11 @@ const pullRequest: RepositoryPullRequest = {
 	repositoryFullName: "acme/web",
 };
 
-function render(listed: readonly YOverviewThread[], prs = [pullRequest]) {
+function render(
+	listed: readonly YOverviewThread[],
+	prs = [pullRequest],
+	labelPrefix?: string,
+) {
 	const client = new QueryClient();
 	client.setQueryData(["agent-sessions", PROJECT], listed);
 	return renderToStaticMarkup(
@@ -60,6 +64,7 @@ function render(listed: readonly YOverviewThread[], prs = [pullRequest]) {
 				pullRequests={prs}
 				live={false}
 				renderedAtMs={NOW}
+				labelPrefix={labelPrefix}
 				onOpenThread={() => undefined}
 			/>
 		</QueryClientProvider>,
@@ -92,5 +97,29 @@ describe("YOverview", () => {
 		const html = render([chats[0] as YOverviewThread], []);
 		expect(html).toContain("Nothing needs you. No threads running.");
 		expect(html).not.toContain("y-overview-group");
+	});
+
+	it("shows each thread's short id on its rows and in 'via <id>' on pull request rows", () => {
+		const hexChats: YOverviewThread[] = [
+			{
+				...(chats[1] as YOverviewThread),
+				id: "3f9a0000-0000-4000-8000-000000000001",
+			},
+			{
+				...(chats[2] as YOverviewThread),
+				id: "00c40000-0000-4000-8000-000000000002",
+			},
+		];
+		const html = render(hexChats, [pullRequest], "WEB");
+		expect(html).toMatch(
+			/y-overview-id">WEB-3F9A<\/span>[^<]*<span[^>]*>·<\/span>waiting on your plan approval/,
+		);
+		expect(html).toMatch(
+			/y-overview-id">WEB-00C4<\/span>[^<]*<span[^>]*>·<\/span>running 3m/,
+		);
+		expect(html).toContain("via WEB-00C4");
+		expect(html).not.toContain("via Fix flaky login test");
+		// Without a prefix the rows are as before.
+		expect(render(hexChats)).not.toContain("y-overview-id");
 	});
 });

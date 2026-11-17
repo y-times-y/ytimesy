@@ -2,6 +2,7 @@ import { workspacePublicationBranch } from "./publication";
 import type { SessionTurnStatus } from "./session-item";
 import type { ChatWaitingOn } from "./sidebar-chats";
 import type { RepositoryPullRequest } from "./sidebar-pr";
+import { threadLabel } from "./thread-label";
 
 /**
  * The Y² chat's inspector overview: the project's threads grouped by what
@@ -25,6 +26,8 @@ export type YOverviewThread = {
 
 export type NeedsYouRow = {
 	readonly threadId: string;
+	/** The thread's short label ("WEB-3F9A"), when the overview was given a prefix. */
+	readonly label: string | null;
 	readonly title: string;
 	readonly waitingOn: ChatWaitingOn;
 	readonly detail: string;
@@ -33,6 +36,7 @@ export type NeedsYouRow = {
 
 export type InProgressRow = {
 	readonly threadId: string;
+	readonly label: string | null;
 	readonly title: string;
 	readonly workingSince: string | null;
 	readonly updatedAt: string | null;
@@ -41,6 +45,11 @@ export type InProgressRow = {
 export type ThreadPullRequestRow = {
 	readonly threadId: string;
 	readonly threadTitle: string;
+	/** The label of the thread that opened it: "via WEB-3F9A". */
+	readonly threadLabel: string | null;
+	readonly owner: string;
+	readonly repo: string;
+	readonly number: number;
 	/** "web#8357": the repository's short name and the PR number. */
 	readonly reference: string;
 	readonly title: string;
@@ -81,6 +90,10 @@ function threadHead(thread: YOverviewThread) {
 	);
 }
 
+function labelOf(prefix: string | undefined, id: string) {
+	return prefix ? threadLabel(prefix, id) : null;
+}
+
 /** The repository's name without its owner: "acme/web" reads "web". */
 export function repositoryShortName(fullName: string) {
 	return fullName.split("/").at(-1) || fullName;
@@ -90,6 +103,7 @@ export function repositoryShortName(fullName: string) {
 function threadPullRequests(
 	threads: readonly YOverviewThread[],
 	pullRequests: readonly RepositoryPullRequest[],
+	labelPrefix: string | undefined,
 ): ThreadPullRequestRow[] {
 	const open = pullRequests.filter((pr) => pr.state === "open" && !pr.merged);
 	const rows: ThreadPullRequestRow[] = [];
@@ -105,6 +119,10 @@ function threadPullRequests(
 			rows.push({
 				threadId: thread.id,
 				threadTitle: thread.title,
+				threadLabel: labelOf(labelPrefix, thread.id),
+				owner: pr.repositoryFullName.split("/")[0] ?? "",
+				repo: repositoryShortName(pr.repositoryFullName),
+				number: pr.number,
 				reference: `${repositoryShortName(pr.repositoryFullName)}#${pr.number}`,
 				title: pr.title?.trim() || pr.head,
 				url: pr.url,
@@ -124,6 +142,8 @@ function threadPullRequests(
 export function yOverview(input: {
 	readonly chats: readonly YOverviewThread[];
 	readonly pullRequests: readonly RepositoryPullRequest[];
+	/** The project's thread-label prefix (thread-label.ts); no labels without it. */
+	readonly labelPrefix?: string;
 }): YOverview {
 	const threads = projectThreads(input.chats);
 	const needsYou: NeedsYouRow[] = [];
@@ -133,6 +153,7 @@ export function yOverview(input: {
 		if (thread.waitingOn && !threadIsRunning(thread))
 			needsYou.push({
 				threadId: thread.id,
+				label: labelOf(input.labelPrefix, thread.id),
 				title: thread.title,
 				waitingOn: thread.waitingOn,
 				detail: needsYouDetail(thread.waitingOn),
@@ -141,6 +162,7 @@ export function yOverview(input: {
 		else if (threadIsRunning(thread))
 			inProgress.push({
 				threadId: thread.id,
+				label: labelOf(input.labelPrefix, thread.id),
 				title: thread.title,
 				workingSince: thread.workingSince ?? null,
 				updatedAt,
@@ -149,7 +171,11 @@ export function yOverview(input: {
 	return {
 		needsYou: needsYou.sort(newestFirst),
 		inProgress: inProgress.sort(newestFirst),
-		pullRequests: threadPullRequests(threads, input.pullRequests),
+		pullRequests: threadPullRequests(
+			threads,
+			input.pullRequests,
+			input.labelPrefix,
+		),
 	};
 }
 

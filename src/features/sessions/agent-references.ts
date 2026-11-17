@@ -10,6 +10,11 @@
  *   kind), drawn left-aligned with a small status icon before its text.
  */
 
+import {
+	type ThreadDirectory,
+	threadLabelSegments,
+} from "#/domain/thread-label";
+
 const CHAT_ID =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -167,4 +172,112 @@ export function withEventLinesAsParagraphs(markdown: string): string {
 		afterEvent = event;
 	}
 	return out.join("\n");
+}
+
+export const ISSUE_SCHEME = "issue";
+
+export type IssueReference = {
+	readonly owner: string;
+	readonly repo: string;
+	readonly number: number;
+	/** The issue's GitHub URL (GitHub redirects it to the pull request when the number is one). */
+	readonly url: string;
+};
+
+const GITHUB_ISSUE = new RegExp(
+	`^https://github\\.com/(${NAME})/(${NAME})/issues/(\\d+)(?:[/?#].*)?$`,
+	"i",
+);
+const ISSUE_SHORTHAND = new RegExp(`^issue:(${NAME})/(${NAME})#(\\d+)$`, "i");
+
+/** The issue a GitHub issue URL or an `issue:owner/repo#12` names. */
+export function issueReference(
+	href: string | undefined,
+): IssueReference | null {
+	const match =
+		GITHUB_ISSUE.exec(href ?? "") ?? ISSUE_SHORTHAND.exec(href ?? "");
+	if (!match) return null;
+	const [, owner = "", repo = "", number = ""] = match;
+	return issue(owner, repo, number);
+}
+
+function issue(owner: string, repo: string, number: string): IssueReference {
+	return {
+		owner,
+		repo,
+		number: Number(number),
+		url: `https://github.com/${owner}/${repo}/issues/${Number(number)}`,
+	};
+}
+
+/** `#12` or `owner/repo#12` in prose; a bare number needs the project's repository. */
+const NUMBER_IN_TEXT = new RegExp(
+	`(?<![\\w/&#.-])(?:(${NAME})/(${NAME}))?#(\\d+)(?![\\w-])`,
+	"g",
+);
+
+/** The lowercase key a reference is looked up by: "owner/repo#12". */
+export function referenceKey(ref: {
+	readonly owner: string;
+	readonly repo: string;
+	readonly number: number;
+}) {
+	return `${ref.owner}/${ref.repo}#${ref.number}`.toLowerCase();
+}
+
+export type ReferenceSegment =
+	| { readonly kind: "text"; readonly text: string }
+	| { readonly kind: "pullRequest"; readonly pullRequest: PullRequestReference }
+	| { readonly kind: "issue"; readonly issue: IssueReference }
+	| { readonly kind: "thread"; readonly label: string; readonly id: string };
+
+/**
+ * Prose split around everything that links: `pr:owner/repo#1`,
+ * `owner/repo#12`, a bare `#12` (with `defaultRepository` "owner/repo")
+ * and a known thread's label. A number is an issue here; the chip turns
+ * it into a pull request when the project lists one by that number.
+ */
+export function referenceSegments(
+	text: string,
+	options: {
+		readonly defaultRepository?: string | null;
+		readonly threads?: ThreadDirectory;
+	} = {},
+): ReferenceSegment[] {
+	const [defaultOwner, defaultRepo] = (options.defaultRepository ?? "").split(
+		"/",
+	);
+	const out: ReferenceSegment[] = [];
+	for (const segment of pullRequestSegments(text)) {
+		if (segment.kind !== "text") {
+			out.push(segment);
+			continue;
+		}
+		let last = 0;
+		const pushText = (end: number) => {
+			if (end > last)
+				out.push(
+					...labelSegments(segment.text.slice(last, end), options.threads),
+				);
+		};
+		for (const match of segment.text.matchAll(NUMBER_IN_TEXT)) {
+			const owner = match[1] ?? defaultOwner;
+			const repo = match[2] ?? defaultRepo;
+			if (!owner || !repo) continue;
+			pushText(match.index);
+			out.push({ kind: "issue", issue: issue(owner, repo, match[3] ?? "") });
+			last = match.index + match[0].length;
+		}
+		pushText(segment.text.length);
+	}
+	return out;
+}
+
+function labelSegments(
+	text: string,
+	threads?: ThreadDirectory,
+): ReferenceSegment[] {
+	return threads?.size
+		? threadLabelSegments(text, threads)
+		: [{ kind: "text", text }];
 }

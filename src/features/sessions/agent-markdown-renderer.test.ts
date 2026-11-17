@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AgentMarkdown } from "./agent-markdown-renderer";
+import { ReferenceContext } from "./agent-reference-chips";
 
 const render = (text: string, streaming = false) =>
 	renderToStaticMarkup(
@@ -94,7 +95,9 @@ describe("assistant Markdown", () => {
 			].map((match) => textOf(match[1] ?? ""));
 			expect(labels).toEqual(["web#8357", "the fix", "cli#3"]);
 			expect(html).toContain('href="https://github.com/acme/api/pull/12"');
-			expect(html).toContain('title="acme/cli#3"');
+			expect(html).toContain('title="acme/cli#3 · open pull request"');
+			// The small secondary link opens GitHub.
+			expect(html.match(/class="reference-chip-github"/g)).toHaveLength(3);
 			expect(textOf(html)).toContain("pr:acme/x#1");
 		}
 	});
@@ -164,5 +167,57 @@ describe("assistant Markdown", () => {
 		expect(html).not.toContain("<script");
 		expect(html).not.toContain("<img");
 		expect(html).toContain('href="https://example.com/tracker.png"');
+	});
+});
+
+describe("pull request, issue and thread mentions", () => {
+	const id = "3f9a1c2e-0000-4000-8000-000000000001";
+	const renderIn = (text: string) =>
+		renderToStaticMarkup(
+			createElement(
+				ReferenceContext.Provider,
+				{
+					value: {
+						defaultRepository: "acme/web",
+						pullRequests: new Set(["acme/web#8"]),
+						threads: new Map([["WEB-3F9A", { id, title: "Fix sign-up form" }]]),
+					},
+				},
+				createElement(AgentMarkdown, { text, onOpenFile: () => {} }),
+			),
+		);
+
+	it("draws #8 as a PR chip when the project lists that pull request, else as an issue chip", () => {
+		const html = renderIn("See #8 and #9, also acme/web#8.");
+		expect(html.match(/data-reference="pull-request"/g)).toHaveLength(2);
+		expect(html.match(/data-reference="issue"/g)).toHaveLength(1);
+		expect(html).toContain('href="https://github.com/acme/web/pull/8"');
+		expect(html).toContain('href="https://github.com/acme/web/issues/9"');
+		expect(html).toContain('<span class="reference-chip-label">#8</span>');
+		expect(html).toContain('<span class="reference-chip-label">#9</span>');
+	});
+
+	it("draws GitHub issue URLs as issue chips and other repositories' numbers with their name", () => {
+		const html = renderIn(
+			"[bug](https://github.com/acme/web/issues/5) and org/lib#3",
+		);
+		expect(html).toContain('data-ref="acme/web#5"');
+		expect(html).toContain('<span class="reference-chip-label">lib#3</span>');
+	});
+
+	it("draws a thread's label as a chip that opens the thread", () => {
+		const html = renderIn(
+			"WEB-3F9A fixes it; WEB-0000 is not a thread. [x](thread:" + id + ")",
+		);
+		expect(html.match(/data-reference="thread"/g)).toHaveLength(2);
+		expect(html).toContain('href="/thread/' + id + '"');
+		expect(html).toContain("Fix sign-up form");
+		expect(html).toContain("WEB-0000 is not a thread");
+	});
+
+	it("leaves numbers in code and bare numbers without a project alone", () => {
+		expect(renderIn("`#8`")).not.toContain("reference-chip");
+		const bare = render("fixes #8");
+		expect(bare).not.toContain("reference-chip");
 	});
 });

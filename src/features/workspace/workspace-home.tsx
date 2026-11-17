@@ -8,7 +8,9 @@ import {
 import { useServerFn } from "@tanstack/react-start";
 import { LoaderCircle, Maximize2, Minimize2, PanelRight } from "lucide-react";
 import {
+	type ContextType,
 	lazy,
+	type ReactNode,
 	Suspense,
 	useCallback,
 	useEffect,
@@ -179,6 +181,11 @@ import {
 	savedSidebarPrsValue,
 } from "#/domain/sidebar-pr-cookie";
 import {
+	threadDirectory,
+	threadLabel,
+	threadLabelPrefix,
+} from "#/domain/thread-label";
+import {
 	progressPage,
 	snapshotLeavesGap,
 	withEarlierPages,
@@ -235,6 +242,16 @@ import {
 	type WorkspaceRetryMode,
 	workspaceStatusQuery,
 } from "../projects/workspace-status";
+import {
+	OPEN_REFERENCE_EVENT,
+	type OpenReferenceDetail,
+	ReferenceContext,
+	type ReferenceContextValue,
+} from "../sessions/agent-reference-chips";
+import {
+	pullRequestReference,
+	referenceKey,
+} from "../sessions/agent-references";
 import {
 	deleteProjectAgentSession,
 	getOlderHelperItems,
@@ -438,6 +455,25 @@ function withoutSearchParam(name: string) {
 /** Re-reads of a PR list while GitHub has not said whether an open PR can merge. */
 const MERGE_ANSWER_READS = 5;
 const MERGE_ANSWER_POLL_MS = 3_000;
+
+/** The contexts the workspace shell provides below it (one component, so the page's JSX keeps its depth). */
+function WorkspaceContexts({
+	setup,
+	reference,
+	children,
+}: {
+	setup: ContextType<typeof SetupIndicatorContext>;
+	reference: ReferenceContextValue;
+	children: ReactNode;
+}) {
+	return (
+		<SetupIndicatorContext.Provider value={setup}>
+			<ReferenceContext.Provider value={reference}>
+				{children}
+			</ReferenceContext.Provider>
+		</SetupIndicatorContext.Provider>
+	);
+}
 
 export function WorkspaceHome({
 	initialSession,
@@ -3452,6 +3488,89 @@ export function WorkspaceHome({
 					draft: pullRequestHandoff.draft,
 				}
 			: undefined;
+	// Thread ids ("WEB-3F9A"): derived from the chat id, see thread-label.ts.
+	const labelPrefix = threadLabelPrefix(
+		selectedProject ? projectDisplayName(selectedProject) : null,
+	);
+	const activeThreadLabel =
+		activeChat && activeChat.role !== "y2"
+			? threadLabel(labelPrefix, activeChat.id)
+			: null;
+	const threadsKey = sidebarChats
+		.map(
+			(chat) =>
+				`${chat.role === "y2" ? "y2" : ""}${chat.id}\u0000${chat.title}`,
+		)
+		.join("\n");
+	const pullRequestUrlsKey = listedPullRequests.map((pr) => pr.url).join("\n");
+	// Chips in replies read these: the project's repository, its pull
+	// requests (a `#12` that is one gets the PR icon) and its threads' labels.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the strings above, so a render that changes nothing keeps every reply's markdown
+	const referenceContext = useMemo<ReferenceContextValue>(
+		() => ({
+			defaultRepository: selectedProject?.fullName ?? null,
+			pullRequests: new Set(
+				listedPullRequests.flatMap((pr) => {
+					const ref = pullRequestReference(pr.url);
+					return ref ? [referenceKey(ref)] : [];
+				}),
+			),
+			threads: threadDirectory(
+				labelPrefix,
+				sidebarChats.filter((chat) => chat.role !== "y2"),
+			),
+		}),
+		[selectedProject?.fullName, labelPrefix, threadsKey, pullRequestUrlsKey],
+	);
+	/**
+	 * A pull request or issue chip was clicked: open it here when it is in
+	 * this project (its pull request in the thread that opened it, an issue
+	 * in the Issues view), else leave it to GitHub.
+	 */
+	function openReferenceInApp(detail: OpenReferenceDetail) {
+		const repository = `${detail.owner}/${detail.repo}`.toLowerCase();
+		if (
+			!projectRepositories.some(
+				(candidate) => candidate.fullName.toLowerCase() === repository,
+			)
+		)
+			return;
+		const key = referenceKey(detail);
+		const pullRequest = listedPullRequests.find((pr) => {
+			const ref = pullRequestReference(pr.url);
+			return ref ? referenceKey(ref) === key : false;
+		});
+		if (!pullRequest) {
+			if (detail.kind === "pull-request") return;
+			detail.handled = true;
+			openInspector("issues");
+			return;
+		}
+		const owner = sidebarChats.find((chat) => {
+			if (chat.role === "y2") return false;
+			const head =
+				chat.workingBranch?.trim() ||
+				(chat.workspaceId ? workspacePublicationBranch(chat.workspaceId) : "");
+			return (
+				head !== "" &&
+				(pullRequest.head === head || pullRequest.head.endsWith(`:${head}`))
+			);
+		});
+		if (!owner) return;
+		detail.handled = true;
+		if (owner.id !== activeSessionId) openChat(owner.id);
+		openInspector("pr");
+	}
+	const openReferenceRef = useRef(openReferenceInApp);
+	openReferenceRef.current = openReferenceInApp;
+	useEffect(() => {
+		const listener = (event: Event) =>
+			openReferenceRef.current(
+				(event as CustomEvent<OpenReferenceDetail>).detail,
+			);
+		window.addEventListener(OPEN_REFERENCE_EVENT, listener);
+		return () => window.removeEventListener(OPEN_REFERENCE_EVENT, listener);
+	}, []);
 	const headerPullRequest =
 		sessionPullRequest ??
 		handedOffPullRequest ??
@@ -3756,7 +3875,10 @@ export function WorkspaceHome({
 	return (
 		<SavedDefaultBranchesContext.Provider value={savedDefaultBranches}>
 			<HeldForSetupContext.Provider value={heldProjects}>
-				<SetupIndicatorContext.Provider value={setupIndicatorShown}>
+				<WorkspaceContexts
+					setup={setupIndicatorShown}
+					reference={referenceContext}
+				>
 					<div className="workspace-shell">
 						<CommandPalette
 							open={paletteOpen}
@@ -3962,6 +4084,14 @@ export function WorkspaceHome({
 														{ySquaredOpen ? <YSquaredMark size={20} /> : null}
 														{chatHeaderTitle(listedTitle, sessionTitle)}
 													</span>
+													{activeThreadLabel && !ySquaredOpen ? (
+														<span
+															className="thread-id"
+															title="This thread's id: use it to mention the thread"
+														>
+															{activeThreadLabel}
+														</span>
+													) : null}
 													{activeChat?.workingBranch && !ySquaredOpen && (
 														<span
 															className="session-title-meta"
@@ -3974,6 +4104,19 @@ export function WorkspaceHome({
 														<a
 															className="session-title-meta"
 															href={headerPullRequest.url}
+															title="Open the pull request here; Ctrl or ⌘ click opens GitHub"
+															onClick={(event) => {
+																if (
+																	event.button !== 0 ||
+																	event.metaKey ||
+																	event.ctrlKey ||
+																	event.shiftKey ||
+																	event.altKey
+																)
+																	return;
+																event.preventDefault();
+																openInspector("pr");
+															}}
 															target="_blank"
 															rel="noreferrer"
 														>
@@ -4218,7 +4361,9 @@ export function WorkspaceHome({
 																? { speed: options.speed }
 																: {}),
 															...(options?.alternateContext !== undefined
-																? { alternateContext: options.alternateContext }
+																? {
+																		alternateContext: options.alternateContext,
+																	}
 																: {}),
 															...(options?.approvesPlan
 																? { approvesPlan: true }
@@ -4274,7 +4419,10 @@ export function WorkspaceHome({
 												onStop={stopOpenTurn}
 												olderItems={
 													session.hasOlderItems
-														? { loading: olderLoading, onLoad: loadOlderItems }
+														? {
+																loading: olderLoading,
+																onLoad: loadOlderItems,
+															}
 														: undefined
 												}
 												stopping={
@@ -4410,6 +4558,12 @@ export function WorkspaceHome({
 													<YOverview
 														projectId={selectedProject.id}
 														pullRequests={listedPullRequests}
+														labelPrefix={labelPrefix}
+														onOpenPullRequest={(row) => {
+															if (row.threadId !== activeSessionId)
+																openChat(row.threadId);
+															openInspector("pr");
+														}}
 														live={inspectorOpen}
 														renderedAtMs={renderedAtMs}
 														onOpenThread={openChat}
@@ -4434,7 +4588,7 @@ export function WorkspaceHome({
 							</main>
 						</ChatRefreshingContext.Provider>
 					</div>
-				</SetupIndicatorContext.Provider>
+				</WorkspaceContexts>
 			</HeldForSetupContext.Provider>
 		</SavedDefaultBranchesContext.Provider>
 	);
