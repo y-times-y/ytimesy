@@ -318,7 +318,8 @@ describe("Y² stays in the loop (instructions)", () => {
 	});
 
 	it("points to the live card instead of repeating it, and keeps reports under 100 words", () => {
-		expect(text).toContain("live status card at the top of this chat");
+		expect(text).toContain("The Overview beside this chat lists every thread");
+		expect(text).toContain("Prefer steer over interrupt");
 		expect(text).toContain("never repeat its content");
 		expect(text).toContain("Report in at most 100 words.");
 		expect(text).toContain("Never poll.");
