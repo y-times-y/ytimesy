@@ -33,6 +33,7 @@ import {
 	sessionTitleFromItems,
 } from "#/domain/session-item";
 import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
+import { Y_SQUARED_CLAUDE_CODE_REFUSAL } from "#/domain/y-squared";
 import {
 	chatHoldingSend,
 	releasingChatClaimOnFailure,
@@ -65,6 +66,7 @@ import {
 	loadModelConnection,
 } from "../adapters/model-connections";
 import { loadModelFailoverPreferences } from "../adapters/model-failover-preferences";
+import { isYSquaredSession } from "../adapters/y-mode";
 import { openAgentSession } from "./agent-session-machine";
 import { cancelServerTurn } from "./cancel-server-turn";
 import {
@@ -442,6 +444,9 @@ async function sendClaudeCodeTask(
 	]);
 	if (!session || session.projectId !== scope.projectId)
 		throw new Error("Session is not available.");
+	// Y² has no machine for the Claude CLI: refuse before anything is queued.
+	if (await isYSquaredSession(scope.userId, session.id))
+		throw new Error(Y_SQUARED_CLAUDE_CODE_REFUSAL);
 	if (!connected)
 		throw new Error(
 			"Connect your Claude subscription in Settings > Agents first.",

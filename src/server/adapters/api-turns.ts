@@ -30,6 +30,7 @@ import {
 	localTurnsEnabled,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
+import { Y_SQUARED_CLAUDE_CODE_REFUSAL } from "#/domain/y-squared";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import { withStepTrace } from "../services/step-timing";
 import {
@@ -66,7 +67,7 @@ import {
 } from "./turn-items-storage";
 import { boxRoutingFacts, turnRunnerBoxAlive } from "./turn-runner-boxes";
 import { startQueuedTurnsDirectly } from "./turn-start";
-import { isActiveYSquaredChat } from "./y-mode";
+import { isActiveYSquaredChat, isYSquaredSession } from "./y-mode";
 
 export type ApiTurn = {
 	id: string;
@@ -320,6 +321,14 @@ export async function enqueueApiTurn(input: {
 			await client.query("commit");
 			return;
 		}
+		// Y² has no machine and Claude Code needs one: refuse before any turn
+		// row exists (the send paths check first; this is the last gate).
+		if (
+			claudeCode &&
+			checked.found &&
+			(await isYSquaredSession(input.userId, input.sessionId))
+		)
+			throw new Error(Y_SQUARED_CLAUDE_CODE_REFUSAL);
 		if (
 			!checked.found ||
 			(checked.turn_status === "running" &&

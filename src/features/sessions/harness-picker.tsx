@@ -106,7 +106,10 @@ export function HarnessPicker({
 	onSpeedChange,
 	alternateContext = false,
 	onAlternateContextChange,
+	withoutClaudeCode = false,
 }: {
+	/** Y²: no Claude subscription section (it has no machine for the CLI). */
+	withoutClaudeCode?: boolean;
 	connectionContent?: ReactNode;
 	harnessId: AgentProviderId;
 	onHarnessIdChange: (id: AgentProviderId) => void;
@@ -143,7 +146,8 @@ export function HarnessPicker({
 		queryFn: () => loadClaude(),
 		staleTime: 30_000,
 	});
-	const claudeData = claude.data?.enabled ? claude.data : null;
+	const claudeData =
+		!withoutClaudeCode && claude.data?.enabled ? claude.data : null;
 	const claudeConnected =
 		claudeData?.status === "connected" || claudeData?.status === "limited";
 	const claudeUsage = useClaudePlanUsageLine(open, claudeConnected);

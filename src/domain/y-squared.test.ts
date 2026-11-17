@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { claudeCodeListedModels } from "./claude-code-route";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 import { chatsWithPinnedFirst } from "./sidebar-chats";
@@ -7,6 +8,7 @@ import {
 	threadDigest,
 	threadHistoryFacts,
 	threadsOverview,
+	withoutClaudeCodeModels,
 	Y_SQUARED_THREADS_TOOL,
 	Y_SQUARED_TOOLS,
 	ySquaredInstructions,
@@ -193,5 +195,24 @@ describe("Y² write tools", () => {
 				),
 			).toBe(false);
 		}
+	});
+});
+
+describe("Y² model picker", () => {
+	it("leaves the Claude Code models out and keeps Codex, Grok and API-key ones", () => {
+		const grok = "api/0f8fad5b-d9cb-469f-a165-70867728950e/x-ai/grok-4";
+		const key = "api/0f8fad5b-d9cb-469f-a165-70867728950e/openai/gpt-6";
+		const models = [
+			...claudeCodeListedModels(),
+			{ id: "gpt-5.3-codex-spark", label: "Codex" },
+			{ id: grok, label: "Grok plan" },
+			{ id: key, label: "API key" },
+		];
+		expect(withoutClaudeCodeModels(models).map((model) => model.id)).toEqual([
+			"gpt-5.3-codex-spark",
+			grok,
+			key,
+		]);
+		expect(withoutClaudeCodeModels(claudeCodeListedModels())).toEqual([]);
 	});
 });

@@ -26,6 +26,7 @@ Why Y does not execute: DeepSeek's Super-agent essay (Nov 1 2026, section 2.1): 
 - Listed first in the project's chats, above pinned threads; it cannot be archived from the sidebar.
 - Its reads count as read-only, so its turns never wait for a VM or commit.
 - Starting, messaging and stopping threads: see Y² write tools.
+- **Routes.** Y² runs on Codex, Grok or an API key, never on Claude Code (the Claude subscription): that route runs the `claude` CLI on a VM or runner box and always needs a workspace, which Y² deliberately lacks. The composer's picker leaves the Claude models out for Y² (with the note "Y² runs on Codex, Grok or an API key, not a Claude subscription."); a Y² send on a Claude Code route is refused before any turn is queued ("Y² can't run on a Claude subscription yet. Pick a Codex, Grok or API-key model for this chat.", `sendClaudeCodeTask` and the last gate in `enqueueApiTurn`), and Claude Code is never offered as a failover target for Y² (`planModelFailover`). Claude Code support would need a runner box with Y²'s tools served over the MCP bridge; not built.
 
 ## Y² write tools
 

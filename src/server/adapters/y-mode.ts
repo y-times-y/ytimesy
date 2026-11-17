@@ -60,6 +60,25 @@ export async function isActiveYSquaredChat(
 	return !!yMode?.enabled && yMode.ySquaredId === session.id;
 }
 
+/**
+ * Whether this session is its project's live Y² chat. Strict: a failed read
+ * throws, so a send that must never reach a Y² turn on the wrong route fails
+ * rather than guessing.
+ */
+export async function isYSquaredSession(
+	userId: string,
+	sessionId: string,
+): Promise<boolean> {
+	const result = await database().query(
+		`select 1 from agent_session s
+		 join project p on p.id=s.project_id and p.user_id=s.user_id
+		 where s.id=$1 and s.user_id=$2 and s.chat_role='y2'
+		   and s.archived_at is null and p.y_enabled`,
+		[sessionId, userId],
+	);
+	return result.rows.length > 0;
+}
+
 export async function setProjectYMode(
 	userId: string,
 	projectId: string,
