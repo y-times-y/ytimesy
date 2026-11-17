@@ -11,10 +11,16 @@ const store = vi.hoisted(() => ({
 vi.mock("#/server/adapters/environment-setup-chats", () => ({
 	markEnvironmentSetupChat: store.mark,
 }));
+vi.mock("#/server/adapters/y-mode", () => ({
+	isActiveYSquaredChat: async () => false,
+}));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: async () => store.chat,
 	agentSessionMetadataForOwner: async (user: string, id: string) => {
-		const chat = (await (async (_user: string, _id: string) => store.chat)(user, id)) as {
+		const chat = (await (async (_user: string, _id: string) => store.chat)(
+			user,
+			id,
+		)) as {
 			items?: unknown;
 		} | null;
 		return chat && { ...chat, items: null };
@@ -24,7 +30,10 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 		id: string,
 		messageId?: string,
 	) => {
-		const chat = (await (async (_user: string, _id: string) => store.chat)(user, id)) as {
+		const chat = (await (async (_user: string, _id: string) => store.chat)(
+			user,
+			id,
+		)) as {
 			items?: unknown;
 		} | null;
 		return (Array.isArray(chat?.items) ? chat.items : []).some(
@@ -33,7 +42,10 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 		);
 	},
 	agentSessionPageForOwner: async (user: string, id: string) => {
-		const chat = (await (async (_user: string, _id: string) => store.chat)(user, id)) as {
+		const chat = (await (async (_user: string, _id: string) => store.chat)(
+			user,
+			id,
+		)) as {
 			items?: unknown;
 		} | null;
 		return (

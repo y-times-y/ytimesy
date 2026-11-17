@@ -7,6 +7,7 @@ import {
 	apiModelReasoning,
 	type ModelProvider,
 	modelRouteId,
+	type PublicModelConnection,
 } from "#/domain/model-connection";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
 import { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
@@ -14,7 +15,10 @@ import {
 	nativeModelCompactor,
 	responsesEndpointCompactor,
 } from "#/server/adapters/model-compaction";
-import { loadModelConnection } from "#/server/adapters/model-connections";
+import {
+	loadModelConnection,
+	type StoredModelConnection,
+} from "#/server/adapters/model-connections";
 import { readModelContext } from "#/server/adapters/model-context";
 import { modelEndpointTransport } from "#/server/adapters/model-endpoint";
 import {
@@ -36,16 +40,40 @@ export type { ApiAgentEvent, ModelAgentInput } from "./model-agent-loop";
 export { runModelAgent } from "./model-agent-loop";
 
 export async function runApiAgent(
-	input: ModelAgentInput & { connectionId: string },
+	input: ModelAgentInput & {
+		connectionId: string;
+		modelAccess?: ApiModelAccess;
+	},
 ): Promise<ModelMessage[]> {
 	return withApiModel(input, (runtime) => runModelAgent(input, runtime));
 }
 
 export function runApiAgentStep(
-	input: ModelAgentInput & { connectionId: string },
+	input: ModelAgentInput & {
+		connectionId: string;
+		modelAccess?: ApiModelAccess;
+	},
 ) {
 	return withApiModel(input, (runtime) => runModelAgentStep(input, runtime));
 }
+
+/**
+ * How a turn runner box reaches its model (docs/turn-runner-boxes.md): the
+ * connection comes from the edge WITHOUT its sealed credential, and requests
+ * go to the edge's model proxy through `fetch`, which injects the turn's
+ * CURRENT grant (it rotates). The box holds no provider key, so `apiKey` is
+ * only a placeholder the SDK needs to build a request.
+ */
+export type ApiModelAccess = {
+	loadConnection(
+		userId: string,
+		connectionId: string,
+	): Promise<PublicModelConnection | null>;
+	/** The proxy's base URL, in place of the provider's. */
+	readonly baseUrl: string;
+	readonly apiKey: string;
+	readonly fetch: typeof globalThis.fetch;
+};
 
 /** What preparing an API connection's model reads from a run's input. */
 type ApiModelInput = Pick<
@@ -59,7 +87,7 @@ type ApiModelInput = Pick<
 	| "reasoning"
 	| "maxOutputTokens"
 	| "signal"
-> & { connectionId: string };
+> & { connectionId: string; modelAccess?: ApiModelAccess };
 
 /** Runs `run` with an API connection's model prepared (also for one-off calls such as the sidekick classifier). */
 export async function withApiModel<T>(
@@ -83,10 +111,10 @@ async function prepareApiModel<T>(
 	onStage: (stage: string) => void,
 ): Promise<T> {
 	input.signal.throwIfAborted();
-	const connection = await loadModelConnection(
-		input.userId,
-		input.connectionId,
-	);
+	const boxAccess = input.modelAccess;
+	const connection = boxAccess
+		? await boxAccess.loadConnection(input.userId, input.connectionId)
+		: await loadModelConnection(input.userId, input.connectionId);
 	onStage("catalog");
 	if (
 		input.connectionRevision &&
@@ -105,14 +133,23 @@ async function prepareApiModel<T>(
 			"The selected model is no longer available on this connection.",
 		);
 	onStage("transport");
-	const transport = modelEndpointTransport(connection.baseUrl);
+	if (boxAccess && connection.subscription)
+		throw new Error(
+			"Subscription connections do not run on a turn runner box.",
+		);
+	// A box has no transport of its own: its requests go to the edge's proxy.
+	const transport = boxAccess
+		? null
+		: modelEndpointTransport(connection.baseUrl);
 	try {
 		onStage("credential");
-		const access = await connectionModelAccess(
-			input.userId,
-			connection,
-			transport.fetch,
-		);
+		const access = boxAccess
+			? { apiKey: boxAccess.apiKey, fetch: boxAccess.fetch }
+			: await connectionModelAccess(
+					input.userId,
+					connection as StoredModelConnection,
+					(transport as NonNullable<typeof transport>).fetch,
+				);
 		return await run(
 			await apiModelRuntime(
 				{
@@ -140,12 +177,13 @@ async function prepareApiModel<T>(
 					reasoning: input.reasoning,
 					maxOutputTokens: input.maxOutputTokens,
 					fetch: access.fetch,
+					...(boxAccess ? { transportBaseUrl: boxAccess.baseUrl } : {}),
 				},
 				onStage,
 			),
 		);
 	} finally {
-		await transport.close();
+		await transport?.close();
 	}
 }
 
@@ -202,6 +240,11 @@ export async function apiModelRuntime(
 		maxOutputTokens?: number;
 		fetch: typeof globalThis.fetch;
 		/**
+		 * Where requests are sent when that is not `baseUrl` (a turn runner box's
+		 * edge proxy); `baseUrl` still decides provider-specific behaviour.
+		 */
+		transportBaseUrl?: string;
+		/**
 		 * Wraps the model before anything uses it (an evaluation's spending
 		 * guard), so native compaction's requests go through the wrapper too.
 		 */
@@ -210,7 +253,10 @@ export async function apiModelRuntime(
 	onStage: (stage: string) => void = () => {},
 ): Promise<ModelAgentRuntime> {
 	onStage("model");
-	const connected = connectedLanguageModel(input, input.fetch);
+	const transportInput = input.transportBaseUrl
+		? { ...input, baseUrl: input.transportBaseUrl }
+		: input;
+	const connected = connectedLanguageModel(transportInput, input.fetch);
 	const model = input.wrapModel ? input.wrapModel(connected) : connected;
 	const cacheSettings = apiPromptCacheSettings({
 		provider: input.provider,
@@ -307,7 +353,7 @@ export async function apiModelRuntime(
 		compact:
 			context.nativeCompaction === "xai" ||
 			context.nativeCompaction === "openai-endpoint"
-				? responsesEndpointCompactor(input)
+				? responsesEndpointCompactor(transportInput)
 				: context.nativeCompaction
 					? nativeModelCompactor(
 							model,

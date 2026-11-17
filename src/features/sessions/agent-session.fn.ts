@@ -7,7 +7,7 @@ import {
 	DEFAULT_COMPOSER_HARNESS_ID,
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
-import { chatsFromAgentSessions } from "#/domain/agent-session";
+import { chatsFromAgentSessions, pinnedYSquared } from "#/domain/agent-session";
 import { HELPER_MESSAGE_MAX } from "#/domain/agent-steering";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import { publicRecoveryFailure } from "#/domain/conversation-recovery-failure";
@@ -17,6 +17,7 @@ import type { ChatWaitingOn } from "#/domain/sidebar-chats";
 import { startAfterResponse } from "#/server/adapters/after-response";
 import { listSidebarAgentSessions } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { ensureYSquaredChat, projectYMode } from "#/server/adapters/y-mode";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 import { relayConversationDeliveriesOnce } from "#/server/jobs/conversation-delivery";
@@ -42,6 +43,8 @@ type PublicAgentChat = {
 	readonly waitingOn?: ChatWaitingOn | null;
 	readonly workingSince?: string | null;
 	readonly unused?: boolean;
+	/** The project's Y² chat (src/domain/y-squared.ts), pinned above its threads. */
+	readonly role?: "y2";
 };
 
 /**
@@ -72,8 +75,17 @@ export const listProjectAgentSessions = createServerFn({ method: "GET" })
 		if (!data.projectId) return [];
 		try {
 			const user = await requireUser(getRequest().headers);
+			// A Y project gets its Y² chat on first listing (after a thread
+			// exists to stand beside), pinned first.
+			const yMode = await projectYMode(user.id, data.projectId).catch(
+				() => null,
+			);
+			const ySquaredId = yMode?.enabled
+				? (yMode.ySquaredId ??
+					(await ensureYSquaredChat(user.id, data.projectId).catch(() => null)))
+				: null;
 			const sessions = await listSidebarAgentSessions(user.id, data.projectId);
-			return chatsFromAgentSessions(sessions);
+			return pinnedYSquared(chatsFromAgentSessions(sessions), ySquaredId);
 		} catch {
 			return [];
 		}

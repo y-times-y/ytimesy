@@ -69,6 +69,7 @@ export async function recoverChildTurnEvents(machines: WorkspaceMachines) {
 			outcome: turn.state === "failed" ? "failed" : "finished",
 			text,
 			thinLead: variant?.lead === "fusion" && variant.leadTools === "thin",
+			applyToThread: variant?.y === "on",
 		}).catch(() => text);
 		const id = await saveAgentTaskResultAndEvent({
 			sessionId: turn.session_id,

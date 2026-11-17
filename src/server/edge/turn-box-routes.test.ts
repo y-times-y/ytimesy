@@ -1,0 +1,385 @@
+import { describe, expect, it } from "vitest";
+import { issueTurnBoxGrant } from "../../domain/turn-box-grant";
+import { TURN_BOX_PATHS } from "../../domain/turn-box-protocol";
+import { FAKE_TURN, fakeEdge } from "./turn-box-fake-edge";
+import { turnBoxEdgeConfig } from "./turn-box-routes";
+import { answerTurnBoxSocketMessage } from "./turn-box-socket";
+
+const grantFor = async (
+	edge: Awaited<ReturnType<typeof fakeEdge>>,
+	over: Partial<{
+		userId: string;
+		sessionId: string;
+		turnId: string;
+		leaseId: string;
+		boxId: string;
+	}> = {},
+) =>
+	issueTurnBoxGrant(
+		edge.keys.privateKey,
+		{
+			userId: FAKE_TURN.user_id,
+			sessionId: FAKE_TURN.session_id,
+			turnId: FAKE_TURN.id,
+			leaseId: FAKE_TURN.lease_id,
+			boxId: "box-a",
+			...over,
+		},
+		edge.state.now,
+	);
+const post = (
+	edge: Awaited<ReturnType<typeof fakeEdge>>,
+	path: string,
+	token: string,
+	body: unknown = {},
+) =>
+	edge.fetchEdge(`https://edge.test${path}`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${token}`,
+			"content-type": "application/json",
+			"content-length": String(JSON.stringify(body).length),
+		},
+		body: JSON.stringify(body),
+	});
+
+type Body = {
+	renewed?: boolean;
+	grant?: string;
+	version?: string;
+	messages?: unknown[];
+	turn?: { id: string };
+};
+const asBody = async (response: Response) => (await response.json()) as Body;
+
+const WRITES: [string, string, unknown][] = [
+	["renew", TURN_BOX_PATHS.renew, {}],
+	["checkpoint", TURN_BOX_PATHS.checkpoint, { messages: [], items: [] }],
+	["progress", TURN_BOX_PATHS.progress, { items: [] }],
+	["finalize", TURN_BOX_PATHS.finalize, { state: "completed", items: [] }],
+	["history", TURN_BOX_PATHS.history, {}],
+	["reserve", TURN_BOX_PATHS.reserve, { tokens: 100 }],
+	["cancel", TURN_BOX_PATHS.cancel, {}],
+];
+
+describe("turn box edge: lease and user checks", () => {
+	for (const [name, path, body] of WRITES) {
+		it(`${name} refuses a stale lease and a wrong user, and writes nothing`, async () => {
+			const edge = await fakeEdge();
+			const stale = await grantFor(edge, {
+				leaseId: "44444444-4444-4444-8444-444444444444",
+			});
+			expect((await post(edge, path, stale, body)).status).toBe(409);
+			const stranger = await grantFor(edge, { userId: "user-2" });
+			expect((await post(edge, path, stranger, body)).status).toBe(409);
+			const otherChat = await grantFor(edge, {
+				sessionId: "55555555-5555-4555-8555-555555555555",
+			});
+			expect((await post(edge, path, otherChat, body)).status).toBe(409);
+			expect(
+				edge.calls.filter((call) => !["loadOwned"].includes(call)),
+			).toEqual([]);
+			expect((await post(edge, path, "ytbg1.forged.sig", body)).status).toBe(
+				401,
+			);
+			// A grant past its expiry is a forged one.
+			const old = await grantFor(edge);
+			edge.state.now += 11 * 60 * 1000;
+			expect((await post(edge, path, old, body)).status).toBe(401);
+		});
+	}
+
+	it("a zombie box whose lease was taken over is fenced at the write, even holding a valid grant", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		// Another box took the turn over between the load and the write.
+		const loaded = { ...edge.row };
+		edge.ops.loadOwned = async () => loaded;
+		edge.row.lease_id = "66666666-6666-4666-8666-666666666666";
+		const response = await post(edge, TURN_BOX_PATHS.checkpoint, grant, {
+			messages: [{ role: "user", content: "x" }],
+			items: [{ id: "i" }],
+		});
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({ ok: false, reason: "lease-lost" });
+		expect(edge.row.items).toEqual([]);
+	});
+
+	it("a stopped turn answers cancelled to writes and cancel-check", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		edge.row.cancel_requested = true;
+		const checkpoint = await post(edge, TURN_BOX_PATHS.checkpoint, grant, {
+			messages: [],
+			items: [],
+		});
+		expect(await checkpoint.json()).toEqual({ ok: false, reason: "cancelled" });
+		expect(
+			await (await post(edge, TURN_BOX_PATHS.cancel, grant)).json(),
+		).toEqual({ cancelRequested: true });
+		const renewed = await (
+			await post(edge, TURN_BOX_PATHS.renew, grant)
+		).json();
+		expect(renewed).toMatchObject({ renewed: false, cancelRequested: true });
+	});
+
+	it("a successful write lands, and finalize reports the effective state", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		expect(
+			(
+				await post(edge, TURN_BOX_PATHS.checkpoint, grant, {
+					messages: [{ role: "user", content: "hi" }],
+					items: [{ id: "a" }],
+				})
+			).status,
+		).toBe(200);
+		expect(edge.row.items).toEqual([{ id: "a" }]);
+		const done = await (
+			await post(edge, TURN_BOX_PATHS.finalize, grant, {
+				state: "completed",
+				items: [{ id: "a" }],
+			})
+		).json();
+		expect(done).toEqual({ ok: true, state: "completed" });
+		// Finished: the same grant now finds no running turn.
+		expect(
+			(await post(edge, TURN_BOX_PATHS.progress, grant, { items: [] })).status,
+		).toBe(409);
+	});
+
+	it("renew refreshes a grant past half its life once, never on replay", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		edge.state.now += 6 * 60 * 1000;
+		const first = await asBody(await post(edge, TURN_BOX_PATHS.renew, grant));
+		expect(first.renewed).toBe(true);
+		expect(first.grant).toMatch(/^ytbg1\./);
+		const replayed = await asBody(
+			await post(edge, TURN_BOX_PATHS.renew, grant),
+		);
+		expect(replayed.renewed).toBe(true);
+		expect(replayed.grant).toBeUndefined();
+	});
+
+	it("history is versioned, compressed and bounded", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		edge.row.messages = [{ role: "user", content: "hello" }] as never;
+		const response = await post(edge, TURN_BOX_PATHS.history, grant);
+		expect(response.headers.get("x-was-gzip")).toBe("1");
+		const body = await asBody(response);
+		expect(body.messages).toHaveLength(1);
+		const cached = await (
+			await post(edge, TURN_BOX_PATHS.history, grant, { version: body.version })
+		).json();
+		expect(cached).toEqual({ notModified: true, version: body.version });
+		edge.row.messages = [
+			{ role: "user", content: "x".repeat(9 * 1024 * 1024) },
+		] as never;
+		expect((await post(edge, TURN_BOX_PATHS.history, grant)).status).toBe(413);
+	});
+
+	it("reserve passes a refusal through as 429", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		edge.state.reserveOk = false;
+		const response = await post(edge, TURN_BOX_PATHS.reserve, grant, {
+			tokens: 5,
+		});
+		expect(response.status).toBe(429);
+	});
+
+	it("is off without users, and 503 without keys", () => {
+		expect(turnBoxEdgeConfig({}, "")).toEqual({ status: 404 });
+		expect(turnBoxEdgeConfig({}, "user-1")).toEqual({ status: 503 });
+		expect(
+			turnBoxEdgeConfig(
+				{
+					TURN_BOX_EDGE_PRIVATE_KEY: "k".repeat(44),
+					TURN_BOX_EDGE_PUBLIC_KEY: "p".repeat(44),
+				},
+				"user-1",
+			).status,
+		).toBe(200);
+	});
+});
+
+describe("turn box edge: claim and identity", () => {
+	const claim = (
+		edge: Awaited<ReturnType<typeof fakeEdge>>,
+		nonce = "abcdef0123456789",
+		token?: string,
+	) =>
+		edge.fetchEdge("https://edge.test/box/v1/claim", {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${token ?? edge.identity}`,
+				"x-ytimesy-nonce": nonce,
+				"x-ytimesy-ts": String(edge.state.now),
+			},
+			body: "{}",
+		});
+
+	it("hands a queued turn and its grant to an authenticated box, once per nonce", async () => {
+		const edge = await fakeEdge();
+		edge.queue.push({ ...edge.row });
+		const response = await claim(edge);
+		expect(response.status).toBe(200);
+		const body = await asBody(response);
+		expect(body.turn?.id).toBe(FAKE_TURN.id);
+		expect(body.grant).toMatch(/^ytbg1\./);
+		expect(JSON.stringify(body)).not.toMatch(/sk-real|postgres/);
+		expect((await claim(edge)).status).toBe(401);
+		expect((await claim(edge, "0123456789abcdef")).status).toBe(204);
+	});
+
+	it("refuses a forged identity, a stale timestamp and a revoked box", async () => {
+		const edge = await fakeEdge();
+		expect((await claim(edge, "aaaaaaaaaaaaaaaa", "ytbi1.x.y")).status).toBe(
+			401,
+		);
+		// A grant is not an identity.
+		expect(
+			(await claim(edge, "bbbbbbbbbbbbbbbb", await grantFor(edge))).status,
+		).toBe(401);
+		const late = await edge.fetchEdge("https://edge.test/box/v1/claim", {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${edge.identity}`,
+				"x-ytimesy-nonce": "cccccccccccccccc",
+				"x-ytimesy-ts": String(edge.state.now - 5 * 60_000),
+			},
+			body: "{}",
+		});
+		expect(late.status).toBe(401);
+		edge.state.revoked = true;
+		expect((await claim(edge, "dddddddddddddddd")).status).toBe(403);
+		const register = await edge.fetchEdge("https://edge.test/box/v1/register", {
+			method: "POST",
+			headers: { authorization: `Bearer ${edge.identity}` },
+			body: JSON.stringify({ capacity: 2, running: 0 }),
+		});
+		expect(register.status).toBe(403);
+	});
+
+	it("releases a claimed turn of a user not enabled for boxes", async () => {
+		const edge = await fakeEdge({ users: "someone-else" });
+		edge.queue.push({ ...edge.row });
+		expect((await claim(edge)).status).toBe(204);
+		expect(edge.calls).toContain("release");
+	});
+
+	it("revoking a box stops its renewals and model requests", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		edge.state.revoked = true;
+		expect((await post(edge, TURN_BOX_PATHS.renew, grant)).status).toBe(403);
+		const model = await post(
+			edge,
+			`${TURN_BOX_PATHS.model}/chat/completions`,
+			grant,
+			{ model: "m" },
+		);
+		expect(model.status).toBe(403);
+	});
+
+	it("serves the model proxy for API-key connections only", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		const okResponse = await post(
+			edge,
+			`${TURN_BOX_PATHS.model}/chat/completions`,
+			grant,
+			{ model: "m" },
+		);
+		expect(okResponse.status).toBe(200);
+		edge.row.connection_kind = "subscription";
+		expect(
+			(await post(edge, `${TURN_BOX_PATHS.model}/chat/completions`, grant, {}))
+				.status,
+		).toBe(403);
+	});
+
+	it("only upgrades socket requests, and forwards verified grants", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		expect((await post(edge, TURN_BOX_PATHS.socket, grant)).status).toBe(426);
+		const upgrade = await edge.fetchEdge(
+			`https://edge.test${TURN_BOX_PATHS.socket}`,
+			{
+				headers: { authorization: `Bearer ${grant}`, upgrade: "websocket" },
+			},
+		);
+		expect(upgrade.status).toBe(204);
+	});
+});
+
+describe("turn box socket (Durable Object side)", () => {
+	const attachment = {
+		boxId: "box-a",
+		userId: FAKE_TURN.user_id,
+		sessionId: FAKE_TURN.session_id,
+		turnId: FAKE_TURN.id,
+		leaseId: FAKE_TURN.lease_id,
+	};
+
+	it("acks progress and renewals under the lease, and tells a fenced box", async () => {
+		const edge = await fakeEdge();
+		const progress = await answerTurnBoxSocketMessage(
+			attachment,
+			JSON.stringify({ t: "progress", seq: 1, items: [{ id: "p" }] }),
+			edge.ops,
+		);
+		expect(progress.reply).toEqual([{ t: "ack", seq: 1, ok: true }]);
+		expect(edge.row.items).toEqual([{ id: "p" }]);
+		const renew = await answerTurnBoxSocketMessage(
+			attachment,
+			JSON.stringify({ t: "renew", seq: 2 }),
+			edge.ops,
+		);
+		expect(renew.reply).toEqual([{ t: "ack", seq: 2, ok: true }]);
+		edge.row.cancel_requested = true;
+		const stopped = await answerTurnBoxSocketMessage(
+			attachment,
+			JSON.stringify({ t: "progress", seq: 3, items: [] }),
+			edge.ops,
+		);
+		expect(stopped.reply).toEqual([{ t: "cancel" }]);
+		edge.row.cancel_requested = false;
+		edge.row.lease_id = "66666666-6666-4666-8666-666666666666";
+		const zombie = await answerTurnBoxSocketMessage(
+			attachment,
+			JSON.stringify({ t: "progress", seq: 4, items: [{ id: "z" }] }),
+			edge.ops,
+		);
+		expect(zombie.reply).toEqual([{ t: "lease-lost" }]);
+		expect(edge.row.items).toEqual([{ id: "p" }]);
+	});
+
+	it("refuses another user's attachment, binary and malformed messages", async () => {
+		const edge = await fakeEdge();
+		const wrong = await answerTurnBoxSocketMessage(
+			{ ...attachment, userId: "user-2" },
+			JSON.stringify({ t: "renew", seq: 1 }),
+			edge.ops,
+		);
+		expect(wrong.reply).toEqual([{ t: "lease-lost" }]);
+		expect(edge.calls).not.toContain("renew");
+		for (const bad of [
+			new ArrayBuffer(4),
+			"not json",
+			JSON.stringify({ t: "other" }),
+		])
+			expect(
+				(await answerTurnBoxSocketMessage(attachment, bad, edge.ops)).close,
+			).toBe(true);
+		edge.state.revoked = true;
+		const revoked = await answerTurnBoxSocketMessage(
+			attachment,
+			JSON.stringify({ t: "renew", seq: 1 }),
+			edge.ops,
+		);
+		expect(revoked).toEqual({ reply: [{ t: "lease-lost" }], close: true });
+	});
+});

@@ -220,6 +220,49 @@ export async function forkWriterWorkspace(input: {
 }
 
 /**
+ * Applies a writer's stored patch to its parent's working tree (Y's thread,
+ * harness variant y=on): the runtime integrates, so Y never runs git. Only a
+ * patch that applies cleanly is applied; otherwise nothing changes and the
+ * reason is returned, so a conflict never leaves markers to be committed.
+ */
+export async function applyWriterPatchToParent(input: {
+	readonly machines: WorkspaceMachines;
+	readonly parentVm: WorkspaceId;
+	readonly patchPath: string;
+}): Promise<
+	| { readonly applied: true }
+	| { readonly applied: false; readonly reason: string }
+> {
+	const cwd = (
+		await input.machines.readTextFile(input.parentVm, PROJECT_CWD_PATH)
+	)?.trim();
+	if (!cwd?.startsWith("/"))
+		return {
+			applied: false,
+			reason: "the thread's repository path is unavailable",
+		};
+	const patchFile = quote(input.patchPath);
+	const result = await input.machines.exec(
+		input.parentVm,
+		[
+			`cd ${quote(cwd)}`,
+			"git add -A",
+			`git apply --index --check ${patchFile}`,
+			`git apply --index ${patchFile}`,
+		].join(" && "),
+		120_000,
+	);
+	return result.exitCode === 0
+		? { applied: true }
+		: {
+				applied: false,
+				reason:
+					(result.stderr || result.stdout).trim().slice(-400) ||
+					"it does not apply cleanly to the thread's current changes",
+			};
+}
+
+/**
  * Exports a writer's work from its fork into the parent's checkout. Returns
  * null when the writer changed nothing.
  */

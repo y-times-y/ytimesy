@@ -1,0 +1,417 @@
+import {
+	type PeerInboxRow,
+	planPeerInjection,
+} from "#/domain/peer-inbox-injection";
+import { agentSecretsEnvFile } from "#/domain/project-secret";
+import type { BoxPortArgs, BoxPortOp } from "#/domain/turn-box-protocol";
+import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
+import type { TurnBoxTurnSession } from "./turn-box-client";
+import { type TurnPorts, TurnPortUnavailable } from "./turn-ports";
+
+/**
+ * The turn runner box's `TurnPorts` (docs/turn-runner-boxes.md): every
+ * member goes to the edge through the typed client, so this file and what it
+ * imports hold no database, provider key or vault key. Members the edge does
+ * not serve throw TurnPortUnavailable (listed in BOX_PORTS_UNAVAILABLE and in
+ * the doc's table); a few degrade on purpose and say so below.
+ */
+
+/** Ports with no edge endpoint: they throw TurnPortUnavailable on a box. */
+export const BOX_PORTS_UNAVAILABLE = [
+	// Post-step GitHub publish/PR handoff and the VM: need the edge's Freestyle/GitHub credentials.
+	"saveAccountWideSecret",
+	"saveVisibleProjectSecret",
+	// Claude Code box tool grants and subscription routes are never run on a box.
+	"turnBoxToolIdentity",
+	"recordTurnBoxToolIdentity",
+	"clearTurnBoxToolIdentity",
+	"pinnedClaudeRunner",
+	"claudeSubscriptionStatus",
+	"warmCodexSubscriptionCatalog",
+	"hasManagedCodexAuth",
+	// Harness evaluation runs stay in Durable Objects.
+	"evaluationRunForTask",
+	"assertEvaluationActive",
+	"recordEvaluationUsage",
+	"reserveEvaluationRequest",
+	// Push approval records.
+	"gitPushRequests",
+] as const;
+
+export type BoxTurnPorts = TurnPorts & {
+	/** Sends the analytics the step buffered; call at the end of a step and before finalize. */
+	flush(): Promise<void>;
+};
+
+const ANALYTICS_BATCH = 20;
+/** The edge confirmed the lease this recently (a renewal, or a checkpoint's own): no renewal request. */
+const RENEW_SKIP_MS = 5_000;
+/** An empty peer inbox is read again after this long. */
+const INBOX_RECHECK_MS = 10_000;
+
+export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
+	const turn = session.turn;
+	const call = <T>(op: BoxPortOp, args: unknown) =>
+		session.port(op, args as BoxPortArgs<typeof op>) as Promise<T>;
+	const unavailable = (name: string) => () => {
+		throw new TurnPortUnavailable(name);
+	};
+	/** A box serves its own turn only: a port call naming another user or chat is refused at once. */
+	const ownUser = (userId: string) => {
+		if (userId !== turn.user_id) throw new TurnBoxPortForbidden("user");
+	};
+	const ownSession = (sessionId: string) => {
+		if (sessionId !== turn.session_id)
+			throw new TurnBoxPortForbidden("session");
+	};
+
+	const analytics: BoxPortArgs<"analytics">["events"] = [];
+	const flush = async () => {
+		while (analytics.length) {
+			const events = analytics.splice(0, 50);
+			// Best effort, like the Durable Object's own telemetry.
+			await call("analytics", { events }).catch(() => undefined);
+		}
+	};
+	// Reads that stay fixed for a turn are asked once (the Durable Object
+	// memoises the same ones per turn with turnMemo): each is a Worker request
+	// here. A failed read is not kept.
+	const memo = new Map<string, Promise<unknown>>();
+	const once = <T>(key: string, load: () => Promise<T>): Promise<T> => {
+		let loading = memo.get(key) as Promise<T> | undefined;
+		if (!loading) {
+			loading = load();
+			memo.set(key, loading);
+			loading.catch(() => memo.delete(key));
+		}
+		return loading;
+	};
+	let coordinated = false;
+	let inboxEmptyAt = Number.NEGATIVE_INFINITY;
+	let savedDirectory: string | undefined;
+	const sdk = session.modelSdkSettings();
+	const adapters = session.adapters();
+
+	const ports: TurnPorts = {
+		// The edge confirmed the lease a moment ago (a checkpoint renews it too).
+		renewApiTurn: (async () =>
+			session.renewedWithin(RENEW_SKIP_MS)
+				? true
+				: adapters.renewApiTurn()) as unknown as TurnPorts["renewApiTurn"],
+		checkpointApiTurn:
+			adapters.checkpointApiTurn as unknown as TurnPorts["checkpointApiTurn"],
+		publishApiTurnProgress:
+			adapters.publishApiTurnProgress as unknown as TurnPorts["publishApiTurnProgress"],
+		finalizeApiTurn:
+			adapters.finalizeApiTurn as unknown as TurnPorts["finalizeApiTurn"],
+		apiTurnCancelRequested:
+			adapters.apiTurnCancelRequested as unknown as TurnPorts["apiTurnCancelRequested"],
+		// The edge's model proxy reserves each request's tokens itself.
+		reserveApiTokens: adapters.reserveApiTokens,
+		otherRunningTurnOnMachine: async (userId, _turnId, vm) => {
+			ownUser(userId);
+			return call("otherRunningTurnOnMachine", { vm });
+		},
+		// Acquired once per turn; the box's socket and its lease renewals keep
+		// the turn tied to the room. A renewal is still sent (the room's lease
+		// is 30 s), a release once at the end.
+		coordinateConversationTurn: async (action) => {
+			if (action === "acquire") {
+				if (coordinated) return true;
+				const held = await call<boolean>("coordinateTurn", { action });
+				coordinated = held !== false;
+				return held;
+			}
+			if (action === "release") coordinated = false;
+			return call("coordinateTurn", { action });
+		},
+
+		agentSessionMetadataForOwner: async (userId, sessionId) => {
+			ownUser(userId);
+			return once(`meta:${sessionId}`, () =>
+				call("sessionMetadata", { sessionId }),
+			);
+		},
+		subagentAncestors: async (userId, sessionId) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			return call("sessionAncestors", {});
+		},
+		projectImportedSessions: async (userId, projectId) => {
+			ownUser(userId);
+			return once(`imported:${projectId}`, () =>
+				call("importedSessions", { projectId }),
+			);
+		},
+		projectYMode: async (userId, projectId) => {
+			ownUser(userId);
+			return once(`ymode:${projectId}`, () =>
+				call("projectYMode", { projectId }),
+			);
+		},
+		loadModelConnection: (async (userId: string, id: string) => {
+			ownUser(userId);
+			return once(`conn:${id}`, () => call("modelConnection", { id }));
+		}) as unknown as TurnPorts["loadModelConnection"],
+		completedLifecycleContinuations: async (sessionId, turnId) => {
+			ownSession(sessionId);
+			if (turnId !== turn.id) throw new TurnBoxPortForbidden("turn");
+			return call("lifecycleContinuations", {});
+		},
+		conversationPointCodeRef: async (userId, sessionId, messageId) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			return (
+				(await once(`code-ref:${messageId}`, () =>
+					call<string | null>("conversationPointCodeRef", { messageId }),
+				)) ?? undefined
+			);
+		},
+		readVerificationBaseline: async (userId, sessionId, directory) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			return once(`baseline:${directory}`, () =>
+				call("verificationBaseline", { directory }),
+			);
+		},
+		readPreparedCheckoutDirectory: async (userId, sessionId, projectId) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			return once(`checkout-dir:${projectId}`, () =>
+				call("preparedCheckoutDirectory", { projectId }),
+			);
+		},
+		savePreparedCheckoutDirectory: async (userId, sessionId, directory) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			// The loop saves it more than once per turn: the same path once.
+			if (savedDirectory === directory) return;
+			await call("savePreparedCheckoutDirectory", { directory });
+			savedDirectory = directory;
+		},
+		readProjectDerivedValue: async (userId, projectId, key) => {
+			ownUser(userId);
+			return once(`project-value:${projectId}:${key}`, () =>
+				call("projectDerivedValue", { projectId, key }),
+			);
+		},
+		readSessionDerivedValue: async (userId, sessionId, key) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			return once(`session-value:${key}`, () =>
+				call("sessionDerivedValue", { key }),
+			);
+		},
+		saveSessionDerivedValue: async (userId, sessionId, key, value) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			await call("saveSessionDerivedValue", { key, value });
+			memo.delete(`session-value:${key}`);
+		},
+		enabledPluginSkillIndex: async (userId, projectId) => {
+			ownUser(userId);
+			return once(`plugins:${projectId}`, () =>
+				call("pluginSkillIndex", { projectId }),
+			);
+		},
+		pluginSkillBody: async (userId, installId, skill) => {
+			ownUser(userId);
+			return call("pluginSkillBody", { installId, skill });
+		},
+		harnessVariantForUser: async (userId) => {
+			ownUser(userId);
+			return once("variant", () => call("harnessVariant", {}));
+		},
+		isDevEvalUser: async (userId) => {
+			ownUser(userId);
+			return once("dev-eval", () => call("isDevEvalUser", {}));
+		},
+		// MCP servers carry credentials (headers, sealed OAuth): not served, so a
+		// box runs without them (the loop's "MCP servers unavailable" notice
+		// covers a failed connection, not an absent one). Missing: docs table.
+		connectableMcpServers: async () => [],
+
+		saveAgentTaskResultAndEvent: async (input) =>
+			call("saveTaskResult", {
+				summary: input.summary,
+				eventType: input.eventType,
+			}),
+		enqueueAgentTaskEvent: (async (eventId?: string) => {
+			await call("enqueueTaskEvent", eventId ? { eventId } : {});
+		}) as unknown as TurnPorts["enqueueAgentTaskEvent"],
+		captureServerAnalytics: (async (
+			userId: string,
+			event: string,
+			properties: Record<string, unknown>,
+			identity: {
+				key: string;
+				timestamp: Date;
+				setOnce?: Record<string, string>;
+			},
+		) => {
+			ownUser(userId);
+			analytics.push({
+				event: event as BoxPortArgs<"analytics">["events"][number]["event"],
+				properties,
+				identity: {
+					key: identity.key,
+					timestamp: identity.timestamp.getTime(),
+					setOnce: identity.setOnce,
+				},
+			});
+			if (analytics.length >= ANALYTICS_BATCH) await flush();
+		}) as unknown as TurnPorts["captureServerAnalytics"],
+		noteUserHub: (userId, topics) => {
+			if (userId !== turn.user_id) return;
+			void call("userHubNote", { topics: [...topics] }).catch(() => undefined);
+		},
+		noteCrewWaiting: (hint) => {
+			if (hint.userId !== turn.user_id) return;
+			void call("crewWaiting", {
+				projectId: hint.projectId,
+				ySquaredId: hint.ySquaredId,
+				waitingOn: hint.waitingOn,
+			}).catch(() => undefined);
+		},
+		injectServerPeerMessages: async (
+			recipientId,
+			history,
+			checkpoint,
+			delivered = () => false,
+			onSetupCatchUp,
+			sentUserMessagesOnly = false,
+		) => {
+			ownSession(recipientId);
+			// An empty inbox is asked again no sooner than INBOX_RECHECK_MS: the Durable
+			// Object reads it every step, which here is a Worker request each; a
+			// message sent meanwhile reaches the turn that much later.
+			if (Date.now() - inboxEmptyAt < INBOX_RECHECK_MS) return history;
+			const rows = await call<PeerInboxRow[]>("peerInboxRead", {});
+			if (!rows.length) {
+				inboxEmptyAt = Date.now();
+				return history;
+			}
+			// The same decision the Durable Object takes over its own read.
+			const plan = planPeerInjection(rows, history, {
+				delivered,
+				sentUserMessagesOnly,
+			});
+			if (plan.catchUp) onSetupCatchUp?.();
+			if (!plan.delivering.length) return history;
+			// Persist the history first; the rows are accepted only after.
+			await checkpoint(plan.injected, plan.users);
+			await call("peerInboxAccept", { ids: plan.delivering });
+			return plan.injected;
+		},
+		archiveModelContext: async (userId, sessionId, messages) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			return call("archiveContext", { messages });
+		},
+		// Called after finalize: the edge records the report there.
+		recordCloudProjectReport: async (_owner, turnId) => {
+			if (turnId !== turn.id) throw new TurnBoxPortForbidden("turn");
+		},
+
+		// Secret NAMES only: the values stay on the edge (the VM's env file is
+		// written there, by the tool bridge, not here); no redaction list is
+		// needed on a box because the box never holds a value.
+		loadAgentProjectSecrets: async (userId, projectId) => {
+			ownUser(userId);
+			const { names } = await once("secret-names", () =>
+				call<{
+					names: { name: string; kind: "build" | "runtime" | string }[];
+				}>("projectSecretNames", {}),
+			);
+			void projectId;
+			return {
+				envFile: agentSecretsEnvFile([]),
+				redact: [],
+				names,
+			} as Awaited<ReturnType<TurnPorts["loadAgentProjectSecrets"]>>;
+		},
+
+		modelAccess: {
+			loadConnection: async (userId, connectionId) => {
+				ownUser(userId);
+				return (await once(`conn:${connectionId}`, () =>
+					call("modelConnection", { id: connectionId }),
+				)) as never;
+			},
+			...sdk,
+		},
+
+		// Decisions (docs/turn-runner-boxes.md, "Whole turn on a box"):
+		// - memory is off on a box (it reads the database and clones a repo onto the VM);
+		// - a push card answered while the turn runs gets no notice from a
+		//   box (the edge-written push tools do not exist yet either);
+		// - the workspace is prepared by the edge's vm/ensure (box-runner
+		//   installs boxApiTurnWorkspace; this placeholder refuses).
+		turnMemory: async () => null,
+		subagentMemory: async () => null,
+		withPushResultNotices: async () => null,
+		deferredApiTurnWorkspace: unavailable("deferredApiTurnWorkspace"),
+
+		// Post-settle work the edge does at finalize (adapters/turn-box-after-settle.ts):
+		// the pull request link item, the next queued message, held reports.
+		// The turn is no longer running by then, so a port call could not be
+		// lease-checked: these are no-ops on the box.
+		replaceSettledTurnItem: async () => false,
+		startQueuedUserTurn: async () => false,
+		releaseHeldAgentTaskEvents: async () => 0,
+
+		// The edge commits (before finalize) with its own machines and pushes
+		// (at finalize); the box learns the notice and that a push is pending.
+		commitSessionTurn: async (_owner, items) => {
+			const done = await call<{ notice?: string; publish: boolean } | null>(
+				"commitTurn",
+				{ items: [...items] },
+			);
+			if (!done) return undefined;
+			if (done.publish) session.publishAfterFinalize = true;
+			return {
+				...(done.notice ? { notice: done.notice } : {}),
+				// The push itself is the edge's, after finalize.
+				...(done.publish ? { publish: async () => ({}) } : {}),
+			};
+		},
+		ensureConversationCodePoint: async (
+			userId,
+			sessionId,
+			messageId,
+			ready,
+		) => {
+			ownUser(userId);
+			ownSession(sessionId);
+			await call("ensureCodePoint", { messageId, cwd: ready.cwd });
+			memo.delete(`code-ref:${messageId}`);
+		},
+		// The edge writes the env file onto the VM; no value passes here.
+		writeAgentProjectSecrets: async () => {
+			await call("writeSecretsToVm", {});
+		},
+		saveAccountWideSecret: unavailable("saveAccountWideSecret"),
+		saveVisibleProjectSecret: unavailable("saveVisibleProjectSecret"),
+		turnBoxToolIdentity: unavailable("turnBoxToolIdentity"),
+		recordTurnBoxToolIdentity: unavailable("recordTurnBoxToolIdentity"),
+		clearTurnBoxToolIdentity: unavailable("clearTurnBoxToolIdentity"),
+		pinnedClaudeRunner: unavailable("pinnedClaudeRunner"),
+		claudeSubscriptionStatus: unavailable("claudeSubscriptionStatus"),
+		warmCodexSubscriptionCatalog: unavailable("warmCodexSubscriptionCatalog"),
+		hasManagedCodexAuth: unavailable("hasManagedCodexAuth"),
+		evaluationRunForTask: unavailable("evaluationRunForTask"),
+		assertEvaluationActive: unavailable("assertEvaluationActive"),
+		recordEvaluationUsage: unavailable("recordEvaluationUsage"),
+		reserveEvaluationRequest: unavailable("reserveEvaluationRequest"),
+		// Methods fail when called; building the push-approval tools does not.
+		gitPushRequests: new Proxy(
+			{},
+			{
+				get: (_target, method) => () => {
+					throw new TurnPortUnavailable(`gitPushRequests.${String(method)}`);
+				},
+			},
+		) as TurnPorts["gitPushRequests"],
+	};
+	return Object.assign(ports, { flush });
+}

@@ -264,6 +264,15 @@ export const HARNESS_VARIANT_VALUES = {
 	 * passing check); proportion = with it (about 10% cheaper on easy tasks).
 	 */
 	checks: ["full", "proportion"],
+	/**
+	 * Y (src/domain/y-agent.ts): on makes a root chat Y, the agent a person
+	 * talks to in a thread. It has no file, shell or code tools: it starts
+	 * builders (writer subagents), asks readers, answers and reports; the
+	 * runtime applies each builder's patch to the thread's checkout, and the
+	 * thread's turn commits and publishes it. off = the root chat is the
+	 * builder, as before (the default).
+	 */
+	y: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -322,6 +331,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	prompt: "full",
 	search: "hosted",
 	checks: "full",
+	y: "off",
 	roleModels: {},
 };
 

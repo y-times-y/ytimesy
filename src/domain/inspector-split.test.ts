@@ -4,7 +4,9 @@ import {
 	clampInspectorSplit,
 	INSPECTOR_SPLIT_DEFAULT,
 	INSPECTOR_SPLIT_DESKTOP,
+	INSPECTOR_SPLIT_LIST,
 	inspectorPaneIsWide,
+	inspectorPaneWidth,
 	inspectorSplitRatio,
 	savedInspectorCookie,
 	savedInspectorFromCookies,
@@ -25,13 +27,30 @@ describe("inspector split", () => {
 		expect(inspectorPaneIsWide("diff")).toBe(false);
 		expect(inspectorPaneIsWide("files")).toBe(true);
 		expect(inspectorPaneIsWide("desktop")).toBe(true);
-		expect(inspectorSplitRatio({ custom: null, wide: false })).toBe(
+		expect(inspectorSplitRatio({ custom: null, pane: "default" })).toBe(
 			INSPECTOR_SPLIT_DEFAULT,
 		);
-		expect(inspectorSplitRatio({ custom: null, wide: true })).toBe(
+		expect(inspectorSplitRatio({ custom: null, pane: "wide" })).toBe(
 			INSPECTOR_SPLIT_DESKTOP,
 		);
-		expect(inspectorSplitRatio({ custom: 0.6, wide: true })).toBe(0.6);
+		expect(inspectorSplitRatio({ custom: 0.6, pane: "wide" })).toBe(0.6);
+	});
+
+	it("gives Y²'s conversation more width than its overview list", () => {
+		expect(inspectorPaneWidth({ view: "overview", ySquared: true })).toBe(
+			"list",
+		);
+		expect(inspectorPaneWidth({ view: "overview", ySquared: false })).toBe(
+			"default",
+		);
+		expect(inspectorPaneWidth({ view: "desktop", ySquared: true })).toBe(
+			"wide",
+		);
+		const ratio = inspectorSplitRatio({ custom: null, pane: "list" });
+		expect(ratio).toBe(INSPECTOR_SPLIT_LIST);
+		// 1190px beside a 250px sidebar on a 1440px screen.
+		expect(Math.round(1190 * (1 - ratio))).toBeLessThanOrEqual(440);
+		expect(ratio).toBeGreaterThan(0.5);
 	});
 
 	it("keeps the conversation and tools both usable", () => {

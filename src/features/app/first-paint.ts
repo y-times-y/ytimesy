@@ -26,6 +26,7 @@ import {
 	type SidebarSort,
 	sidebarIsPinnedInStorage,
 } from "#/domain/sidebar-chats";
+import { SIDEBAR_COLLAPSED_Y2_KEY } from "#/domain/sidebar-tree";
 import { fitDraftHeight } from "../sessions/fit-draft-height";
 
 /**
@@ -43,6 +44,8 @@ export type FirstPaintChoices = {
 	readonly sidebarOpen: boolean;
 	readonly sidebarSort: SidebarSort;
 	readonly collapsedProjectIds: readonly string[];
+	/** Y projects whose threads are folded under their Y² row. */
+	readonly collapsedY2ProjectIds: readonly string[];
 	readonly pinnedChatIds: readonly string[];
 };
 
@@ -65,6 +68,7 @@ export const SERVER_FIRST_PAINT: FirstPaintChoices = {
 	sidebarOpen: false,
 	sidebarSort: "projects",
 	collapsedProjectIds: [],
+	collapsedY2ProjectIds: [],
 	pinnedChatIds: [],
 };
 
@@ -72,6 +76,7 @@ const STORAGE_KEYS = {
 	sidebarPinned: SIDEBAR_PINNED_STORAGE_KEY,
 	sidebarSort: SIDEBAR_SORT_KEY,
 	collapsedProjects: SIDEBAR_COLLAPSED_PROJECTS_KEY,
+	collapsedY2: SIDEBAR_COLLAPSED_Y2_KEY,
 	pinnedChats: SIDEBAR_PINNED_CHATS_KEY,
 };
 
@@ -101,6 +106,7 @@ export function readFirstPaintChoices(
 		sidebarOpen: !compact && parsePinned(stored(keys.sidebarPinned)),
 		sidebarSort: parseSort(stored(keys.sidebarSort)),
 		collapsedProjectIds: parseIds(stored(keys.collapsedProjects)),
+		collapsedY2ProjectIds: parseIds(stored(keys.collapsedY2)),
 		pinnedChatIds: parseIds(stored(keys.pinnedChats)),
 	};
 }
@@ -108,7 +114,7 @@ export function readFirstPaintChoices(
 /**
  * Self-contained, like readFirstPaintChoices. The sheet only sets custom
  * properties that styles.css reads (--chat-pinned, --folder-chats,
- * --folder-chevron); React's own attributes replace it after hydration.
+ * --folder-chevron, --y2-branch, --y2-chevron); React's own attributes replace it after hydration.
  */
 export function showFirstPaintChoices(choices: FirstPaintChoices) {
 	window.__YT_BOOT__ = choices;
@@ -126,6 +132,14 @@ export function showFirstPaintChoices(choices: FirstPaintChoices) {
 					(id) =>
 						`.sidebar-project[data-project-id="${id}"]{--folder-chats:none;--folder-chevron:none}`,
 				),
+		)
+		.concat(
+			choices.collapsedY2ProjectIds
+				.filter(plain)
+				.map(
+					(id) =>
+						`.sidebar-y2[data-project-id="${id}"]{--y2-branch:none;--y2-chevron:none;--y2-toggle-shown:1}`,
+				),
 		);
 	if (!rules.length) return;
 	try {
@@ -141,9 +155,9 @@ export function showFirstPaintChoices(choices: FirstPaintChoices) {
 /**
  * Self-contained, inlined right after the sidebar's server HTML: what needs
  * both the rows and this browser's storage. It marks unread replies from the
- * seen chats, and in Recent shows saved pins that sit past the Done fold. Rows
- * carry data-seen-key, data-updated-at, data-unread-mark and data-done-overflow
- * while hydrating.
+ * seen chats, and shows saved pins that sit past a fold (Recent's Done rows,
+ * the finished threads under Y²). Rows carry data-seen-key, data-updated-at,
+ * data-unread-mark, data-foldable and data-done-overflow while hydrating.
  */
 export function markFirstPaintRows(
 	keys: { readonly seen: string; readonly seenSince: string },
@@ -191,22 +205,31 @@ export function markFirstPaintRows(
 			`${chat} .sidebar-chat-title{color:var(--chat-unread-color);font-weight:var(--chat-unread-weight)}`,
 		);
 	}
-	const done = rows('.sidebar-recent [data-group="done"] .sidebar-chat-row');
-	const fold = done.filter((row) => !row.dataset.doneOverflow).length;
-	const shown = new Set(
-		pinnedFirst(
-			done.map((row) => ({ id: row.dataset.chatId ?? "" })),
-			window.__YT_BOOT__?.pinnedChatIds ?? [],
-		)
-			.slice(0, fold)
-			.map((chat) => chat.id),
-	);
-	for (const row of done) {
-		const id = row.dataset.chatId ?? "";
-		if (shown.has(id) === !row.dataset.doneOverflow) continue;
-		rules.push(
-			`.sidebar-recent [data-chat-id="${id}"]{display:${shown.has(id) ? "flex" : "none"}}`,
+	const folds = [
+		{
+			scope: ".sidebar-recent",
+			rows: '[data-group="done"] .sidebar-chat-row',
+		},
+		{ scope: ".sidebar-y2-threads", rows: ".sidebar-chat-row[data-foldable]" },
+	];
+	for (const { scope, rows: rowsSelector } of folds) {
+		const foldable = rows(`${scope} ${rowsSelector}`);
+		const fold = foldable.filter((row) => !row.dataset.doneOverflow).length;
+		const shown = new Set(
+			pinnedFirst(
+				foldable.map((row) => ({ id: row.dataset.chatId ?? "" })),
+				window.__YT_BOOT__?.pinnedChatIds ?? [],
+			)
+				.slice(0, fold)
+				.map((chat) => chat.id),
 		);
+		for (const row of foldable) {
+			const id = row.dataset.chatId ?? "";
+			if (shown.has(id) === !row.dataset.doneOverflow) continue;
+			rules.push(
+				`${scope} [data-chat-id="${id}"]{display:${shown.has(id) ? "flex" : "none"}}`,
+			);
+		}
 	}
 	// A page streamed in two copies (the latest chat read late) runs this
 	// twice; the later copy is the one that stays, so its marks replace the

@@ -1,4 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
+import {
+	type BudgetState,
+	type BudgetUsage,
+	budgetMessage,
+	budgetPeriodKey,
+	budgetState,
+	cloudflareBudgetFromEnv,
+	gbSecondsFromWallMs,
+} from "../../domain/cloudflare-budget";
 import { LIVE_SOCKET_CLOSE } from "../../domain/live-progress-socket";
 import type { SessionTurnStatus } from "../../domain/session-item";
 import {
@@ -53,6 +62,9 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 			session_id text primary key, turn_status text not null, updated_at integer not null)`);
 		ctx.storage.sql.exec(`create table if not exists hub_signal(
 			topic text primary key, at integer not null)`);
+		ctx.storage.sql.exec(`create table if not exists usage_month(
+			period text primary key, wall_ms integer not null default 0, requests integer not null default 0,
+			ws_msgs integer not null default 0, alarms integer not null default 0)`);
 		ctx.setWebSocketAutoResponse(
 			pingAutoResponse() as WebSocketRequestResponsePair,
 		);
@@ -98,6 +110,62 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 		for (const topic of staleHubSignals(signals))
 			this.ctx.storage.sql.exec("delete from hub_signal where topic=?", topic);
 		this.push({}, pushed);
+	}
+
+	private monthUsage(period: string): BudgetUsage {
+		const row = this.ctx.storage.sql
+			.exec<BudgetUsage>(
+				`select wall_ms as wallMs,requests,ws_msgs as wsMsgs,alarms from usage_month where period=?`,
+				period,
+			)
+			.toArray()[0];
+		return row ?? { wallMs: 0, requests: 0, wsMsgs: 0, alarms: 0 };
+	}
+
+	/**
+	 * The user's compute this UTC month (all their chats' Durable Objects) and
+	 * its budget state. Kept here, in SQLite; nothing in Postgres.
+	 */
+	async usage(): Promise<{
+		period: string;
+		usage: BudgetUsage;
+		gbSeconds: number;
+		state: BudgetState;
+		message: string | null;
+	}> {
+		const period = budgetPeriodKey(Date.now());
+		const usage = this.monthUsage(period);
+		const state = budgetState(usage, cloudflareBudgetFromEnv(process.env));
+		return {
+			period,
+			usage,
+			gbSeconds: gbSecondsFromWallMs(usage.wallMs),
+			state,
+			message: budgetMessage(state),
+		};
+	}
+
+	/** A chat's unsent usage since its last flush (RPC from its ModelConversation); returns the new state. */
+	async addUsage(delta: Omit<BudgetUsage, "workerRequests">) {
+		const period = budgetPeriodKey(Date.now());
+		const clean = (value: number) =>
+			Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+		this.ctx.storage.sql.exec(
+			`insert into usage_month(period,wall_ms,requests,ws_msgs,alarms) values(?,?,?,?,?)
+			 on conflict(period) do update set wall_ms=wall_ms+excluded.wall_ms,requests=requests+excluded.requests,
+			 ws_msgs=ws_msgs+excluded.ws_msgs,alarms=alarms+excluded.alarms`,
+			period,
+			clean(delta.wallMs),
+			clean(delta.requests),
+			clean(delta.wsMsgs),
+			clean(delta.alarms),
+		);
+		// Only this and last month are kept.
+		this.ctx.storage.sql.exec(
+			"delete from usage_month where period<?",
+			budgetPeriodKey(Date.now() - 62 * 86_400_000),
+		);
+		return this.usage();
 	}
 
 	/** A chat's turn started or settled (RPC from its ModelConversation). */

@@ -37,6 +37,8 @@ const mocks = vi.hoisted(() => ({
 	retryDelays: [] as number[],
 }));
 
+// The project switch for Y reads the database; these turns run with it off.
+vi.mock("../adapters/y-mode", () => ({ projectYMode: async () => null }));
 vi.mock("#/domain/model-failover", async (importOriginal) => ({
 	...(await importOriginal<typeof import("#/domain/model-failover")>()),
 	get MODEL_STEP_RETRY_DELAYS_MS() {

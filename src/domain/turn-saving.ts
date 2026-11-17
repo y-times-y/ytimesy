@@ -6,11 +6,27 @@ import type {
 	SessionItem,
 	SessionTurnStatus,
 } from "./session-item";
+import {
+	Y_SQUARED_MESSAGE_THREAD_TOOL,
+	Y_SQUARED_START_THREAD_TOOL,
+	Y_SQUARED_STOP_THREAD_TOOL,
+	Y_SQUARED_THREAD_TOOL,
+	Y_SQUARED_THREADS_TOOL,
+} from "./y-squared";
 
 /** Lean tools that only read the checkout (or an image in it), and the display-only canvas. */
 const READ_ONLY_TOOLS = new Set<string>([
 	...leanToolNames(["read", "glob", "grep", "image"]),
 	CANVAS_TOOL,
+	// Y²'s tools never touch a workspace (src/domain/y-squared.ts): they read
+	// the crew and start, message or stop other chats. Y² has no machine, so
+	// counting the write tools here would make its turn wait for a checkout
+	// it cannot have (the turn would fail with "Y² has no workspace").
+	Y_SQUARED_THREADS_TOOL,
+	Y_SQUARED_THREAD_TOOL,
+	Y_SQUARED_START_THREAD_TOOL,
+	Y_SQUARED_MESSAGE_THREAD_TOOL,
+	Y_SQUARED_STOP_THREAD_TOOL,
 ]);
 
 /**

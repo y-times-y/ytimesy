@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { Freestyle } from "freestyle";
 import type { BackgroundJob } from "#/domain/background-job";
 import { claudeBoxToolsEnabled } from "#/domain/claude-box-tools";
+import { boxTurnUsers } from "#/domain/turn-executor";
 import { failAbandonedHelperDrafts } from "../adapters/agent-sessions";
 import {
 	clearTurnBoxToolIdentity,
@@ -109,7 +110,8 @@ export async function deliverBackgroundJob(
 						// Helpers whose start failed before a turn was queued.
 						failAbandonedHelperDrafts(),
 						// Off with box tools off; bookkeeping never fails the job.
-						claudeBoxToolsEnabled(process.env)
+						claudeBoxToolsEnabled(process.env) ||
+						boxTurnUsers(process.env.YTIMESY_BOX_TURN_USERS).size > 0
 							? sweepClaudeBoxToolIdentities({
 									machines,
 									stale: () => staleTurnBoxToolIdentities(),

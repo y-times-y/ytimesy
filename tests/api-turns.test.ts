@@ -117,6 +117,7 @@ beforeAll(async () => {
 		"20261114120000_conversation_delivery_items_rev",
 		"20261115120000_turn_runner_box",
 		"20261115200000_api_turn_base",
+		"20261117120000_turn_runner_box_revocation",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}.sql`, "utf8"));
 	await db.exec(
@@ -134,6 +135,10 @@ beforeAll(async () => {
 			"supabase/migrations/20261019150000_training_consent.sql",
 			"utf8",
 		),
+	);
+	// Box routing reads these (boxRoutingFacts, evaluationRunForTask); the rows are not needed, the tables are.
+	await db.exec(
+		"create table if not exists project_secret(project_id uuid, kind text); create table if not exists account_secret(user_id text, kind text); create table if not exists harness_evaluation_run(root_session_id uuid, user_id text)",
 	);
 	await db.query(
 		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,revision) values($1,'alice','openrouter','Test','https://openrouter.ai/api/v1','fixture',$2)`,
@@ -1349,6 +1354,32 @@ it("routes an enabled user's API turn to a box only while one was seen lately", 
 	vi.stubEnv("YTIMESY_BOX_TURN_USERS", "someone-else");
 	expect(await executorOf()).toBe("durable-object");
 	await removeTurnRunnerBox("box-1");
+	await db.exec("truncate turn_runner_box");
+});
+
+it("revokes a turn runner box: it is no longer registered, alive or active, and stays revoked", async () => {
+	const {
+		registerTurnRunnerBox,
+		revokeTurnRunnerBox,
+		turnRunnerBoxActive,
+		turnRunnerBoxAlive,
+	} = await import("../src/server/adapters/turn-runner-boxes");
+	expect(await turnRunnerBoxActive("box-r")).toBe(true);
+	expect(
+		await registerTurnRunnerBox({ id: "box-r", capacity: 2, running: 0 }),
+	).toBe(true);
+	expect(await turnRunnerBoxAlive()).toBe(true);
+	await revokeTurnRunnerBox("box-r");
+	expect(await turnRunnerBoxActive("box-r")).toBe(false);
+	expect(await turnRunnerBoxAlive()).toBe(false);
+	// Its next heartbeat is refused and does not un-revoke it.
+	expect(
+		await registerTurnRunnerBox({ id: "box-r", capacity: 2, running: 0 }),
+	).toBe(false);
+	expect(await turnRunnerBoxActive("box-r")).toBe(false);
+	// Revoking an unregistered box works too.
+	await revokeTurnRunnerBox("box-never-seen");
+	expect(await turnRunnerBoxActive("box-never-seen")).toBe(false);
 	await db.exec("truncate turn_runner_box");
 });
 

@@ -11,6 +11,7 @@ import {
 } from "../adapters/machine-prewarm";
 import { projectMachineSize } from "../adapters/project-machine-size";
 import { workspaceForProject } from "../adapters/workspaces";
+import { isActiveYSquaredChat } from "../adapters/y-mode";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
@@ -39,12 +40,14 @@ export async function prewarmChatMachine(
 		(await agentSessionHasItems(input.userId, input.sessionId))
 	)
 		return "skipped";
-	const [workspace, size] = await Promise.all([
+	const [workspace, size, ySquared] = await Promise.all([
 		workspaceForProject(input.userId, input.projectId),
 		projectMachineSize(input.userId, input.projectId),
+		// Y² never gets a machine (it reads only the database).
+		isActiveYSquaredChat(input.userId, input.projectId, session),
 	]);
 	const snapshotId = workspace?.templateSnapshotId;
-	if (!snapshotId) return "skipped";
+	if (!snapshotId || ySquared) return "skipped";
 	if (!(await claimMachinePrewarm(input.userId, input.sessionId)))
 		return "skipped";
 	try {

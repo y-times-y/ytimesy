@@ -64,7 +64,7 @@ import {
 } from "#/domain/harness-access";
 import {
 	CLOSED_INSPECTOR,
-	inspectorPaneIsWide,
+	inspectorPaneWidth,
 	inspectorSplitRatio,
 	type SavedInspector,
 	savedInspectorCookie,
@@ -350,6 +350,9 @@ import {
 import { WorkspaceOverview } from "./workspace-overview";
 import { WorkspacePanes } from "./workspace-panes";
 import { preloadWorkspaceTools } from "./workspace-tools-preload";
+import { YOverview } from "./y-overview";
+import { YSquaredEmptyState } from "./y-squared-empty-state";
+import { YSquaredMark } from "./y-squared-mark";
 
 /** One composer send, from the click until the server accepts or refuses it. */
 type PendingSend = {
@@ -1216,10 +1219,6 @@ export function WorkspaceHome({
 				...(mode === "append" ? { append: true } : {}),
 			}),
 	);
-	const splitRatio = inspectorSplitRatio({
-		custom: customSplit,
-		wide: inspectorPaneIsWide(inspectorView),
-	});
 	const sessionTitle = sessionTitleFromItems(session.items);
 	const hasUserMessage = Boolean(lastUserMessageText(session.items));
 	const listedPullRequests = pullRequestsAcrossRepositories(
@@ -2837,6 +2836,8 @@ export function WorkspaceHome({
 		const chatId = session.agentSessionId;
 		const projectId = selectedProject?.id;
 		if (!chatId || !projectId || session.turnStatus === "running") return;
+		// Y² has no machine to copy or wake.
+		if (sidebarChats.find((chat) => chat.id === chatId)?.role === "y2") return;
 		if (session.items.length) {
 			wakeChatMachine(projectId, chatId);
 			return;
@@ -3410,11 +3411,20 @@ export function WorkspaceHome({
 	}
 
 	const activeChat = sidebarChats.find((chat) => chat.id === activeSessionId);
-	const activeHead =
-		activeChat?.workingBranch ||
-		(activeChat?.workspaceId
-			? workspacePublicationBranch(activeChat.workspaceId)
-			: null);
+	const ySquaredOpen = activeChat?.role === "y2";
+	const splitRatio = inspectorSplitRatio({
+		custom: customSplit,
+		pane: inspectorPaneWidth({
+			view: inspectorView,
+			ySquared: ySquaredOpen,
+		}),
+	});
+	const activeHead = ySquaredOpen
+		? null
+		: activeChat?.workingBranch ||
+			(activeChat?.workspaceId
+				? workspacePublicationBranch(activeChat.workspaceId)
+				: null);
 	const sessionPullRequests = listedPullRequests.filter(
 		(pr) => Boolean(activeHead) && pr.head === activeHead,
 	);
@@ -3944,10 +3954,14 @@ export function WorkspaceHome({
 										{followUpLayout ? (
 											<div className="session-title-row">
 												<div className="session-title-copy">
-													<span className="session-title">
+													<span
+														className="session-title"
+														data-role={ySquaredOpen ? "y2" : undefined}
+													>
+														{ySquaredOpen ? <YSquaredMark size={20} /> : null}
 														{chatHeaderTitle(listedTitle, sessionTitle)}
 													</span>
-													{activeChat?.workingBranch && (
+													{activeChat?.workingBranch && !ySquaredOpen && (
 														<span
 															className="session-title-meta"
 															title="This chat's branch: each turn that changes code is committed and pushed here"
@@ -3999,6 +4013,12 @@ export function WorkspaceHome({
 													setSettingsOpen(true);
 												}}
 												setupPlaceholder={setupPlaceholder}
+												branchless={ySquaredOpen}
+												emptyState={
+													ySquaredOpen
+														? (send) => <YSquaredEmptyState onSend={send} />
+														: undefined
+												}
 												setupHold={
 													heldView && selectedProject
 														? {
@@ -4320,6 +4340,9 @@ export function WorkspaceHome({
 									</section>
 									<div className="inspector-frame">
 										<WorkspaceInspector
+											overviewIcon={
+												ySquaredOpen ? <YSquaredMark size={16} /> : undefined
+											}
 											sideChat={
 												session.agentSessionId ? (
 													<SideChat
@@ -4374,17 +4397,28 @@ export function WorkspaceHome({
 													: undefined
 											}
 											overview={
-												<WorkspaceOverview
-													tasks={agentTasks.data ?? []}
-													items={session.items}
-													changes={fileChanges}
-													repository={selectedProject?.fullName}
-													desktop={desktop}
-													turnRunning={isTurnRunning(session.turnStatus)}
-													onOpen={openInspector}
-													onIntent={intendView}
-													pullRequests={overviewPullRequests}
-												/>
+												// Y² works on nothing itself: its overview is the project's threads.
+												activeChat?.role === "y2" && selectedProject ? (
+													<YOverview
+														projectId={selectedProject.id}
+														pullRequests={listedPullRequests}
+														live={inspectorOpen}
+														renderedAtMs={renderedAtMs}
+														onOpenThread={openChat}
+													/>
+												) : (
+													<WorkspaceOverview
+														tasks={agentTasks.data ?? []}
+														items={session.items}
+														changes={fileChanges}
+														repository={selectedProject?.fullName}
+														desktop={desktop}
+														turnRunning={isTurnRunning(session.turnStatus)}
+														onOpen={openInspector}
+														onIntent={intendView}
+														pullRequests={overviewPullRequests}
+													/>
+												)
 											}
 										/>
 									</div>

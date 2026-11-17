@@ -13,6 +13,7 @@ import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
 const mocks = vi.hoisted(() => ({
+	yMode: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 	attachments: vi.fn(async (..._args: unknown[]) => {}),
 	renew: vi.fn(),
 	replaceItem: vi.fn(async (..._args: unknown[]) => true),
@@ -182,12 +183,14 @@ vi.mock("../adapters/agent-sessions", () => ({
 		}
 		return ancestors;
 	},
+	listSidebarAgentSessions: vi.fn(async () => []),
 }));
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.turnMemory.mockReset().mockResolvedValue(null);
 	mocks.subagentMemory.mockReset().mockResolvedValue(null);
 	mocks.variant.mockReset().mockReturnValue(undefined);
+	mocks.yMode.mockReset().mockResolvedValue(null);
 	mocks.reviewLoop.mockReset().mockImplementation(() => ({
 		beforeModel: mocks.beforeModel,
 		afterAttempt: mocks.afterAttempt,
@@ -363,6 +366,7 @@ it.each(["running", "completed"])(
 		);
 	},
 );
+vi.mock("../adapters/y-mode", () => ({ projectYMode: mocks.yMode }));
 vi.mock("../adapters/model-connections", () => ({
 	loadModelConnection: vi.fn(async () => ({ revision: "revision" })),
 }));
@@ -2082,6 +2086,133 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		expect(full?.tools).toEqual(
 			expect.arrayContaining(["agent", "agent_send"]),
 		);
+	});
+
+	it("y=on: the root chat is Y, with delegation and questions only, Y's prompt, and it still commits", async () => {
+		const seen: { tools: string[]; instructions: string }[] = [];
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			seen.push({
+				tools: Object.keys(input.tools ?? {}).sort(),
+				instructions: String(input.instructions),
+			});
+			// Y edits nothing itself: it answers, and the commit takes builders' patches.
+			await input.onEvent({
+				type: "text-delta",
+				id: "reply",
+				text: "Started builder 1.",
+			});
+			return { messages: input.messages, outcome: "completed" };
+		});
+		mocks.lean = {
+			shape: "core",
+			readOnly: false,
+			commandReader: "read_command",
+			waitHint: () => "",
+			saveHistory: async () => null,
+		};
+		const base = (await import("#/domain/harness-variant"))
+			.PRODUCT_HARNESS_VARIANT;
+		mocks.variant.mockReturnValue({ ...base, y: "on" });
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			{ ...rootTurn, id: "turn-y" },
+			durable(),
+		);
+		mocks.lean = null;
+		const [y] = seen;
+		expect(y?.tools).toEqual(expect.arrayContaining(["agent", "agent_send"]));
+		for (const name of [
+			"bash",
+			"read",
+			"write",
+			"edit",
+			"apply_patch",
+			"run_code",
+			"read_command",
+			"execute_command",
+			"update_plan",
+			"web_fetch",
+		])
+			expect(y?.tools).not.toContain(name);
+		expect(y?.instructions).toContain(
+			"You are Y, the ytimesy agent for this thread",
+		);
+		expect(y?.instructions).not.toContain("You are the ytimesy coding agent");
+		// Builders' patches land in Y's checkout, so Y's turn commits them.
+		expect(mocks.commit).toHaveBeenCalled();
+	});
+
+	it("a Y project's pinned Y² chat: thread tools and questions only, Y²'s prompt, no machine and no commit", async () => {
+		const seen: { tools: string[]; instructions: string }[] = [];
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			seen.push({
+				tools: Object.keys(input.tools ?? {}).sort(),
+				instructions: String(input.instructions),
+			});
+			await input.onEvent({
+				type: "text-delta",
+				id: "reply",
+				text: "Two threads are working.",
+			});
+			return { messages: input.messages, outcome: "completed" };
+		});
+		mocks.lean = {
+			shape: "core",
+			readOnly: false,
+			commandReader: "read_command",
+			waitHint: () => "",
+			saveHistory: async () => null,
+		};
+		// The product's variant (y off) with the project's switch on.
+		mocks.yMode.mockResolvedValue({ enabled: true, ySquaredId: "session" });
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			{ ...rootTurn, id: "turn-y2" },
+			durable(),
+		);
+		mocks.lean = null;
+		const [y2] = seen;
+		expect(y2?.tools).toEqual([
+			"ask_user",
+			"message_thread",
+			"start_thread",
+			"stop_thread",
+			"thread",
+			"threads",
+		]);
+		expect(y2?.instructions).toContain(
+			"You are Y², the ytimesy agent above all",
+		);
+		// Its tools read only the database: no VM is copied, woken or checked out.
+		expect(mocks.workspace).not.toHaveBeenCalled();
+		expect(mocks.checkedOut).not.toHaveBeenCalled();
+		expect(mocks.turnMemory).not.toHaveBeenCalled();
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
+
+	it("a Y project's ordinary chat is Y, though the user's variant has y off", async () => {
+		const seen: string[][] = [];
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			seen.push(Object.keys(input.tools ?? {}).sort());
+			return { messages: input.messages, outcome: "completed" };
+		});
+		mocks.lean = {
+			shape: "core",
+			readOnly: false,
+			commandReader: "read_command",
+			waitHint: () => "",
+			saveHistory: async () => null,
+		};
+		mocks.yMode.mockResolvedValue({ enabled: true, ySquaredId: "another" });
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			{ ...rootTurn, id: "turn-y-project" },
+			durable(),
+		);
+		mocks.lean = null;
+		expect(seen[0]).toEqual(expect.arrayContaining(["agent", "agent_send"]));
+		expect(seen[0]).not.toContain("edit");
+		expect(seen[0]).not.toContain("threads");
 	});
 
 	it("is off by default: no loop, the turn completes as before", async () => {

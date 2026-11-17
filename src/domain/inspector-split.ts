@@ -7,6 +7,15 @@ export function workspaceNeedsSinglePane(width: number): boolean {
 	return width < CHAT_PANE_MIN_WIDTH + INSPECTOR_PANE_MIN_WIDTH + 4;
 }
 export const INSPECTOR_SPLIT_DESKTOP = 0.38;
+/**
+ * Y²'s overview is a short list of threads beside a conversation, so the
+ * conversation keeps most of the width: about 430px of panel next to a
+ * 760px chat on a 1440px screen.
+ */
+export const INSPECTOR_SPLIT_LIST = 0.64;
+
+/** How much of the width a panel's view wants until the user drags. */
+export type InspectorPaneWidth = "wide" | "default" | "list";
 
 export function clampInspectorSplit(ratio: number): number {
 	if (!Number.isFinite(ratio)) return INSPECTOR_SPLIT_DEFAULT;
@@ -17,12 +26,26 @@ export function inspectorPaneIsWide(view: string): boolean {
 	return view === "desktop" || view === "files" || view === "canvas";
 }
 
+export function inspectorPaneWidth(input: {
+	readonly view: string;
+	readonly ySquared: boolean;
+}): InspectorPaneWidth {
+	if (inspectorPaneIsWide(input.view)) return "wide";
+	return input.ySquared && input.view === "overview" ? "list" : "default";
+}
+
+const SPLIT_FOR_PANE: Record<InspectorPaneWidth, number> = {
+	wide: INSPECTOR_SPLIT_DESKTOP,
+	default: INSPECTOR_SPLIT_DEFAULT,
+	list: INSPECTOR_SPLIT_LIST,
+};
+
 export function inspectorSplitRatio(input: {
 	readonly custom: number | null;
-	readonly wide: boolean;
+	readonly pane: InspectorPaneWidth;
 }): number {
 	if (input.custom !== null) return clampInspectorSplit(input.custom);
-	return input.wide ? INSPECTOR_SPLIT_DESKTOP : INSPECTOR_SPLIT_DEFAULT;
+	return SPLIT_FOR_PANE[input.pane];
 }
 
 /** The right panel's views (workspace-inspector.tsx's InspectorView). */

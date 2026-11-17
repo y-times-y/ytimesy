@@ -36,6 +36,8 @@ const mocks = vi.hoisted(() => ({
 	variant: vi.fn(),
 }));
 // Observes the real lifecycle hooks' UserPromptSubmit without a repository config.
+// The project switch for Y reads the database; these turns run with it off.
+vi.mock("../adapters/y-mode", () => ({ projectYMode: async () => null }));
 vi.mock("../services/harness-lifecycle-hooks", async (importOriginal) => {
 	const actual =
 		await importOriginal<

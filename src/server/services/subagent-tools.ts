@@ -72,6 +72,7 @@ import {
 	subagentTree,
 } from "#/domain/subagent-tree";
 import { budgetTokenWeight } from "#/domain/subagent-usage";
+import { Y_AGENT_TOOL_DESCRIPTION } from "#/domain/y-agent";
 import {
 	type AgentSessionRecord,
 	agentSessionItemsOfKindsForOwner,
@@ -208,6 +209,8 @@ export type SubagentToolContext = {
 	readonly roleModels?: RoleModels;
 	/** Harness variant lead: fusion makes the root's first writer a persistent sidekick. */
 	readonly lead?: LeadMode;
+	/** Harness variant y=on: the root is Y, and its writers' patches are applied for it (src/domain/y-agent.ts). */
+	readonly y?: boolean;
 	/**
 	 * The parent turn's reasoning effort: a child on another model gets it
 	 * unless its roleModels entry sets one (a same-model child inherits the
@@ -348,10 +351,13 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	const isLead = context.lead === "fusion" && !parent.parentSessionId;
 	const requestKey = () =>
 		latestUserRequestId(sessionItemsFromUnknown(parent.items));
+	const isY = !!context.y && !parent.parentSessionId && !isLead;
 	const agent = tool({
-		description: isLead
-			? "Start a subagent. It sees only your brief (never this conversation), works within its own budget and reports back as a message. Your writer persists for this chat and works directly in your checkout: while it works your edits and commands are refused, its report wakes you, and you review its changes in place with git diff. Readers share your VM read-only and run in the background. Returns its id and budget."
-			: "Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
+		description: isY
+			? Y_AGENT_TOOL_DESCRIPTION
+			: isLead
+				? "Start a subagent. It sees only your brief (never this conversation), works within its own budget and reports back as a message. Your writer persists for this chat and works directly in your checkout: while it works your edits and commands are refused, its report wakes you, and you review its changes in place with git diff. Readers share your VM read-only and run in the background. Returns its id and budget."
+				: "Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
 		inputSchema: isLead
 			? agentInput.extend({
 					role: z.enum(SUBAGENT_ROLES).describe(LEAD_ROLE_TEXT),

@@ -62,6 +62,12 @@ export function durableObjectState() {
 		ctx: {
 			storage,
 			blockConcurrencyWhile: <T>(run: () => Promise<T>) => run(),
+			// A real Durable Object's ctx always has it; fire-and-forget work (usage rollup, crew notes) uses it.
+			// Hibernatable sockets (turn runner boxes, Claude feeds): none open in these tests.
+			getWebSockets: (_tag?: string) => [] as unknown[],
+			waitUntil: (work: Promise<unknown>) => {
+				work.catch(() => {});
+			},
 		},
 	};
 }

@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
 }));
 const stepRuntime = vi.hoisted(() => vi.fn());
 
+// The project switch for Y reads the database; these turns run with it off.
+vi.mock("../adapters/y-mode", () => ({ projectYMode: async () => null }));
 vi.mock("../adapters/database", () => ({
 	database: () => ({
 		query: async (sql: string, parameters: unknown[] = []) => {

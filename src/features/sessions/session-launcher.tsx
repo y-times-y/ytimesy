@@ -232,7 +232,16 @@ export function SessionLauncher({
 	setupHold,
 	onOpenSettings,
 	setupPlaceholder,
+	branchless = false,
+	emptyState,
 }: {
+	/** A chat without a branch of its own (Y²): no branch pill or picker. */
+	branchless?: boolean;
+	/**
+	 * Drawn instead of the transcript while the chat has no messages; `send`
+	 * sends a message the way the message box does.
+	 */
+	emptyState?: (send: (text: string) => void) => ReactNode;
 	/** The project's setup runs in the background: the empty composer says so. */
 	setupPlaceholder?: string | null;
 	/** Opens Settings at a section: the fix a blocked send points to. */
@@ -1384,6 +1393,13 @@ export function SessionLauncher({
 						onOpenFile={onOpenFile}
 					/>
 				</>
+			) : emptyState &&
+				!setupHold &&
+				timelineItems.length === 0 &&
+				turnStatus !== "running" ? (
+				<div className="session-empty-state">
+					{emptyState((text) => sendText(text))}
+				</div>
 			) : (
 				<SessionTimeline
 					// Another chat opens as a new list, at its end.
@@ -1490,6 +1506,7 @@ export function SessionLauncher({
 								setBasePick({ projectId: selectedProject.id, branch });
 						}}
 						currentBranch={session.selectedBranch}
+						branchless={branchless}
 					/>
 				) : null}
 				<div className="composer-shell">

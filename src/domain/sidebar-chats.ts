@@ -32,6 +32,8 @@ export type SidebarChat = {
 	readonly unused?: boolean;
 	/** A message waits in it for the project's environment (setup running or failed). */
 	readonly waitsForSetup?: boolean;
+	/** The project's Y² chat (src/domain/y-squared.ts): always listed first. */
+	readonly role?: "y2";
 };
 
 /**
@@ -190,9 +192,11 @@ export function chatsWithPinnedFirst(
 	pinnedIds: readonly string[],
 ): SidebarChat[] {
 	const pinned = new Set(pinnedIds);
+	const threads = chats.filter((chat) => chat.role !== "y2");
 	return [
-		...chats.filter((chat) => pinned.has(chat.id)),
-		...chats.filter((chat) => !pinned.has(chat.id)),
+		...chats.filter((chat) => chat.role === "y2"),
+		...threads.filter((chat) => pinned.has(chat.id)),
+		...threads.filter((chat) => !pinned.has(chat.id)),
 	];
 }
 

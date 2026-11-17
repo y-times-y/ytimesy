@@ -64,6 +64,8 @@ const mocks = vi.hoisted(() => ({
 		  ) => { exitCode: number; stdout: string; stderr: string } | null),
 }));
 // The real subscription agent, with its input recorded on the way through.
+// The project switch for Y reads the database; these turns run with it off.
+vi.mock("../adapters/y-mode", () => ({ projectYMode: async () => null }));
 vi.mock("../services/codex-subscription-agent", async (importOriginal) => {
 	const real =
 		await importOriginal<

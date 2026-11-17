@@ -16,6 +16,7 @@ export function ProjectContext({
 	baseBranch = null,
 	onBaseBranchChange,
 	currentBranch,
+	branchless = false,
 }: {
 	projects: Project[];
 	selectedProject?: Project;
@@ -32,6 +33,8 @@ export function ProjectContext({
 	onBaseBranchChange?: (branch: string) => void;
 	/** The open chat's branch, shown read-only once it has started. */
 	currentBranch?: string | null;
+	/** The chat has no branch of its own (Y²): neither picker nor branch. */
+	branchless?: boolean;
 }) {
 	return (
 		<div
@@ -48,13 +51,15 @@ export function ProjectContext({
 					onOpenChange={onProjectPickerOpenChange}
 				/>
 			)}
-			<BaseBranchPicker
-				project={selectedProject}
-				value={baseBranch}
-				onChange={(branch) => onBaseBranchChange?.(branch)}
-				currentBranch={currentBranch}
-				locked={projectLocked || !onBaseBranchChange}
-			/>
+			{branchless ? null : (
+				<BaseBranchPicker
+					project={selectedProject}
+					value={baseBranch}
+					onChange={(branch) => onBaseBranchChange?.(branch)}
+					currentBranch={currentBranch}
+					locked={projectLocked || !onBaseBranchChange}
+				/>
+			)}
 			{/* Rerun setup lives in Settings > Environment, not in every chat. */}
 			{selectedProject && (
 				<WorkspaceStatus

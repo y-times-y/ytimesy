@@ -13,6 +13,7 @@ import {
 	SIDEBAR_PINNED_STORAGE_KEY,
 	SIDEBAR_SORT_KEY,
 } from "#/domain/sidebar-chats";
+import { SIDEBAR_COLLAPSED_Y2_KEY } from "#/domain/sidebar-tree";
 import {
 	COMPOSER_DRAFT_SCRIPT,
 	FIRST_PAINT_ROWS_SCRIPT,
@@ -77,6 +78,7 @@ const saved = {
 	[SIDEBAR_PINNED_STORAGE_KEY]: "1",
 	[SIDEBAR_SORT_KEY]: "recent",
 	[SIDEBAR_COLLAPSED_PROJECTS_KEY]: JSON.stringify(["project-1"]),
+	[SIDEBAR_COLLAPSED_Y2_KEY]: JSON.stringify(["project-2"]),
 	[SIDEBAR_PINNED_CHATS_KEY]: JSON.stringify(["chat-1", "chat-2"]),
 };
 
@@ -122,6 +124,7 @@ describe("first-paint script", () => {
 			sidebarOpen: true,
 			sidebarSort: "recent",
 			collapsedProjectIds: ["project-1"],
+			collapsedY2ProjectIds: ["project-2"],
 			pinnedChatIds: ["chat-1", "chat-2"],
 		});
 		expect(page.document.documentElement.dataset).toEqual({
@@ -133,7 +136,8 @@ describe("first-paint script", () => {
 		expect(sheet?.text).toBe(
 			'.sidebar-chat-row[data-chat-id="chat-1"]{--chat-pinned:1}' +
 				'.sidebar-chat-row[data-chat-id="chat-2"]{--chat-pinned:1}' +
-				'.sidebar-project[data-project-id="project-1"]{--folder-chats:none;--folder-chevron:none}',
+				'.sidebar-project[data-project-id="project-1"]{--folder-chats:none;--folder-chevron:none}' +
+				'.sidebar-y2[data-project-id="project-2"]{--y2-branch:none;--y2-chevron:none;--y2-toggle-shown:1}',
 		);
 	});
 
@@ -254,6 +258,30 @@ describe("first-paint rows script", () => {
 		expect(css).toBe(
 			'.sidebar-recent [data-chat-id="b"]{display:none}' +
 				'.sidebar-recent [data-chat-id="late"]{display:flex}',
+		);
+	});
+
+	it("shows a saved pin past the fold of Y²'s finished threads", () => {
+		const row = (id: string, overflow = false): FakeRow => ({
+			dataset: {
+				chatId: id,
+				foldable: "true",
+				doneOverflow: overflow ? "true" : undefined,
+			},
+		});
+		const css = runRowsScript({
+			pinnedChatIds: ["late"],
+			rows: {
+				".sidebar-y2-threads .sidebar-chat-row[data-foldable]": [
+					row("a"),
+					row("b"),
+					row("late", true),
+				],
+			},
+		});
+		expect(css).toBe(
+			'.sidebar-y2-threads [data-chat-id="b"]{display:none}' +
+				'.sidebar-y2-threads [data-chat-id="late"]{display:flex}',
 		);
 	});
 });

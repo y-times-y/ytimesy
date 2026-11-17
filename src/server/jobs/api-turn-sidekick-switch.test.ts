@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
 const row = vi.hoisted(() => ({
 	current: null as null | Record<string, unknown>,
 }));
+// The project switch for Y reads the database; these turns run with it off.
+vi.mock("../adapters/y-mode", () => ({ projectYMode: async () => null }));
 vi.mock("../adapters/subagents", () => ({
 	subagentAncestors: vi.fn(async () => [{ id: "root" }]),
 	updateSidekickState: vi.fn(

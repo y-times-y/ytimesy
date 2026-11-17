@@ -460,6 +460,15 @@ button:enabled:active {
 .sidebar-chat-row {
 	order: calc(-1 * var(--chat-pinned, 0));
 }
+/* A Y project's Y² chat (src/domain/y-squared.ts) sits above pinned
+   threads. It comes from the server's list, so first paint is already right. */
+.sidebar-chat-row[data-role="y2"] {
+	--chat-pinned: 2;
+}
+.sidebar-chat-row[data-role="y2"] .sidebar-chat-title {
+	color: var(--list-text-strong);
+	font-weight: 600;
+}
 /* Row actions, end side: [archive][fold arrow][+]. The + keeps a fixed
    spot flush with the row's end; archive and the arrow take no space until
    the row is hovered, then open to the left of the + so it never moves. */
@@ -828,6 +837,184 @@ button:enabled:active {
 	fill: currentColor;
 	fill-opacity: var(--chat-pinned, 0);
 }
+/* ---- Y² tree (src/domain/sidebar-tree.ts) ----------------------------
+   In a Y project the Y² row heads the project's threads, which hang under
+   its mark on a quiet guide line, their titles aligned with "Y²". Before
+   hydration the boot sheet folds a saved branch through --y2-branch,
+   --y2-chevron and --y2-toggle-shown (src/features/app/first-paint.ts). */
+.sidebar-y2 {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.sidebar-y2[data-open="false"] {
+	--y2-toggle-shown: 1;
+}
+.sidebar-y2-row .sidebar-chat-title {
+	color: var(--list-text-strong);
+	font-weight: 600;
+}
+.sidebar-y2-row .sidebar-chat-trailing {
+	gap: 4px;
+}
+.sidebar-y2-count {
+	display: inline-grid;
+	place-items: center;
+	min-width: 16px;
+	height: 16px;
+	margin-left: 2px;
+	padding: 0 5px;
+	border-radius: 999px;
+	background: var(--accent-blue);
+	color: #fff;
+	font-size: 10.5px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+}
+.sidebar-y2-toggle {
+	display: grid;
+	place-items: center;
+	width: 18px;
+	height: 18px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--list-icon-color);
+	opacity: var(--y2-toggle-shown, 0);
+	transition:
+		opacity 120ms ease,
+		color 120ms ease;
+}
+.sidebar-y2-row:hover .sidebar-y2-toggle,
+.sidebar-y2-toggle:focus-visible {
+	opacity: 1;
+}
+.sidebar-y2-toggle:hover {
+	background: #ffffff14;
+	color: #f2f2f2;
+}
+.sidebar-y2-chevron {
+	transition: transform 160ms ease;
+}
+.sidebar-y2[data-open="true"] .sidebar-y2-chevron {
+	transform: var(--y2-chevron, rotate(90deg));
+}
+@media (hover: none) {
+	.sidebar-y2-toggle {
+		opacity: 1;
+	}
+}
+/* Threads start past the guide; the guide runs down the mark's centre. */
+.sidebar-y2-branch {
+	position: relative;
+	display: var(--y2-branch, block);
+	padding-left: calc(var(--list-row-pad-x) + var(--list-icon-size));
+}
+.sidebar-y2-branch::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 4px;
+	left: calc(var(--list-row-pad-x) + var(--list-icon-size) / 2 - 0.5px);
+	width: 1px;
+	border-radius: 1px;
+	background: var(--menu-divider);
+}
+.sidebar-y2[data-toggled] .sidebar-y2-branch {
+	animation: sidebar-y2-open 160ms ease-out;
+}
+@keyframes sidebar-y2-open {
+	from {
+		opacity: 0;
+		transform: translateY(-3px);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.sidebar-y2[data-toggled] .sidebar-y2-branch,
+	.sidebar-y2-chevron {
+		animation: none;
+		transition: none;
+	}
+}
+.sidebar-y2 .sidebar-y2-threads {
+	margin: 0;
+}
+.sidebar-y2-threads .sidebar-chat-lead {
+	display: none;
+}
+/* Before hydration every thread renders; the rows script swaps in saved pins. */
+.sidebar-y2-threads [data-done-overflow] {
+	display: none;
+}
+.sidebar-y2-more {
+	width: 100%;
+	margin-top: 2px;
+}
+/* A thread waiting on the user: the badge's colour, the unread dot's shape. */
+.sidebar-chat-needs-you {
+	flex: 0 0 6px;
+	width: 6px;
+	height: 6px;
+	margin: 0 4px 0 8px;
+	border-radius: 50%;
+	background: var(--accent-blue);
+}
+/* ---- end Y² tree ---- */
+
+/* ---- Y² mark (src/features/workspace/y-squared-mark.tsx) ----------------
+   The logo as its border only, a "2" on top. While threads work a light runs
+   around the border. --y2m is the height; the drawing is a little wider for
+   the exponent. */
+.y2-mark {
+	display: inline-block;
+	flex: 0 0 auto;
+	height: var(--y2m);
+	width: calc(var(--y2m) * 40 / 38);
+	line-height: 0;
+}
+.y2-mark-glyph {
+	display: block;
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+}
+.y2-mark[data-live="true"] .y2-mark-border {
+	stroke-opacity: 0.35;
+}
+.y2-mark-light {
+	animation: y2-mark-run 3.2s linear infinite;
+}
+@keyframes y2-mark-run {
+	to {
+		stroke-dashoffset: -100;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.y2-mark-light {
+		animation: none;
+	}
+}
+.y2-mark-exponent {
+	fill: #c4b5fd;
+	font-family: var(--font-sans, "Inter Variable", sans-serif);
+	font-size: 11px;
+	font-weight: 700;
+}
+.session-title[data-role="y2"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	overflow: visible;
+	font-weight: 600;
+}
+.y-squared-empty .y2-mark {
+	margin-bottom: 4px;
+}
+/* ---- end Y² mark ---- */
 .workspace-main {
 	position: relative;
 	/* The saved right panel's rules below ask how wide it is. */
@@ -5406,4 +5593,306 @@ details.environment-build[open] > summary .session-activity-chevron {
 	.chat-updating {
 		animation-duration: 1ms;
 	}
+}
+/* ── Y² overview (src/features/workspace/y-overview.tsx) ──────────────────
+   The Y² chat's inspector overview: threads that need the person, threads
+   running, and their open pull requests. Rows use the sidebar's list tokens
+   so they read as the same list, one step denser. */
+.y-overview {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 16px;
+	min-height: 0;
+	overflow: auto;
+	padding: 14px 12px 28px;
+	font-size: var(--list-font-size);
+}
+.y-overview-group-title {
+	margin: 0 0 4px;
+	font: inherit;
+}
+.y-overview-heading {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	width: 100%;
+	height: 30px;
+	padding: 0 8px 0 var(--list-row-pad-x);
+	border: 0;
+	border-radius: 7px;
+	background: #ffffff06;
+	color: var(--list-text-secondary);
+	font-size: 12px;
+	font-weight: 500;
+	text-align: left;
+	cursor: pointer;
+}
+.y-overview-heading:hover {
+	background: #ffffff0a;
+	color: var(--list-text-strong);
+}
+.y-overview-heading:focus-visible,
+.y-overview-row:focus-visible {
+	outline: 2px solid #aaa;
+	outline-offset: -2px;
+}
+.y-overview-count {
+	color: var(--list-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+.y-overview-chevron {
+	margin-left: auto;
+	color: var(--list-icon-color);
+	transition: transform 120ms ease;
+}
+.y-overview-heading[aria-expanded="false"] .y-overview-chevron {
+	transform: rotate(-90deg);
+}
+.y-overview-rows {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.y-overview-row {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--list-row-gap);
+	width: 100%;
+	min-height: var(--list-row-height-tall);
+	padding: 6px var(--list-row-pad-x);
+	border: 0;
+	border-radius: var(--list-row-radius);
+	background: transparent;
+	color: var(--list-text);
+	text-align: left;
+	cursor: pointer;
+}
+.y-overview-row:hover {
+	background: var(--list-hover-bg);
+}
+.y-overview-icon {
+	display: grid;
+	place-items: center;
+	flex: 0 0 var(--list-icon-size);
+	height: 18px;
+	color: var(--list-icon-color);
+}
+.y-overview-row[data-status="needs-you"] .y-overview-icon {
+	color: #f87171;
+}
+.y-overview-row[data-status="pull-request"] .y-overview-icon {
+	color: #4ade80;
+}
+.y-overview-row[data-status="draft"] .y-overview-icon {
+	color: #8a8a8a;
+}
+.t-matrix.y-overview-working {
+	--t-matrix-cell: 3px;
+	--t-matrix-gap: 1.5px;
+	width: 14px;
+	height: 14px;
+	color: #4ade80;
+}
+.y-overview-copy {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+}
+.y-overview-title,
+.y-overview-detail {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.y-overview-title {
+	color: var(--list-text);
+	font-size: var(--list-font-size);
+	line-height: 18px;
+}
+.y-overview-row:hover .y-overview-title {
+	color: var(--list-text-strong);
+}
+.y-overview-detail {
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+	line-height: 16px;
+}
+.y-overview-ref {
+	margin-right: 7px;
+	color: var(--list-text-secondary);
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 12px;
+}
+.y-overview-arrow {
+	display: inline-block;
+	margin: 0 4px;
+	vertical-align: -1px;
+}
+.y-overview-diff {
+	margin-left: 8px;
+	font-variant-numeric: tabular-nums;
+}
+.y-overview-diff [data-diff="added"] {
+	color: var(--diff-added-fg);
+}
+.y-overview-diff [data-diff="removed"] {
+	margin-left: 4px;
+	color: var(--diff-removed-fg);
+}
+.y-overview-via {
+	margin-left: 5px;
+}
+.y-overview-age {
+	flex: 0 0 auto;
+	color: var(--list-text-muted);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	line-height: 18px;
+}
+.y-overview-empty {
+	margin: 2px var(--list-row-pad-x);
+	color: var(--list-text-muted);
+	font-size: var(--list-font-size);
+}
+/* ── end Y² overview ── */
+
+/* An empty chat's own content in place of its transcript (SessionLauncher
+   emptyState), centered in the space the transcript would fill. Y²'s says
+   what it is for and offers questions that send at a click. */
+.session-empty-state {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	min-height: 0;
+	padding: 24px 16px;
+}
+.y-squared-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	text-align: center;
+}
+.y-squared-empty-text {
+	margin: 0;
+	color: var(--list-text-muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.y-squared-suggestions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.y-squared-suggestion {
+	height: 26px;
+	padding: 0 10px;
+	border: 1px solid #ffffff14;
+	border-radius: 13px;
+	background: #ffffff06;
+	color: var(--list-text-secondary);
+	font-size: 12px;
+	cursor: pointer;
+}
+.y-squared-suggestion:hover {
+	background: #ffffff0f;
+	color: var(--list-text-strong);
+}
+.y-squared-suggestion:focus-visible {
+	outline: 2px solid #aaa;
+	outline-offset: 1px;
+}
+
+/* Live references in Y and Y² replies (agent-reference-chips.tsx): a thread
+   or a pull request as a compact chip in running text, an event as one
+   quiet centered line, and a thread's status as prose behind a small icon. Chips keep the reply's 13px text and 18px line, so a
+   line with a chip is as tall as one without; the label sits on the text
+   baseline and a long thread title ends in an ellipsis instead of wrapping. */
+.reference-chip-label {
+	display: inline-block;
+	max-width: 240px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: top;
+}
+.reference-chip-icon {
+	display: inline-block;
+	margin-top: 2.5px;
+	margin-right: 4px;
+	vertical-align: top;
+}
+.session-event-icon {
+	flex-shrink: 0;
+	color: var(--event-icon);
+}
+.session-markdown a.reference-chip {
+	display: inline-block;
+	max-width: 100%;
+	height: 18px;
+	padding: 0 5px;
+	border-radius: 5px;
+	background: rgba(154, 194, 255, 0.1);
+	color: #9ac2ff;
+	font-size: 13px;
+	line-height: 18px;
+	text-decoration: none;
+	white-space: nowrap;
+	overflow-wrap: normal;
+	vertical-align: baseline;
+}
+.session-markdown a.reference-chip:hover {
+	background: rgba(154, 194, 255, 0.18);
+}
+.session-markdown a.reference-chip:focus-visible {
+	outline: 1px solid #9ac2ff;
+	outline-offset: 1px;
+}
+.session-markdown p.session-event-line {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	margin: 2px 0;
+	color: var(--list-text-muted);
+	font-size: 12px;
+	line-height: 18px;
+	text-align: center;
+	white-space: nowrap;
+}
+/* One line only: a long event ends in an ellipsis (its title has the rest). */
+.session-event-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* A thread's status as plain left-aligned prose, a small icon in front. */
+.session-markdown p.session-status-paragraph {
+	text-align: left;
+}
+.session-status-icon {
+	display: inline-block;
+	margin-top: 2.5px;
+	margin-right: 6px;
+	vertical-align: top;
+}
+.session-markdown [data-event] {
+	--event-icon: #40c977;
+}
+.session-markdown [data-event="needs-you"] {
+	--event-icon: #fbbf24;
+}
+.session-markdown [data-event="merged"] {
+	--event-icon: #a78bfa;
+}
+.session-markdown [data-event="failed"] {
+	--event-icon: #ff6764;
 }

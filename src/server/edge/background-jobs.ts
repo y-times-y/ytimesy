@@ -5,6 +5,11 @@ import {
 	backgroundJob,
 	interruptedJobDecision,
 } from "../../domain/background-job";
+import {
+	BUDGET_PAUSED_MESSAGE,
+	globalBudgetMode,
+	isSpendingCapError,
+} from "../../domain/cloudflare-budget";
 import { modelConversationName } from "../../domain/model-conversation-routing";
 import { withBackgroundJobDispatcher } from "../adapters/background-job-dispatch";
 import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
@@ -29,6 +34,7 @@ import {
 	JobTimeLimitReached,
 	runWithJobTimeLimit,
 } from "./background-job-time-limit";
+import { budgetAdmission } from "./budget-admission";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { withEdgeModelEndpoints } from "./model-endpoint";
@@ -116,16 +122,38 @@ export async function admitQueuedTurns(env: EdgeExecutorEnvironment) {
 	await admitQueuedTurnsWith((turn) => startClaimedTurn(env, turn));
 }
 
-/** Hands a claimed turn to its chat's loop; idempotent for the same turn and lease. */
-export function startClaimedTurn(
+/**
+ * Hands a claimed turn to its chat's loop; idempotent for the same turn and
+ * lease. "held": the monthly compute budget (or the global pause) keeps the
+ * turn queued; the caller releases its claim. A turn already running is
+ * never asked about.
+ */
+export async function startClaimedTurn(
 	env: EdgeExecutorEnvironment,
 	turn: TurnStartRequest,
-) {
+): Promise<boolean | "held" | "paused"> {
 	const scope = { userId: turn.userId, sessionId: turn.sessionId };
-	return env.MODEL_CONVERSATIONS.getByName(
-		modelConversationName(scope),
-		durableObjectLocation(),
-	).startTurn(scope, { turnId: turn.turnId, leaseId: turn.leaseId });
+	const admission = await budgetAdmission(env, turn.userId);
+	if (admission.action === "hold") {
+		console.warn("Turn held by the compute budget.", {
+			message: admission.message,
+		});
+		return admission.message === BUDGET_PAUSED_MESSAGE ? "paused" : "held";
+	}
+	try {
+		return await env.MODEL_CONVERSATIONS.getByName(
+			modelConversationName(scope),
+			durableObjectLocation(),
+		).startTurn(
+			scope,
+			{ turnId: turn.turnId, leaseId: turn.leaseId },
+			{ degraded: admission.degraded },
+		);
+	} catch (error) {
+		// Cloudflare's account spending cap: the same message, not a generic failure.
+		if (isSpendingCapError(error)) return "held";
+		throw error;
+	}
 }
 
 /** Idempotent by job ID: admitting the same job again only reports its state. */
@@ -137,6 +165,13 @@ export function startBackgroundJob(
 		backgroundJob.parse(job),
 	);
 }
+
+/** Background kinds that wait while the compute budget is degraded or paused globally. */
+const NON_ESSENTIAL_JOB_KINDS: ReadonlySet<string> = new Set([
+	"maintenance",
+	"memory",
+	"pr-evidence",
+]);
 
 type JobRecord = {
 	job: BackgroundJob;
@@ -198,6 +233,19 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 				interruptions,
 			});
 			record = { ...record, interruptions };
+		}
+		// The global compute kill-switch (YTIMESY_CF_BUDGET_GLOBAL=degrade|pause):
+		// non-essential jobs wait on an alarm (no active time) and keep their attempts.
+		if (
+			NON_ESSENTIAL_JOB_KINDS.has(record.job.kind) &&
+			globalBudgetMode(process.env.YTIMESY_CF_BUDGET_GLOBAL) !== "off"
+		) {
+			await this.ctx.storage.put<JobRecord>("job", {
+				...record,
+				state: "queued",
+			});
+			await this.ctx.storage.setAlarm(Date.now() + 30 * 60_000);
+			return;
 		}
 		// Memory-heavy kinds share the isolate's budget with other jobs; one
 		// that does not fit waits on an alarm (no active time) and keeps its attempts.
