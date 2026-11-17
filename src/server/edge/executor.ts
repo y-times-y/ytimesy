@@ -577,6 +577,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				waitingOn: null,
 				prUrl: null,
 				lastReply: null,
+				lastRequest: null,
 				title: "",
 			};
 			if (turnStatus !== "running") {

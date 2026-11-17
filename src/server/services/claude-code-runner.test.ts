@@ -2396,6 +2396,19 @@ describe("Y² on a runner box (no machine)", () => {
 		});
 	const transcript = `${HOME}/.ytimesy/claude-code/projects/${claudeCodeProjectDirectory(Y_CWD)}/${CLAUDE_SESSION}.jsonl`;
 
+	it("offers only ytimesy's bridge server: none of the user's MCP servers", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		vm.files.set(transcript, '{"type":"user"}\n');
+		await runClaudeCodeStep(ySquared(vm));
+		const mcp = JSON.parse(vm.files.get(`${RUNS}/1/mcp.json`) ?? "{}");
+		expect(Object.keys(mcp.mcpServers)).toEqual(["ytimesy"]);
+		expect(String(vm.files.get(`${RUNS}/1/system`))).not.toMatch(
+			/MCP servers unavailable/,
+		);
+	});
+
 	it("writes its own prompt and an options file with every native tool off", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, success);

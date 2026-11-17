@@ -9,6 +9,7 @@ import {
 	startThreadInput,
 	stopThreadInput,
 	threadsOverview,
+	threadTimesText,
 	Y_SQUARED_MAX_STARTS_PER_TURN,
 	Y_SQUARED_MESSAGE_THREAD_DESCRIPTION,
 	Y_SQUARED_MESSAGE_THREAD_TOOL,
@@ -109,7 +110,10 @@ function rowFromSidebar(chat: Sidebar): CrewRow {
 		waitingOn: chat.waitingOn ?? null,
 		prUrl: null,
 		lastReply: null,
+		lastRequest: null,
 		updatedAt: Date.parse(chat.workingSince ?? chat.updatedAt ?? "") || 0,
+		createdAt: 0,
+		lastActiveAt: 0,
 	};
 }
 
@@ -177,18 +181,19 @@ export function ySquaredTools(input: {
 	return {
 		[Y_SQUARED_THREADS_TOOL]: tool({
 			description:
-				"Every thread in this project: what it needs from the person, whether it is working, its last reply, and its pull request. Threads that need the person come first.",
+				"Every thread in this project: what it needs from the person, whether it is working, when it was last active and created, its last request, last reply and pull request. Threads that need the person come first, then the most recently active.",
 			inputSchema: z.object({}),
 			execute: async () => {
 				const now = deps.now();
 				return threadsOverview(
 					(await crewRows()).map((row) => crewDigest(row, now)),
+					now,
 				);
 			},
 		}),
 		[Y_SQUARED_THREAD_TOOL]: tool({
 			description:
-				"One thread's details: its status, its last reply and its pull request. Pass the id from the threads list.",
+				"One thread's details: its status, when it was last active and created, its last request, last reply and pull request. Pass the id from the threads list.",
 			inputSchema: z.object({
 				id: z.string().min(1).max(64).describe("The thread's id"),
 			}),
@@ -199,7 +204,8 @@ export function ySquaredTools(input: {
 					: (await fromSidebar()).find((entry) => entry.sessionId === id);
 				if (!row || row.sessionId === input.selfId)
 					return "No such thread in this project.";
-				const digest = crewDigest(row, deps.now());
+				const now = deps.now();
+				const digest = crewDigest(row, now);
 				return [
 					`"${digest.title}" (id ${digest.id})`,
 					digest.waitingOn
@@ -207,6 +213,8 @@ export function ySquaredTools(input: {
 						: digest.workingForMinutes !== null
 							? `Status: working for ${digest.workingForMinutes} min`
 							: "Status: idle",
+					threadTimesText(digest, now),
+					digest.lastRequest ? `Last request: ${digest.lastRequest}` : "",
 					digest.pullRequest ? `Pull request: ${digest.pullRequest}` : "",
 					digest.lastReply
 						? `Last reply: ${digest.lastReply}`

@@ -356,3 +356,73 @@ describe("ySquaredTools write tools", () => {
 		expect(f.crew).not.toHaveBeenCalled();
 	});
 });
+
+describe("ySquaredTools: which thread did what, and when", () => {
+	const seed = (crew: SqliteYSquaredCrew) => {
+		const base = {
+			userId: "u",
+			projectId: "p",
+			ySquaredId: "y2",
+			prUrl: null,
+			lastReply: null,
+			waitingOn: null,
+		};
+		crew.noteThread(
+			{ ...base, sessionId: "t1", title: "Docs", state: "working" },
+			NOW - 3 * 86_400_000,
+		);
+		crew.noteThread(
+			{
+				...base,
+				sessionId: "t1",
+				title: "Docs",
+				state: "finished",
+				lastReply: "Docs are updated.",
+				lastRequest: "Update the README",
+			},
+			NOW - 3 * 86_400_000 + 60_000,
+		);
+		crew.noteThread(
+			{
+				...base,
+				sessionId: "t2",
+				title: "Health endpoint",
+				state: "finished",
+				lastReply: "Added /health.",
+				lastRequest: "Add a health endpoint",
+			},
+			NOW - 2 * 3_600_000,
+		);
+	};
+
+	it("threads: last active, created, last request and reply; most recently active first; compact", async () => {
+		const { tools } = fixture(seed);
+		const text = await run(tools, "threads", {});
+		expect(text.indexOf("Health endpoint")).toBeLessThan(
+			text.indexOf('"Docs"'),
+		);
+		expect(text).toContain("last active 2 h ago · created 2026-11-12");
+		expect(text).toContain("last active 3 days ago · created 2026-11-09");
+		expect(text).toContain("last request: Add a health endpoint");
+		expect(text).toContain("last reply: Added /health.");
+		for (const block of text.split(/\n(?=- \[)/))
+			expect(block.split("\n").length).toBeLessThanOrEqual(6);
+	});
+
+	it("thread: shows the same facts for one thread", async () => {
+		const { tools } = fixture(seed);
+		const text = await run(tools, "thread", { id: "t2" });
+		expect(text).toContain("last active 2 h ago · created 2026-11-12");
+		expect(text).toContain("Last request: Add a health endpoint");
+		expect(text).toContain("Last reply: Added /health.");
+	});
+
+	it("says what is not recorded for a thread seeded from the sidebar", async () => {
+		const crew = fixture();
+		// The overview fills the empty crew from the sidebar once.
+		await run(crew.tools, "threads", {});
+		const text = await run(crew.tools, "thread", { id: "t1" });
+		expect(text).toContain("created not recorded");
+		expect(text).toContain("last active");
+	});
+});
