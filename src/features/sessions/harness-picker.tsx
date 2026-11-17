@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Check, ChevronDown, RefreshCw, Search, Star, Zap } from "lucide-react";
+import { ChevronDown, RefreshCw, Search, Star, Zap } from "lucide-react";
 import { contextWindowLabel } from "#/domain/context-window-option";
 import "./model-picker.css";
-import { type ReactNode, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useState } from "react";
 import {
 	Popover,
 	PopoverContent,
@@ -31,10 +31,19 @@ import { getClaudeSubscription } from "./claude-subscription.fn";
 import { codexCatalogKey } from "./codex-catalog-store";
 import {
 	type ComposerSpeed,
+	resolveReasoningLevel,
 	type SessionModel,
 	sessionModelsFromListed,
 } from "./model-capabilities";
 import { getModelConnections } from "./model-connections.fn";
+import {
+	ModelDetailCard,
+	ModelDetailProvider,
+	type ModelDetailSpec,
+	ModelInfoButton,
+	ModelRowMeta,
+	useModelDetail,
+} from "./model-detail";
 import {
 	ModelFavoriteButton,
 	type RenderModelFavorite,
@@ -44,6 +53,7 @@ import {
 	readModelFavorites,
 	writeModelFavorites,
 } from "./model-picker-favorites";
+import { nextFocusIndex } from "./model-picker-format";
 import { ModelPickerSettings } from "./model-picker-settings";
 import { ModelProviderLogo, modelLogoProvider } from "./model-provider-logo";
 import {
@@ -208,6 +218,10 @@ export function HarnessPicker({
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
 	const [favorites, setFavorites] = useState<readonly string[]>([]);
+	// The model the side card shows: the last row hovered or focused. Set from
+	// what the rows already hold, so hovering never reads anything.
+	const [detail, setDetail] = useState<ModelDetailSpec | null>(null);
+	const [detailExpanded, setDetailExpanded] = useState(false);
 	const searching = Boolean(search.trim());
 	const model = models.find((candidate) => candidate.id === modelId);
 	function chooseModel(id: string) {
@@ -239,6 +253,49 @@ export function HarnessPicker({
 		);
 	}
 
+	function detailRowProps(spec: ModelDetailSpec) {
+		return {
+			onPointerEnter: (event: { pointerType?: string }) => {
+				if (event.pointerType === "mouse") setDetail(spec);
+			},
+			onFocus: () => setDetail(spec),
+		};
+	}
+	// Arrow keys walk the options from the search box and between rows.
+	function onPickerKeyDown(event: KeyboardEvent<HTMLElement>) {
+		if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+		const target = event.target as HTMLElement;
+		const inSearch = target.matches(".model-picker-search input");
+		if (!inSearch && !target.matches("[data-model-option]")) return;
+		if (inSearch && (event.key === "Home" || event.key === "End")) return;
+		const options = Array.from(
+			event.currentTarget.querySelectorAll<HTMLElement>(
+				"[data-model-option]:not(:disabled)",
+			),
+		);
+		const at = options.indexOf(target);
+		if (inSearch && event.key === "ArrowUp") return;
+		const next = inSearch ? 0 : nextFocusIndex(at, options.length, event.key);
+		if (next === null) {
+			if (!inSearch && event.key === "ArrowUp" && at === 0) {
+				event.preventDefault();
+				event.currentTarget
+					.querySelector<HTMLInputElement>(".model-picker-search input")
+					?.focus();
+			}
+			return;
+		}
+		event.preventDefault();
+		options[next]?.focus();
+		options[next]?.scrollIntoView({ block: "nearest" });
+	}
+	const detailSelected =
+		detail !== null && detail.provider === harnessId && detail.id === modelId;
+	const detailModel = detailSelected ? model : undefined;
+	const detailFavorite = detail
+		? favorites.includes(favoriteModelKey(detail.provider, detail.id))
+		: false;
+
 	return (
 		<Popover
 			open={open}
@@ -247,6 +304,8 @@ export function HarnessPicker({
 				if (value) {
 					setFavorites(readModelFavorites());
 					setSearch("");
+					setDetail(null);
+					setDetailExpanded(false);
 					// Open on the section the chosen model belongs to: Codex,
 					// Claude Code, the Grok plan, or its provider's API keys.
 					const view = pickerViewFor(harnessId, modelId, connections.data);
@@ -294,260 +353,299 @@ export function HarnessPicker({
 				align="start"
 				className="harness-picker"
 				aria-label="Choose model"
+				onKeyDown={onPickerKeyDown}
 			>
-				<label className="model-picker-search">
-					<Search size={16} aria-hidden="true" />
-					<input
-						aria-label="Search models"
-						placeholder="Search models"
-						value={search}
-						onChange={(event) => setSearch(event.target.value)}
-					/>
-				</label>
-				{model ? (
-					<ModelPickerSettings
-						model={model}
-						reasoningId={reasoningId}
-						onReasoningIdChange={onReasoningIdChange}
-						speed={speed}
-						onSpeedChange={onSpeedChange}
-						alternateContext={alternateContext}
-						onAlternateContextChange={onAlternateContextChange}
-					/>
-				) : null}
-				<div className="model-picker-body">
-					<nav className="model-provider-rail" aria-label="Model providers">
-						<button
-							type="button"
-							aria-label="Favorites"
-							title="Favorites across all models"
-							aria-pressed={favoritesOnly}
-							onClick={() => {
-								setBrowse(false);
-								setClaudeView(false);
-								setFavoritesOnly(!favoritesOnly);
-							}}
-						>
-							<Star size={19} />
-						</button>
-						{options
-							.filter((option) => option.id === "codex")
-							.map((option) => (
+				<ModelDetailProvider
+					value={{
+						rowProps: detailRowProps,
+						open: (spec) => {
+							setDetail(spec);
+							setDetailExpanded(true);
+						},
+					}}
+				>
+					<label className="model-picker-search">
+						<Search size={16} aria-hidden="true" />
+						<input
+							aria-label="Search models"
+							placeholder="Search models"
+							value={search}
+							onChange={(event) => setSearch(event.target.value)}
+						/>
+					</label>
+					{model ? (
+						<ModelPickerSettings
+							model={model}
+							reasoningId={reasoningId}
+							onReasoningIdChange={onReasoningIdChange}
+							speed={speed}
+							onSpeedChange={onSpeedChange}
+							alternateContext={alternateContext}
+							onAlternateContextChange={onAlternateContextChange}
+						/>
+					) : null}
+					<div className="model-picker-body">
+						<nav className="model-provider-rail" aria-label="Model providers">
+							<button
+								type="button"
+								aria-label="Favorites"
+								title="Favorites across all models"
+								aria-pressed={favoritesOnly}
+								onClick={() => {
+									setBrowse(false);
+									setClaudeView(false);
+									setFavoritesOnly(!favoritesOnly);
+								}}
+							>
+								<Star size={19} />
+							</button>
+							{options
+								.filter((option) => option.id === "codex")
+								.map((option) => (
+									<button
+										key={option.id}
+										className="model-provider-subscription"
+										type="button"
+										title={`${option.name} · ChatGPT subscription`}
+										aria-label={option.name}
+										aria-pressed={!browse && !favoritesOnly && !claudeView}
+										onClick={() => {
+											setFavoritesOnly(false);
+											setBrowse(false);
+											setClaudeView(false);
+											setGrokView(false);
+											setSearch("");
+										}}
+									>
+										<SubscriptionMark brand="codex" size={21} />
+									</button>
+								))}
+							{claudeData ? (
 								<button
-									key={option.id}
 									className="model-provider-subscription"
 									type="button"
-									title={`${option.name} · ChatGPT subscription`}
-									aria-label={option.name}
-									aria-pressed={!browse && !favoritesOnly && !claudeView}
+									title="Claude Agent · Claude subscription"
+									aria-label="Claude Agent"
+									aria-pressed={claudeView && !browse && !favoritesOnly}
 									onClick={() => {
 										setFavoritesOnly(false);
 										setBrowse(false);
-										setClaudeView(false);
+										setClaudeView(true);
 										setGrokView(false);
 										setSearch("");
 									}}
 								>
-									<SubscriptionMark brand="codex" size={21} />
+									<SubscriptionMark brand="claude" size={21} />
 								</button>
-							))}
-						{claudeData ? (
-							<button
-								className="model-provider-subscription"
-								type="button"
-								title="Claude Agent · Claude subscription"
-								aria-label="Claude Agent"
-								aria-pressed={claudeView && !browse && !favoritesOnly}
-								onClick={() => {
-									setFavoritesOnly(false);
-									setBrowse(false);
-									setClaudeView(true);
-									setGrokView(false);
-									setSearch("");
-								}}
-							>
-								<SubscriptionMark brand="claude" size={21} />
-							</button>
-						) : null}
-						{grokSubscription ? (
-							<button
-								className="model-provider-subscription"
-								type="button"
-								title="Grok · Grok subscription"
-								aria-label="Grok subscription"
-								aria-pressed={
-									browse && grokView && apiProvider === "x-ai" && !favoritesOnly
-								}
-								onClick={() => {
-									setFavoritesOnly(false);
-									setClaudeView(false);
-									setGrokView(true);
-									setApiProvider("x-ai");
+							) : null}
+							{grokSubscription ? (
+								<button
+									className="model-provider-subscription"
+									type="button"
+									title="Grok · Grok subscription"
+									aria-label="Grok subscription"
+									aria-pressed={
+										browse &&
+										grokView &&
+										apiProvider === "x-ai" &&
+										!favoritesOnly
+									}
+									onClick={() => {
+										setFavoritesOnly(false);
+										setClaudeView(false);
+										setGrokView(true);
+										setApiProvider("x-ai");
+										setBrowse(true);
+										setSearch("");
+									}}
+								>
+									<SubscriptionMark brand="grok" size={21} />
+								</button>
+							) : null}
+							<ApiProviderRail
+								selected={browse && !grokView ? apiProvider : null}
+								onSelect={(id) => {
 									setBrowse(true);
+									setGrokView(false);
+									setClaudeView(false);
+									setApiProvider(id);
+									setFavoritesOnly(false);
 									setSearch("");
 								}}
-							>
-								<SubscriptionMark brand="grok" size={21} />
-							</button>
-						) : null}
-						<ApiProviderRail
-							selected={browse && !grokView ? apiProvider : null}
-							onSelect={(id) => {
-								setBrowse(true);
-								setGrokView(false);
-								setClaudeView(false);
-								setApiProvider(id);
-								setFavoritesOnly(false);
-								setSearch("");
-							}}
-						/>
-					</nav>
-					<section
-						className="model-picker-catalog"
-						aria-label={
-							favoritesOnly
-								? "Favorite models"
-								: searching
-									? "Search all models"
-									: browse
-										? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
-										: claudeView && claudeData
-											? "Claude Agent"
-											: "Codex"
-						}
-					>
-						{searching || favoritesOnly ? (
-							<>
-								{favoritesOnly && favorites.length === 0 ? (
-									<p className="model-picker-status">
-										No favorites yet. Star a model in any list to add it here.
-									</p>
-								) : null}
-								{claudeData ? (
-									<ClaudeCodeSearch
+							/>
+						</nav>
+						<section
+							className="model-picker-catalog"
+							aria-label={
+								favoritesOnly
+									? "Favorite models"
+									: searching
+										? "Search all models"
+										: browse
+											? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
+											: claudeView && claudeData
+												? "Claude Agent"
+												: "Codex"
+							}
+						>
+							{searching || favoritesOnly ? (
+								<>
+									{favoritesOnly && favorites.length === 0 ? (
+										<p className="model-picker-status">
+											No favorites yet. Star a model in any list to add it here.
+										</p>
+									) : null}
+									{claudeData ? (
+										<ClaudeCodeSearch
+											favoriteIds={favoritesOnly ? favorites : undefined}
+											renderFavorite={renderFavorite("api")}
+											models={claudeData.models}
+											search={search}
+											selectedRoute={harnessId === "api" ? modelId : ""}
+											onSelect={(id) => {
+												if (harnessId !== "api") onHarnessIdChange("api");
+												onModelIdChange(id);
+												setOpen(false);
+											}}
+										/>
+									) : null}
+									<CodexModelSearch
 										favoriteIds={favoritesOnly ? favorites : undefined}
-										renderFavorite={renderFavorite("api")}
-										models={claudeData.models}
+										renderFavorite={renderFavorite("codex")}
 										search={search}
-										selectedRoute={harnessId === "api" ? modelId : ""}
+										fallbackModels={codexModels}
+										onSelect={(id) => {
+											if (harnessId !== "codex") onHarnessIdChange("codex");
+											onModelIdChange(id);
+											setOpen(false);
+										}}
+									/>
+									<ApiModelBrowser
+										renderFavorite={renderFavorite("api")}
+										author={null}
+										favoriteIds={favoritesOnly ? favorites : undefined}
+										search={search}
+										// The subscription row above is the usable one; no locked copy.
+										coveredIds={
+											claudeData
+												? claudeCodeCoveredOpenRouterIds(claudeData.models)
+												: undefined
+										}
+										hasOtherResults={
+											favoritesOnly ||
+											claudeCodeSearchMatches(claudeData?.models ?? [], search)
+												.length > 0
+										}
+										onBrowseProvider={(author) => {
+											setApiProvider(author);
+											setBrowse(true);
+											setSearch("");
+										}}
+										selectedRoute={modelId}
 										onSelect={(id) => {
 											if (harnessId !== "api") onHarnessIdChange("api");
 											onModelIdChange(id);
 											setOpen(false);
 										}}
 									/>
-								) : null}
-								<CodexModelSearch
-									favoriteIds={favoritesOnly ? favorites : undefined}
-									renderFavorite={renderFavorite("codex")}
-									search={search}
-									fallbackModels={codexModels}
-									onSelect={(id) => {
-										if (harnessId !== "codex") onHarnessIdChange("codex");
-										onModelIdChange(id);
-										setOpen(false);
-									}}
-								/>
-								<ApiModelBrowser
+								</>
+							) : claudeView && claudeData ? (
+								<ClaudeCodeModels
 									renderFavorite={renderFavorite("api")}
-									author={null}
-									favoriteIds={favoritesOnly ? favorites : undefined}
-									search={search}
-									// The subscription row above is the usable one; no locked copy.
-									coveredIds={
-										claudeData
-											? claudeCodeCoveredOpenRouterIds(claudeData.models)
-											: undefined
+									models={claudeData.models}
+									usage={
+										<SectionPlanUsage
+											line={claudeUsage}
+											label="Claude plan"
+											hint={CLAUDE_PLAN_USAGE_HINT}
+										/>
 									}
-									hasOtherResults={
-										favoritesOnly ||
-										claudeCodeSearchMatches(claudeData?.models ?? [], search)
-											.length > 0
-									}
-									onBrowseProvider={(author) => {
-										setApiProvider(author);
-										setBrowse(true);
-										setSearch("");
-									}}
-									selectedRoute={modelId}
+									selectedRoute={harnessId === "api" ? modelId : ""}
 									onSelect={(id) => {
 										if (harnessId !== "api") onHarnessIdChange("api");
 										onModelIdChange(id);
 										setOpen(false);
 									}}
 								/>
-							</>
-						) : claudeView && claudeData ? (
-							<ClaudeCodeModels
-								renderFavorite={renderFavorite("api")}
-								models={claudeData.models}
-								usage={
-									<SectionPlanUsage
-										line={claudeUsage}
-										label="Claude plan"
-										hint={CLAUDE_PLAN_USAGE_HINT}
-									/>
-								}
-								selectedRoute={harnessId === "api" ? modelId : ""}
-								onSelect={(id) => {
-									if (harnessId !== "api") onHarnessIdChange("api");
-									onModelIdChange(id);
-									setOpen(false);
-								}}
-							/>
-						) : browse ? (
-							<ApiModelBrowser
-								renderFavorite={renderFavorite("api")}
-								key={`${apiProvider}:${grokView ? "plan" : "keys"}`}
-								author={apiProvider}
-								// Grok's plan has its own rail entry; xAI lists API keys only.
-								source={
-									apiProvider === "x-ai" && grokSubscription
-										? grokView
-											? "plan"
-											: "keys"
-										: undefined
-								}
-								usage={<SectionPlanUsage line={grokUsage} label="Grok plan" />}
-								search={search}
-								selectedRoute={modelId}
-								onSelect={(id) => {
-									if (harnessId !== "api") {
-										onHarnessIdChange("api");
-										onModelIdChange(id);
-										setOpen(false);
-									} else chooseModel(id);
-								}}
-							/>
-						) : (
-							<CodexSection
-								models={codexModels}
-								visibleModels={visibleModels}
-								status={codexStatus}
-								onRetry={codexRetry}
-								onRefresh={codexCatalog.refresh}
-								refreshing={codexCatalog.refreshing}
-								refreshDisabled={codexCatalog.cooling}
-								search={search}
-								modelId={harnessId === "codex" ? modelId : ""}
-								modelsEnabled={modelsEnabled}
-								providerConnected={providerConnected}
-								connectionContent={
-									harnessId === "codex" ? connectionContent : null
-								}
-								usage={
-									<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
-								}
-								renderFavorite={renderFavorite("codex")}
-								onSelect={(id) => {
-									if (harnessId !== "codex") onHarnessIdChange("codex");
-									chooseModel(id);
-								}}
-							/>
-						)}
-					</section>
-				</div>
-				<ModelPickerUsage windows={usageWindows} />
+							) : browse ? (
+								<ApiModelBrowser
+									renderFavorite={renderFavorite("api")}
+									key={`${apiProvider}:${grokView ? "plan" : "keys"}`}
+									author={apiProvider}
+									// Grok's plan has its own rail entry; xAI lists API keys only.
+									source={
+										apiProvider === "x-ai" && grokSubscription
+											? grokView
+												? "plan"
+												: "keys"
+											: undefined
+									}
+									usage={
+										<SectionPlanUsage line={grokUsage} label="Grok plan" />
+									}
+									search={search}
+									selectedRoute={modelId}
+									onSelect={(id) => {
+										if (harnessId !== "api") {
+											onHarnessIdChange("api");
+											onModelIdChange(id);
+											setOpen(false);
+										} else chooseModel(id);
+									}}
+								/>
+							) : (
+								<CodexSection
+									models={codexModels}
+									visibleModels={visibleModels}
+									status={codexStatus}
+									onRetry={codexRetry}
+									onRefresh={codexCatalog.refresh}
+									refreshing={codexCatalog.refreshing}
+									refreshDisabled={codexCatalog.cooling}
+									search={search}
+									modelId={harnessId === "codex" ? modelId : ""}
+									modelsEnabled={modelsEnabled}
+									providerConnected={providerConnected}
+									connectionContent={
+										harnessId === "codex" ? connectionContent : null
+									}
+									usage={
+										<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
+									}
+									renderFavorite={renderFavorite("codex")}
+									onSelect={(id) => {
+										if (harnessId !== "codex") onHarnessIdChange("codex");
+										chooseModel(id);
+									}}
+								/>
+							)}
+						</section>
+					</div>
+					<ModelPickerUsage windows={usageWindows} />
+					{detail ? (
+						<ModelDetailCard
+							key={`${detail.provider}:${detail.id}`}
+							spec={detail}
+							expanded={detailExpanded}
+							onExpandedChange={setDetailExpanded}
+							favorite={detailFavorite}
+							onToggleFavorite={() =>
+								toggleFavorite(detail.id, detail.provider)
+							}
+							reasoning={
+								detailModel?.reasoning && onReasoningIdChange
+									? {
+											levels: detailModel.reasoning.levels,
+											valueId:
+												resolveReasoningLevel(detailModel, reasoningId)?.id ??
+												"",
+											onChange: onReasoningIdChange,
+										}
+									: undefined
+							}
+						/>
+					) : null}
+				</ModelDetailProvider>
 			</PopoverContent>
 		</Popover>
 	);
@@ -591,6 +689,7 @@ export function CodexSection({
 	renderFavorite?: RenderModelFavorite;
 	onSelect: (id: string) => void;
 }) {
+	const detail = useModelDetail();
 	return (
 		<>
 			<div className="model-section-head">
@@ -617,6 +716,15 @@ export function CodexSection({
 					<ModelListSkeleton />
 				) : null}
 				{visibleModels.map((candidate) => {
+					const spec = {
+						id: candidate.id,
+						provider: "codex",
+						label: candidate.label,
+						logo: "codex",
+						priceId: candidate.id,
+						plan: true,
+						contextTokens: candidate.contextWindow?.standard,
+					} as const;
 					return (
 						<div
 							className="model-picker-row"
@@ -627,19 +735,24 @@ export function CodexSection({
 								type="button"
 								className="model-picker-option"
 								disabled={!modelsEnabled}
+								data-model-option
 								aria-pressed={candidate.id === modelId}
 								title={candidate.notice ?? candidate.label}
+								{...detail?.rowProps(spec)}
 								onClick={() => {
 									onSelect(candidate.id);
 								}}
 							>
 								<AgentProviderMark provider="codex" size={16} />
 								<span>{candidate.label}</span>
-								{candidate.id === modelId ? (
-									<Check size={14} aria-hidden="true" />
-								) : null}
+								<ModelRowMeta
+									priceId={candidate.id}
+									plan
+									selected={candidate.id === modelId}
+								/>
 							</button>
 							{renderFavorite?.(candidate.id, candidate.label)}
+							<ModelInfoButton spec={spec} />
 						</div>
 					);
 				})}
@@ -698,6 +811,7 @@ export function ClaudeCodeModels({
 	selectedRoute: string;
 	onSelect: (id: string) => void;
 }) {
+	const detail = useModelDetail();
 	return (
 		<>
 			<div className="model-section-head">
@@ -711,28 +825,43 @@ export function ClaudeCodeModels({
 				Claude subscription
 			</p>
 			<div className="model-picker-list">
-				{models.map((model) => (
-					<div
-						className="model-picker-row"
-						key={model.id}
-						data-selected={model.id === selectedRoute}
-					>
-						<button
-							type="button"
-							className="model-picker-option"
-							aria-pressed={model.id === selectedRoute}
-							title={`${model.label} in Claude Agent`}
-							onClick={() => onSelect(model.id)}
+				{models.map((model) => {
+					const spec = {
+						id: model.id,
+						provider: "api",
+						label: model.label,
+						logo: "anthropic",
+						priceId: model.id,
+						plan: true,
+					} as const;
+					return (
+						<div
+							className="model-picker-row"
+							key={model.id}
+							data-selected={model.id === selectedRoute}
 						>
-							<ModelProviderLogo provider="anthropic" size={16} />
-							<span>{model.label}</span>
-							{model.id === selectedRoute ? (
-								<Check size={14} aria-hidden="true" />
-							) : null}
-						</button>
-						{renderFavorite?.(model.id, model.label)}
-					</div>
-				))}
+							<button
+								type="button"
+								className="model-picker-option"
+								data-model-option
+								aria-pressed={model.id === selectedRoute}
+								title={`${model.label} in Claude Agent`}
+								{...detail?.rowProps(spec)}
+								onClick={() => onSelect(model.id)}
+							>
+								<ModelProviderLogo provider="anthropic" size={16} />
+								<span>{model.label}</span>
+								<ModelRowMeta
+									priceId={model.id}
+									plan
+									selected={model.id === selectedRoute}
+								/>
+							</button>
+							{renderFavorite?.(model.id, model.label)}
+							<ModelInfoButton spec={spec} />
+						</div>
+					);
+				})}
 				{models.length === 0 ? (
 					<p className="model-picker-status" role="status">
 						Connect your Claude plan in Settings › Agents
@@ -767,28 +896,44 @@ function ClaudeCodeSearch({
 		(model) =>
 			!favoriteIds || favoriteIds.includes(favoriteModelKey("api", model.id)),
 	);
+	const detail = useModelDetail();
 	if (!results.length) return null;
 	return (
 		<>
 			<h3>Claude Agent · Claude subscription</h3>
-			{results.map((model) => (
-				<div className="model-picker-row" key={model.id}>
-					<button
-						type="button"
-						className="model-browser-option model-browser-choice"
-						aria-pressed={model.id === selectedRoute}
-						title={`${model.label} in Claude Agent`}
-						onClick={() => onSelect(model.id)}
-					>
-						<ModelProviderLogo provider="anthropic" size={16} />
-						<span>{model.label}</span>
-						{model.id === selectedRoute ? (
-							<Check size={14} aria-hidden="true" />
-						) : null}
-					</button>
-					{renderFavorite?.(model.id, model.label)}
-				</div>
-			))}
+			{results.map((model) => {
+				const spec = {
+					id: model.id,
+					provider: "api",
+					label: model.label,
+					logo: "anthropic",
+					priceId: model.id,
+					plan: true,
+				} as const;
+				return (
+					<div className="model-picker-row" key={model.id}>
+						<button
+							type="button"
+							className="model-browser-option model-browser-choice"
+							data-model-option
+							aria-pressed={model.id === selectedRoute}
+							title={`${model.label} in Claude Agent`}
+							{...detail?.rowProps(spec)}
+							onClick={() => onSelect(model.id)}
+						>
+							<ModelProviderLogo provider="anthropic" size={16} />
+							<span>{model.label}</span>
+							<ModelRowMeta
+								priceId={model.id}
+								plan
+								selected={model.id === selectedRoute}
+							/>
+						</button>
+						{renderFavorite?.(model.id, model.label)}
+						<ModelInfoButton spec={spec} />
+					</div>
+				);
+			})}
 		</>
 	);
 }
@@ -806,6 +951,7 @@ function CodexModelSearch({
 	renderFavorite?: RenderModelFavorite;
 	onSelect: (id: string) => void;
 }) {
+	const detail = useModelDetail();
 	const catalog = useCodexCatalog();
 	const models = catalog.models
 		? sessionModelsFromListed(catalog.models)
@@ -825,19 +971,34 @@ function CodexModelSearch({
 	return (
 		<>
 			<h3>Codex · ChatGPT subscription</h3>
-			{results.map((model) => (
-				<div className="model-picker-row" key={model.id}>
-					<button
-						type="button"
-						className="model-browser-option model-browser-choice"
-						onClick={() => onSelect(model.id)}
-					>
-						<AgentProviderMark provider="codex" size={16} />
-						<span>{model.label}</span>
-					</button>
-					{renderFavorite?.(model.id, model.label)}
-				</div>
-			))}
+			{results.map((model) => {
+				const spec = {
+					id: model.id,
+					provider: "codex",
+					label: model.label,
+					logo: "codex",
+					priceId: model.id,
+					plan: true,
+					contextTokens: model.contextWindow?.standard,
+				} as const;
+				return (
+					<div className="model-picker-row" key={model.id}>
+						<button
+							type="button"
+							className="model-browser-option model-browser-choice"
+							data-model-option
+							{...detail?.rowProps(spec)}
+							onClick={() => onSelect(model.id)}
+						>
+							<AgentProviderMark provider="codex" size={16} />
+							<span>{model.label}</span>
+							<ModelRowMeta priceId={model.id} plan selected={false} />
+						</button>
+						{renderFavorite?.(model.id, model.label)}
+						<ModelInfoButton spec={spec} />
+					</div>
+				);
+			})}
 		</>
 	);
 }
