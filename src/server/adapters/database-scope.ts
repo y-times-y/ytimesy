@@ -5,6 +5,11 @@ import {
 	accountQueryBytes,
 	byteAccountingEnabled,
 } from "./database-byte-accounting";
+import {
+	logConnectionFailure,
+	poolStats,
+	retryConnectFailure,
+} from "./dropped-connection-retry";
 import { withInvocationTasks } from "./invocation-tasks";
 
 type DatabaseScope = {
@@ -90,7 +95,11 @@ export async function withDatabaseScope<T>(
 		statement_timeout: 20000,
 		idle_in_transaction_session_timeout: 30000,
 	});
-	pool.on("error", () => console.warn("Request database connection failed."));
+	// An idle or checked-out client's connection died (the pool replaces it).
+	pool.on("error", (error) =>
+		logConnectionFailure("client-error", error, 0, poolStats(pool)),
+	);
+	retryPoolConnects(pool);
 	if (stepTimingEnabled()) timePool(pool);
 	if (byteAccountingEnabled()) accountQueryBytes(pool);
 	const current: DatabaseScope = { pool, resources: new Map(), cleanup: [] };
@@ -103,6 +112,35 @@ export async function withDatabaseScope<T>(
 				.catch(() => console.warn("Request resource cleanup failed."));
 		await pool.end();
 	}
+}
+
+/**
+ * A connect that timed out or was refused never ran a statement, so the
+ * promise forms of connect() and query() repeat it (250 ms, then 750 ms)
+ * before the caller sees a failure. Each failure logs its cause and the
+ * pool's counts. Callback forms are left alone.
+ */
+function retryPoolConnects(pool: Pool) {
+	if (typeof pool.query !== "function" || typeof pool.connect !== "function")
+		return;
+	const query = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+	const connect = pool.connect.bind(pool) as (...args: unknown[]) => unknown;
+	Object.assign(pool, {
+		query: (...args: unknown[]) =>
+			typeof args.at(-1) === "function"
+				? query(...args)
+				: retryConnectFailure(() => query(...args) as Promise<unknown>, {
+						stage: "query",
+						stats: () => poolStats(pool),
+					}),
+		connect: (...args: unknown[]) =>
+			args.length
+				? connect(...args)
+				: retryConnectFailure(() => connect() as Promise<unknown>, {
+						stage: "connect",
+						stats: () => poolStats(pool),
+					}),
+	});
 }
 
 /** Development diagnostics: attributes pooled queries and client checkouts to the current step. */

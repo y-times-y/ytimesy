@@ -234,32 +234,15 @@ it("sends on a refused Claude token while failover is on: the turn moves elsewhe
 	).rejects.toThrow(/Settings > Agents/);
 });
 
-const Y2_REFUSAL =
-	"Y² on a Claude subscription needs the Claude runner, which isn't enabled for your account. Pick a Codex, Grok or API-key model for this chat.";
-
-it("sends a Y² turn on a Claude Code model when the user has a Claude runner", async () => {
-	fake.ySquared.mockResolvedValue(true);
-	fake.runner.mockResolvedValue(true);
+it("adds no Y² read of its own to a Claude Code send: enqueueApiTurn gates it from the chat row it already locks", async () => {
 	await sendApiWorkspaceTask(scope, {
 		text: "What is going on?",
 		modelId: "claude-code/claude-sonnet-5-5",
+		idempotencyKey: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 	});
-	expect(fake.runner).toHaveBeenCalled();
-	expect(fake.enqueue.mock.calls[0]?.[0]).toMatchObject({
-		revision: "claude-code:v1:{}",
-	});
-});
-
-it("refuses a Y² send on a Claude Code model without a runner, before anything is queued", async () => {
-	fake.ySquared.mockResolvedValue(true);
-	await expect(
-		sendApiWorkspaceTask(scope, {
-			text: "What is going on?",
-			modelId: "claude-code/claude-sonnet-5-5",
-			idempotencyKey: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-		}),
-	).rejects.toThrow(Y2_REFUSAL);
-	expect(fake.enqueue).not.toHaveBeenCalled();
+	expect(fake.ySquared).not.toHaveBeenCalled();
+	expect(fake.runner).not.toHaveBeenCalled();
+	expect(fake.enqueue).toHaveBeenCalledTimes(1);
 });
 
 it("still sends a normal chat on Claude Code", async () => {

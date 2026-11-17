@@ -1,3 +1,7 @@
+import {
+	DATABASE_CONNECTION_SEND_FAILURE,
+	isConnectFailure,
+} from "./database-connection-failure";
 import { WORKSPACE_QUEUE_STALL_SECONDS } from "./environment-build-limits";
 import {
 	isWorkspaceAtCapacity,
@@ -102,6 +106,7 @@ export function publicFailureMessage(error: unknown) {
 				? error.statusText
 				: "Workspace preparation failed. Retry after checking GitHub access.";
 	if (!readableMessage(message)) return GENERIC_FAILURE_MESSAGE;
+	if (isConnectFailure(error)) return DATABASE_CONNECTION_SEND_FAILURE;
 	return redactInfrastructure(
 		workspaceCapacityMessage(redactSecrets(message)),
 	).slice(0, 300);
