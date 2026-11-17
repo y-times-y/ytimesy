@@ -54,8 +54,44 @@ const query = async (sql: string, values: unknown[] = []) => {
 	const result = await db.query(sql, values);
 	return { ...result, rowCount: result.affectedRows ?? result.rows.length };
 };
+// Faults for the send's connection: connects that time out, and a commit the
+// server applied whose acknowledgement was lost. `sql` records every statement.
+const fault = vi.hoisted(() => ({
+	connects: 0,
+	lostCommit: 0,
+	connected: 0,
+	sql: [] as string[],
+}));
 vi.mock("../src/server/adapters/database", () => ({
-	database: () => ({ query, connect: async () => ({ query, release() {} }) }),
+	database: () => {
+		const tracked = (async (sql: string, values?: unknown[]) => {
+			fault.sql.push(sql.trim());
+			return query(sql, values);
+		}) as typeof query;
+		return {
+			query: tracked,
+			connect: async () => {
+				if (fault.connects > 0) {
+					fault.connects--;
+					throw new Error("timeout exceeded when trying to connect");
+				}
+				fault.connected++;
+				return {
+					query: (async (sql: string, values?: unknown[]) => {
+						const result = await tracked(sql, values);
+						if (sql === "commit" && fault.lostCommit > 0) {
+							fault.lostCommit--;
+							throw new Error("Connection terminated unexpectedly");
+						}
+						return result;
+					}) as typeof query,
+					release() {
+						fault.connected--;
+					},
+				};
+			},
+		};
+	},
 }));
 const sessionId = randomUUID();
 const connectionId = randomUUID();
@@ -128,7 +164,7 @@ beforeAll(async () => {
 	);
 	// Training consent reads the chat's project; this schema builds both minimally.
 	await db.exec(
-		"create table project(id uuid primary key,user_id text); alter table agent_session add column project_id uuid references project(id)",
+		"create table project(id uuid primary key,user_id text,y_enabled boolean not null default false); alter table agent_session add column project_id uuid references project(id); alter table agent_session add column chat_role text; alter table agent_session add column archived_at timestamptz",
 	);
 	await db.exec(
 		await readFile(
@@ -150,6 +186,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "node");
+	Object.assign(fault, { connects: 0, lostCommit: 0, connected: 0, sql: [] });
 	await db.exec("truncate api_turn,agent_session,api_usage_budget cascade");
 	await db.query(
 		"insert into agent_session(id,user_id,harness,turn_status) values($1,'alice','codex','idle')",
@@ -1778,4 +1815,88 @@ it("never queues a Claude Code turn for Y², and leaves other routes alone", asy
 	await db.exec(
 		"update agent_session set project_id=null; delete from project",
 	);
+});
+
+const turnCount = async () =>
+	(await query("select count(*)::int as n from api_turn")).rows[0] as {
+		n: number;
+	};
+const keyed = (key?: string) =>
+	enqueueApiTurn({
+		sessionId,
+		userId: "alice",
+		connectionId,
+		revision,
+		modelId: "test-model",
+		routeId: `api/${connectionId}/test-model`,
+		messages: [{ role: "user", content: "test" }],
+		items: [],
+		...(key ? { idempotencyKey: key } : {}),
+	});
+
+it("repeats a send whose connection timed out before begin and queues exactly one turn", async () => {
+	fault.connects = 2;
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	// The pool wrapper retries a connect itself; here the transaction's own
+	// repeat covers a connect error that reaches it.
+	await keyed("key-connect");
+	expect(await turnCount()).toEqual({ n: 1 });
+	expect(fault.connected).toBe(0);
+	warn.mockRestore();
+});
+
+it("cannot queue two turns when the commit applied but its acknowledgement was lost", async () => {
+	fault.lostCommit = 1;
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	await keyed("key-lost-commit");
+	expect(await turnCount()).toEqual({ n: 1 });
+	expect(warn).toHaveBeenCalledWith(
+		"Request database connection failed.",
+		expect.objectContaining({ stage: "send-transaction", attempt: 1 }),
+	);
+	warn.mockRestore();
+});
+
+it("does not repeat a write that began without an idempotency key", async () => {
+	fault.lostCommit = 1;
+	await expect(keyed()).rejects.toThrow("Connection terminated unexpectedly");
+	expect(fault.sql.filter((sql) => sql === "begin")).toHaveLength(1);
+});
+
+it("gives up after two repeats with the connection error and holds no connection", async () => {
+	fault.connects = 3;
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	const error = await keyed("key-all-fail").catch((cause: unknown) => cause);
+	expect(error).toBeInstanceOf(Error);
+	expect(await turnCount()).toEqual({ n: 0 });
+	const { publicFailureMessage } = await import(
+		"../src/domain/project-workspace"
+	);
+	expect(publicFailureMessage(error)).toBe(
+		"Couldn't send that: the database connection timed out. Your message was kept; try again.",
+	);
+	warn.mockRestore();
+});
+
+it("a normal Claude Code chat's send makes no Y² query of its own", async () => {
+	await db.query("insert into claude_subscription values('alice','connected')");
+	await enqueueApiTurn({
+		sessionId,
+		userId: "alice",
+		connectionId: null,
+		revision: claudeCodeTurnRevision(),
+		modelId: "claude-sonnet-5-5",
+		routeId: "claude-code/claude-sonnet-5-5",
+		messages: [{ role: "user", content: "fix it" }],
+		items: [],
+	});
+	expect(await turnCount()).toEqual({ n: 1 });
+	// chat_role is read only inside the gate statement; no separate Y² read.
+	expect(fault.sql.filter((sql) => /chat_role/.test(sql))).toHaveLength(1);
+	expect(
+		fault.sql.filter((sql) => sql.startsWith("with connection")),
+	).toHaveLength(1);
+	expect(
+		fault.sql.filter((sql) => /from agent_session s\s+join project/.test(sql)),
+	).toEqual([]);
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
 import { Effect, Schedule } from "effect";
+import type { PoolClient } from "pg";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
 import {
 	type ApiTurnSettings,
@@ -51,7 +52,11 @@ import {
 } from "./conversation-recovery";
 import { database } from "./database";
 import {
+	CONNECT_RETRY_DELAYS_MS,
+	isConnectFailure,
 	isDroppedConnection,
+	logConnectionFailure,
+	poolStats,
 	retryDroppedConnection,
 } from "./dropped-connection-retry";
 import { infrastructureAdmissionEnabled } from "./freestyle/usage-admission";
@@ -67,11 +72,7 @@ import {
 } from "./turn-items-storage";
 import { boxRoutingFacts, turnRunnerBoxAlive } from "./turn-runner-boxes";
 import { startQueuedTurnsDirectly } from "./turn-start";
-import {
-	claudeCodeYSquaredAvailable,
-	isActiveYSquaredChat,
-	isYSquaredSession,
-} from "./y-mode";
+import { claudeCodeYSquaredAvailable, isActiveYSquaredChat } from "./y-mode";
 
 export type ApiTurn = {
 	id: string;
@@ -269,162 +270,203 @@ export async function enqueueApiTurn(input: {
 				? await turnRunnerBoxAlive().catch(() => false)
 				: false,
 	});
-	const client = await database().connect();
 	let turnId: string | undefined;
 	let started: TurnAnalyticsSession | undefined;
 	let executor: TurnExecutor = chosenExecutor;
 	// Development only: a Y² turn runs in this process (local-turn.ts).
 	let runsLocally = false;
-	try {
-		await client.query("begin");
-		const subscription = subscriptionTurnSettings(input.revision);
-		const claudeCode = isClaudeCodeRevision(input.revision);
-		if ((subscription || claudeCode) && input.connectionId !== null)
-			throw new Error("Subscription turns cannot use an API connection.");
-		// One statement: the connection (or Codex sign-in) is share-locked,
-		// the chat row locked for update, and a turn this send already queued
-		// looked up, instead of three round trips.
-		const gate = await client.query<{
-			connected: boolean;
-			found: boolean;
-			turn_status: string | null;
-			parent_session_id: string | null;
-			task_state: string | null;
-			task_access: string | null;
-			project_id: string | null;
-			existing: boolean;
-		}>(
-			`with connection as (${
-				subscription
-					? "select 1 from agent_account where user_id=$2 and provider='codex' and status='connected' and encrypted_codex_auth is not null for share"
-					: claudeCode
-						? "select 1 from claude_subscription where user_id=$2 and status in ('connected','limited') for share"
-						: "select 1 from model_connection where id=$4 and user_id=$2 and revision=$5 for share"
-			}),
-			 chat as (select id,turn_status,parent_session_id,task_state,task_access,project_id from agent_session where id=$1 and user_id=$2 for update)
+	// A connection that could not be had, or dropped, is tried again (250 ms,
+	// 750 ms) when nothing was applied: it failed before `begin`, or the send
+	// has an idempotency key, so a repeat finds a turn that did land
+	// (`existing` below) instead of queueing a second one.
+	for (let attempt = 1; ; attempt++) {
+		let began = false;
+		let held: PoolClient | undefined;
+		try {
+			const client = await database().connect();
+			held = client;
+			await client.query("begin");
+			began = true;
+			const subscription = subscriptionTurnSettings(input.revision);
+			const claudeCode = isClaudeCodeRevision(input.revision);
+			if ((subscription || claudeCode) && input.connectionId !== null)
+				throw new Error("Subscription turns cannot use an API connection.");
+			// One statement: the connection (or Codex sign-in) is share-locked,
+			// the chat row locked for update, and a turn this send already queued
+			// looked up, instead of three round trips.
+			const gate = await client.query<{
+				connected: boolean;
+				found: boolean;
+				turn_status: string | null;
+				parent_session_id: string | null;
+				task_state: string | null;
+				task_access: string | null;
+				project_id: string | null;
+				existing: boolean;
+				y_squared: boolean;
+			}>(
+				`with connection as (${
+					subscription
+						? "select 1 from agent_account where user_id=$2 and provider='codex' and status='connected' and encrypted_codex_auth is not null for share"
+						: claudeCode
+							? "select 1 from claude_subscription where user_id=$2 and status in ('connected','limited') for share"
+							: "select 1 from model_connection where id=$4 and user_id=$2 and revision=$5 for share"
+				}),
+			 chat as (select id,turn_status,parent_session_id,task_state,task_access,project_id,chat_role,archived_at from agent_session where id=$1 and user_id=$2 for update)
 			 select exists(select 1 from connection) as connected,chat.id is not null as found,
 			 chat.turn_status,chat.parent_session_id,chat.task_state,chat.task_access,chat.project_id,
+			 (chat.chat_role='y2' and chat.archived_at is null and exists(select 1 from project p where p.id=chat.project_id and p.user_id=$2 and p.y_enabled)) as y_squared,
 			 ($3::text is not null and exists(select 1 from api_turn t where t.session_id=$1 and t.user_id=$2 and t.idempotency_key=$3::text)) as existing
 			 from (select 1) one left join chat on true`,
-			subscription || claudeCode
-				? [input.sessionId, input.userId, input.idempotencyKey ?? null]
-				: [
+				subscription || claudeCode
+					? [input.sessionId, input.userId, input.idempotencyKey ?? null]
+					: [
+							input.sessionId,
+							input.userId,
+							input.idempotencyKey ?? null,
+							input.connectionId,
+							input.revision,
+						],
+			);
+			const checked = gate.rows[0];
+			if (!checked?.connected)
+				throw new Error(
+					"The model connection changed or is no longer available.",
+				);
+			if (checked.existing) {
+				await client.query("commit");
+				client.release();
+				return;
+			}
+			// Y² has no machine: its Claude Code turns need a Claude runner box.
+			// Refuse before any turn row exists (the send paths check first; this
+			// is the last gate).
+			// Read by the gate statement above; the runner check is environment
+			// only (claudeCodeYSquaredAvailable with a session id), so a normal
+			// chat's send makes no query for it.
+			if (
+				claudeCode &&
+				checked.found &&
+				checked.y_squared &&
+				!(await claudeCodeYSquaredAvailable(input.userId, input.sessionId))
+			)
+				throw new Error(Y_SQUARED_CLAUDE_CODE_REFUSAL);
+			if (
+				!checked.found ||
+				(checked.turn_status === "running" &&
+					!(
+						input.preparedTask &&
+						checked.parent_session_id &&
+						checked.task_state === "working"
+					))
+			)
+				throw new Error(
+					"Finish or stop the current turn before sending another prompt.",
+				);
+			if (input.base) {
+				// The history it continues, unchanged since it was planned (share-locked
+				// until commit); otherwise the caller plans the send again.
+				const base = await client.query<{ count: number }>(
+					`select jsonb_array_length(messages) as count from api_turn
+				 where id=$1 and session_id=$2 and user_id=$3 and updated_at::text=$4 for share`,
+					[
+						input.base.turnId,
 						input.sessionId,
 						input.userId,
-						input.idempotencyKey ?? null,
-						input.connectionId,
-						input.revision,
+						input.base.version,
 					],
-		);
-		const checked = gate.rows[0];
-		if (!checked?.connected)
-			throw new Error(
-				"The model connection changed or is no longer available.",
-			);
-		if (checked.existing) {
-			await client.query("commit");
-			return;
-		}
-		// Y² has no machine: its Claude Code turns need a Claude runner box.
-		// Refuse before any turn row exists (the send paths check first; this
-		// is the last gate).
-		if (
-			claudeCode &&
-			checked.found &&
-			(await isYSquaredSession(input.userId, input.sessionId)) &&
-			!(await claudeCodeYSquaredAvailable(input.userId, input.sessionId))
-		)
-			throw new Error(Y_SQUARED_CLAUDE_CODE_REFUSAL);
-		if (
-			!checked.found ||
-			(checked.turn_status === "running" &&
-				!(
-					input.preparedTask &&
-					checked.parent_session_id &&
-					checked.task_state === "working"
-				))
-		)
-			throw new Error(
-				"Finish or stop the current turn before sending another prompt.",
-			);
-		if (input.base) {
-			// The history it continues, unchanged since it was planned (share-locked
-			// until commit); otherwise the caller plans the send again.
-			const base = await client.query<{ count: number }>(
-				`select jsonb_array_length(messages) as count from api_turn
-				 where id=$1 and session_id=$2 and user_id=$3 and updated_at::text=$4 for share`,
-				[input.base.turnId, input.sessionId, input.userId, input.base.version],
-			);
-			if (base.rows[0]?.count !== input.base.count) throw new TurnBaseChanged();
-		}
-		await recordConversationPoint(client, {
-			...input,
-			messagesObject,
-			messagesUnknown: Boolean(input.base),
-		});
-		// Development only: Y² (no machine) runs in this process (local-turn.ts).
-		if (
-			localTurnsEnabled() &&
-			checked.project_id &&
-			(await isActiveYSquaredChat(input.userId, checked.project_id, {
-				id: input.sessionId,
-				parentSessionId: checked.parent_session_id,
-			}))
-		) {
-			executor = "node";
-			runsLocally = true;
-		}
-		turnId = randomUUID();
-		started = {
-			userId: input.userId,
-			harness: subscription ? "codex" : "api",
-			parentSessionId: checked.parent_session_id ?? null,
-			taskAccess: checked.task_access ?? null,
-		};
-		// The turn and the chat's running state in one statement.
-		const append = input.appendItems !== undefined;
-		const written = append ? (input.appendItems ?? []) : input.items;
-		// Appending: the stored transcript plus this send's items (the row is
-		// locked above); a turn row keeping whole items gets the same.
-		const whole = append
-			? "coalesce((select a.items from agent_session a where a.id=$2),'[]'::jsonb)||$8::jsonb"
-			: "$8";
-		// Continuing a turn: its history (copied inside the database) and then
-		// this send's messages.
-		const messages = input.base
-			? "(select b.messages from api_turn b where b.id=$16::uuid)||$7::jsonb"
-			: "$7";
-		await client.query(
-			`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible,base_turn_id,base_version,base_count)
+				);
+				if (base.rows[0]?.count !== input.base.count)
+					throw new TurnBaseChanged();
+			}
+			await recordConversationPoint(client, {
+				...input,
+				messagesObject,
+				messagesUnknown: Boolean(input.base),
+			});
+			// Development only: Y² (no machine) runs in this process (local-turn.ts).
+			if (
+				localTurnsEnabled() &&
+				checked.project_id &&
+				(await isActiveYSquaredChat(input.userId, checked.project_id, {
+					id: input.sessionId,
+					parentSessionId: checked.parent_session_id,
+				}))
+			) {
+				executor = "node";
+				runsLocally = true;
+			}
+			turnId = randomUUID();
+			started = {
+				userId: input.userId,
+				harness: subscription ? "codex" : "api",
+				parentSessionId: checked.parent_session_id ?? null,
+				taskAccess: checked.task_access ?? null,
+			};
+			// The turn and the chat's running state in one statement.
+			const append = input.appendItems !== undefined;
+			const written = append ? (input.appendItems ?? []) : input.items;
+			// Appending: the stored transcript plus this send's items (the row is
+			// locked above); a turn row keeping whole items gets the same.
+			const whole = append
+				? "coalesce((select a.items from agent_session a where a.id=$2),'[]'::jsonb)||$8::jsonb"
+				: "$8";
+			// Continuing a turn: its history (copied inside the database) and then
+			// this send's messages.
+			const messages = input.base
+				? "(select b.messages from api_turn b where b.id=$16::uuid)||$7::jsonb"
+				: "$7";
+			await client.query(
+				`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible,base_turn_id,base_version,base_count)
 			 values($1,$2,$3,$4,$5,$6,'queued',${messages},coalesce($15::jsonb,${whole}),$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")},$16::uuid,$17::text,$18::int))
 			 update agent_session set harness=$14,listed_model_id=$13,items=${append ? "coalesce(items,'[]'::jsonb)||$8::jsonb" : "$8"},turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
-			[
-				turnId,
-				input.sessionId,
-				input.userId,
-				input.connectionId,
-				input.revision,
-				input.modelId,
-				jsonbText(input.messages),
-				jsonbText(written),
-				input.idempotencyKey ?? null,
-				executor,
-				JSON.stringify(input.settings ?? {}),
-				input.failover ? JSON.stringify(input.failover) : null,
-				input.routeId,
-				subscription ? "codex" : "api",
-				executor === "durable-object" ? newTurnItemsColumn(written) : null,
-				input.base?.turnId ?? null,
-				input.base?.version ?? null,
-				input.base?.count ?? null,
-			],
-		);
-		await client.query("commit");
-	} catch (error) {
-		await client.query("rollback");
-		throw error;
-	} finally {
-		client.release();
+				[
+					turnId,
+					input.sessionId,
+					input.userId,
+					input.connectionId,
+					input.revision,
+					input.modelId,
+					jsonbText(input.messages),
+					jsonbText(written),
+					input.idempotencyKey ?? null,
+					executor,
+					JSON.stringify(input.settings ?? {}),
+					input.failover ? JSON.stringify(input.failover) : null,
+					input.routeId,
+					subscription ? "codex" : "api",
+					executor === "durable-object" ? newTurnItemsColumn(written) : null,
+					input.base?.turnId ?? null,
+					input.base?.version ?? null,
+					input.base?.count ?? null,
+				],
+			);
+			await client.query("commit");
+			client.release();
+			break;
+		} catch (error) {
+			await held?.query("rollback").catch(() => undefined);
+			const repeat =
+				attempt <= CONNECT_RETRY_DELAYS_MS.length &&
+				(isConnectFailure(error) || isDroppedConnection(error)) &&
+				(!began || input.idempotencyKey !== undefined);
+			// A dead connection is destroyed, never pooled again.
+			held?.release(repeat ? true : undefined);
+			if (!repeat) throw error;
+			logConnectionFailure(
+				"send-transaction",
+				error,
+				attempt,
+				poolStats(database()),
+			);
+			turnId = undefined;
+			started = undefined;
+			executor = chosenExecutor;
+			runsLocally = false;
+			await new Promise((resolve) =>
+				setTimeout(resolve, CONNECT_RETRY_DELAYS_MS[attempt - 1]),
+			);
+		}
 	}
 	if (turnId && started) void captureTurnStarted(started, turnId, new Date());
 	if (turnId && executor === "node" && runsLocally) {

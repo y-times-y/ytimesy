@@ -40,3 +40,30 @@ Hosting limits, fleet-wide admission control, production dashboards, a 10,000-us
 - [node-postgres pool sizing](https://node-postgres.com/guides/pool-sizing): budget pools across all service instances and leave headroom.
 - [Supabase connection methods](https://supabase.com/docs/guides/database/connecting-to-postgres): choose connection mode for the deployment environment.
 - [pg-boss documentation](https://pgboss.io/): the pinned 12.31.0 package provides the custom database adapter and producer/worker configuration used here.
+
+## Connection failures and the send's retry policy
+
+Every request (Worker or Durable Object) has its own `pg` pool of at most 2
+connections (`src/server/adapters/database-scope.ts`), each caller waiting at
+most 10 s for one.
+
+- **Log event.** Each connection failure logs one warning,
+  `Request database connection failed.`, with `stage` (`connect`, `query`,
+  `send-transaction`, or `client-error` for a socket that died while pooled),
+  `code`, `message` (the error message only, cut to 200 characters; never SQL,
+  parameters or user content), `attempt`, and the pool's `total`, `idle` and
+  `waiting` counts. `total=2, idle=0, waiting>0` means the request's own
+  queries were holding both connections.
+- **Retry.** A failure to get a connection (`isConnectFailure`: "timeout
+  exceeded when trying to connect", "Connection terminated due to connection
+  timeout", `ETIMEDOUT` on connect, 57P03, 53300) happens before any
+  statement ran, so the pool's promise-form `connect()`/`query()` repeat it
+  twice, after 250 ms and 750 ms. `isDroppedConnection` (turn writes) is
+  unchanged.
+- **The send's transaction** (`enqueueApiTurn`) repeats on a connect failure
+  before `begin`; after `begin` only when the send has an idempotency key (the
+  gate statement then finds the turn that did land and queues nothing). A
+  keyless send that failed after `begin` is never repeated.
+- **Person's view.** After the last repeat the composer shows "Couldn't send
+  that: the database connection timed out. Your message was kept; try again."
+  (`publicFailureMessage`) and takes the typed message back.
