@@ -59,11 +59,11 @@ export function LandingHeader({ signedIn = false }: { signedIn?: boolean }) {
 				<nav className="landing-nav" aria-label="Resources and account">
 					<a
 						className="landing-github-link"
-						href="https://github.com/y-times-y/harness"
+						href="https://github.com/y-times-y/ytimesy"
 						target="_blank"
 						rel="noreferrer"
-						aria-label="Open-source harness on GitHub"
-						title="Open-source harness on GitHub"
+						aria-label="ytimesy on GitHub (open source)"
+						title="ytimesy on GitHub (open source)"
 					>
 						<GithubMark size={18} />
 						<span>GitHub</span>
@@ -524,12 +524,12 @@ export function SiteFooter() {
 			<nav aria-label="Resources, legal and support">
 				<a
 					className="landing-harness-link"
-					href="https://github.com/y-times-y/harness"
+					href="https://github.com/y-times-y/ytimesy"
 					target="_blank"
 					rel="noreferrer"
 				>
 					<GithubMark size={15} />
-					Open-source harness
+					Open source
 					<ArrowUpRight size={13} aria-hidden="true" />
 				</a>
 				<a
