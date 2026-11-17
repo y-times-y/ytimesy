@@ -9,7 +9,7 @@
 
 ### AI Software Engineer in the Cloud
 
-Give it a task. Agents work in parallel, each on its own machine, test in a real browser and hand you a pull request with the evidence attached.
+The place to build software with AI engineers. Describe what you want and agents get to work in parallel, each on its own machine, testing in a real browser, while you stay in control of what ships.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/8rhTdsrtGw)
@@ -27,22 +27,22 @@ Give it a task. Agents work in parallel, each on its own machine, test in a real
 
 - **Parallel agents, separate machines.** A lead agent plans and splits the work. Builders write code in parallel, each on its own cloud machine with its own working tree, terminal and preview, so they never collide.
 - **Tested in a real browser.** Verifier agents open the running app, click through it and capture screenshots and a screen recording.
-- **Evidence in your PR.** Every completed turn is committed to its own branch, and the draft pull request carries the screenshots, the video and the test results.
+- **Proof, not promises.** Screenshots, a screen recording and test results come with the work, and every completed turn is saved to its own branch so you can review, steer or roll back.
 - **Fixes its own failing checks.** When a test fails, the chat picks it up and keeps going.
 - **Remembers how you work.** "Use pnpm, not npm" is learned once and kept.
 - **Keeps working when you leave.** Close the tab; the work continues and you reconnect later.
 - **Bring your own model.** Your ChatGPT, Claude or Grok subscription, or your own API keys, on one harness. Nothing silently falls back to paid inference.
 
 <div align="center">
-<img src="docs/images/app.png" alt="A task split across three agents, with the diff and the pull request in the right sidebar" width="900">
+<img src="docs/images/app.png" alt="A task split across three agents, with the diff and progress in the right sidebar" width="900">
 <br>
-<sub>The workspace: chat, per-agent progress, the diff, todos and the pull request. Screenshot from <a href="https://ytimesy.com">ytimesy.com</a> with demo data.</sub>
+<sub>The workspace: chat, per-agent progress, the diff, todos and what has shipped. Screenshot from <a href="https://ytimesy.com">ytimesy.com</a> with demo data.</sub>
 </div>
 
 ## What's inside
 
 <div align="center">
-<img src="docs/images/features.png" alt="Parallel agents, tests in a real browser, fixing failing checks, memory, and evidence in the pull request" width="900">
+<img src="docs/images/features.png" alt="Parallel agents, tests in a real browser, fixing failing checks, memory, and screenshots and video as proof" width="900">
 </div>
 
 ## Bring your own model
@@ -59,7 +59,7 @@ flowchart LR
   UI --> Edge["Cloudflare<br/>one Durable Object per chat"]
   Edge --> Models["Your model<br/>subscription or API key"]
   Edge --> VMs["Cloud machines<br/>one per agent"]
-  VMs --> PR["Draft pull request<br/>with screenshots and video"]
+  VMs --> Out["Working software<br/>with screenshots and video"]
   Edge --> DB[("Postgres")]
 ```
 

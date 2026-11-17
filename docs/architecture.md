@@ -1,6 +1,6 @@
 # Architecture
 
-ytimesy turns a task into a reviewed pull request. A **lead** agent plans and splits the work, **builder** agents write code in parallel, each on its own cloud machine, and **verifier** agents check the result in a real browser before a draft PR is opened with screenshots and video as evidence.
+ytimesy is where software gets built with AI engineers. A **lead** agent plans and splits the work, **builder** agents write code in parallel, each on its own cloud machine, and **verifier** agents check the result in a real browser, with screenshots and video as proof.
 
 This page is the map. The decisions behind it live in [PLAN.md](../PLAN.md), [Cloudflare execution model](edge-architecture-migration.md#cloudflare-execution-model-decision-2026-10-12) and [Where Claude Code runs](claude-code-placement.md).
 
