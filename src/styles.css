@@ -981,6 +981,11 @@ button:enabled:active {
 	width: 100%;
 	height: 100%;
 	overflow: visible;
+	/* A soft white glow, not a coloured one. */
+	filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.35));
+}
+.y2-mark[data-live="true"] .y2-mark-glyph {
+	filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.75));
 }
 .y2-mark[data-live="true"] .y2-mark-border {
 	stroke-opacity: 0.35;
@@ -999,7 +1004,7 @@ button:enabled:active {
 	}
 }
 .y2-mark-exponent {
-	fill: #c4b5fd;
+	fill: #f2f2f0;
 	font-family: var(--font-sans, "Inter Variable", sans-serif);
 	font-size: 11px;
 	font-weight: 700;
