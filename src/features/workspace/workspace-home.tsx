@@ -371,6 +371,9 @@ import { YOverview } from "./y-overview";
 import { YSquaredEmptyState } from "./y-squared-empty-state";
 import { YSquaredMark } from "./y-squared-mark";
 
+/** What the Y² chat is called on screen: its mark already sits beside it. */
+const SUPER_AGENT_LABEL = "Super agent";
+
 /** One composer send, from the click until the server accepts or refuses it. */
 type PendingSend = {
 	readonly epoch: number;
@@ -4081,7 +4084,9 @@ export function WorkspaceHome({
 														data-role={ySquaredOpen ? "y2" : undefined}
 													>
 														{ySquaredOpen ? <YSquaredMark size={20} /> : null}
-														{chatHeaderTitle(listedTitle, sessionTitle)}
+														{ySquaredOpen
+															? SUPER_AGENT_LABEL
+															: chatHeaderTitle(listedTitle, sessionTitle)}
 													</span>
 													{activeThreadLabel && !ySquaredOpen ? (
 														<span
