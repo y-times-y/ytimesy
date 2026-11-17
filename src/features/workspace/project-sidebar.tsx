@@ -71,6 +71,12 @@ import {
 	withProjectExpanded,
 } from "#/domain/sidebar-chats";
 import {
+	SIDEBAR_COLLAPSED_Y2_KEY,
+	type Y2ThreadTree,
+	y2NeedsYouLabel,
+	y2ThreadTree,
+} from "#/domain/sidebar-tree";
+import {
 	accountDisplayName,
 	accountInitials,
 } from "#/domain/workspace-settings";
@@ -81,6 +87,7 @@ import {
 } from "../app/first-paint";
 import { useShortcutHint } from "../app/keyboard-shortcuts";
 import { requestJson } from "../projects/api";
+import { YSquaredMark } from "./y-squared-mark";
 
 /** Who is signed in, as the account button shows them. */
 export type SidebarAccount = {
@@ -197,6 +204,12 @@ export function ProjectSidebar({
 	const [pinnedChatIds, setPinnedChatIds] = useState(
 		firstPaint.choices.pinnedChatIds,
 	);
+	const [collapsedY2Ids, setCollapsedY2Ids] = useState(
+		firstPaint.choices.collapsedY2ProjectIds,
+	);
+	const [y2ThreadsExpanded, setY2ThreadsExpanded] = useState(false);
+	// Only a fold the user opens animates in, never the page's first paint.
+	const [y2Toggled, setY2Toggled] = useState(false);
 	const [sort, setSort] = useState(firstPaint.choices.sidebarSort);
 	// Until hydrated this renders the server's markup: both sort views, no
 	// pins, folds or unread marks. The first-paint script shows the saved
@@ -205,6 +218,7 @@ export function ProjectSidebar({
 	const shownSort = hydrated ? sort : null;
 	const shownPinnedIds = hydrated ? pinnedChatIds : [];
 	const shownCollapsedIds = hydrated ? collapsedProjectIds : [];
+	const shownCollapsedY2Ids = hydrated ? collapsedY2Ids : [];
 	const shownSeenKeys = hydrated ? seenKeys : [];
 	const shownSeenSinceMs = hydrated ? seenSinceMs : null;
 	const firstPaintView = (view: SidebarSort) => (hydrated ? undefined : view);
@@ -267,6 +281,13 @@ export function ProjectSidebar({
 		);
 	}
 
+	function toggleY2Threads(projectId: string) {
+		const next = toggleCollapsedProjectIds(collapsedY2Ids, projectId);
+		setCollapsedY2Ids(next);
+		setY2Toggled(true);
+		writeStorage(SIDEBAR_COLLAPSED_Y2_KEY, collapsedProjectStorageValue(next));
+	}
+
 	function persistPinned(next: readonly string[]) {
 		setPinnedChatIds(next);
 		writeStorage(SIDEBAR_PINNED_CHATS_KEY, pinnedChatStorageValue(next));
@@ -283,6 +304,28 @@ export function ProjectSidebar({
 			return;
 		}
 		persistCollapsed(toggleCollapsedProjectIds(collapsedProjectIds, projectId));
+	}
+
+	/** The open project's chats: a Y² tree in a Y project, else a flat list. */
+	function projectChatList(project: Project) {
+		if (chats.length === 0) return <p className="sidebar-empty">{emptyCopy}</p>;
+		const tree = y2ThreadTree({
+			chats,
+			pinnedIds: shownPinnedIds,
+			selectedChatId,
+			statusOf: chatStatus,
+			expanded: y2ThreadsExpanded,
+			keepFolded: !hydrated,
+		});
+		return (
+			<ul className="sidebar-chats">
+				{tree
+					? y2Tree(project, tree)
+					: chatsWithPinnedFirst(chats, shownPinnedIds).map((chat) =>
+							chatRow(chat),
+						)}
+			</ul>
+		);
 	}
 
 	function toggleProjects() {
@@ -381,14 +424,147 @@ export function ProjectSidebar({
 				</h3>
 				<ul className="sidebar-chats">
 					{rows.map(({ chat, project }, index) =>
-						chatRow(chat, project, index >= hiddenFrom),
+						chatRow(chat, { project, pastFold: index >= hiddenFrom }),
 					)}
 				</ul>
 			</li>
 		);
 	}
 
-	function chatRow(chat: SidebarChat, project?: Project, pastFold = false) {
+	/**
+	 * The project's Y² chat heading its threads. Before hydration the branch
+	 * renders open with every thread; the first-paint sheet folds what this
+	 * browser saved (--y2-branch, data-done-overflow).
+	 */
+	function y2Tree(project: Project, tree: Y2ThreadTree<SidebarChat>) {
+		const head = tree.head;
+		const selected = head.id === selectedChatId;
+		const open = !shownCollapsedY2Ids.includes(project.id);
+		const shown = rowStatus(head, {
+			keys: shownSeenKeys,
+			sinceMs: shownSeenSinceMs,
+		});
+		const branchId = `sidebar-y2-branch-${project.id}`;
+		const needsYou = tree.needsYouCount;
+		const hasThreads = tree.threads.length > 0;
+		return (
+			<li
+				key={head.id}
+				className="sidebar-y2"
+				data-project-id={project.id}
+				data-open={open}
+				data-toggled={y2Toggled ? "true" : undefined}
+			>
+				<div
+					className="sidebar-chat-row sidebar-y2-row"
+					data-chat-id={head.id}
+					data-selected={selected}
+					data-role="y2"
+					{...firstPaintMarks(head)}
+				>
+					<button
+						type="button"
+						className="sidebar-chat"
+						data-selected={selected}
+						data-status={shown.kind}
+						title="Y²: what is going on across this project's threads"
+						aria-current={selected ? "page" : undefined}
+						onPointerEnter={() => onChatIntent?.(head.id)}
+						onFocus={() => onChatIntent?.(head.id)}
+						onClick={() => onSelectChat?.(head.id)}
+					>
+						<span className="sidebar-chat-lead" aria-hidden="true">
+							<YSquaredMark size={16} live={tree.workingCount > 0} />
+						</span>
+						<span className="sidebar-chat-title">Y²</span>
+						{needsYou ? (
+							<span className="sr-only">{y2NeedsYouLabel(needsYou)}</span>
+						) : null}
+						{shown.kind === "working" ? (
+							<span className="sr-only">Working</span>
+						) : null}
+					</button>
+					<div className="sidebar-chat-trailing">
+						{shown.kind === "working" || shown.kind === "unread" ? (
+							<SidebarChatStatusMark
+								status={shown}
+								label={sidebarChatStatusLabel(shown, nowMs)}
+								age={null}
+							/>
+						) : null}
+						{hasThreads ? (
+							<button
+								type="button"
+								className="sidebar-y2-toggle"
+								aria-label={open ? "Collapse Y² threads" : "Expand Y² threads"}
+								title={open ? "Collapse threads" : "Expand threads"}
+								aria-expanded={open}
+								aria-controls={open ? branchId : undefined}
+								onClick={() => toggleY2Threads(project.id)}
+							>
+								<ChevronRight
+									className="sidebar-y2-chevron"
+									size={14}
+									strokeWidth={1.5}
+								/>
+							</button>
+						) : null}
+						{needsYou ? (
+							<span className="sidebar-y2-count" aria-hidden="true">
+								{needsYou}
+							</span>
+						) : null}
+					</div>
+				</div>
+				{open && hasThreads ? (
+					<div className="sidebar-y2-branch" id={branchId}>
+						<ul
+							className="sidebar-chats sidebar-y2-threads"
+							aria-label="Threads"
+						>
+							{tree.threads.map((thread) =>
+								chatRow(thread.chat, {
+									pastFold: thread.pastFold,
+									foldable: thread.foldable,
+									nested: true,
+								}),
+							)}
+						</ul>
+						{tree.overflowCount ? (
+							<button
+								type="button"
+								className="sidebar-show-more sidebar-y2-more"
+								aria-expanded={y2ThreadsExpanded}
+								onClick={() => setY2ThreadsExpanded((value) => !value)}
+							>
+								{y2ThreadsExpanded
+									? "Show fewer"
+									: `Show ${tree.overflowCount} more`}
+							</button>
+						) : null}
+					</div>
+				) : null}
+			</li>
+		);
+	}
+
+	function chatRow(
+		chat: SidebarChat,
+		{
+			project,
+			pastFold = false,
+			foldable = false,
+			nested = false,
+		}: {
+			/** In Recent: the project the chat belongs to. */
+			project?: Project;
+			pastFold?: boolean;
+			/** Under Y², before hydration: the rows script may fold it. */
+			foldable?: boolean;
+			/** A thread under Y²: a waiting thread shows a dot. */
+			nested?: boolean;
+		} = {},
+	) {
 		const status = chatStatus(chat);
 		const shown = rowStatus(chat, {
 			keys: shownSeenKeys,
@@ -405,7 +581,9 @@ export function ProjectSidebar({
 				data-chat-id={chat.id}
 				data-selected={chat.id === selectedChatId}
 				data-pinned={pinned ? "true" : undefined}
+				data-role={chat.role}
 				data-done-overflow={pastFold ? "true" : undefined}
+				data-foldable={foldable && !hydrated ? "true" : undefined}
 				{...firstPaintMarks(chat)}
 			>
 				<button
@@ -453,25 +631,28 @@ export function ProjectSidebar({
 					) : null}
 				</button>
 				<div className="sidebar-chat-trailing">
-					<button
-						type="button"
-						className="sidebar-chat-pin"
-						aria-label={pinned ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
-						aria-pressed={pinned}
-						title={pinned ? "Unpin chat" : "Pin chat"}
-						data-pinned={pinned ? "true" : undefined}
-						onClick={(event) => {
-							event.stopPropagation();
-							persistPinned(togglePinnedChatIds(pinnedChatIds, chat.id));
-						}}
-					>
-						<Pin
-							size={14}
-							strokeWidth={1.5}
-							fill={pinned ? "currentColor" : "none"}
-						/>
-					</button>
-					{onDeleteChat ? (
+					{/* Y² is the project's own chat: always on top, and it stays while Y is on. */}
+					{chat.role === "y2" ? null : (
+						<button
+							type="button"
+							className="sidebar-chat-pin"
+							aria-label={pinned ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
+							aria-pressed={pinned}
+							title={pinned ? "Unpin chat" : "Pin chat"}
+							data-pinned={pinned ? "true" : undefined}
+							onClick={(event) => {
+								event.stopPropagation();
+								persistPinned(togglePinnedChatIds(pinnedChatIds, chat.id));
+							}}
+						>
+							<Pin
+								size={14}
+								strokeWidth={1.5}
+								fill={pinned ? "currentColor" : "none"}
+							/>
+						</button>
+					)}
+					{onDeleteChat && chat.role !== "y2" ? (
 						<button
 							type="button"
 							className="sidebar-chat-archive"
@@ -494,6 +675,7 @@ export function ProjectSidebar({
 								? () => onOpenChatPullRequest(project?.id, chat.id)
 								: undefined
 						}
+						askingAsDot={nested}
 					/>
 				</div>
 			</li>
@@ -823,17 +1005,7 @@ export function ProjectSidebar({
 												</button>
 											</div>
 										</div>
-										{open ? (
-											chats.length === 0 ? (
-												<p className="sidebar-empty">{emptyCopy}</p>
-											) : (
-												<ul className="sidebar-chats">
-													{chatsWithPinnedFirst(chats, shownPinnedIds).map(
-														(chat) => chatRow(chat),
-													)}
-												</ul>
-											)
-										) : null}
+										{open ? projectChatList(project) : null}
 									</li>
 								);
 							})}
@@ -974,15 +1146,26 @@ function SidebarChatStatusMark({
 	label,
 	age,
 	onOpenPullRequest,
+	askingAsDot = false,
 }: {
 	status: SidebarChatStatus;
 	label: string | null;
 	age: string | null;
 	onOpenPullRequest?: () => void;
+	/** Under Y²: waiting on the user reads as the badge's colour, a dot. */
+	askingAsDot?: boolean;
 }) {
 	const time = age ? <span className="sidebar-chat-age">{age}</span> : null;
 	switch (status.kind) {
 		case "asking":
+			if (askingAsDot)
+				return (
+					<span
+						className="sidebar-chat-needs-you"
+						role="img"
+						aria-label={label ?? undefined}
+					/>
+				);
 			return (
 				<span
 					className="sidebar-chat-status"

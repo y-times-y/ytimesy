@@ -1,7 +1,15 @@
 import { z } from "zod";
+import {
+	BUDGET_BLOCKED_MESSAGE,
+	BUDGET_PAUSED_MESSAGE,
+} from "#/domain/cloudflare-budget";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
 import { modelConcurrencyLimits } from "./agent-capacity";
-import { claimApiTurn, releaseClaimedApiTurn } from "./api-turns";
+import {
+	claimApiTurn,
+	noteBudgetHeldTurn,
+	releaseClaimedApiTurn,
+} from "./api-turns";
 import {
 	backgroundAdmissionEndpoint,
 	hasInternalJobDispatcher,
@@ -19,8 +27,10 @@ export const turnStartRequest = z
 	.strict();
 export type TurnStartRequest = z.infer<typeof turnStartRequest>;
 
-/** Starts one claimed turn in its chat; false when the chat would not take it. */
-export type StartClaimedTurn = (turn: TurnStartRequest) => Promise<boolean>;
+/** Starts one claimed turn in its chat; false when the chat would not take it; "held" when the monthly compute budget keeps it queued, "paused" for the global pause. */
+export type StartClaimedTurn = (
+	turn: TurnStartRequest,
+) => Promise<boolean | "held" | "paused">;
 
 /**
  * Claims queued chat turns (within the concurrency limits, oldest first) and
@@ -30,15 +40,18 @@ export type StartClaimedTurn = (turn: TurnStartRequest) => Promise<boolean>;
  */
 export async function admitQueuedTurnsWith(start: StartClaimedTurn) {
 	const limits = modelConcurrencyLimits();
+	const held = new Set<string>();
 	for (let count = 0; count < 16; count++) {
 		const turn = await claimApiTurn(
 			limits.perUser,
 			limits.fleet,
 			"durable-object",
+			undefined,
+			[...held],
 		);
 		if (!turn) break;
 		if (!turn.lease_id) throw new Error("Claimed turn has no lease.");
-		let started: boolean;
+		let started: boolean | "held" | "paused";
 		try {
 			started = await start({
 				userId: turn.user_id,
@@ -54,6 +67,20 @@ export async function admitQueuedTurnsWith(start: StartClaimedTurn) {
 				console.warn("A claimed turn could not be released."),
 			);
 			throw error;
+		}
+		if (started === "held" || started === "paused") {
+			// Budget reached: back to the queue, and this user's other turns wait
+			// too, so the oldest held turn does not starve everyone else.
+			await releaseClaimedApiTurn(turn.id, turn.lease_id).catch(() =>
+				console.warn("A held turn could not be released."),
+			);
+			held.add(turn.user_id);
+			// Tell the chat, once: the notice is written only when absent.
+			await noteBudgetHeldTurn(
+				turn,
+				started === "paused" ? BUDGET_PAUSED_MESSAGE : BUDGET_BLOCKED_MESSAGE,
+			).catch(() => console.warn("A held turn's notice was not written."));
+			continue;
 		}
 		if (!started)
 			console.warn(
@@ -95,6 +122,11 @@ export async function startQueuedTurnsDirectly(): Promise<boolean> {
 				await response.body?.cancel().catch(() => {});
 				if (response.status === 204) return true;
 				if (response.status === 409) return false;
+				// The edge's compute budget keeps the turn queued.
+				if (response.status === 423)
+					return response.headers.get("x-budget-hold") === "paused"
+						? "paused"
+						: "held";
 				throw new Error("Turn start failed.");
 			} catch (error) {
 				if (attempt >= 1) throw error;

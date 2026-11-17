@@ -48,6 +48,7 @@ import {
 	withGoalNotice,
 } from "#/domain/goal-notice";
 import {
+	type HarnessVariant,
 	leadReasoningEffort,
 	outputCapCharacters,
 	PRODUCT_HARNESS_VARIANT,
@@ -106,6 +107,7 @@ import type {
 	UserMessageItem,
 } from "#/domain/session-item";
 import { isSideChat, sideChatReadOnly } from "#/domain/side-chat";
+import { chatWaitingOn } from "#/domain/sidebar-chats";
 import {
 	isActiveSidekick,
 	sidekickState,
@@ -130,74 +132,14 @@ import { ASK_USER_TOOL } from "#/domain/user-question";
 import { apiReasoningEffort } from "#/server/adapters/api-reasoning-effort";
 import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
 import { lastUserMessageIndex } from "#/server/adapters/turn-items-storage";
-import {
-	type AgentSessionRecord,
-	agentSessionMetadataForOwner,
-} from "../adapters/agent-sessions";
-import { completedLifecycleContinuations } from "../adapters/agent-task-command-receipts";
-import {
-	releaseHeldAgentTaskEvents,
-	saveAgentTaskResultAndEvent,
-} from "../adapters/agent-task-events";
-import { captureServerAnalytics } from "../adapters/analytics";
-import {
-	type ApiTurn,
-	apiTurnCancelRequested,
-	checkpointApiTurn,
-	clearTurnBoxToolIdentity,
-	finalizeApiTurn,
-	otherRunningTurnOnMachine,
-	publishApiTurnProgress,
-	recordTurnBoxToolIdentity,
-	renewApiTurn,
-	replaceSettledTurnItem,
-	turnBoxToolIdentity,
-} from "../adapters/api-turns";
-import { reserveApiTokens } from "../adapters/api-usage-budget";
-import { pinnedClaudeRunner } from "../adapters/claude-runner-placement";
-import { claudeSubscriptionStatus } from "../adapters/claude-subscription";
-import { warmCodexSubscriptionCatalog } from "../adapters/codex-subscription";
-import { archiveModelContext } from "../adapters/context-archives";
-import { conversationPointCodeRef } from "../adapters/conversation-recovery";
-import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
-import {
-	devEvalUsersEnabled,
-	harnessVariantForUser,
-	isDevEvalUser,
-} from "../adapters/dev-eval-users";
-import { gitPushRequests } from "../adapters/git-push-requests";
-import {
-	assertEvaluationActive,
-	type EvaluationRun,
-	evaluationRunForTask,
-	recordEvaluationUsage,
-	reserveEvaluationRequest,
-} from "../adapters/harness-evaluation";
-import {
-	type ImportedSessionRow,
-	projectImportedSessions,
-} from "../adapters/local-imports";
-import { connectableMcpServers } from "../adapters/mcp-servers";
-import { loadModelConnection } from "../adapters/model-connections";
+import type { AgentSessionRecord } from "../adapters/agent-sessions";
+import type { ApiTurn } from "../adapters/api-turns";
+import { devEvalUsersEnabled } from "../adapters/dev-eval-users";
+import type { EvaluationRun } from "../adapters/harness-evaluation";
+import type { ImportedSessionRow } from "../adapters/local-imports";
 import { nativeWebSearchTools } from "../adapters/native-web-search";
 import { queuedMessageSentNow } from "../adapters/peer-inbox-observation";
-import {
-	enabledPluginSkillIndex,
-	pluginSkillBody,
-} from "../adapters/plugin-installs";
-import {
-	readPreparedCheckoutDirectory,
-	readProjectDerivedValue,
-	readSessionDerivedValue,
-	savePreparedCheckoutDirectory,
-	saveSessionDerivedValue,
-} from "../adapters/prepared-checkout";
 import { nodePublicHost } from "../adapters/public-host";
-import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
-import { subagentAncestors } from "../adapters/subagents";
-import { readVerificationBaseline } from "../adapters/turn-verification";
-import { noteUserHub } from "../adapters/user-hub-notes";
-import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import {
 	agentCapturesNote,
 	collectAgentCaptures,
@@ -208,7 +150,7 @@ import { agentTurnInstructions } from "../services/agent-turn-instructions";
 import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
-import { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
+import type { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
 import {
 	ASK_USER_END_TURN_TOOLS,
 	askUserTools,
@@ -255,7 +197,6 @@ import {
 	withCompactInstruction,
 } from "../services/compact-command";
 import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
-import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import {
 	CODE_MODE_DEFERRED_TOOLS,
 	deferredToolSurface,
@@ -302,19 +243,10 @@ import { planModelFailover } from "../services/model-failover";
 import { modelRequestRecorder } from "../services/model-request-recorder";
 import { planTool } from "../services/plan-tool";
 import { pluginSkillTools } from "../services/plugin-skill-tools";
-import { recordCloudProjectReport } from "../services/project-knowledge";
-import {
-	loadAgentProjectSecrets,
-	saveAccountWideSecret,
-	saveVisibleProjectSecret,
-	writeAgentProjectSecrets,
-} from "../services/project-secrets";
-import { withPushResultNotices } from "../services/push-approval";
 import {
 	countCommitsCommand,
 	pushApprovalTools,
 } from "../services/push-approval-tool";
-import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
 import { hasRepositoryInstructions } from "../services/repository-instructions";
 import { createReviewLoop } from "../services/review-loop";
@@ -351,17 +283,9 @@ import {
 } from "../services/thinking-pause";
 import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
-import {
-	type CommittedTurn,
-	commitSessionTurn,
-	type PublishedTurn,
-} from "../services/turn-commit";
+import type { CommittedTurn, PublishedTurn } from "../services/turn-commit";
 import { forgetTurnMemo, setTurnMemo, turnMemo } from "../services/turn-memo";
-import {
-	subagentMemory,
-	type TurnMemory,
-	turnMemory,
-} from "../services/turn-memory";
+import type { TurnMemory } from "../services/turn-memory";
 import { turnProgressWriter } from "../services/turn-progress-writer";
 import {
 	type EarlyRequestReason,
@@ -378,7 +302,10 @@ import {
 	withWorkspaceNote,
 	workspaceReplacedNote,
 } from "../services/workspace-replaced-note";
-import { enqueueAgentTaskEvent } from "./queue";
+import { ySquaredTools } from "../services/y-squared-tools";
+import { yTools } from "../services/y-tools";
+
+import type { TurnPorts } from "./turn-ports";
 
 /**
  * Acquires the chat's coordination lease, waiting out a brief holder instead
@@ -389,6 +316,7 @@ import { enqueueAgentTaskEvent } from "./queue";
 async function acquireConversationTurn(
 	control: TurnControl,
 	signal: AbortSignal,
+	coordinateConversationTurn: TurnPorts["coordinateConversationTurn"],
 ) {
 	const deadline = Date.now() + TURN_COORDINATION_LEASE_MS + 5_000;
 	for (;;) {
@@ -438,9 +366,10 @@ type ApiTurnStep = {
  * link, with why the changes were not pushed, or (nothing reached a pull
  * request) with nothing. GitHub trouble never fails the turn.
  */
-async function finishPullRequestHandoff(
+export async function finishPullRequestHandoff(
 	turn: Pick<ApiTurn, "id" | "session_id" | "user_id">,
 	publish: NonNullable<CommittedTurn["publish"]>,
+	replaceSettledTurnItem: TurnPorts["replaceSettledTurnItem"],
 ) {
 	const id = pullRequestHandoffItemId(turn.id);
 	const show = (item: SessionItem | null) =>
@@ -477,11 +406,15 @@ async function finishPullRequestHandoff(
 async function deliverHeldReports(
 	sessionId: string,
 	parentSessionId: string | null | undefined,
+	ports: Pick<
+		TurnPorts,
+		"releaseHeldAgentTaskEvents" | "enqueueAgentTaskEvent"
+	>,
 ) {
 	if (parentSessionId) return;
 	try {
-		if (await releaseHeldAgentTaskEvents(sessionId))
-			await enqueueAgentTaskEvent();
+		if (await ports.releaseHeldAgentTaskEvents(sessionId))
+			await ports.enqueueAgentTaskEvent();
 	} catch {
 		// The task-event sweep delivers them once their retry is due.
 	}
@@ -494,7 +427,15 @@ export async function runApiTurn(
 	machines: WorkspaceMachines,
 	turn: ApiTurn,
 	step?: ApiTurnStep,
+	/**
+	 * Unset in the Durable Object and the Node worker: the database-backed
+	 * `localTurnPorts`, loaded on first use so a turn runner box (which always
+	 * passes its own ports) never loads them or the database adapters under them.
+	 */
+	givenPorts?: TurnPorts,
 ): Promise<ApiTurnStepOutcome> {
+	const ports =
+		givenPorts ?? (await import("./turn-ports-local")).localTurnPorts;
 	// A durable step logs where its time went (turn-timing.ts).
 	const timing = step
 		? turnTiming({
@@ -520,7 +461,15 @@ export async function runApiTurn(
 		// MODEL_STEP_RETRY_DELAYS_MS.length times before a step succeeds.
 		for (let continued = false; ; continued = true) {
 			const attempt = () =>
-				runApiTurnAttempt(machines, turn, step, continued, timing, toolTime);
+				runApiTurnAttempt(
+					machines,
+					turn,
+					step,
+					continued,
+					ports,
+					timing,
+					toolTime,
+				);
 			// Model and egress code below marks its own phases (request start,
 			// response headers, first body byte, egress path).
 			const outcome = await (timing
@@ -553,9 +502,69 @@ async function runApiTurnAttempt(
 	step: ApiTurnStep | undefined,
 	/** The local worker is continuing this turn on a fallback route. */
 	continued: boolean,
+	ports: TurnPorts,
 	timing?: TurnTiming,
 	toolTime?: TurnToolTime,
 ): Promise<ApiTurnStepOutcome | { failedOver: ApiTurn }> {
+	const {
+		renewApiTurn,
+		checkpointApiTurn,
+		publishApiTurnProgress,
+		finalizeApiTurn,
+		apiTurnCancelRequested,
+		reserveApiTokens,
+		replaceSettledTurnItem,
+		otherRunningTurnOnMachine,
+		turnBoxToolIdentity,
+		recordTurnBoxToolIdentity,
+		clearTurnBoxToolIdentity,
+		coordinateConversationTurn,
+		agentSessionMetadataForOwner,
+		subagentAncestors,
+		projectImportedSessions,
+		projectYMode,
+		loadModelConnection,
+		completedLifecycleContinuations,
+		conversationPointCodeRef,
+		readVerificationBaseline,
+		readPreparedCheckoutDirectory,
+		savePreparedCheckoutDirectory,
+		readProjectDerivedValue,
+		readSessionDerivedValue,
+		saveSessionDerivedValue,
+		enabledPluginSkillIndex,
+		pluginSkillBody,
+		harnessVariantForUser,
+		isDevEvalUser,
+		connectableMcpServers,
+		saveAgentTaskResultAndEvent,
+		enqueueAgentTaskEvent,
+		captureServerAnalytics,
+		noteUserHub,
+		noteCrewWaiting,
+		injectServerPeerMessages,
+		archiveModelContext,
+		recordCloudProjectReport,
+		evaluationRunForTask,
+		assertEvaluationActive,
+		recordEvaluationUsage,
+		reserveEvaluationRequest,
+		pinnedClaudeRunner,
+		claudeSubscriptionStatus,
+		warmCodexSubscriptionCatalog,
+		hasManagedCodexAuth,
+		loadAgentProjectSecrets,
+		saveAccountWideSecret,
+		saveVisibleProjectSecret,
+		writeAgentProjectSecrets,
+		startQueuedUserTurn,
+		commitSessionTurn,
+		ensureConversationCodePoint,
+		deferredApiTurnWorkspace,
+		turnMemory,
+		subagentMemory,
+		withPushResultNotices,
+	} = ports;
 	const abort = new AbortController();
 	// The executor's step budget and turn deadline abort with a TimeoutError.
 	const stopForDeadline = () =>
@@ -660,6 +669,8 @@ async function runApiTurnAttempt(
 	let fusionRoleModels: RoleModels | undefined;
 	/** Lead mode fusion with leadTools=thin: a writer's notices point its lead to a restart. */
 	let fusionThinLead = false;
+	/** Harness variant y=on: a writer's patch is applied to its root's (Y's) checkout. */
+	let yVariant = false;
 	/** Lead mode fusion: the lead's writes in this step (a round started stops them). */
 	const leadWrites = leadWriteTracker();
 	let activeClaudeRunner: ClaudeRunnerBox | null = null;
@@ -915,8 +926,16 @@ async function runApiTurnAttempt(
 					loadModelConnection(turn.user_id, route.connectionId as string),
 				)
 			: Promise.resolve(null);
-	const loadingVariant = turnHarnessVariant(turn.id, turn.user_id);
-	const loadingRecordsRequests = turnRecordsRequests(turn.id, turn.user_id);
+	const loadingVariant = turnHarnessVariant(
+		turn.id,
+		turn.user_id,
+		harnessVariantForUser,
+	);
+	const loadingRecordsRequests = turnRecordsRequests(
+		turn.id,
+		turn.user_id,
+		isDevEvalUser,
+	);
 	for (const loading of [
 		checkingCodexAuth,
 		loadingConnection,
@@ -934,7 +953,11 @@ async function runApiTurnAttempt(
 		if (
 			!turn.lease_id ||
 			!(await timed("turn:acquire", () =>
-				acquireConversationTurn(control, abort.signal),
+				acquireConversationTurn(
+					control,
+					abort.signal,
+					coordinateConversationTurn,
+				),
 			))
 		)
 			throw new Error("The conversation is already running or was stopped.");
@@ -1013,7 +1036,21 @@ async function runApiTurnAttempt(
 						return [];
 					})
 				: Promise.resolve([]);
-		const variant = await loadingVariant;
+		// A project with Y on (project.y_enabled) makes its chats Y and its
+		// pinned Y² chat Y² (src/domain/y-agent.ts, src/domain/y-squared.ts).
+		// A failed read keeps the turn as it was.
+		const projectY = owner.projectId
+			? await projectYMode(owner.userId, owner.projectId).catch(() => null)
+			: null;
+		const loadedVariant = await loadingVariant;
+		const variant: HarnessVariant = projectY?.enabled
+			? { ...loadedVariant, y: "on" }
+			: loadedVariant;
+		const ySquared =
+			variant.y === "on" &&
+			!owner.parentSessionId &&
+			!!projectY?.ySquaredId &&
+			owner.id === projectY.ySquaredId;
 		if (owner.agentRole && !sideConversation) subagentSession = owner;
 		// Builder subagents (harness variant subagents=on): the agent tools
 		// and per-level budgets. Children carry the role.
@@ -1021,11 +1058,14 @@ async function runApiTurnAttempt(
 		const subagentsOn =
 			variant.subagents !== "off" ||
 			variant.lead === "fusion" ||
+			// Y only delegates (src/domain/y-agent.ts).
+			variant.y === "on" ||
 			!!owner.agentRole;
 		if (variant.lead === "fusion" && !owner.parentSessionId)
 			fusionLead = { userId: owner.userId, id: owner.id };
 		fusionRoleModels = variant.roleModels;
 		fusionThinLead = variant.lead === "fusion" && variant.leadTools === "thin";
+		yVariant = variant.y === "on";
 		const subagentLevel = owner.agentRole
 			? (
 					await turnMemo(`${turn.id}:subagent-ancestors`, () =>
@@ -1117,7 +1157,8 @@ async function runApiTurnAttempt(
 			role: analyticsAgentRole(owner),
 		};
 		// The root chat is the builder itself; writer subagents build too.
-		const writable = writesOwnCheckout(owner) && !sideReadOnly;
+		// Y² reads only the database (y-squared-tools.ts): no checkout to write.
+		const writable = writesOwnCheckout(owner) && !sideReadOnly && !ySquared;
 		// Cross-chat memory (Agent Memory Repo) for the root builder, never
 		// benchmarks. Loaded alongside the rest of the setup; never fails a turn.
 		memoryLoading =
@@ -1215,16 +1256,20 @@ async function runApiTurnAttempt(
 							? "evaluation"
 							: "harness-variant";
 		if (earlyIneligible) timing?.early(false, earlyIneligible);
-		const prepareWorkspace = deferredApiTurnWorkspace(
-			turnMachines,
-			owner,
-			abort.signal,
-			workspaceReuse,
-			{
-				pinNewChatBase: earlyFirstRequestEligible,
-				onPhase: (phase) => timing?.mark(phase),
-			},
-		);
+		// Y² has no machine: a path that still asks for one fails instead of
+		// copying or waking a VM.
+		const prepareWorkspace = ySquared
+			? refusedApiTurnWorkspace("Y² has no workspace.")
+			: deferredApiTurnWorkspace(
+					turnMachines,
+					owner,
+					abort.signal,
+					workspaceReuse,
+					{
+						pinNewChatBase: earlyFirstRequestEligible,
+						onPhase: (phase) => timing?.mark(phase),
+					},
+				);
 		let codePoint: Promise<void> | undefined;
 		/** Set once the checkout (without ~/memory) is ready. */
 		let checkoutReady = false;
@@ -1575,11 +1620,12 @@ async function runApiTurnAttempt(
 			// Builders get repository instructions as messages, like AGENTS.md in Codex.
 			instructionMessages: {
 				turnStart: () =>
-					step
+					!ySquared &&
+					(step
 						? step.index === 1
 							? !earlyPromptCheck
 							: instructionsOwed
-						: !continued,
+						: !continued),
 			},
 			onEvent: async (event) => {
 				items = applyApiProgress(items, turn.id, event);
@@ -1666,10 +1712,14 @@ async function runApiTurnAttempt(
 		// below and is awaited where the first request is decided.
 		const promptSubmitKnown =
 			firstStep && reportedDirectory ? hooks.promptSubmitConfigured() : null;
-		const leanWorkingDirectory = surface.lean
-			? (reportedDirectory ??
-				(await turnMemo(leanDirectoryKey, async () => (await checkout()).cwd)))
-			: undefined;
+		const leanWorkingDirectory =
+			surface.lean && !ySquared
+				? (reportedDirectory ??
+					(await turnMemo(
+						leanDirectoryKey,
+						async () => (await checkout()).cwd,
+					)))
+				: undefined;
 		if (reportedDirectory) {
 			const named = reportedDirectory;
 			setTurnMemo(leanDirectoryKey, named);
@@ -1765,6 +1815,15 @@ async function runApiTurnAttempt(
 					owner.agentBudget?.checkerPair !== "worker" &&
 					subagentLevel < MAX_SUBAGENT_LEVEL
 				: !owner.parentSessionId);
+		// Harness variant y=on (src/domain/y-agent.ts): the root chat is Y. It
+		// delegates every change to builders and keeps no file or shell tools.
+		const yAgent =
+			variant.y === "on" &&
+			!ySquared &&
+			delegates &&
+			!owner.parentSessionId &&
+			!owner.agentRole &&
+			!claudeCode;
 		// checkerMode=pair: the judge's only delegation is its worker (src/domain/checker-pair.ts).
 		const pairJudge =
 			!!surface.lean &&
@@ -1779,6 +1838,7 @@ async function runApiTurnAttempt(
 			waitDeadlineAt: step?.waitDeadlineAt,
 			roleModels: variant.roleModels,
 			lead: variant.lead,
+			y: variant.y === "on",
 			parentReasoning: turnReasoning,
 			rigor: variant.rigor === "on",
 			checkerMode: variant.checkerMode,
@@ -1832,7 +1892,9 @@ async function runApiTurnAttempt(
 		const codeMode =
 			(surface.lean || claudeCode) &&
 			(variant.codeMode !== "off" || claudeCode) &&
-			!thinLead
+			!thinLead &&
+			!yAgent &&
+			!ySquared
 				? variant.codeMode !== "off"
 					? variant.codeMode
 					: "on"
@@ -1896,7 +1958,7 @@ async function runApiTurnAttempt(
 							userId: owner.userId,
 							projectId: owner.projectId,
 							sessionId: owner.id,
-							requests: gitPushRequests,
+							requests: ports.gitPushRequests,
 							countCommits: async (oldId, newId) => {
 								const ready = await workspace();
 								const counted = await ready.machines.exec(
@@ -1918,6 +1980,8 @@ async function runApiTurnAttempt(
 		// Claude gets it too: the pinned Claude Code SDK offers no plan tool
 		// of its own (no TodoWrite), so this one feeds the chat's checklist.
 		const planning: ToolSet =
+			!yAgent &&
+			!ySquared &&
 			variant.plan === "on" &&
 			((!owner.parentSessionId && !owner.agentRole) || isSideChat(owner))
 				? planTool({
@@ -1960,16 +2024,36 @@ async function runApiTurnAttempt(
 					})
 				: {};
 		// The thin lead only inspects, so a round needs no write guard.
-		const baseTools: ToolSet = thinLead
-			? { ...thinLeadTools({ ...ownTools, ...delegation }), ...planning }
-			: {
-					...(leadGate
-						? withSidekickWriteGuard(ownTools, leadWrites)
-						: ownTools),
-					...delegation,
-					...planning,
-					...goalMode,
-				};
+		const baseTools: ToolSet = ySquared
+			? {
+					// Y² asks the person; it has no secret or delegation tools.
+					...(ownTools[ASK_USER_TOOL]
+						? { [ASK_USER_TOOL]: ownTools[ASK_USER_TOOL] }
+						: {}),
+					...ySquaredTools({
+						userId: owner.userId,
+						projectId: owner.projectId as string,
+						selfId: owner.id,
+						// Only handed to the send/stop paths of other chats: Y²
+						// itself never prepares a VM (refusedApiTurnWorkspace).
+						machines: unscopedMachines,
+						modelId: owner.listedModelId,
+						harnessId: owner.harness,
+						turnId: turn.id,
+					}),
+				}
+			: yAgent
+				? yTools({ ...ownTools, ...delegation })
+				: thinLead
+					? { ...thinLeadTools({ ...ownTools, ...delegation }), ...planning }
+					: {
+							...(leadGate
+								? withSidekickWriteGuard(ownTools, leadWrites)
+								: ownTools),
+							...delegation,
+							...planning,
+							...goalMode,
+						};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
 		// call tools (run_code only). agent, agent_send and
 		// request_project_secret are ordinary tools. Additions append, so
@@ -2162,6 +2246,7 @@ async function runApiTurnAttempt(
 					(step ? runApiAgentStep : runApiAgent)({
 						...input,
 						connectionId: route.connectionId as string,
+						...(ports.modelAccess ? { modelAccess: ports.modelAccess } : {}),
 					});
 		const runAgent = (input: ModelAgentInput) =>
 			(
@@ -2310,6 +2395,8 @@ async function runApiTurnAttempt(
 					leadTools: thinLead ? "thin" : "full",
 					rigor: variant.rigor === "on",
 					forceDelegation: variant.subagents === "force",
+					y: yAgent,
+					ySquared,
 					fusionPair:
 						variant.lead === "fusion" && !owner.parentSessionId
 							? fusionPairFor(owner.listedModelId, variant.roleModels)
@@ -2347,7 +2434,8 @@ async function runApiTurnAttempt(
 				runningIds: () => pendingAgentCommandIds(items),
 			}),
 			restoreInstructions: async (history) => {
-				history = await repositoryContext.restoreInstructions(history);
+				if (!ySquared)
+					history = await repositoryContext.restoreInstructions(history);
 				await hooks.postCompact(history);
 				return hooks.drain(history);
 			},
@@ -3056,7 +3144,10 @@ async function runApiTurnAttempt(
 			);
 		// A subagent's work reaches its parent as a report (a writer's as a
 		// patch and ref), never as a commit or a published branch.
-		const commits = !owner.agentRole && changedWorkspace;
+		// Y changes no files itself, but builders' patches were applied to its
+		// checkout since its last commit (src/domain/y-agent.ts): it commits
+		// whatever is there; an empty commit is skipped.
+		const commits = !owner.agentRole && (changedWorkspace || yAgent);
 		failureStage = commits ? "commit" : "saving";
 		// The answer is done: the chat shows "Saving changes…" (the composer
 		// offers Send, which waits for the commit, instead of Stop).
@@ -3157,6 +3248,20 @@ async function runApiTurnAttempt(
 		// Set before the write: a renewal racing it may see the row completed.
 		// finalize itself refuses a turn whose cancel was requested.
 		turnSettled = true;
+		// The turn ends on a card only the person can answer (question, secret
+		// request, push approval, plan): tell the project's crew now, so Y²
+		// does not see the thread as finished if the chat object's own copy of
+		// the transcript cannot say what it waits on. The crew merges it into
+		// the settle note. No database read; a port, so a box turn too.
+		const waitingOn = chatWaitingOn(items, "completed");
+		if (waitingOn && projectY?.enabled && owner.projectId && !ySquared)
+			noteCrewWaiting({
+				sessionId: owner.id,
+				userId: owner.userId,
+				projectId: owner.projectId,
+				ySquaredId: projectY.ySquaredId,
+				waitingOn,
+			});
 		const saved = await timed("turn:finalize", () =>
 			finalizeApiTurn(turn, "completed", items),
 		);
@@ -3168,7 +3273,11 @@ async function runApiTurnAttempt(
 		if (saved !== "completed") {
 			// A stop that raced completion still hands off what was committed.
 			if (saved === "cancelled" && committed?.publish)
-				await finishPullRequestHandoff(turn, committed.publish);
+				await finishPullRequestHandoff(
+					turn,
+					committed.publish,
+					replaceSettledTurnItem,
+				);
 			abort.abort();
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
@@ -3182,6 +3291,7 @@ async function runApiTurnAttempt(
 				finishPullRequestHandoff(
 					turn,
 					committed.publish as NonNullable<typeof committed.publish>,
+					replaceSettledTurnItem,
 				),
 			);
 		// The writer lives as long as the chat: an idle one waits for the next
@@ -3216,6 +3326,7 @@ async function runApiTurnAttempt(
 					}`,
 					roleModels: fusionRoleModels,
 					thinLead: fusionThinLead,
+					applyToThread: yVariant,
 					...(evaluation
 						? {
 								deps: {
@@ -3237,7 +3348,7 @@ async function runApiTurnAttempt(
 			turn.user_id,
 			turn.session_id,
 		).catch(() => {});
-		await deliverHeldReports(owner.id, owner.parentSessionId);
+		await deliverHeldReports(owner.id, owner.parentSessionId, ports);
 		return "completed";
 	} catch (error) {
 		workspaceReuse?.forget();
@@ -3635,6 +3746,7 @@ async function runApiTurnAttempt(
 								: "failed",
 						roleModels: fusionRoleModels,
 						thinLead: fusionThinLead,
+						applyToThread: yVariant,
 						text: [
 							failureMessage,
 							items
@@ -3665,6 +3777,7 @@ async function runApiTurnAttempt(
 			await deliverHeldReports(
 				turn.session_id,
 				subagentSession?.parentSessionId,
+				ports,
 			);
 		}
 		abort.abort();
@@ -3712,13 +3825,34 @@ async function runApiTurnAttempt(
  * Development eval users pick harness variants per run; everyone else (and
  * production) gets the default. Fixed for the turn.
  */
-function turnRecordsRequests(turnId: string, userId: string) {
+/** A turn's workspace that every caller is refused (a chat without a machine). */
+function refusedApiTurnWorkspace(
+	reason: string,
+): ReturnType<typeof deferredApiTurnWorkspace> {
+	const refused = () => Promise.reject<AgentToolWorkspace>(new Error(reason));
+	return Object.assign(refused, {
+		checkedOut: refused,
+		pinnedBase: async () => null,
+		plannedDirectory: async () => null,
+		pinnedBaseFile: async () => null,
+	});
+}
+
+function turnRecordsRequests(
+	turnId: string,
+	userId: string,
+	isDevEvalUser: TurnPorts["isDevEvalUser"],
+) {
 	return devEvalUsersEnabled()
 		? turnMemo(`${turnId}:records-requests`, () => isDevEvalUser(userId))
 		: Promise.resolve(false);
 }
 
-function turnHarnessVariant(turnId: string, userId: string) {
+function turnHarnessVariant(
+	turnId: string,
+	userId: string,
+	harnessVariantForUser: TurnPorts["harnessVariantForUser"],
+) {
 	return devEvalUsersEnabled()
 		? turnMemo(`${turnId}:harness-variant`, () => harnessVariantForUser(userId))
 		: Promise.resolve(PRODUCT_HARNESS_VARIANT);
@@ -3732,14 +3866,16 @@ function turnHarnessVariant(turnId: string, userId: string) {
 function turnTools(input: {
 	surfaceTools: ToolSet;
 	mcp: Awaited<ReturnType<typeof connectMcpTools>>;
-	plugins: Awaited<ReturnType<typeof enabledPluginSkillIndex>>;
+	plugins: Awaited<ReturnType<TurnPorts["enabledPluginSkillIndex"]>>;
 	/** A listed skill's body, read when the agent asks for it. */
 	pluginSkillBody: NonNullable<Parameters<typeof pluginSkillTools>[1]>;
 	webSearch: ToolSet;
 	webFetch: ToolSet;
 	hooks: ReturnType<typeof harnessLifecycleHooks>;
 	rootChat: boolean;
-	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
+	projectSecrets: Awaited<
+		ReturnType<TurnPorts["loadAgentProjectSecrets"]>
+	> | null;
 	redact: readonly string[];
 	/** save_project_environment, in a person's root chats (not evaluations). */
 	environmentSetup: ToolSet;

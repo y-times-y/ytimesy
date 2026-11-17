@@ -18,6 +18,10 @@ const store = vi.hoisted(() => ({
 	remote: new Set<string>(["main", "release"]),
 }));
 const receive = vi.hoisted(() => vi.fn(async () => "updated"));
+const ySquared = vi.hoisted(() => vi.fn(async () => false));
+vi.mock("#/server/adapters/y-mode", () => ({
+	isActiveYSquaredChat: ySquared,
+}));
 
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: async () => store.chat,
@@ -98,6 +102,14 @@ const submit = (baseBranch?: string) =>
 beforeEach(() => {
 	store.chat = { ...newChat };
 	receive.mockClear();
+	ySquared.mockResolvedValue(false);
+});
+
+it("gives a Y project's Y² chat no branch: it changes no code", async () => {
+	ySquared.mockResolvedValue(true);
+	const chat = await submit();
+	expect(chat.workingBranch).toBeNull();
+	expect(chat.selectedBranch).toBeNull();
 });
 
 it("creates a new chat's own branch from the picked base and keeps that base", async () => {

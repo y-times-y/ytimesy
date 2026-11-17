@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 	),
 	workspace: vi.fn(async () => ({ templateSnapshotId: "snap-1" })),
 	size: vi.fn(async () => "large"),
+	ySquared: vi.fn(async () => false),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionMetadataForOwner: mocks.session,
@@ -29,6 +30,9 @@ vi.mock("../adapters/workspaces", () => ({
 vi.mock("../adapters/project-machine-size", () => ({
 	projectMachineSize: mocks.size,
 }));
+vi.mock("../adapters/y-mode", () => ({
+	isActiveYSquaredChat: mocks.ySquared,
+}));
 
 const chat = {
 	id: "11111111-1111-4111-8111-111111111111",
@@ -44,6 +48,18 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.session.mockResolvedValue(chat);
 	mocks.claim.mockResolvedValue(true);
+	mocks.ySquared.mockResolvedValue(false);
+});
+
+it("never copies a machine for a Y project's Y² chat", async () => {
+	mocks.ySquared.mockResolvedValue(true);
+	const provisionSession = vi.fn(async () => "vm-1");
+	expect(await prewarmChatMachine({ provisionSession } as never, input)).toBe(
+		"skipped",
+	);
+	expect(mocks.ySquared).toHaveBeenCalledWith("owner", "project", chat);
+	expect(provisionSession).not.toHaveBeenCalled();
+	expect(mocks.claim).not.toHaveBeenCalled();
 });
 
 it("copies an empty chat's machine by its slug and records the copy", async () => {

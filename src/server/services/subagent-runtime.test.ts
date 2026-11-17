@@ -21,6 +21,7 @@ const adapters = vi.hoisted(() => ({
 	session: vi.fn(),
 	mergeFork: vi.fn(async () => {}),
 	transfer: vi.fn(),
+	apply: vi.fn(),
 	idle: vi.fn(async (): Promise<unknown[]> => []),
 	saveState: vi.fn(async () => {}),
 }));
@@ -45,6 +46,7 @@ vi.mock("../adapters/agent-sessions", () => ({
 }));
 vi.mock("./subagent-writer", () => ({
 	transferWriterPatch: adapters.transfer,
+	applyWriterPatchToParent: adapters.apply,
 }));
 // No model call in these tests: the classifier answers as its rules would.
 vi.mock("./sidekick-classifier", () => ({
@@ -367,6 +369,62 @@ describe("subagent report", () => {
 		});
 		expect(report).toContain("[agent 1 writer budget exhausted");
 		expect(report).toContain("Patch: not transferred (fork VM is gone).");
+	});
+
+	it("applies a builder's patch to Y's checkout and says so (y=on)", async () => {
+		adapters.apply.mockResolvedValueOnce({ applied: true });
+		const report = await subagentReport({
+			machines: {} as never,
+			session: writer,
+			items: [],
+			outcome: "finished",
+			text: "Added the flag.",
+			now: NOW,
+			applyToThread: true,
+		});
+		expect(adapters.apply).toHaveBeenCalledWith(
+			expect.objectContaining({
+				parentVm: "vm-root",
+				patchPath: "~/.ytimesy/agents/1.patch",
+			}),
+		);
+		expect(report).toContain(
+			"Builder 1's changes (2 files, +120 −30) were applied to this thread's checkout",
+		);
+		expect(report).not.toContain("apply with");
+	});
+
+	it("reports a builder's patch that did not apply, without touching the checkout's commit (y=on)", async () => {
+		adapters.apply.mockResolvedValueOnce({
+			applied: false,
+			reason: "error: patch failed: src/cli.ts:12",
+		});
+		const report = await subagentReport({
+			machines: {} as never,
+			session: writer,
+			items: [],
+			outcome: "finished",
+			text: "Added the flag.",
+			now: NOW,
+			applyToThread: true,
+		});
+		expect(report).toContain(
+			"Builder 1's changes could not be applied to this thread's checkout: error: patch failed: src/cli.ts:12",
+		);
+		expect(report).toContain("Start a builder to resolve it");
+	});
+
+	it("leaves the patch to the parent when Y is off", async () => {
+		adapters.apply.mockClear();
+		await subagentReport({
+			machines: {} as never,
+			session: writer,
+			items: [],
+			outcome: "finished",
+			text: "done",
+			now: NOW,
+		});
+		expect(adapters.apply).not.toHaveBeenCalled();
 	});
 
 	it("labels a plan-billed agent's dollars as a list-price estimate", async () => {

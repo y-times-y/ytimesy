@@ -1,13 +1,14 @@
 import type { ModelMessage } from "ai";
-import { parseSteering } from "#/domain/agent-steering";
-import { SessionItemId } from "#/domain/ids";
+import {
+	type PeerInboxRow,
+	planPeerInjection,
+} from "#/domain/peer-inbox-injection";
 import type { UserMessageItem } from "#/domain/session-item";
 import { database } from "./database";
 import {
 	forgetPeerInboxObservation,
 	peerInboxMayHaveMessages,
 } from "./peer-inbox-observation";
-import { isSetupCatchUpRow } from "./setup-catch-up";
 
 export async function stageServerPeerMessage(
 	recipientId: string,
@@ -57,6 +58,35 @@ export async function acknowledgeServerPeerMessage(
 		[recipientId, id],
 	);
 }
+/** The recipient's next pending inbox rows (at most 16, oldest first). */
+export async function readPeerInbox(
+	recipientId: string,
+): Promise<PeerInboxRow[]> {
+	const result = await database().query<{
+		id: string;
+		message: string;
+		queued_send: { item: UserMessageItem; released?: boolean } | null;
+	}>(
+		"select id,message,queued_send from agent_peer_inbox where recipient_id=$1 and not accepted order by created_at,id limit 16",
+		[recipientId],
+	);
+	return result.rows;
+}
+
+/** Marks inbox rows accepted, after a checkpoint saved what they delivered. */
+export async function acceptPeerInbox(
+	recipientId: string,
+	ids: readonly string[],
+) {
+	await database().query(
+		"update agent_peer_inbox set accepted=true where recipient_id=$1 and id=any($2::text[])",
+		[recipientId, [...ids]],
+	);
+	// A heartbeat that read the inbox before this must not report these as
+	// still waiting (queuedMessageSentNow would restart the step for nothing).
+	forgetPeerInboxObservation(recipientId);
+}
+
 /**
  * Persist the real model history before acknowledging input; retries cannot
  * silently discard it. A runtime notice already in the history is not added
@@ -78,69 +108,21 @@ export async function injectServerPeerMessages(
 	sentUserMessagesOnly = false,
 ) {
 	if (!peerInboxMayHaveMessages(recipientId)) return history;
-	const result = await database().query<{
-		id: string;
-		message: string;
-		queued_send: { item: UserMessageItem; released?: boolean } | null;
-	}>(
-		"select id,message,queued_send from agent_peer_inbox where recipient_id=$1 and not accepted order by created_at,id limit 16",
-		[recipientId],
-	);
-	if (!result.rows.length) return history;
-	const catchUp = result.rows.some((row) => isSetupCatchUpRow(row.id));
-	if (catchUp) onSetupCatchUp?.();
-	// A queued follow-up stays editable until Send. The turn's end takes it
-	// whether or not Send was pressed; this step does not.
-	const delivering = result.rows.filter((row) =>
-		sentUserMessagesOnly
-			? Boolean(row.queued_send?.item) && row.queued_send?.released === true
-			: !isSetupCatchUpRow(row.id) &&
-				!(row.queued_send?.item && row.queued_send.released === false),
-	);
-	if (!delivering.length) return history;
-	const injected = [...history];
-	const users: UserMessageItem[] = [];
-	for (const row of delivering) {
-		const item = row.queued_send?.item;
-		if (item) {
-			if (delivered(item.id)) continue;
-			users.push(item);
-			injected.push({ role: "user", content: row.message });
-		} else if (
-			!injected.some(
-				(message) => message.role === "user" && message.content === row.message,
-			)
-		) {
-			injected.push({ role: "user", content: row.message });
-			// Steering shows in the subagent's transcript where it arrived.
-			const steering = steeringTimelineItem(row.id, row.message);
-			if (steering && !delivered(steering.id)) users.push(steering);
-		}
-	}
+	const rows = await readPeerInbox(recipientId);
+	if (!rows.length) return history;
+	const plan = planPeerInjection(rows, history, {
+		delivered,
+		sentUserMessagesOnly,
+	});
+	if (plan.catchUp) onSetupCatchUp?.();
+	if (!plan.delivering.length) return history;
+	const { injected, users } = plan;
 	await checkpoint(injected, users);
-	await database().query(
-		"update agent_peer_inbox set accepted=true where recipient_id=$1 and id=any($2::text[])",
-		[recipientId, delivering.map((row) => row.id)],
-	);
-	// A heartbeat that read the inbox before this must not report these as
-	// still waiting (queuedMessageSentNow would restart the step for nothing).
-	forgetPeerInboxObservation(recipientId);
+	await acceptPeerInbox(recipientId, plan.delivering);
 	return injected;
 }
 
-/** A delivered steering message as its recipient's timeline item; null for other notices. */
-export function steeringTimelineItem(
-	inboxId: string,
-	message: string,
-): UserMessageItem | null {
-	return parseSteering(message)
-		? {
-				kind: "userMessage",
-				id: SessionItemId(`steer:${inboxId}`),
-				text: message,
-			}
-		: null;
-}
+export { steeringTimelineItem } from "#/domain/peer-inbox-injection";
 
 /** A steering message waiting in a subagent's mailbox. */
 export type PendingSteering = {

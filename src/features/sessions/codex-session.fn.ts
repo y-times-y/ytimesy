@@ -7,7 +7,7 @@ import {
 	DEFAULT_COMPOSER_HARNESS_ID,
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
-import { chatsFromAgentSessions } from "#/domain/agent-session";
+import { chatsFromAgentSessions, pinnedYSquared } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { claudeSubscriptionEnabled } from "#/domain/claude-code-route";
 import { savedDefaultBranchesFromCookies } from "#/domain/default-branch-cookie";
@@ -46,6 +46,7 @@ import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live
 import { listModelConnections } from "#/server/adapters/model-connections";
 import { listProjects } from "#/server/adapters/projects";
 import { consumeUserAction } from "#/server/adapters/user-action-rate";
+import { ySquaredChatsByProject } from "#/server/adapters/y-mode";
 import { loadAgentAccount } from "#/server/auth/agent-account";
 import { requireUser } from "#/server/auth/auth";
 import {
@@ -368,14 +369,23 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 		// projects and the Recent list by them, so the server's order is the
 		// order the browser keeps (read in the browser, the projects reordered
 		// as the page loaded).
+		// A Y project's Y² chat is marked and pinned, as the browser's list read has it.
+		const ySquaredChats = ySquaredChatsByProject(user.id).catch(
+			() => new Map<string, string>(),
+		);
+		const sidebarChats = (projectId: string) =>
+			listSidebarAgentSessions(user.id, projectId).then(async (sessions) =>
+				pinnedYSquared(
+					chatsFromAgentSessions(sessions),
+					(await ySquaredChats).get(projectId),
+				),
+			);
 		const projectChatReads = listed.then(
 			(projects) =>
 				new Map(
 					(projects ?? []).map((project) => [
 						project.id,
-						listSidebarAgentSessions(user.id, project.id).then(
-							chatsFromAgentSessions,
-						),
+						sidebarChats(project.id),
 					]),
 				),
 		);
@@ -397,10 +407,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				const read = (await projectChatReads).get(projectId);
 				return {
 					projectId,
-					chats: await (read ??
-						listSidebarAgentSessions(user.id, projectId).then(
-							chatsFromAgentSessions,
-						)),
+					chats: await (read ?? sidebarChats(projectId)),
 				};
 			})
 			.catch(() => undefined);

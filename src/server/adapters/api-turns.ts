@@ -23,9 +23,11 @@ import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { settledTurnItems } from "#/domain/turn-end";
 import {
+	boxTurnBlock,
 	boxTurnUsers,
 	chooseTurnExecutor,
 	configuredTurnExecutor,
+	localTurnsEnabled,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
@@ -52,6 +54,7 @@ import {
 	retryDroppedConnection,
 } from "./dropped-connection-retry";
 import { infrastructureAdmissionEnabled } from "./freestyle/usage-admission";
+import { evaluationRunForTask } from "./harness-evaluation";
 import { assertUsageWindowsOpen } from "./infrastructure-usage";
 import { observePeerInbox } from "./peer-inbox-observation";
 import { trainingEligibleAtTurnStart } from "./training-consent";
@@ -61,8 +64,9 @@ import {
 	planItemsWrite,
 	rebaseAfterWrite,
 } from "./turn-items-storage";
-import { turnRunnerBoxAlive } from "./turn-runner-boxes";
+import { boxRoutingFacts, turnRunnerBoxAlive } from "./turn-runner-boxes";
 import { startQueuedTurnsDirectly } from "./turn-start";
+import { isActiveYSquaredChat } from "./y-mode";
 
 export type ApiTurn = {
 	id: string;
@@ -226,9 +230,30 @@ export async function enqueueApiTurn(input: {
 		process.env.YTIMESY_MODEL_EXECUTION_TARGET,
 	);
 	const boxUsers = boxTurnUsers(process.env.YTIMESY_BOX_TURN_USERS);
-	const eligibleForBox =
+	let eligibleForBox =
 		!subscriptionTurnSettings(input.revision) &&
 		!isClaudeCodeRevision(input.revision);
+	// Only read when the user may use boxes at all (flag off: no extra query,
+	// the Durable Object path is exactly as before). A routing read that fails
+	// keeps the turn in its object.
+	if (
+		eligibleForBox &&
+		configuredExecutor === "durable-object" &&
+		(boxUsers.has("*") || boxUsers.has(input.userId))
+	) {
+		const facts = await boxRoutingFacts(input.userId, input.sessionId).catch(
+			() => null,
+		);
+		const evaluation = facts
+			? Boolean(
+					await evaluationRunForTask(input.userId, input.sessionId).catch(
+						() => true,
+					),
+				)
+			: true;
+		eligibleForBox =
+			!!facts && boxTurnBlock({ ...facts, evaluation }, process.env) === null;
+	}
 	const chosenExecutor = chooseTurnExecutor({
 		configured: configuredExecutor,
 		userId: input.userId,
@@ -242,6 +267,9 @@ export async function enqueueApiTurn(input: {
 	const client = await database().connect();
 	let turnId: string | undefined;
 	let started: TurnAnalyticsSession | undefined;
+	let executor: TurnExecutor = chosenExecutor;
+	// Development only: a Y² turn runs in this process (local-turn.ts).
+	let runsLocally = false;
 	try {
 		await client.query("begin");
 		const subscription = subscriptionTurnSettings(input.revision);
@@ -258,6 +286,7 @@ export async function enqueueApiTurn(input: {
 			parent_session_id: string | null;
 			task_state: string | null;
 			task_access: string | null;
+			project_id: string | null;
 			existing: boolean;
 		}>(
 			`with connection as (${
@@ -267,9 +296,9 @@ export async function enqueueApiTurn(input: {
 						? "select 1 from claude_subscription where user_id=$2 and status in ('connected','limited') for share"
 						: "select 1 from model_connection where id=$4 and user_id=$2 and revision=$5 for share"
 			}),
-			 chat as (select id,turn_status,parent_session_id,task_state,task_access from agent_session where id=$1 and user_id=$2 for update)
+			 chat as (select id,turn_status,parent_session_id,task_state,task_access,project_id from agent_session where id=$1 and user_id=$2 for update)
 			 select exists(select 1 from connection) as connected,chat.id is not null as found,
-			 chat.turn_status,chat.parent_session_id,chat.task_state,chat.task_access,
+			 chat.turn_status,chat.parent_session_id,chat.task_state,chat.task_access,chat.project_id,
 			 ($3::text is not null and exists(select 1 from api_turn t where t.session_id=$1 and t.user_id=$2 and t.idempotency_key=$3::text)) as existing
 			 from (select 1) one left join chat on true`,
 			subscription || claudeCode
@@ -318,8 +347,19 @@ export async function enqueueApiTurn(input: {
 			messagesObject,
 			messagesUnknown: Boolean(input.base),
 		});
+		// Development only: Y² (no machine) runs in this process (local-turn.ts).
+		if (
+			localTurnsEnabled() &&
+			checked.project_id &&
+			(await isActiveYSquaredChat(input.userId, checked.project_id, {
+				id: input.sessionId,
+				parentSessionId: checked.parent_session_id,
+			}))
+		) {
+			executor = "node";
+			runsLocally = true;
+		}
 		turnId = randomUUID();
-		const executor = chosenExecutor;
 		started = {
 			userId: input.userId,
 			harness: subscription ? "codex" : "api",
@@ -372,7 +412,17 @@ export async function enqueueApiTurn(input: {
 		client.release();
 	}
 	if (turnId && started) void captureTurnStarted(started, turnId, new Date());
-	if (chosenExecutor === "durable-object") {
+	if (turnId && executor === "node" && runsLocally) {
+		const { runQueuedLocalTurn } = await import("../jobs/local-turn");
+		// Runs for the turn's length, past this request's response.
+		void runQueuedLocalTurn(input.sessionId).catch((error) => {
+			console.warn("The local turn failed.", {
+				message: error instanceof Error ? error.message : "unknown",
+			});
+		});
+		return;
+	}
+	if (executor === "durable-object") {
 		// The turn is committed; waking its executor (an admission claim and the
 		// chat's startTurn) need not hold the sender's response. A web request
 		// sends it after responding; a lost wake is admitted by the next
@@ -601,6 +651,8 @@ export async function claimApiTurn(
 	fleetLimit = modelConcurrencyLimits().fleet,
 	executor: TurnExecutor = "node",
 	sessionId?: string,
+	/** Users whose turns stay queued this pass (compute budget); ids that are not plain are ignored. */
+	excludedUserIds: readonly string[] = [],
 ): Promise<ApiTurn | null> {
 	if (
 		!Number.isInteger(perUserLimit) ||
@@ -616,6 +668,9 @@ export async function claimApiTurn(
 	if (sessionId !== undefined && !UUID.test(sessionId))
 		throw new Error("Invalid chat id.");
 	const lease = randomUUID();
+	const excluded = excludedUserIds.filter((id) =>
+		/^[A-Za-z0-9_-]{1,256}$/.test(id),
+	);
 	// One round trip: the whole transaction goes as one simple-protocol batch,
 	// so its values are validated literals above (no parameters). Poolers may
 	// ignore startup settings, so the bounds are set inside the transaction,
@@ -634,6 +689,7 @@ with admission as (select pg_try_advisory_xact_lock(81738419) as acquired)
  where id=(select q.id from api_turn q where (select acquired from admission)
  and q.state='queued' and q.executor='${executor}' and not q.cancel_requested
  ${sessionId ? `and q.session_id='${sessionId}'::uuid` : ""}
+ ${excluded.length ? `and q.user_id not in (${excluded.map((id) => `'${id}'`).join(",")})` : ""}
  and not exists(select 1 from agent_task_command_receipt f where f.parent_session_id=q.session_id and f.request_id='${CONVERSATION_FORK_REQUEST_ID}')
  and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<${perUserLimit}
  and (select count(*) from api_turn r where r.state='running')<${fleetLimit}
@@ -1028,13 +1084,48 @@ export async function refreshWaitingApiTurns(
  * that did receive it can no longer read or write it under that lease, so
  * it still runs exactly once.
  */
-export async function releaseClaimedApiTurn(turnId: string, leaseId: string) {
+export async function releaseClaimedApiTurn(
+	turnId: string,
+	leaseId: string,
+	executor: TurnExecutor = "durable-object",
+) {
 	const result = await database().query(
 		`update api_turn set state='queued',lease_id=null,updated_at=now()
-		 where id=$1 and lease_id=$2 and state='running' and executor='durable-object'`,
-		[turnId, leaseId],
+		 where id=$1 and lease_id=$2 and state='running' and executor=$3`,
+		[turnId, leaseId, executor],
 	);
 	return (result.rowCount ?? 0) > 0;
+}
+
+/** Turn ids whose budget notice this isolate already wrote or found, so repeated admission passes ask the database nothing. */
+const budgetNoticed = new Set<string>();
+
+/**
+ * Shows the chat why its queued turn is not starting (the compute budget or
+ * the global pause): one notice item after the turn's user message. The
+ * statement is a no-op when the notice is already there or the turn is no
+ * longer queued, so a repeated pass writes nothing. The turn's own first
+ * progress write replaces everything from its user message on, which clears
+ * the notice when the turn starts.
+ */
+export async function noteBudgetHeldTurn(
+	turn: Pick<ApiTurn, "id" | "session_id" | "user_id">,
+	message: string,
+) {
+	if (budgetNoticed.has(turn.id)) return false;
+	if (budgetNoticed.size > 2000) budgetNoticed.clear();
+	budgetNoticed.add(turn.id);
+	const itemId = `budget-hold:${turn.id}`;
+	const result = await database().query(
+		`update agent_session set items=items||jsonb_build_array(jsonb_build_object('kind','notice','id',$3::text,'message',$4::text)),updated_at=now()
+		 where id=$1 and user_id=$2 and jsonb_typeof(items)='array'
+		 and not items @> jsonb_build_array(jsonb_build_object('id',$3::text))
+		 and exists(select 1 from api_turn where id=$5 and state='queued')`,
+		[turn.session_id, turn.user_id, itemId, message, turn.id],
+	);
+	if (!result.rowCount) return false;
+	await wakeConversationProgress();
+	return true;
 }
 
 export async function cancelWaitingApiTurn(turnId: string, leaseId: string) {

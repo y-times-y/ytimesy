@@ -24,6 +24,7 @@ import {
 	repositoryBranchSha,
 } from "#/server/adapters/github";
 import { projectForOwner } from "#/server/adapters/projects";
+import { isActiveYSquaredChat } from "#/server/adapters/y-mode";
 import {
 	githubAccessToken,
 	githubConnectionExists,
@@ -76,6 +77,9 @@ export async function commitChatBranchForSubmission(input: {
 			session.selectedBranch,
 			session.selectedBranch,
 		);
+	// Y² changes no code, so it never takes a branch of its own.
+	if (await isActiveYSquaredChat(input.userId, input.projectId, session))
+		return session;
 	const project = await projectForOwner(input.userId, input.projectId);
 	if (!project) throw new Error("This project is not available.");
 	// Existing chats keep their checkout; only a genuinely new task gets a generated branch.

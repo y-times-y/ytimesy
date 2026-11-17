@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { boxTurnUsers, chooseTurnExecutor } from "./turn-executor";
+import {
+	boxTurnBlock,
+	boxTurnUsers,
+	chooseTurnExecutor,
+	localTurnsEnabled,
+} from "./turn-executor";
 
 describe("chooseTurnExecutor", () => {
 	const base = {
@@ -36,5 +41,56 @@ describe("chooseTurnExecutor", () => {
 
 	it("never changes a deployment that runs turns on the node executor", () => {
 		expect(chooseTurnExecutor({ ...base, configured: "node" })).toBe("node");
+	});
+});
+
+it("runs turns locally only on a development server that asked for it", () => {
+	const development = {
+		YTIMESY_ENVIRONMENT: "development",
+		NODE_ENV: "development",
+	};
+	expect(localTurnsEnabled({ ...development, YTIMESY_LOCAL_TURNS: "1" })).toBe(
+		true,
+	);
+	expect(localTurnsEnabled(development)).toBe(false);
+	expect(
+		localTurnsEnabled({ ...development, YTIMESY_LOCAL_TURNS: "true" }),
+	).toBe(false);
+	// Production, or a deployment that forgot its environment, never does.
+	expect(
+		localTurnsEnabled({
+			...development,
+			NODE_ENV: "production",
+			YTIMESY_LOCAL_TURNS: "1",
+		}),
+	).toBe(false);
+	expect(localTurnsEnabled({ YTIMESY_LOCAL_TURNS: "1" })).toBe(false);
+});
+
+describe("boxTurnBlock (what keeps a turn off the boxes)", () => {
+	const none = { subagent: false, evaluation: false, hasRuntimeSecrets: false };
+	it("lets a plain root chat's turn run on a box", () => {
+		expect(boxTurnBlock(none, {})).toBeNull();
+	});
+	it("keeps helper chats and evaluation runs in their Durable Objects", () => {
+		expect(boxTurnBlock({ ...none, subagent: true }, {})).toBe("subagent");
+		expect(boxTurnBlock({ ...none, evaluation: true }, {})).toBe("evaluation");
+	});
+	it("keeps a project with runtime secrets off the box unless the secrets flag is 1", () => {
+		const secrets = { ...none, hasRuntimeSecrets: true };
+		expect(boxTurnBlock(secrets, {})).toBe("runtime-secrets");
+		expect(
+			boxTurnBlock(secrets, { YTIMESY_CLAUDE_BOX_TOOLS_SECRETS: "0" }),
+		).toBe("runtime-secrets");
+		expect(
+			boxTurnBlock(secrets, { YTIMESY_CLAUDE_BOX_TOOLS_SECRETS: "1" }),
+		).toBeNull();
+		// The flag never lifts the other blocks.
+		expect(
+			boxTurnBlock(
+				{ ...secrets, subagent: true },
+				{ YTIMESY_CLAUDE_BOX_TOOLS_SECRETS: "1" },
+			),
+		).toBe("subagent");
 	});
 });

@@ -117,6 +117,7 @@ export function WorkspaceInspector({
 	pullRequestChats,
 	onOpenChat,
 	overview,
+	overviewIcon,
 	pullRequest,
 	pullRequestSummary,
 	onViewIntent,
@@ -155,6 +156,8 @@ export function WorkspaceInspector({
 	pullRequestChats?: ReadonlyMap<string, PullRequestChat>;
 	onOpenChat?: (chatId: string) => void;
 	overview: ReactNode;
+	/** The Overview tab's icon when the chat has its own (Y²'s mark). */
+	overviewIcon?: ReactNode;
 	pullRequest?: PullRequestRepository;
 	/** What the Overview knows about pullRequest.number, painted before its details load. */
 	pullRequestSummary?: PullRequestSummary;
@@ -193,7 +196,7 @@ export function WorkspaceInspector({
 						aria-pressed={activeView === "overview"}
 						onClick={() => onActiveViewChange("overview")}
 					>
-						<ListTodo size={16} />
+						{overviewIcon ?? <ListTodo size={16} />}
 						Overview
 					</button>
 					{openedViews.map((view) => (

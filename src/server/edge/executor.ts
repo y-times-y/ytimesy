@@ -57,12 +57,17 @@ import {
 	type WorkflowTurn,
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
-import type { SessionTurnStatus } from "../../domain/session-item";
+import type { SessionItem, SessionTurnStatus } from "../../domain/session-item";
+import { TURN_BOX_PATHS } from "../../domain/turn-box-protocol";
 import {
 	parseHubNote,
 	settledHubTurnStatus,
 	userHubEnabledFor,
 } from "../../domain/user-hub";
+import {
+	crewFromSettledItems,
+	crewProjectFor,
+} from "../../domain/y-squared-crew";
 import { BUILD_ID } from "../../lib/build-id";
 import { socketPair } from "../../realtime/socket-upgrade";
 import {
@@ -104,6 +109,7 @@ import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspac
 import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
 import { registerMemoryRepos } from "../adapters/memory-repos";
 import { withConversationPublisher } from "../adapters/realtime-delivery";
+import { createTurnBoxEdgeOps } from "../adapters/turn-box-edge";
 import { withTurnHistoryMirror } from "../adapters/turn-history-mirror";
 import { turnStartRequest } from "../adapters/turn-start";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
@@ -164,13 +170,26 @@ import {
 } from "./machine-git-grant";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { stepFailureCause } from "./step-failure-cause";
+import { isTurnBoxEdgePath } from "./turn-box-routes";
+import {
+	answerTurnBoxSocketMessage,
+	pushCancelToTurnBox,
+	TURN_BOX_SOCKET_TAG,
+	type TurnBoxSocketAttachment,
+} from "./turn-box-socket";
+import {
+	routeTurnBoxWorker,
+	verifiedTurnBoxSocketGrant,
+} from "./turn-box-worker";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
 import { logTurnStepSizes } from "./turn-step-sizes";
+import { meteredUserId, UsageMeter } from "./usage-meter";
 
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
 export { UserHub } from "./user-hub";
+export { YSquaredCrew } from "./y-squared-crew";
 
 import { registerUserHubNotes } from "./user-hub-notes-binding";
 
@@ -228,9 +247,23 @@ type ActiveTurn = {
 };
 
 async function resolveModelConversation(step: WorkflowStep) {
-	const result = await database().query<{ userId: string; sessionId: string }>(
-		`select t.user_id as "userId",t.session_id as "sessionId"
+	// Also the chat's project and whether it has Y on (and its Y² chat): what
+	// the chat object needs to tell its project's crew (y-squared-crew.ts),
+	// in the same read, so no thread status ever needs a later one.
+	const result = await database().query<{
+		userId: string;
+		sessionId: string;
+		projectId: string | null;
+		yEnabled: boolean | null;
+		ySquaredId: string | null;
+	}>(
+		`select t.user_id as "userId",t.session_id as "sessionId",
+		   s.project_id as "projectId",p.y_enabled as "yEnabled",
+		   case when p.y_enabled then (select y.id from agent_session y
+		     where y.user_id=s.user_id and y.project_id=s.project_id
+		       and y.chat_role='y2' and y.archived_at is null limit 1) end as "ySquaredId"
 		 from api_turn t join agent_session s on s.id=t.session_id and s.user_id=t.user_id
+		 left join project p on p.id=s.project_id and p.user_id=s.user_id
 		 where t.id=$1 and t.lease_id=$2 and t.executor='durable-object'`,
 		[step.turnId, step.leaseId],
 	);
@@ -263,6 +296,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private feedPending: { since: number; urgent: boolean } | null = null;
 	private readonly history: TurnHistoryCache;
 	private readonly queue: SqliteTurnQueue;
+	/** Compute metering for the monthly Cloudflare budget (usage-meter.ts); never throws. */
+	private readonly usage: UsageMeter;
+	private meteredUserId: string | null = null;
 	private readonly room: ConversationRoom;
 	/**
 	 * The chat was deleted: its tombstone (kept in SQLite across restarts)
@@ -270,7 +306,65 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	 * cannot recreate its state after the purge.
 	 */
 	private purged = false;
-	private bindIdentity(scope: { userId: string; sessionId: string }) {
+	/** The chat's owner (from its identity name, a JSON [userId, sessionId]); null when unreadable. */
+	private meterUserId(): string | null {
+		return meteredUserId(process.env.YTIMESY_CF_BUDGET_USERS, () =>
+			this.identityUserId(),
+		);
+	}
+	private identityUserId(): string | null {
+		if (this.meteredUserId) return this.meteredUserId;
+		try {
+			const name = this.ctx.storage.sql
+				.exec<{ name: string }>("select name from conversation_identity")
+				.toArray()[0]?.name;
+			const parsed: unknown = name ? JSON.parse(name) : null;
+			if (Array.isArray(parsed) && typeof parsed[0] === "string")
+				this.meteredUserId = parsed[0];
+		} catch {
+			// Unreadable: this chat is not metered.
+		}
+		return this.meteredUserId;
+	}
+	/** Sends unsent usage to the user's hub: throttled, and at once when no turn is active. */
+	private async rollupUsage() {
+		try {
+			const userId = this.meterUserId();
+			if (!userId) return;
+			await this.usage.rollup(
+				(delta) =>
+					this.env.USER_HUBS.getByName(
+						userId,
+						durableObjectLocation(),
+					).addUsage(delta),
+				!this.activeTurn(),
+			);
+		} catch (error) {
+			console.warn("Usage rollup skipped.", { cause: stepFailureCause(error) });
+		}
+	}
+	/** Whether the budget admitted this turn in degraded mode (longer waits). */
+	private turnDegraded(turnId: string) {
+		try {
+			this.ctx.storage.sql.exec(
+				"create table if not exists budget_degraded(turn_id text primary key)",
+			);
+			return (
+				this.ctx.storage.sql
+					.exec("select 1 from budget_degraded where turn_id=?", turnId)
+					.toArray().length > 0
+			);
+		} catch {
+			return false;
+		}
+	}
+	private bindIdentity(scope: {
+		userId: string;
+		sessionId: string;
+		projectId?: string | null;
+		yEnabled?: boolean | null;
+		ySquaredId?: string | null;
+	}) {
 		if (this.purged) return false;
 		const name = modelConversationName(scope);
 		const existing = this.ctx.storage.sql
@@ -281,7 +375,65 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			"insert or ignore into conversation_identity(id,name) values(1,?)",
 			name,
 		);
+		if ("yEnabled" in scope) this.rememberCrewScope(scope);
 		return true;
+	}
+	/** The chat's project and Y switch, kept in SQLite only when they change. */
+	private crewScopeCache:
+		| {
+				projectId: string | null;
+				yEnabled: boolean;
+				ySquaredId: string | null;
+		  }
+		| null
+		| undefined;
+	private crewScope() {
+		if (this.crewScopeCache !== undefined) return this.crewScopeCache;
+		const sql = this.ctx.storage.sql;
+		sql.exec(
+			"create table if not exists crew_scope(id integer primary key check(id=1),project_id text,y_enabled integer not null,y2_id text)",
+		);
+		const row = sql
+			.exec<{
+				project_id: string | null;
+				y_enabled: number;
+				y2_id: string | null;
+			}>("select project_id,y_enabled,y2_id from crew_scope")
+			.toArray()[0];
+		this.crewScopeCache = row
+			? {
+					projectId: row.project_id,
+					yEnabled: row.y_enabled === 1,
+					ySquaredId: row.y2_id,
+				}
+			: null;
+		return this.crewScopeCache;
+	}
+	private rememberCrewScope(scope: {
+		projectId?: string | null;
+		yEnabled?: boolean | null;
+		ySquaredId?: string | null;
+	}) {
+		const next = {
+			projectId: scope.projectId ?? null,
+			yEnabled: !!scope.yEnabled,
+			ySquaredId: scope.ySquaredId ?? null,
+		};
+		const known = this.crewScope();
+		if (
+			known?.projectId === next.projectId &&
+			known.yEnabled === next.yEnabled &&
+			known.ySquaredId === next.ySquaredId
+		)
+			return;
+		if (!known && !next.yEnabled && !next.projectId) return;
+		this.ctx.storage.sql.exec(
+			"insert into crew_scope(id,project_id,y_enabled,y2_id) values(1,?,?,?) on conflict(id) do update set project_id=excluded.project_id,y_enabled=excluded.y_enabled,y2_id=excluded.y2_id",
+			next.projectId,
+			next.yEnabled ? 1 : 0,
+			next.ySquaredId,
+		);
+		this.crewScopeCache = next;
 	}
 	private withLocalConversation<T>(
 		scope: { userId: string; sessionId: string },
@@ -338,8 +490,25 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	async startTurn(
 		scope: { userId: string; sessionId: string },
 		turn: WorkflowTurn,
+		/** Set by budget admission (budget-admission.ts): the user is near their monthly compute budget. */
+		options?: { degraded?: boolean },
 	) {
 		if (!this.bindIdentity(scope)) return false;
+		if (options?.degraded) {
+			try {
+				this.ctx.storage.sql.exec(
+					"create table if not exists budget_degraded(turn_id text primary key)",
+				);
+				this.ctx.storage.sql.exec(
+					"insert or ignore into budget_degraded values(?)",
+					turn.turnId,
+				);
+			} catch (error) {
+				console.warn("Degraded turn was not marked.", {
+					cause: stepFailureCause(error),
+				});
+			}
+		}
 		const active = this.activeTurn();
 		if (active?.turnId === turn.turnId) return active.leaseId === turn.leaseId;
 		if (active) {
@@ -371,6 +540,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		scope: { userId: string; sessionId: string },
 		turnStatus: SessionTurnStatus,
 	) {
+		this.noteCrew(scope, turnStatus);
 		if (!userHubEnabledFor(process.env.YTIMESY_USER_HUB_USERS, scope.userId))
 			return;
 		const warn = (error: unknown) =>
@@ -386,6 +556,55 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			);
 		} catch (error) {
 			warn(error);
+		}
+	}
+	/**
+	 * Tells the project's crew (YSquaredCrew) this thread's state: one note
+	 * when the turn starts and one when it settles, only for a Y project and
+	 * never from Y² itself. Built from the transcript this object already
+	 * holds, never from Postgres. Fire and forget, like the hub's note.
+	 */
+	private noteCrew(
+		scope: { userId: string; sessionId: string },
+		turnStatus: SessionTurnStatus,
+	) {
+		try {
+			const crew = this.crewScope();
+			const projectId = crewProjectFor(crew, scope.sessionId);
+			if (!crew || !projectId) return;
+			let derived: ReturnType<typeof crewFromSettledItems> = {
+				state: "working",
+				waitingOn: null,
+				prUrl: null,
+				lastReply: null,
+				title: "",
+			};
+			if (turnStatus !== "running") {
+				let items: SessionItem[] = [];
+				try {
+					items = this.history.chatCopy()?.items ?? [];
+				} catch {}
+				derived = crewFromSettledItems(items, turnStatus);
+			}
+			this.ctx.waitUntil(
+				this.env.Y_SQUARED_CREWS.getByName(projectId, durableObjectLocation())
+					.noteThread({
+						...derived,
+						sessionId: scope.sessionId,
+						userId: scope.userId,
+						projectId,
+						ySquaredId: crew.ySquaredId,
+					})
+					.catch((error: unknown) =>
+						console.warn("Crew was not told the thread's state.", {
+							cause: stepFailureCause(error),
+						}),
+					),
+			);
+		} catch (error) {
+			console.warn("Crew was not told the thread's state.", {
+				cause: stepFailureCause(error),
+			});
 		}
 	}
 	private activeTurn() {
@@ -496,7 +715,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		const due = new Set(rows.map((row) => row.purpose));
 		if (due.has("room")) {
 			await this.wake("room", null);
-			await this.room.alarm();
+			await this.usage.timeStep(() => this.room.alarm(), 0);
 		}
 		if (due.has("thinking")) {
 			await this.wake("thinking", null);
@@ -511,10 +730,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (turnAt === undefined || this.stepping) return;
 		this.stepping = true;
 		try {
-			if (await this.renewParkedTurn()) return;
-			await this.advanceTurn(now - turnAt);
+			if (await this.usage.timeStep(() => this.renewParkedTurn())) return;
+			await this.usage.timeStep(() => this.advanceTurn(now - turnAt));
 		} finally {
 			this.stepping = false;
+			this.ctx.waitUntil(this.rollupUsage());
 		}
 	}
 	/** The Claude Code turn parked here, if any (its next turn wake only renews). */
@@ -970,7 +1190,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 							pendingSince: this.pendingFeed()?.since ?? now,
 						}
 					: null,
-				fallbackPauseMs: CLAUDE_STEP_PAUSE_MS,
+				// A degraded turn (monthly budget nearly used) waits longer between steps.
+				fallbackPauseMs:
+					CLAUDE_STEP_PAUSE_MS * (this.turnDegraded(step.turnId) ? 2 : 1),
 			});
 			if (!next.parked) return this.wake("turn", next.at);
 			if (await this.parkTurn(step.turnId)) {
@@ -1473,6 +1695,65 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			});
 		}
 	}
+	/** The turn runner box's one socket for a turn: hibernatable, tagged with the turn. */
+	private async acceptTurnBoxSocket(request: Request) {
+		if (this.purged) return new Response(null, { status: 410 });
+		const grant = await verifiedTurnBoxSocketGrant(
+			request,
+			this.env,
+			(name) =>
+				this.ctx.storage.sql
+					.exec<{ name: string }>("select name from conversation_identity")
+					.toArray()[0]?.name === name,
+		);
+		if (grant instanceof Response) return grant;
+		// A newer socket for the turn replaces the older one.
+		for (const old of this.ctx.getWebSockets(grant.turnId))
+			if (this.isTurnBoxSocket(old))
+				try {
+					old.close(1000, "replaced");
+				} catch {}
+		const { client, server } = socketPair();
+		this.ctx.acceptWebSocket(server as unknown as WebSocket, [
+			TURN_BOX_SOCKET_TAG,
+			grant.turnId,
+		]);
+		server.serializeAttachment({
+			userId: grant.userId,
+			sessionId: grant.sessionId,
+			turnId: grant.turnId,
+			leaseId: grant.leaseId,
+			boxId: grant.boxId,
+		} satisfies TurnBoxSocketAttachment);
+		return new Response(null, {
+			status: 101,
+			webSocket: client,
+		} as ResponseInit);
+	}
+	private async turnBoxSocketMessage(
+		socket: WebSocket,
+		message: string | ArrayBuffer,
+	) {
+		const attachment =
+			socket.deserializeAttachment() as TurnBoxSocketAttachment | null;
+		if (!attachment) return socket.close(1008, "unknown turn");
+		const { reply, close } = await answerTurnBoxSocketMessage(
+			attachment,
+			message,
+			createTurnBoxEdgeOps((run) =>
+				withDatabaseScope(this.env.HYPERDRIVE.connectionString, run, null),
+			),
+		);
+		for (const item of reply) socket.send(JSON.stringify(item));
+		if (close) socket.close(1008, "refused");
+	}
+	private isTurnBoxSocket(socket: WebSocket) {
+		try {
+			return this.ctx.getTags(socket).includes(TURN_BOX_SOCKET_TAG);
+		} catch {
+			return false;
+		}
+	}
 	private isClaudeFeed(socket: WebSocket) {
 		try {
 			return this.ctx.getTags(socket).includes(CLAUDE_FEED_SOCKET_TAG);
@@ -1481,8 +1762,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		}
 	}
 	async fetch(request: Request) {
+		this.usage.record({ requests: 1 });
 		const path = new URL(request.url).pathname;
 		if (path === CLAUDE_CODE_FEED_PATH) return this.acceptClaudeFeed(request);
+		if (path === TURN_BOX_PATHS.socket)
+			return this.acceptTurnBoxSocket(request);
 		// The VM's Claude Code asking for ytimesy's tools; the turn's step runs them.
 		if (path === CLAUDE_CODE_MCP_PATH) {
 			if (this.purged) return new Response(null, { status: 410 });
@@ -1518,6 +1802,12 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 						// The room holds the stop; the turn running here stops now, and
 						// one sleeping between steps (parked or paused) wakes to stop.
 						if (control.success && response.status === 204) {
+							// A turn running on a box hears Stop over its socket.
+							pushCancelToTurnBox(
+								this.ctx
+									.getWebSockets(control.data.turnId)
+									.filter((open) => this.isTurnBoxSocket(open)),
+							);
 							abortLiveTurn(control.data.turnId);
 							if (this.activeTurn()?.turnId === control.data.turnId)
 								await this.wakeSleepingTurn();
@@ -1585,6 +1875,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	// The room's live viewers and the Claude Code runs' feeds are this
 	// object's hibernatable sockets, told apart by tag.
 	async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+		this.usage.record({ wsMsgs: 1 });
+		if (this.isTurnBoxSocket(socket))
+			return this.turnBoxSocketMessage(socket, message);
 		if (this.isClaudeFeed(socket))
 			return this.claudeFeedMessage(socket, message);
 		this.room.webSocketMessage(socket, message);
@@ -1595,6 +1888,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		reason: string,
 		wasClean: boolean,
 	) {
+		// A box reconnects with a fresh grant; the lease decides whether it still owns the turn.
+		if (this.isTurnBoxSocket(socket)) {
+			try {
+				socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
+			} catch {}
+			return;
+		}
 		// A feed's runner reconnects on its own; the feed's state stays.
 		if (this.isClaudeFeed(socket)) {
 			try {
@@ -1606,7 +1906,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		this.syncClaudeFeeds();
 	}
 	webSocketError(socket: WebSocket, error: unknown) {
-		if (this.isClaudeFeed(socket)) return;
+		if (this.isClaudeFeed(socket) || this.isTurnBoxSocket(socket)) return;
 		this.room.webSocketError(socket, error);
 	}
 
@@ -1625,6 +1925,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		this.room.onAdopted(() => this.syncClaudeFeeds());
 		this.history = new TurnHistoryCache(ctx.storage.sql);
 		this.queue = new SqliteTurnQueue(ctx.storage.sql);
+		this.usage = new UsageMeter(ctx.storage.sql, () => this.meterUserId());
 		ctx.storage.sql.exec(
 			"create table if not exists conversation_identity(id integer primary key check(id=1),name text not null)",
 		);
@@ -1903,9 +2204,13 @@ export default {
 				}
 				const turn = turnStartRequest.safeParse(value);
 				if (!turn.success) return new Response(null, { status: 400 });
-				return new Response(null, {
-					status: (await startClaimedTurn(env, turn.data)) ? 204 : 409,
-				});
+				const started = await startClaimedTurn(env, turn.data);
+				if (started === "held" || started === "paused")
+					return new Response(null, {
+						status: 423,
+						headers: { "x-budget-hold": started },
+					});
+				return new Response(null, { status: started ? 204 : 409 });
 			}
 			if (route === "jobs-start") {
 				if (request.method !== "POST")
@@ -2107,6 +2412,8 @@ export default {
 					{ status: 202 },
 				);
 			}
+			if (isTurnBoxEdgePath(new URL(request.url).pathname))
+				return await routeTurnBoxWorker(request, env);
 			if (isClaudeCodeEdgePath(new URL(request.url).pathname))
 				return await routeClaudeCodeEdge(
 					request,

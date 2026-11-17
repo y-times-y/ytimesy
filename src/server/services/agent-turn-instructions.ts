@@ -43,6 +43,8 @@ import {
 	sidekickRoleInstructions,
 	subagentRoleInstructions,
 } from "#/domain/subagent-instructions";
+import { yInstructions } from "#/domain/y-agent";
+import { ySquaredInstructions } from "#/domain/y-squared";
 import {
 	type DeferredToolEntry,
 	deferredToolsInstructions,
@@ -90,11 +92,25 @@ export function agentTurnInstructions(input: {
 	checkInProportion?: boolean;
 	/** Replaces the subagent section (the Harbor bridge's read-only helpers). */
 	helperInstructions?: string;
+	/** Harness variant y=on: the root chat is Y, which only delegates (src/domain/y-agent.ts). */
+	y?: boolean;
+	/** The project's pinned Y² chat (src/domain/y-squared.ts): it only reads the threads and reports. */
+	ySquared?: boolean;
 }) {
+	if (input.ySquared && !input.session.agentRole) return ySquaredInstructions();
+	if (input.y && !input.session.agentRole) return yTurnInstructions(input);
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
 	const { session, tools, plugins, projectKnowledge, secretNames } = input;
 	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely. ${BUILDER_ENVIRONMENT_INSTRUCTIONS} ${roleInstructions(session, AGENT_TOOL in tools)}${"browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}${CANVAS_TOOL in tools ? `\n${canvasInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames)}` : ""}${rigorApplies(input) ? `\n${rigorBlock(input)}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
+}
+
+/** Y's system prompt: its role and the project's secret names, never the builder's tool guidance. */
+function yTurnInstructions(input: Parameters<typeof agentTurnInstructions>[0]) {
+	const secrets = input.secretNames?.length
+		? projectSecretsInstructions(input.secretNames)
+		: "";
+	return secrets ? `${yInstructions()}\n${secrets}` : yInstructions();
 }
 
 /** The rigor block goes to the root builder and writers, never to readers. */

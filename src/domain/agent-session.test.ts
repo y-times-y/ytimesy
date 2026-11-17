@@ -7,12 +7,24 @@ import {
 	copiedSessionScratchResetCommand,
 	copiedSessionScratchResetCommands,
 	nextAgentSessionMachineSlug,
+	pinnedYSquared,
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
 	sessionMachineRefsToDestroy,
 	shouldResealProjectSnapshotAfterCopyFailure,
 	workspaceCopyCapacityRetryDelaysMs,
 } from "./agent-session";
+
+it("marks a project's Y² chat and lists it first, keeping the others' order", () => {
+	const chats = [{ id: "a" }, { id: "y2" }, { id: "b" }];
+	expect(pinnedYSquared(chats, "y2")).toEqual([
+		{ id: "y2", role: "y2", unused: false },
+		{ id: "a" },
+		{ id: "b" },
+	]);
+	expect(pinnedYSquared(chats, null)).toBe(chats);
+	expect(pinnedYSquared(chats, "gone")).toBe(chats);
+});
 
 describe("chatsFromAgentSessions branches", () => {
 	it("lists the composer's branch so the chat's first paint shows it", () => {

@@ -8,6 +8,8 @@ const render = (text: string, streaming = false) =>
 		createElement(AgentMarkdown, { text, streaming, onOpenFile: () => {} }),
 	);
 
+const textOf = (html: string) => html.replace(/<[^>]+>/g, "");
+
 describe("assistant Markdown", () => {
 	it("replaces unresolved citations in prose without altering literal code", () => {
 		for (const streaming of [false, true]) {
@@ -64,6 +66,95 @@ describe("assistant Markdown", () => {
 		expect(html).toContain("<pre");
 		expect(html).toContain("<code");
 		expect(html).not.toContain("session-file-open");
+	});
+	it("draws thread links as chips that open the thread, and bad ids as text", () => {
+		const id = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+		const html = render(
+			`[Fix sign-up form](thread:${id}) and [Gone](thread:nope) and \`[Code](thread:${id})\``,
+		);
+		expect(html).toContain(`href="/thread/${id}"`);
+		expect(html).toContain('data-reference="thread"');
+		expect(html).toContain(
+			'<span class="reference-chip-label">Fix sign-up form</span>',
+		);
+		expect(html).toContain("<span>Gone</span>");
+		expect(html).not.toContain("thread:nope");
+		expect(html.match(/data-reference="thread"/g)).toHaveLength(1);
+	});
+	it("draws pull request URLs and pr: references as repo#number chips", () => {
+		for (const streaming of [false, true]) {
+			const html = render(
+				"Merge https://github.com/acme/web/pull/8357, [the fix](pr:acme/api#12) and pr:acme/cli#3. `pr:acme/x#1`",
+				streaming,
+			);
+			const chips = html.match(/data-reference="pull-request"/g);
+			expect(chips, html).toHaveLength(3);
+			const labels = [
+				...html.matchAll(/class="reference-chip-label">(.*?)<\/span><\/a>/g),
+			].map((match) => textOf(match[1] ?? ""));
+			expect(labels).toEqual(["web#8357", "the fix", "cli#3"]);
+			expect(html).toContain('href="https://github.com/acme/api/pull/12"');
+			expect(html).toContain('title="acme/cli#3"');
+			expect(textOf(html)).toContain("pr:acme/x#1");
+		}
+	});
+	it("draws event lines as quiet lines of their own", () => {
+		for (const streaming of [false, true]) {
+			const html = render(
+				'Split it across three threads.\n::finished All 3 threads finished\n::event{kind="needs-you"} Merge pr:acme/web#8\n\n```\n::failed in code\n```',
+				streaming,
+			);
+			const lines = [
+				...html.matchAll(
+					/<p class="session-event-line" data-event="([^"]+)"[^>]*>(.*?)<\/p>/g,
+				),
+			].map((match) => [match[1], textOf(match[2] ?? "")]);
+			expect(lines).toEqual([
+				["finished", "All 3 threads finished"],
+				["needs-you", "Merge web#8"],
+			]);
+			// The event line is its own paragraph, not a soft break in the prose.
+			expect(
+				textOf(html.slice(0, html.indexOf('<p class="session-event-line"'))),
+			).toMatch(/^Split it across three threads\.\s*$/);
+			expect(html).toContain('data-event="needs-you"');
+			expect(html).toContain('data-reference="pull-request"');
+			expect(html).not.toContain('data-event="failed"');
+			expect(html).not.toContain("::finished");
+			expect(html).toContain('title="All 3 threads finished"');
+		}
+	});
+	it("draws a long event line as a left-aligned status paragraph", () => {
+		const id = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+		const html = render(
+			`::failed [Bug-fix agent](thread:${id}) failed on its last turn. It had planned six bug fixes and regression tests.`,
+		);
+		expect(html).not.toContain("session-event-line");
+		expect(html).toMatch(
+			/^<div[^>]*><p class="session-status-paragraph" data-event="failed"><svg[^>]*session-status-icon/,
+		);
+		expect(html).toContain('data-reference="thread"');
+		expect(textOf(html)).toMatch(/^Bug-fix agent failed on its last turn\./);
+	});
+	it("draws :status: paragraphs as prose with a status icon in front", () => {
+		const id = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+		for (const streaming of [false, true]) {
+			const html = render(
+				`Here is where things stand.\n:needs-you: [Fix sign-up form](thread:${id}) needs you to merge pr:acme/web#8.\n:finished: Two more finished.\n\n\`:failed: in code\``,
+				streaming,
+			);
+			const paragraphs = [
+				...html.matchAll(
+					/<p class="session-status-paragraph" data-event="([^"]+)">(.*?)<\/p>/g,
+				),
+			].map((match) => [match[1], textOf(match[2] ?? "")]);
+			expect(paragraphs).toEqual([
+				["needs-you", "Fix sign-up form needs you to merge web#8."],
+				["finished", "Two more finished."],
+			]);
+			expect(textOf(html)).toContain(":failed: in code");
+			expect(textOf(html)).not.toContain(":needs-you:");
+		}
 	});
 	it("does not execute raw HTML or unsafe URLs or load remote images", () => {
 		const html = render(

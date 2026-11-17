@@ -8,6 +8,7 @@ import {
 	claimApiTurn,
 	enqueueApiTurn,
 	inheritedSubscriptionSettings,
+	noteBudgetHeldTurn,
 	previousTurnMessages,
 	renewApiTurn,
 } from "./api-turns";
@@ -431,4 +432,36 @@ it("stores a tool output carrying NUL bytes without the jsonb escape Postgres re
 		expect(param).not.toContain("\\u0000");
 		expect(param).toContain("ELF binary launcher");
 	}
+});
+
+it("writes the budget notice for a held turn once, and asks the database nothing on a repeat", async () => {
+	const turn = { id: "turn-budget-1", session_id: "chat", user_id: "owner" };
+	mocks.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+	expect(await noteBudgetHeldTurn(turn, "Monthly compute budget reached")).toBe(
+		true,
+	);
+	const [sqlText, params] = mocks.query.mock.calls[0];
+	expect(sqlText).toContain("not items @>");
+	expect(sqlText).toContain("state='queued'");
+	expect(params).toEqual([
+		"chat",
+		"owner",
+		"budget-hold:turn-budget-1",
+		"Monthly compute budget reached",
+		"turn-budget-1",
+	]);
+	expect(await noteBudgetHeldTurn(turn, "Monthly compute budget reached")).toBe(
+		false,
+	);
+	expect(mocks.query).toHaveBeenCalledTimes(1);
+});
+
+it("a budget notice that matched no row (turn started, notice present) reports nothing written", async () => {
+	mocks.query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+	expect(
+		await noteBudgetHeldTurn(
+			{ id: "turn-budget-2", session_id: "chat", user_id: "owner" },
+			"m",
+		),
+	).toBe(false);
 });

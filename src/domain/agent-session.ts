@@ -93,6 +93,20 @@ export function workspaceCopyCapacityRetryDelaysMs(message: string) {
 		: [];
 }
 
+/** Marks the project's Y² chat and lists it first; the others keep their order. */
+export function pinnedYSquared<Chat extends { readonly id: string }>(
+	chats: readonly Chat[],
+	ySquaredId: string | null | undefined,
+): readonly (Chat & { readonly role?: "y2"; readonly unused?: boolean })[] {
+	if (!ySquaredId) return chats;
+	const ySquared = chats.find((chat) => chat.id === ySquaredId);
+	if (!ySquared) return chats;
+	return [
+		{ ...ySquared, role: "y2" as const, unused: false },
+		...chats.filter((chat) => chat.id !== ySquaredId),
+	];
+}
+
 export function chatsFromAgentSessions(
 	sessions: readonly {
 		readonly id: string;

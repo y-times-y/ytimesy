@@ -54,7 +54,7 @@ import { requestJson } from "../projects/api";
 import { clearChatCache } from "../sessions/chat-cache";
 import { ChatgptSignIn, DeviceCodeHint } from "../sessions/chatgpt-sign-in";
 import { getClaudeSubscription } from "../sessions/claude-subscription.fn";
-import { ClaudeSubscriptionSettings } from "../sessions/claude-subscription-settings";
+import { ClaudeSubscriptionRow } from "../sessions/claude-subscription-row";
 import { CodexMark } from "../sessions/codex-mark";
 import {
 	ClaudeSubscriptionUsage,
@@ -66,6 +66,7 @@ import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
+import { SubscriptionConnectionRow } from "../sessions/subscription-connection-row";
 import { disconnectXaiSubscriptionFn } from "../sessions/xai-subscription.fn";
 import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
 import { ArchivedSettings } from "./archived-settings";
@@ -95,6 +96,7 @@ import {
 	useHubDelivery,
 	useHubRead,
 } from "./user-hub-store";
+import { YModeSettings } from "./y-mode-settings";
 
 type AccountView = {
 	readonly user: {
@@ -429,6 +431,7 @@ function ProjectPage({
 				projectId={project.id}
 				branch={project.branch}
 			/>
+			<YModeSettings projectId={project.id} />
 			<ProjectSecretsSection project={project} />
 			<AccountSecretsSection />
 			<ProjectTrainingSettings projectId={project.id} />
@@ -1074,7 +1077,6 @@ function AgentsSection({
 	xaiSubscription?: XaiSubscriptionView;
 }) {
 	const queryClient = useQueryClient();
-	const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 	const refreshAccount = () =>
 		Promise.all(
 			[
@@ -1088,7 +1090,6 @@ function AgentsSection({
 		mutationFn: () =>
 			requestJson<{ status: "disconnected" }>("/api/agent/account", {}),
 		onSuccess: async () => {
-			setConfirmingSignOut(false);
 			await refreshAccount();
 		},
 	});
@@ -1112,76 +1113,35 @@ function AgentsSection({
 					}
 				/>
 				<ul className="settings-group">
-					<li className="settings-row">
-						<div className="settings-row-main">
-							<span className="settings-row-icon">
-								<CodexMark size={18} />
-							</span>
-							<div className="settings-row-text">
-								<span className="settings-row-title">Codex subscription</span>
-								<span className="settings-row-meta">{meta}</span>
-								{/* Below the description, so the button column stays narrow. */}
-								{connected ? null : <DeviceCodeHint />}
-							</div>
-						</div>
-						<div className="settings-row-actions">
-							{connected ? (
-								confirmingSignOut ? (
-									<>
-										<button
-											type="button"
-											className="settings-secondary"
-											disabled={signOut.isPending}
-											onClick={() => setConfirmingSignOut(false)}
-										>
-											Cancel
-										</button>
-										<button
-											type="button"
-											className="settings-danger"
-											disabled={signOut.isPending}
-											onClick={() => signOut.mutate()}
-										>
-											{signOut.isPending ? "Signing out…" : "Sign out"}
-										</button>
-									</>
-								) : (
-									<>
-										<span className="settings-badge" data-tone="ok">
-											Connected
-										</span>
-										<button
-											type="button"
-											className="settings-secondary"
-											onClick={() => setConfirmingSignOut(true)}
-										>
-											Sign out
-										</button>
-									</>
-								)
-							) : (
-								<ChatgptSignIn
-									label={
-										account.status === "expired"
-											? "Sign in again"
-											: "Sign in with ChatGPT"
-									}
-									onConnected={() => void refreshAccount()}
-									showHint={false}
-								/>
-							)}
-						</div>
-					</li>
+					<SubscriptionConnectionRow
+						name="Codex subscription"
+						mark={<CodexMark size={18} />}
+						meta={meta}
+						hint={<DeviceCodeHint />}
+						signedIn={connected}
+						badge={{ text: "Connected", ok: true }}
+						signIn={
+							<ChatgptSignIn
+								label={
+									account.status === "expired"
+										? "Sign in again"
+										: "Sign in with ChatGPT"
+								}
+								onConnected={() => void refreshAccount()}
+								showHint={false}
+							/>
+						}
+						onSignOut={() => signOut.mutateAsync()}
+					/>
 					{xaiSubscription ? (
 						<XaiSubscriptionRow
 							subscription={xaiSubscription}
 							onChange={() => void refreshAccount()}
 						/>
 					) : null}
+					<ClaudeSubscriptionRow />
 				</ul>
-				{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
 			</section>
-			<ClaudeSubscriptionSettings />
 			<ModelConnections />
 			<ModelFailoverSettings />
 		</>
@@ -1197,14 +1157,6 @@ function XaiSubscriptionRow({
 	onChange: () => void;
 }) {
 	const disconnect = useServerFn(disconnectXaiSubscriptionFn);
-	const [confirming, setConfirming] = useState(false);
-	const signOut = useMutation({
-		mutationFn: () => disconnect({ data: {} }),
-		onSuccess: () => {
-			setConfirming(false);
-			onChange();
-		},
-	});
 	const status = subscription.status;
 	const meta =
 		status === "disconnected"
@@ -1213,69 +1165,29 @@ function XaiSubscriptionRow({
 				? `${subscription.modelCount} Grok models`
 				: xaiSubscriptionMessage(status);
 	return (
-		<li className="settings-row">
-			<div className="settings-row-main">
-				<span className="settings-row-icon">
-					<GrokMark size={18} />
-				</span>
-				<div className="settings-row-text">
-					<span className="settings-row-title">Grok subscription</span>
-					<span
-						className="settings-row-meta"
-						title="Grok runs on your SuperGrok or X subscription, with no API bill. Usage counts against your plan's limits."
-					>
-						{meta}
-					</span>
-				</div>
-			</div>
-			<div className="settings-row-actions">
-				{!xaiSubscriptionNeedsSignIn(status) ? (
-					confirming ? (
-						<>
-							<button
-								type="button"
-								className="settings-secondary"
-								disabled={signOut.isPending}
-								onClick={() => setConfirming(false)}
-							>
-								Cancel
-							</button>
-							<button
-								type="button"
-								className="settings-danger"
-								disabled={signOut.isPending}
-								onClick={() => signOut.mutate()}
-							>
-								{signOut.isPending ? "Signing out…" : "Sign out"}
-							</button>
-						</>
-					) : (
-						<>
-							{/* A refused plan is retried by the next Grok turn, not by signing in. */}
-							<span
-								className="settings-badge"
-								data-tone={status === "ready" ? "ok" : undefined}
-							>
-								{status === "ready" ? "Connected" : "Retrying"}
-							</span>
-							<button
-								type="button"
-								className="settings-secondary"
-								onClick={() => setConfirming(true)}
-							>
-								Sign out
-							</button>
-						</>
-					)
-				) : (
-					<XaiSubscriptionSignIn
-						label={status === "disconnected" ? "Sign in with xAI" : "Reconnect"}
-						onConnected={onChange}
-					/>
-				)}
-			</div>
-			{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
-		</li>
+		<SubscriptionConnectionRow
+			name="Grok subscription"
+			mark={<GrokMark size={18} />}
+			meta={meta}
+			metaTitle="Grok runs on your SuperGrok or X subscription, with no API bill. Usage counts against your plan's limits."
+			signedIn={!xaiSubscriptionNeedsSignIn(status)}
+			// A refused plan is retried by the next Grok turn, not by signing in.
+			badge={
+				status === "ready"
+					? { text: "Connected", ok: true }
+					: { text: "Retrying" }
+			}
+			signIn={
+				<XaiSubscriptionSignIn
+					label={status === "disconnected" ? "Sign in with xAI" : "Reconnect"}
+					onConnected={onChange}
+				/>
+			}
+			onSignOut={async () => {
+				await disconnect({ data: {} });
+				onChange();
+			}}
+		/>
 	);
 }
 

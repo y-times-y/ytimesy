@@ -4,10 +4,15 @@ import { withBackgroundJobDispatcher } from "./background-job-dispatch";
 import { withExecutorBinding } from "./executor-fetch";
 import { admitQueuedTurnsWith, startQueuedTurnsDirectly } from "./turn-start";
 
-const mocks = vi.hoisted(() => ({ claim: vi.fn(), release: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	claim: vi.fn(),
+	release: vi.fn(),
+	note: vi.fn(),
+}));
 vi.mock("./api-turns", () => ({
 	claimApiTurn: mocks.claim,
 	releaseClaimedApiTurn: mocks.release,
+	noteBudgetHeldTurn: mocks.note,
 }));
 
 const secret = "k".repeat(64);
@@ -26,6 +31,7 @@ beforeEach(() => {
 	vi.stubEnv("YTIMESY_BACKGROUND_WORKFLOW_SECRET", secret);
 	mocks.claim.mockReset();
 	mocks.release.mockReset().mockResolvedValue(true);
+	mocks.note.mockReset().mockResolvedValue(true);
 });
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -48,6 +54,8 @@ it("claims until nothing is left and hands each claimed turn to its chat", async
 		expect.any(Number),
 		expect.any(Number),
 		"durable-object",
+		undefined,
+		[],
 	);
 	expect(start).toHaveBeenNthCalledWith(1, {
 		userId: "owner",
@@ -126,5 +134,56 @@ it("does not release a turn its chat answered for, started or not", async () => 
 		vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
 	);
 	expect(mocks.release).not.toHaveBeenCalled();
+	warn.mockRestore();
+});
+
+it("releases a held turn, keeps the user's other turns queued this pass and moves on", async () => {
+	mocks.claim.mockResolvedValueOnce(claimed).mockResolvedValueOnce(null);
+	const start = vi.fn().mockResolvedValueOnce("held");
+	await admitQueuedTurnsWith(start);
+	expect(mocks.release).toHaveBeenCalledWith(turnId, lease);
+	expect(mocks.claim).toHaveBeenLastCalledWith(
+		expect.any(Number),
+		expect.any(Number),
+		"durable-object",
+		undefined,
+		["owner"],
+	);
+});
+
+it("tells the chat why a held turn waits, after releasing it", async () => {
+	mocks.claim.mockResolvedValueOnce(claimed).mockResolvedValueOnce(null);
+	await admitQueuedTurnsWith(vi.fn().mockResolvedValueOnce("held"));
+	expect(mocks.note).toHaveBeenCalledWith(
+		claimed,
+		"Monthly compute budget reached, resets on the 1st",
+	);
+	expect(mocks.release.mock.invocationCallOrder[0]).toBeLessThan(
+		mocks.note.mock.invocationCallOrder[0],
+	);
+});
+
+it("uses the maintenance text for the global pause, and never notes a started turn", async () => {
+	mocks.claim
+		.mockResolvedValueOnce(claimed)
+		.mockResolvedValueOnce(null)
+		.mockResolvedValueOnce({ ...claimed, user_id: "other" })
+		.mockResolvedValueOnce(null);
+	await admitQueuedTurnsWith(vi.fn().mockResolvedValueOnce("paused"));
+	expect(mocks.note).toHaveBeenCalledWith(
+		claimed,
+		expect.stringContaining("paused for maintenance"),
+	);
+	mocks.note.mockClear();
+	await admitQueuedTurnsWith(vi.fn().mockResolvedValueOnce(true));
+	expect(mocks.note).not.toHaveBeenCalled();
+});
+
+it("a failed notice write does not stop the pass", async () => {
+	mocks.claim.mockResolvedValueOnce(claimed).mockResolvedValueOnce(null);
+	mocks.note.mockRejectedValueOnce(new Error("db"));
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	await admitQueuedTurnsWith(vi.fn().mockResolvedValueOnce("held"));
+	expect(mocks.claim).toHaveBeenCalledTimes(2);
 	warn.mockRestore();
 });

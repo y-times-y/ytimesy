@@ -8,6 +8,7 @@ import {
 	SIDEBAR_SORT_KEY,
 	type SidebarChat,
 } from "#/domain/sidebar-chats";
+import { SIDEBAR_COLLAPSED_Y2_KEY } from "#/domain/sidebar-tree";
 import { RenderAsHydrated } from "../app/first-paint";
 import { ProjectSidebar } from "./project-sidebar";
 
@@ -421,9 +422,123 @@ describe("left sidebar", () => {
 		expect(hydratedHtml).not.toContain("<script>");
 	});
 
+	it("lists a project without Y as a flat list of chats", () => {
+		const html = render(null);
+		expect(html).not.toContain("sidebar-y2");
+	});
+
 	it("renders only the saved sort view once hydrated", () => {
 		const html = render("recent");
 		expect(html).not.toContain("data-sort-view");
 		expect(html).not.toContain("sidebar-projects");
+	});
+});
+
+describe("a Y project's sidebar", () => {
+	const at = "2026-10-20T00:00:00Z";
+	const y2: SidebarChat = { id: "y2", title: "Y²", role: "y2", updatedAt: at };
+	const finished = Array.from({ length: 10 }, (_, index) => ({
+		id: `t${index}`,
+		title: `Thread ${index}`,
+		updatedAt: at,
+		turnStatus: "completed" as const,
+	}));
+	const chats: SidebarChat[] = [
+		y2,
+		{ id: "asks", title: "Asks", updatedAt: at, waitingOn: "question" },
+		{ id: "secret", title: "Needs a key", updatedAt: at, waitingOn: "secret" },
+		{ id: "busy", title: "Busy", updatedAt: at, turnStatus: "running" },
+		...finished,
+	];
+
+	function renderY(
+		stored: Record<string, string> = {},
+		hydrated = true,
+	): string {
+		(globalThis as { window?: unknown }).window = {
+			localStorage: {
+				getItem: (key: string) => stored[key] ?? null,
+				setItem: () => undefined,
+			},
+		};
+		return renderToStaticMarkup(
+			<RenderAsHydrated value={hydrated}>
+				<ProjectSidebar
+					projects={[alpha]}
+					projectsLoading={false}
+					selectedProjectId="alpha"
+					onSelectProject={() => undefined}
+					expanded
+					onToggle={() => undefined}
+					onAddProject={() => undefined}
+					chats={chats}
+					onNewChat={() => undefined}
+					onDeleteChat={() => undefined}
+				/>
+			</RenderAsHydrated>,
+		);
+	}
+	const head = (html: string) =>
+		html.slice(
+			html.indexOf('class="sidebar-chat-row sidebar-y2-row"'),
+			html.indexOf('<div class="sidebar-y2-branch"'),
+		);
+
+	it("heads the threads with Y²: its mark, a needs-you count, no pin or archive", () => {
+		const html = renderY({ [CHAT_SEEN_SINCE_STORAGE_KEY]: "1" });
+		expect(head(html)).toContain('class="y2-mark"');
+		expect(head(html)).toContain('<span class="sidebar-chat-title">Y²</span>');
+		expect(head(html)).toContain(
+			'<span class="sidebar-y2-count" aria-hidden="true">2</span>',
+		);
+		expect(head(html)).toContain("2 threads need you");
+		expect(head(html)).not.toContain("sidebar-chat-pin");
+		expect(head(html)).not.toContain("sidebar-chat-archive");
+		expect(head(html)).toContain(
+			'aria-label="Collapse Y² threads" title="Collapse threads" aria-expanded="true" aria-controls="sidebar-y2-branch-alpha"',
+		);
+	});
+
+	it("nests the threads under Y², waiting ones with a dot, the finished past eight folded", () => {
+		const html = renderY({ [CHAT_SEEN_SINCE_STORAGE_KEY]: "1" });
+		const branch = html.slice(html.indexOf('<div class="sidebar-y2-branch"'));
+		expect(branch).toContain('class="sidebar-chats sidebar-y2-threads"');
+		expect(branch.match(/class="sidebar-chat-row"/g)).toHaveLength(11);
+		expect(branch).toContain(
+			'class="sidebar-chat-needs-you" role="img" aria-label="Asking you a question"',
+		);
+		expect(branch).not.toContain("lucide-message-circle-question");
+		expect(branch).toContain("sidebar-chat-working");
+		expect(branch).toContain("Show 2 more");
+		expect(branch).not.toContain(">Thread 9<");
+		// Threads keep their own pin and archive.
+		expect(branch).toContain('aria-label="Pin Asks"');
+		expect(branch).toContain('aria-label="Archive Asks"');
+	});
+
+	it("folds the threads this browser folded", () => {
+		const html = renderY({
+			[SIDEBAR_COLLAPSED_Y2_KEY]: JSON.stringify(["alpha"]),
+		});
+		expect(html).toContain(
+			'class="sidebar-y2" data-project-id="alpha" data-open="false"',
+		);
+		expect(html).not.toContain('sidebar-y2-branch-alpha"');
+		expect(html).toContain('aria-label="Expand Y² threads"');
+		expect(html).not.toContain(">Thread 0<");
+		// The count still says who needs the user.
+		expect(html).toContain('class="sidebar-y2-count" aria-hidden="true">2<');
+	});
+
+	it("renders every thread open while hydrating, marking those the rows script may fold", () => {
+		const html = renderY(
+			{ [SIDEBAR_COLLAPSED_Y2_KEY]: JSON.stringify(["alpha"]) },
+			false,
+		);
+		const tree = html.slice(html.indexOf('class="sidebar-y2"'));
+		expect(tree).toContain('data-open="true"');
+		expect(tree).toContain(">Thread 9<");
+		expect(tree.match(/data-done-overflow="true"/g)).toHaveLength(2);
+		expect(tree.match(/data-foldable="true"/g)).toHaveLength(10);
 	});
 });

@@ -57,6 +57,7 @@ import {
 	budgetUsageTokens,
 	sessionTokenUsage,
 } from "#/domain/subagent-usage";
+import { appliedBuilderPatchBlock } from "#/domain/y-agent";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
@@ -86,7 +87,10 @@ import {
 	type SidekickRoundChanges,
 	sidekickRoundChanges,
 } from "./sidekick-workspace";
-import { transferWriterPatch } from "./subagent-writer";
+import {
+	applyWriterPatchToParent,
+	transferWriterPatch,
+} from "./subagent-writer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** A subagent's turn stopped at its budget; its work so far is still reported. */
@@ -222,6 +226,11 @@ export async function subagentReport(input: {
 	readonly roleModels?: RoleModels;
 	/** Lead mode fusion with leadTools=thin: the lead restarts a failed writer, never takes over. */
 	readonly thinLead?: boolean;
+	/**
+	 * Harness variant y=on: a writer directly under the root (Y) has its
+	 * patch applied to the thread's checkout by the runtime (src/domain/y-agent.ts).
+	 */
+	readonly applyToThread?: boolean;
 	/**
 	 * Stops the round's classifier early. Not the finished turn's own signal:
 	 * the report is written after the turn ended, when that signal is spent.
@@ -359,12 +368,34 @@ export async function subagentReport(input: {
 						?.agentFork?.patch?.files ?? [],
 			})),
 		);
+		const threadRoot =
+			input.applyToThread && parent && !parent.parentSessionId && !sidekick;
+		const applied =
+			threadRoot && patch && parent?.providerRef
+				? await (input.deps?.applyPatch ?? applyWriterPatchToParent)({
+						machines: input.machines,
+						parentVm: WorkspaceId(parent.providerRef),
+						patchPath: patch.path,
+					}).catch((cause: unknown) => ({
+						applied: false as const,
+						reason: cause instanceof Error ? cause.message : String(cause),
+					}))
+				: null;
 		parts.push(
-			writerPatchBlock(
-				patch,
-				patch ? overlappingWriters(patch.files, siblingFiles) : [],
-				failure,
-			),
+			applied && patch
+				? appliedBuilderPatchBlock({
+						label,
+						files: patch.files.length,
+						added: patch.added,
+						removed: patch.removed,
+						path: patch.path,
+						...(applied.applied ? {} : { failure: applied.reason }),
+					})
+				: writerPatchBlock(
+						patch,
+						patch ? overlappingWriters(patch.files, siblingFiles) : [],
+						failure,
+					),
 		);
 		if (sidekick) {
 			// It worked on a fork from before the shared checkout: its round ends
@@ -411,6 +442,7 @@ export function sidekickChangesBlock(
 export type SidekickRuntimeDeps = {
 	readonly session?: typeof agentSessionMetadataForOwner;
 	readonly transfer?: typeof transferWriterPatch;
+	readonly applyPatch?: typeof applyWriterPatchToParent;
 	readonly roundChanges?: typeof sidekickRoundChanges;
 	readonly mergeFork?: typeof mergeSubagentFork;
 	readonly saveState?: typeof saveSidekickState;

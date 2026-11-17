@@ -127,6 +127,24 @@ it("keeps workspace status and shows the chat's branch once it has started", () 
 	expect(html).not.toContain("Start from");
 });
 
+it("shows no branch or base picker for a chat without a branch (Y²)", () => {
+	for (const projectLocked of [true, false]) {
+		const html = render(
+			<ProjectContext
+				projects={[project]}
+				selectedProject={project}
+				onSelectProject={() => {}}
+				projectLocked={projectLocked}
+				currentBranch="ytimesy/hey-what-is-the-other-f1c8fe"
+				onBaseBranchChange={() => {}}
+				branchless
+			/>,
+		);
+		expect(html).not.toContain("ytimesy/hey-what-is-the-other-f1c8fe");
+		expect(html).not.toContain("base-branch");
+	}
+});
+
 it("offers the base picker beside the project in a new chat", () => {
 	const html = render(
 		<ProjectContext
