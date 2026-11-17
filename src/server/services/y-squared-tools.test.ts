@@ -79,7 +79,12 @@ function fixture(seed: (crew: SqliteYSquaredCrew) => void = () => {}) {
 		userId: "u",
 		projectId: "p",
 		selfId: "y2",
-		deps: { list: list as never, crew: () => client as never, now: () => NOW },
+		deps: {
+			list: list as never,
+			crew: () => client as never,
+			now: () => NOW,
+			outcome: async () => null,
+		},
 	});
 	return { tools, list, requests };
 }
@@ -119,6 +124,12 @@ const seeded = (crew: SqliteYSquaredCrew) => {
 		},
 		NOW - 60_000,
 	);
+};
+
+const store0 = (id: string) => {
+	const crew = store();
+	seeded(crew);
+	return crew.thread(id);
 };
 
 describe("ySquaredTools", () => {
@@ -541,5 +552,80 @@ describe("ySquaredTools: which thread did what, and when", () => {
 		const text = await run(crew.tools, "thread", { id: "t1" });
 		expect(text).toContain("created not recorded");
 		expect(text).toContain("last active");
+	});
+
+	it("thread: reads the thread's full final reply, its questions and canvases, not the crew's 300 characters", async () => {
+		const long = `Audit findings\n${"A finding about licences and secrets. ".repeat(400)}\nVERDICT: safe to open-source after rotating the two keys.`;
+		const { tools } = fixture(seeded);
+		const outcome = vi.fn(async () => ({
+			items: [
+				{
+					kind: "agentMessage" as const,
+					text: "Working on it.",
+					phase: "commentary",
+				},
+				{ kind: "agentMessage" as const, text: long, phase: "final_answer" },
+				{
+					kind: "userQuestion" as const,
+					questions: [
+						{
+							question: "Rotate the keys now?",
+							options: [{ label: "Yes" }, { label: "Later" }],
+						},
+					],
+				},
+			],
+			canvases: [{ title: "Audit board", revision: 2 }],
+		}));
+		const withOutcome = ySquaredTools({
+			userId: "u",
+			projectId: "p",
+			selfId: "y2",
+			deps: {
+				crew: () =>
+					({
+						list: async () => ({ reconciled: true, rows: [] }),
+						thread: async () => store0("t4"),
+					}) as never,
+				now: () => NOW,
+				outcome: outcome as never,
+			},
+		});
+		void tools;
+		const text = await run(withOutcome, "thread", { id: "t4" });
+		expect(outcome).toHaveBeenCalledWith("u", "t4");
+		expect(text).toContain("Audit findings");
+		expect(text).toContain(
+			"VERDICT: safe to open-source after rotating the two keys.",
+		);
+		expect(text).toContain("characters in the middle omitted");
+		expect(text).not.toContain("Working on it.");
+		expect(text).toContain("Rotate the keys now? [Yes / Later]");
+		expect(text).toContain('"Audit board" (revision 2)');
+		expect(text).toContain("Pull request: https://github.com/a/b/pull/8");
+	});
+
+	it("thread: still answers from the crew's short reply when the full read fails", async () => {
+		const { tools } = fixture(seeded);
+		const failing = ySquaredTools({
+			userId: "u",
+			projectId: "p",
+			selfId: "y2",
+			deps: {
+				crew: () =>
+					({
+						list: async () => ({ reconciled: true, rows: [] }),
+						thread: async () => store0("t4"),
+					}) as never,
+				now: () => NOW,
+				outcome: async () => {
+					throw new Error("connection timeout");
+				},
+			},
+		});
+		void tools;
+		expect(await run(failing, "thread", { id: "t4" })).toContain(
+			"Last reply: Done.",
+		);
 	});
 });

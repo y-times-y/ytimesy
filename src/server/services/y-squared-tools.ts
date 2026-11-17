@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { z } from "zod";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { wakeMessageId } from "#/domain/pull-request-wake";
+import { threadOutcomeLines } from "#/domain/thread-outcome";
 import {
 	messageThreadInput,
 	startThreadInput,
@@ -17,6 +18,7 @@ import {
 	Y_SQUARED_START_THREAD_TOOL,
 	Y_SQUARED_STOP_THREAD_DESCRIPTION,
 	Y_SQUARED_STOP_THREAD_TOOL,
+	Y_SQUARED_THREAD_DESCRIPTION,
 	Y_SQUARED_THREAD_LIMIT,
 	Y_SQUARED_THREAD_TOOL,
 	Y_SQUARED_THREADS_TOOL,
@@ -30,6 +32,7 @@ import {
 	agentSessionMetadataForOwner,
 	listSidebarAgentSessions,
 } from "../adapters/agent-sessions";
+import { threadOutcomeForOwner } from "../adapters/thread-outcome";
 import {
 	type YSquaredCrewClient,
 	ySquaredCrewFor,
@@ -47,6 +50,8 @@ type Deps = {
 	readonly now: () => number;
 	/** One chat's row without its transcript (metadata only). */
 	readonly metadata: typeof agentSessionMetadataForOwner;
+	/** What a thread's final turn produced (its reply, questions, plan, canvases): two small reads, only when Y² asks. */
+	readonly outcome: typeof threadOutcomeForOwner;
 	/** The person's own send path: queues behind a running turn, else starts a turn (admission applies). */
 	readonly send: (
 		machines: WorkspaceMachines,
@@ -75,6 +80,7 @@ const defaultDeps: Deps = {
 	crew: (projectId) => ySquaredCrewFor(projectId),
 	now: () => Date.now(),
 	metadata: (...args) => agentSessionMetadataForOwner(...args),
+	outcome: (...args) => threadOutcomeForOwner(...args),
 	send: async (machines, scope, input) => {
 		const view = await Effect.runPromise(
 			sendComposerMessage(machines, scope, input),
@@ -203,8 +209,7 @@ export function ySquaredTools(input: {
 			},
 		}),
 		[Y_SQUARED_THREAD_TOOL]: tool({
-			description:
-				"One thread's details: its status, when it was last active and created, its last request, last reply and pull request. Pass the id from the threads list.",
+			description: Y_SQUARED_THREAD_DESCRIPTION,
 			inputSchema: z.object({
 				id: z.string().min(1).max(64).describe("The thread's id"),
 			}),
@@ -217,6 +222,17 @@ export function ySquaredTools(input: {
 					return "No such thread in this project.";
 				const now = deps.now();
 				const digest = crewDigest(row, now);
+				// The thread's own words: the full final reply (long ones start and
+				// end), its questions, plan and canvases. Best effort: the crew's short
+				// last reply stands in when the read fails.
+				const outcome = await deps.outcome(input.userId, id).catch(() => null);
+				const substance = outcome
+					? threadOutcomeLines(outcome)
+					: [
+							digest.lastReply
+								? `Last reply: ${digest.lastReply}`
+								: "No reply yet.",
+						];
 				return [
 					`"${digest.title}" (id ${digest.id})`,
 					digest.waitingOn
@@ -227,9 +243,7 @@ export function ySquaredTools(input: {
 					threadTimesText(digest, now),
 					digest.lastRequest ? `Last request: ${digest.lastRequest}` : "",
 					digest.pullRequest ? `Pull request: ${digest.pullRequest}` : "",
-					digest.lastReply
-						? `Last reply: ${digest.lastReply}`
-						: "No reply yet.",
+					...substance,
 				]
 					.filter(Boolean)
 					.join("\n");

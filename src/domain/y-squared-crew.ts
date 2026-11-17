@@ -231,7 +231,7 @@ export function crewWakeBody(input: {
 		"Something changed in this project's threads.",
 		...(lines.length ? ["Since your last report:", ...lines] : []),
 		...(working.length ? ["Still working:", ...working] : []),
-		"Call `threads`, then give the person a short delta (what changed, who is still working and for how long); do not list everything again.",
+		"Call `threads`, then call `thread` for each one that finished or needs the person and give the person a short delta with the substance: what it found or built, the decision they need to make, who is still working and for how long. Never just say it finished; do not list everything again.",
 	].join("\n");
 }
 

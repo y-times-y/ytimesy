@@ -321,7 +321,16 @@ describe("Y² stays in the loop (instructions)", () => {
 		expect(text).toContain("The Overview beside this chat lists every thread");
 		expect(text).toContain("Prefer steer over interrupt");
 		expect(text).toContain("never repeat its content");
-		expect(text).toContain("Report in at most 100 words.");
+		expect(text).toContain("Report in at most 100 words");
 		expect(text).toContain("Never poll.");
+	});
+
+	it('reports the substance of a finished thread, never just "go read it"', () => {
+		expect(text).toContain("never have to open a thread");
+		expect(text).toContain("report the SUBSTANCE");
+		expect(text).toContain("the decision the person must make");
+		expect(text).toContain(
+			'Never say only "finished" or "open the thread to read it"',
+		);
 	});
 });
