@@ -1,5 +1,6 @@
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { jsonbText } from "#/domain/jsonb";
+import { QUEUED_MESSAGES_PER_CHAT_LIMIT } from "#/domain/peer-inbox-injection";
 import type { UserMessageItem } from "#/domain/session-item";
 import { wakeConversationProgress } from "./conversation-progress-wake";
 import { database } from "./database";
@@ -46,21 +47,36 @@ const inboxId = (messageId: string) => `queued-user:${messageId}`;
  * orders it against the turn's end: a turn that already ended returns
  * "not-running" (the caller starts a turn), and one that ends after this
  * commits finds the message waiting. Touching `items` republishes the chat.
+ * A chat holds at most QUEUED_MESSAGES_PER_CHAT_LIMIT waiting messages: past
+ * it nothing is stored and the result is "full" (a replay of a message that
+ * is already waiting is still "queued"). The count is read in the same
+ * statement as the insert, so two sends at the same instant can overshoot by
+ * a message or two: the cap bounds growth, it is not an exact limit.
  */
 export async function queueUserMessageWhileRunning(
 	userId: string,
 	sessionId: string,
 	send: QueuedUserSend,
-): Promise<"queued" | "not-running"> {
+): Promise<"queued" | "not-running" | "full"> {
 	const { message, ...stored } = send;
-	const result = await database().query<{ running: number }>(
+	const result = await database().query<{ running: number; full: boolean }>(
 		`with s as (update agent_session set items=items where id=$1 and user_id=$2 and turn_status='running' returning id),
+		 waiting as (select count(*)::int as n, coalesce(bool_or(id=$3),false) as has from agent_peer_inbox where recipient_id=$1 and not accepted and queued_send is not null),
 		 queued as (insert into agent_peer_inbox(id,recipient_id,message,queued_send)
-		  select $3,s.id,$4,$5::jsonb from s on conflict(id) do nothing returning id)
-		 select (select count(*) from s)::int as running`,
-		[sessionId, userId, inboxId(send.item.id), message, jsonbText(stored)],
+		  select $3,s.id,$4,$5::jsonb from s, waiting where waiting.n < $6 on conflict(id) do nothing returning id)
+		 select (select count(*) from s)::int as running,
+		  (select n >= $6 and not has from waiting) as full`,
+		[
+			sessionId,
+			userId,
+			inboxId(send.item.id),
+			message,
+			jsonbText(stored),
+			QUEUED_MESSAGES_PER_CHAT_LIMIT,
+		],
 	);
 	if (!result.rows[0]?.running) return "not-running";
+	if (result.rows[0].full) return "full";
 	forgetPeerInboxObservation(sessionId);
 	await wakeConversationProgress();
 	return "queued";

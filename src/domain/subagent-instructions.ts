@@ -48,7 +48,7 @@ export function orchestratorInstructions(
 		? `in one run_code program: ${parallel}`
 		: "with one agent call per helper in the same step";
 	return [
-		`Subagents: \`agent\` starts a helper (a background agent) with only your brief and returns its id at once; \`agent_send\` steers or stops one. Their reports arrive as messages.${readOnly ? " You may start only researchers, reviewers and checkers." : ""}`,
+		`Subagents: \`agent\` starts a helper (a background agent) with only your brief and returns its id at once; \`agent_send\` messages or stops one (mode: steer for a correction while it works (no extra turn), queue when the next instruction can wait for its report, interrupt only to stop wrong work). Their reports arrive as messages.${readOnly ? " You may start only researchers, reviewers and checkers." : ""}`,
 		readOnly
 			? "Roles: researcher and reviewer read your VM and cannot change it; checker gets only the user's task and the current work and returns pass or fail."
 			: "Roles: writer edits on a fork of your VM (your uncommitted work included) and returns a patch and git ref; researcher and reviewer read your VM and cannot change it; checker gets only the user's task and your current work and returns pass or fail.",

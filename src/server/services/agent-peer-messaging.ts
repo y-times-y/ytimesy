@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { steeringTexts } from "#/domain/agent-steering";
+import { SessionItemId } from "#/domain/ids";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { sidekickState } from "#/domain/sidekick";
 import {
@@ -9,12 +10,18 @@ import {
 } from "../adapters/agent-sessions";
 import { hasActiveApiTurn } from "../adapters/api-turns";
 import {
+	type QueuedUserSend,
+	queueUserMessageWhileRunning,
+	restoreQueuedUserMessage,
+} from "../adapters/queued-user-messages";
+import {
 	removePendingServerPeerMessage,
 	serverPeerMessageAccepted,
 	stageServerPeerMessage,
 } from "../adapters/server-peer-inbox";
 import { enqueuePeerMessage } from "../jobs/queue";
 import { sendHarnessWorkspaceTask } from "./harness-workspace-session";
+import { stopTurnKeepingQueue } from "./queued-user-messages";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -155,4 +162,92 @@ export async function deliverAgentPeerMessage(
 		throw new Error(
 			"Steering dispatch failed; inspect the subagent's connection.",
 		);
+}
+
+/**
+ * The helper's waiting row for an agent_send `queue` or `interrupt`: the same
+ * row a person's queued message is (`queued_send`, released false), so the
+ * helper's turn end takes it and starts its next turn (startQueuedUserTurn),
+ * one row per turn, oldest first. The item is the steering text (who sent it,
+ * as for steering) and the row's message is what the model reads.
+ */
+async function queuedHelperSend(
+	sender: AgentSessionRecord,
+	recipientId: string,
+	message: string,
+	requestId: string,
+) {
+	if (!message.trim() || message.length > 8_000)
+		throw new Error("A message must contain 1–8,000 characters.");
+	const recipient = await steerableChild(sender, recipientId);
+	if (!recipient?.listedModelId)
+		throw new Error("That started subagent of yours is not available.");
+	const messageId = `${sender.id}:${requestId}`;
+	const { text, runtimeText } = steeringTexts({
+		sender: { kind: "parent", title: sender.title, id: sender.id },
+		message: message.trim(),
+		messageId,
+	});
+	const send: QueuedUserSend = {
+		item: { kind: "userMessage", id: SessionItemId(messageId), text },
+		message: runtimeText,
+		harnessId: recipient.harness,
+		modelId: recipient.listedModelId,
+		released: false,
+	};
+	return { recipient, send };
+}
+
+/**
+ * agent_send `queue`: the message waits behind the helper's running turn and
+ * starts its next turn when that ends; any earlier waiting messages go first
+ * (several may wait; each starts its own turn in order). "not-running": the
+ * helper's turn ended meanwhile, the caller sends it as to an idle helper.
+ * "full": QUEUED_MESSAGES_PER_CHAT_LIMIT are already waiting.
+ */
+export async function queueAgentPeerMessageAfterTurn(
+	sender: AgentSessionRecord,
+	recipientId: string,
+	message: string,
+	requestId: string,
+) {
+	const { recipient, send } = await queuedHelperSend(
+		sender,
+		recipientId,
+		message,
+		requestId,
+	);
+	return queueUserMessageWhileRunning(sender.userId, recipient.id, send);
+}
+
+/**
+ * agent_send `interrupt`: the helper's running turn is stopped and this
+ * message starts its next turn, ahead of every message already waiting (those
+ * keep their order behind it: stopTurnKeepingQueue keeps the queue). Waiting
+ * first (created_at -infinity, as a restored message) means the stop's own
+ * queue start, or the executor's when it finishes stopping, takes it.
+ */
+export async function interruptAgentWithMessage(
+	machines: WorkspaceMachines,
+	sender: AgentSessionRecord,
+	recipientId: string,
+	message: string,
+	requestId: string,
+) {
+	const { recipient, send } = await queuedHelperSend(
+		sender,
+		recipientId,
+		message,
+		requestId,
+	);
+	await restoreQueuedUserMessage(recipient.id, send);
+	await Effect.runPromise(
+		stopTurnKeepingQueue(machinesForAgentSession(machines, recipient), {
+			userId: sender.userId,
+			projectId: recipient.projectId,
+			sessionId: recipient.id,
+			harnessId: recipient.harness,
+			createNew: false,
+		}),
+	);
 }

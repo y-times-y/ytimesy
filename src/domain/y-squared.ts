@@ -57,7 +57,7 @@ export const Y_SQUARED_TITLE_LIMIT = 120;
 export const Y_SQUARED_START_THREAD_DESCRIPTION =
 	"Start a new thread (a root chat with its own Y and its own machine) in this project. The brief is the thread's first message and must be self-contained: the goal, the constraints and what done looks like, since the thread knows nothing of this chat. Starting may leave the thread queued behind the budget or concurrency limit; the result says which. Start only what is needed.";
 export const Y_SQUARED_MESSAGE_THREAD_DESCRIPTION =
-	'Send a message to one of this project\'s threads. Pass the id from the threads list. An idle thread starts a turn with it (which may itself queue behind the budget or concurrency limit). For a working thread, mode decides: "queue" (default) puts it behind the running turn; "interrupt" stops the running turn first, then sends it; "steer" is the same as "queue" (a thread\'s turn takes new messages only when it ends, there is no mid-turn steering for a thread yet).';
+	'Send a message to one of this project\'s threads. Pass the id from the threads list. An idle thread starts a turn with it (which may itself queue behind the budget or concurrency limit), whatever the mode. For a working thread, mode decides: "queue" (default) puts it behind the running turn, which starts its next turn with it when it ends (several may wait, in order, at most 50); "steer" delivers it at the thread\'s next step, with no extra turn, for a correction while it works (a Claude Code thread takes it only after its next tool call; a thread on a runner box may see it up to 10 s late; a turn that ends first starts its next turn with it); "interrupt" stops the running turn first, then sends it. Steer for a correction while it works, queue when it can wait for the turn to end, interrupt only to stop wrong work.';
 /** How message_thread reaches a working thread. */
 export const Y_SQUARED_MESSAGE_MODES = ["queue", "interrupt", "steer"] as const;
 export type YSquaredMessageMode = (typeof Y_SQUARED_MESSAGE_MODES)[number];
@@ -85,7 +85,7 @@ export const messageThreadInput = z.object({
 		.enum(Y_SQUARED_MESSAGE_MODES)
 		.default("queue")
 		.describe(
-			"queue (default): after the running turn. interrupt: stop the running turn, then send. steer: same as queue.",
+			"queue (default): after the running turn, as its next turn. steer: at its next step, no extra turn. interrupt: stop the running turn, then send.",
 		),
 });
 export const stopThreadInput = z.object({

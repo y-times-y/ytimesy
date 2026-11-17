@@ -84,6 +84,10 @@ export async function sendSideChatMessage(
 	);
 	if (target.queueOn === "side") {
 		const queued = await queueSideTurn(input, side.id, modelText);
+		if (queued === "full")
+			throw new Error(
+				"This side chat already has too many messages waiting. Wait for some to be delivered before sending another.",
+			);
 		if (queued === "queued")
 			return { sideSessionId: side.id, view: await publicSessionView(scope) };
 	}

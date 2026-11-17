@@ -196,6 +196,51 @@ it("queues a send behind the running turn instead of rejecting it", async () => 
 	]);
 });
 
+it("refuses a send past the per-chat cap with a clear error and starts nothing", async () => {
+	mocks.queue.mockResolvedValueOnce("full");
+	await expect(
+		Effect.runPromise(
+			sendComposerMessage(machines, scope, {
+				text: "one more",
+				modelId: "connection|model",
+				idempotencyKey: messageId,
+			}),
+		),
+	).rejects.toThrow("already has 50 messages waiting");
+	expect(mocks.send).not.toHaveBeenCalled();
+});
+
+it("starts an agent's queued message (agent_send queue) with the text the model reads, a person's with its own text", async () => {
+	mocks.session.mockResolvedValue({
+		id: "chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "idle",
+		items: [],
+	});
+	const steering =
+		"Message from Main (root):\n\nUse port 4001.\n\nCoordination message ID: root:req";
+	mocks.take.mockResolvedValueOnce({
+		item: { kind: "userMessage", id: "root:req", text: steering },
+		message: `${steering}\n\nThis is your parent agent steering your brief.`,
+		harnessId: "api",
+		modelId: "model",
+	});
+	await startQueuedUserTurn(machines, "owner", "chat");
+	expect(mocks.send.mock.calls.at(-1)?.[2]).toMatchObject({
+		text: steering,
+		runtimeText: `${steering}\n\nThis is your parent agent steering your brief.`,
+	});
+	mocks.take.mockResolvedValueOnce({
+		item: { kind: "userMessage", id: messageId, text: "Then deploy" },
+		message: "Then deploy\n\nNote",
+		harnessId: "api",
+		modelId: "model",
+	});
+	await startQueuedUserTurn(machines, "owner", "chat");
+	expect(mocks.send.mock.calls.at(-1)?.[2]).not.toHaveProperty("runtimeText");
+});
+
 it("starts a turn with the stored files when the turn ended before the send queued", async () => {
 	const attachment = {
 		id: "22222222-2222-4222-8222-222222222222",

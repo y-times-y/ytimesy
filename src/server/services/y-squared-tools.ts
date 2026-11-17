@@ -276,6 +276,7 @@ export function ySquaredTools(input: {
 				await markSent(chat.id);
 				const interrupted =
 					mode === "interrupt" && chat.turnStatus === "running";
+				const steered = mode === "steer" && chat.turnStatus === "running";
 				if (interrupted)
 					await deps.stop(input.machines, {
 						userId: input.userId,
@@ -297,6 +298,11 @@ export function ySquaredTools(input: {
 						text,
 						modelId: chat.listedModelId ?? input.modelId,
 						idempotencyKey: sendKey("message", chat.id, text),
+						// Steer: the row waits already released, so the running turn takes
+						// it at its next step (releaseQueuedComposerMessage's mark). An idle
+						// thread starts a turn as for any send; if the turn ends before the
+						// row is stored the send starts the next turn.
+						...(steered ? { released: true } : {}),
 					},
 				);
 				if (sent.failed) return `Not sent: ${sent.failed}`;
@@ -306,6 +312,8 @@ export function ySquaredTools(input: {
 							? "its new turn started."
 							: "it is queued and starts by itself."
 					}`;
+				if (steered)
+					return `Steering "${chat.title}": the message goes in at its next step (a Claude Code thread takes it after its next tool call, a runner box up to 10 s late); if its turn ends first it starts its next turn with it.`;
 				return chat.turnStatus === "running"
 					? `Queued the message in "${chat.title}"; it goes in when its current turn ends.`
 					: sent.turnStatus === "running"

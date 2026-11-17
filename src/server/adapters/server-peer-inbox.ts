@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 import {
+	PEER_INBOX_STEP_READ_LIMIT,
 	type PeerInboxRow,
 	planPeerInjection,
 } from "#/domain/peer-inbox-injection";
@@ -58,7 +59,13 @@ export async function acknowledgeServerPeerMessage(
 		[recipientId, id],
 	);
 }
-/** The recipient's next pending inbox rows (at most 16, oldest first). */
+/**
+ * The recipient's next pending inbox rows a step may take (at most
+ * PEER_INBOX_STEP_READ_LIMIT, oldest first). A queued send still waiting for
+ * Send (`released` false) is not read: no step takes it, so it must not use
+ * up the limit and hide a released or steering row behind it. A row with no
+ * `released` field (the old shape) is read as before.
+ */
 export async function readPeerInbox(
 	recipientId: string,
 ): Promise<PeerInboxRow[]> {
@@ -67,8 +74,8 @@ export async function readPeerInbox(
 		message: string;
 		queued_send: { item: UserMessageItem; released?: boolean } | null;
 	}>(
-		"select id,message,queued_send from agent_peer_inbox where recipient_id=$1 and not accepted order by created_at,id limit 16",
-		[recipientId],
+		"select id,message,queued_send from agent_peer_inbox where recipient_id=$1 and not accepted and coalesce(queued_send->>'released','')<>'false' order by created_at,id limit $2",
+		[recipientId, PEER_INBOX_STEP_READ_LIMIT],
 	);
 	return result.rows;
 }

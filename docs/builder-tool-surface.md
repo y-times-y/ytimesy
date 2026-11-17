@@ -85,3 +85,20 @@ No model in the selector names the SWE-agent shape as its native harness.
 - **Engine:** `src/server/services/lean-engine.ts` (commands through `execute_command`/`continue_command`/`stop_command`; one file reader/writer; output limit in `lean-output.ts`), its Python in `lean-scripts.ts`, each shape in `lean-shapes/`, and `lean-edit.ts` (exact, then a normalized fuzzy match that rewrites only the matched region). Writes go through the runtime's own checked edit function (`LOCKED_APPLY_EDIT` in `api-agent-file-tools.ts`: edit lock, no `.git`, no symlinks, no escape, temp file removed) and must land in the repository or `~/memory`.
 - **Workspace commands:** `lean-helpers.ts` installs `ytimesy-check`, `ytimesy-browser`, `ytimesy-job` (status/wait/stop for background commands) and `~/.ytimesy/environment.md` the first time a lean tool touches the VM; compaction writes `~/.ytimesy/history/<time>-<archive>.md`.
 - **Measure:** `node --import tsx scripts/builder-context-breakdown.ts --surfaces`.
+
+## `agent_send` modes (delegation tools)
+
+`agent_send {id, message?, mode?, stop?}` messages one of the caller's helpers. `mode` is `steer` (default, so existing calls are unchanged), `queue` or `interrupt`. The agent is told one line: *steer for a correction while it works (no extra turn), queue when the next instruction can wait for its report, interrupt only to stop wrong work.* (tool description in `src/server/services/subagent-tools.ts`; the helpers paragraph in `src/domain/subagent-instructions.ts`).
+
+| Mode | Helper running | Helper idle | `delivery` |
+|---|---|---|---|
+| `steer` | staged in the helper's inbox and read at its next model step (`queueAgentPeerMessage`, then `deliverAgentPeerMessage`): no new turn | starts its next round (a new turn) | `next step`; `now` + a note when idle |
+| `queue` | a waiting row (`agent_peer_inbox.queued_send`, `released: false`, the same row a person's queued message is; `queueAgentPeerMessageAfterTurn`). The helper's turn end starts one new turn per row, oldest first (`startQueuedUserTurn`), so several may wait and run in order. If the turn ended before the row was stored, it is sent as to an idle helper | as steer | `after turn` |
+| `interrupt` | the row is stored first in line (`created_at = -infinity`, as a restored message), then the turn is stopped with `stopTurnKeepingQueue`; earlier queued rows keep their order behind it (`interruptAgentWithMessage`) | as steer | `interrupt` |
+
+- A message with `stop: true` keeps the wrap-up stop (`requestSubagentStop`) whatever the mode.
+- A fusion lead's writer works in the lead's checkout round by round: while it works only `steer` is accepted (queue/interrupt would start a round outside its budget); idle, any mode starts its next round.
+- At most 50 messages wait per chat or helper (`QUEUED_MESSAGES_PER_CHAT_LIMIT`, `src/domain/peer-inbox-injection.ts`); past it `agent_send` and the composer return a clear error. The count is read with the insert, so a burst may overshoot by a message or two.
+- Cost note (a direct consequence of the mechanics, not a measurement): a queued message starts a new turn, which sends the whole history again (a cache miss once the provider's cache expired); a steer adds one user message to the next step of the same turn. `docs/research/experiment-log.md` has no earlier test of steering versus queueing.
+- The public harness repo (y-times-y/harness) does not have this change yet.
+

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
+import { parseSteering } from "#/domain/agent-steering";
 import {
 	ENVIRONMENT_SETUP_PROMPT,
 	initialSetupMessageId,
 } from "#/domain/environment-setup";
 import type { MessageAttachment } from "#/domain/message-attachment";
 import { withAttachmentNote } from "#/domain/message-attachment";
+import { QUEUED_MESSAGES_PER_CHAT_LIMIT } from "#/domain/peer-inbox-injection";
 import {
 	firstEnvironmentBuildRunning,
 	sendWaitsForEnvironment,
@@ -306,6 +308,10 @@ async function queueBehindRunningTurn(
 			: {}),
 		released: input.released === true,
 	});
+	if (outcome === "full")
+		throw new Error(
+			`This chat already has ${QUEUED_MESSAGES_PER_CHAT_LIMIT} messages waiting. Wait for some to be delivered, or remove one, before sending another.`,
+		);
 	// The turn ended meanwhile: this send starts the next one with the stored files.
 	if (outcome === "not-running") return { storedAttachments: attachments };
 	return { view: await publicSessionView(scope) };
@@ -586,6 +592,11 @@ async function deliverQueuedSend(
 				},
 				{
 					text: next.item.text,
+					// An agent's queued message (agent_send) starts the turn with the
+					// text the model reads (the sender's role note), as its steering does.
+					...(parseSteering(next.item.text) && next.message !== next.item.text
+						? { runtimeText: next.message }
+						: {}),
 					modelId: next.modelId,
 					...(next.variant ? { variant: next.variant } : {}),
 					...(next.speed ? { speed: next.speed } : {}),

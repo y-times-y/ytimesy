@@ -142,6 +142,8 @@ function harness(
 		logStartFailure: vi.fn(),
 		takeReport: vi.fn(async () => null),
 		message: vi.fn(async () => ({}) as never),
+		queueAfterTurn: vi.fn(async () => "queued" as const),
+		interrupt: vi.fn(async () => {}),
 		stop: vi.fn(async () => {}),
 		markRoundStart: vi.fn(async (input: { round: number }) =>
 			`start-${input.round}`.padEnd(40, "0"),
@@ -573,6 +575,140 @@ describe("agent_send", () => {
 		expect(vi.mocked(deps.message).mock.calls[1]?.[2]).toContain(
 			"write your report now",
 		);
+	});
+
+	it("mode defaults to steer: delivered at the next step, no queue, no interrupt", async () => {
+		const { call, deps } = harness({ sessions: tree() });
+		const result = await call("agent_send", { id: "1", message: "Use 4001." });
+		expect(result.delivery).toBe("next step");
+		expect(deps.message).toHaveBeenCalledTimes(1);
+		expect(deps.queueAfterTurn).not.toHaveBeenCalled();
+		expect(deps.interrupt).not.toHaveBeenCalled();
+		const explicit = await call("agent_send", {
+			id: "1",
+			message: "Use 4002.",
+			mode: "steer",
+		});
+		expect(explicit.delivery).toBe("next step");
+		expect(deps.message).toHaveBeenCalledTimes(2);
+	});
+
+	it("queue on a running agent waits for its turn to end (after turn), several in order, without steering", async () => {
+		const { call, deps } = harness({ sessions: tree() });
+		for (const message of ["first", "second"]) {
+			const result = await call("agent_send", {
+				id: "1",
+				message,
+				mode: "queue",
+			});
+			expect(result).toMatchObject({
+				id: "1",
+				status: "message queued",
+				delivery: "after turn",
+			});
+		}
+		expect(
+			vi.mocked(deps.queueAfterTurn).mock.calls.map((args) => args[2]),
+		).toEqual(["first", "second"]);
+		// each send has its own request id, so both rows are kept
+		const ids = vi
+			.mocked(deps.queueAfterTurn)
+			.mock.calls.map((args) => args[3]);
+		expect(new Set(ids).size).toBe(2);
+		expect(deps.message).not.toHaveBeenCalled();
+		expect(deps.interrupt).not.toHaveBeenCalled();
+	});
+
+	it("queue says so when the cap is reached, and sends as to an idle agent when its turn ended meanwhile", async () => {
+		const full = harness({
+			sessions: tree(),
+			deps: { queueAfterTurn: vi.fn(async () => "full" as const) },
+		});
+		await expect(
+			full.call("agent_send", { id: "1", message: "x", mode: "queue" }),
+		).rejects.toThrow("already has 50 messages waiting");
+		const raced = harness({
+			sessions: tree(),
+			deps: { queueAfterTurn: vi.fn(async () => "not-running" as const) },
+		});
+		await raced.call("agent_send", { id: "1", message: "x", mode: "queue" });
+		expect(raced.deps.message).toHaveBeenCalledTimes(1);
+	});
+
+	it("interrupt stops the running turn and puts the message first, keeping the queue", async () => {
+		const { call, deps } = harness({ sessions: tree() });
+		const result = await call("agent_send", {
+			id: "1",
+			message: "Stop that, do this.",
+			mode: "interrupt",
+		});
+		expect(result).toMatchObject({ id: "1", delivery: "interrupt" });
+		expect(deps.interrupt).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ id: "root" }),
+			"w",
+			"Stop that, do this.",
+			expect.any(String),
+		);
+		// not the wrap-up stop, not steering, not a plain queue
+		expect(deps.stop).not.toHaveBeenCalled();
+		expect(deps.message).not.toHaveBeenCalled();
+		expect(deps.queueAfterTurn).not.toHaveBeenCalled();
+	});
+
+	it("an idle agent starts its next round with the message in every mode, and the result says so", async () => {
+		for (const mode of ["steer", "queue", "interrupt"]) {
+			const { call, deps } = harness({
+				sessions: [
+					row("root", null),
+					row("w", "root", { agentRole: "writer", turnStatus: "idle" }),
+				],
+			});
+			const result = await call("agent_send", {
+				id: "1",
+				message: "Next: add tests.",
+				mode,
+			});
+			expect(result.delivery).toBe("now");
+			expect(result.note).toContain("idle");
+			expect(result.note).toContain("next round");
+			expect(deps.message).toHaveBeenCalledWith(
+				expect.anything(),
+				"w",
+				"Next: add tests.",
+				expect.any(String),
+			);
+			expect(deps.queueAfterTurn).not.toHaveBeenCalled();
+			expect(deps.interrupt).not.toHaveBeenCalled();
+		}
+	});
+
+	it("stop with a message keeps the wrap-up path whatever the mode", async () => {
+		const { call, deps } = harness({ sessions: tree() });
+		const result = await call("agent_send", {
+			id: "1",
+			message: "bye",
+			stop: true,
+			mode: "queue",
+		});
+		expect(result.status).toBe("stopping");
+		expect(deps.stop).toHaveBeenCalledWith("w");
+		expect(deps.queueAfterTurn).not.toHaveBeenCalled();
+	});
+
+	it("the description and schema carry the mode guidance line; the schema rejects an unknown mode", () => {
+		const { context } = harness({ sessions: tree() });
+		const tool = subagentTools(context).agent_send as unknown as {
+			inputSchema: { safeParse: (input: unknown) => { success: boolean } };
+			description: string;
+		};
+		expect(tool.description).toContain(
+			"Steer for a correction while it works (no extra turn), queue when the next instruction can wait for its report, interrupt only to stop wrong work.",
+		);
+		const parse = (input: unknown) => tool.inputSchema.safeParse(input).success;
+		expect(parse({ id: "1", message: "x", mode: "queue" })).toBe(true);
+		expect(parse({ id: "1", message: "x", mode: "now" })).toBe(false);
+		expect(parse({ id: "1", message: "x" })).toBe(true);
 	});
 
 	it("names the caller's own agents when the id is not one of them", async () => {

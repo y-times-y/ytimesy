@@ -452,7 +452,7 @@ which `checkpointApiTurn`'s own SQL does not do: it only requires a fresh
 heartbeat) and tells the box, which then skips a renewal within 5 s; steps
 reuse the history the box last checkpointed instead of reading it; an empty
 peer inbox is asked again after 10 s, not every step (a message sent to a
-running turn can arrive up to 10 s later than in the Durable Object).
+running turn can arrive up to 10 s later than in the Durable Object). That includes a released queued message (`message_thread` steer, the composer's Send) and `agent_send` steering. One step reads at most 16 takeable inbox rows (`PEER_INBOX_STEP_READ_LIMIT`), oldest first; queued sends still waiting for Send are not read, so they never hide a released or steering row behind them, and more than 16 deliverable rows are taken in order over the next steps.
 The target of ~100 for 40 steps is met in this run, with a floor of one model
 request and one checkpoint per step. Not in this number: time-based costs
 (with no socket, a lease renewal and a room-lease renewal about every 10 s

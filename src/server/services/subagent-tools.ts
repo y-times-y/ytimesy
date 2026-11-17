@@ -21,6 +21,7 @@ import { fusionPairProfile } from "#/domain/fusion-pairs";
 import type { CheckerMode, LeadMode } from "#/domain/harness-variant";
 import { WorkspaceId } from "#/domain/ids";
 import type { FailoverConnection } from "#/domain/model-failover";
+import { QUEUED_MESSAGES_PER_CHAT_LIMIT } from "#/domain/peer-inbox-injection";
 import { posixShellQuoted } from "#/domain/posix-command";
 import {
 	type ModelRole,
@@ -103,7 +104,11 @@ import {
 	subagentAncestors,
 	takeSubagentReport,
 } from "../adapters/subagents";
-import { queueAgentPeerMessage } from "./agent-peer-messaging";
+import {
+	interruptAgentWithMessage,
+	queueAgentPeerMessage,
+	queueAgentPeerMessageAfterTurn,
+} from "./agent-peer-messaging";
 import { openAgentTask } from "./agent-session-machine";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { startPreparedAgentTask } from "./harness-workspace-session";
@@ -168,6 +173,10 @@ export type SubagentToolDeps = {
 	readonly logStartFailure: (event: SubagentStartFailure) => void;
 	readonly takeReport: typeof takeSubagentReport;
 	readonly message: typeof queueAgentPeerMessage;
+	/** agent_send queue: waits behind the agent's running turn (several in order). */
+	readonly queueAfterTurn: typeof queueAgentPeerMessageAfterTurn;
+	/** agent_send interrupt: stops the running turn, keeps its queue, this message first. */
+	readonly interrupt: typeof interruptAgentWithMessage;
 	readonly stop: typeof requestSubagentStop;
 	/** Lead mode fusion: the round's start snapshot, the sidekick's state and retirement. */
 	readonly markRoundStart: typeof markSidekickRoundStart;
@@ -217,6 +226,8 @@ const defaultDeps: SubagentToolDeps = {
 	logStartFailure: (event) => logSubagentStartFailure(event),
 	takeReport: (...args) => takeSubagentReport(...args),
 	message: (...args) => queueAgentPeerMessage(...args),
+	queueAfterTurn: (...args) => queueAgentPeerMessageAfterTurn(...args),
+	interrupt: (...args) => interruptAgentWithMessage(...args),
 	stop: (...args) => requestSubagentStop(...args),
 	markRoundStart: (...args) => markSidekickRoundStart(...args),
 	saveSidekick: (...args) => saveSidekickState(...args),
@@ -368,6 +379,11 @@ const exploreField = z
 		"Writer only: an exploration round. It changes no files and returns the relevant file paths, key snippets with line ranges, the check commands and open questions for you to plan from.",
 	);
 
+const AGENT_SEND_MODES = ["steer", "queue", "interrupt"] as const;
+/** The one line of guidance on choosing a mode (also in the agent instructions). */
+const AGENT_SEND_MODE_TEXT =
+	"steer (default): delivered at the agent's next step, no extra turn; queue: delivered after its current turn ends, as its next turn (several may wait, in order); interrupt: stops its running turn, then this message starts its next turn before any queued ones. Steer for a correction while it works (no extra turn), queue when the next instruction can wait for its report, interrupt only to stop wrong work. An idle agent starts its next round with the message in every mode.";
+
 const sendInput = z.object({
 	id: z.string().min(1).max(20).describe('The agent id, e.g. "1.2"'),
 	message: z
@@ -375,7 +391,10 @@ const sendInput = z.object({
 		.min(1)
 		.max(8_000)
 		.optional()
-		.describe("Steering, delivered at the agent's next step"),
+		.describe(
+			"The message. Delivered per mode (default steer: at the agent's next step).",
+		),
+	mode: z.enum(AGENT_SEND_MODES).optional().describe(AGENT_SEND_MODE_TEXT),
 	stop: z.boolean().optional().describe("Wrap up now and report what is done"),
 });
 
@@ -568,8 +587,8 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 
 	const agentSend = tool({
 		description: isLead
-			? "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A message to your idle writer starts its next round in your checkout; its report wakes you. A finished reader resumes with the message."
-			: "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A finished agent resumes with the message.",
+			? `Message one of your subagents or stop it (it wraps up and reports what is done). Mode: ${AGENT_SEND_MODE_TEXT} A message to your idle writer starts its next round in your checkout; its report wakes you. A finished reader resumes with the message. Your writer takes only steer while it works.`
+			: `Message one of your running subagents or stop it (it wraps up and reports what is done). Mode: ${AGENT_SEND_MODE_TEXT} A finished agent resumes with the message.`,
 		inputSchema: isLead
 			? sendInput.extend({ explore: exploreField })
 			: sendInput,
@@ -643,6 +662,55 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				});
 				if (handled) return handled;
 			}
+			const mode = input.mode ?? "steer";
+			if (
+				mode !== "steer" &&
+				input.message &&
+				!input.stop &&
+				target.live &&
+				sidekick
+			)
+				throw new Error(
+					`Your writer ${target.label} is working: a ${mode} would start a round outside its budget. Use steer for a correction now, or wait for its report (it wakes you) and send the next brief.`,
+				);
+			const sentToRunning = !!input.message && !input.stop && target.live;
+			if (mode === "queue" && sentToRunning && input.message) {
+				const queued = await deps.queueAfterTurn(
+					parent,
+					target.id,
+					input.message,
+					randomUUID(),
+				);
+				if (queued === "full")
+					throw new Error(
+						`${target.label} already has ${QUEUED_MESSAGES_PER_CHAT_LIMIT} messages waiting. Let it work through them, or use steer or interrupt.`,
+					);
+				if (queued === "queued")
+					return {
+						id: target.label,
+						name: target.name,
+						status: "message queued",
+						delivery: "after turn",
+						note: "It starts its next turn with this message when its current turn ends, after any messages queued before it.",
+					};
+				// Its turn ended meanwhile: it is idle now, as the send below says.
+			}
+			if (mode === "interrupt" && sentToRunning && input.message) {
+				await deps.interrupt(
+					context.machines,
+					parent,
+					target.id,
+					input.message,
+					randomUUID(),
+				);
+				return {
+					id: target.label,
+					name: target.name,
+					status: "interrupted; message sent",
+					delivery: "interrupt",
+					note: "Its running turn was stopped; this message starts its next turn before any messages queued earlier, which still follow.",
+				};
+			}
 			if (input.stop) await deps.stop(target.id);
 			const released =
 				!!input.message &&
@@ -659,11 +727,18 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				.filter(Boolean)
 				.join("\n\n");
 			await deps.message(parent, target.id, text, randomUUID());
+			// A message to an idle agent has no step to wait for: it starts its next round.
+			const idle = !!input.message && !input.stop && !target.live;
 			return {
 				id: target.label,
 				name: target.name,
 				status: input.stop ? "stopping" : "message queued",
-				delivery: "next step",
+				delivery: idle ? "now" : "next step",
+				...(idle
+					? {
+							note: "The agent was idle, so this message starts its next round (a new turn) in every mode.",
+						}
+					: {}),
 			};
 		},
 	});

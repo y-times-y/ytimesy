@@ -384,15 +384,48 @@ describe("ySquaredTools write tools", () => {
 		expect(order).toEqual(["mark:null", "send", "mark:t1", "send"]);
 	});
 
-	it("message_thread modes: queue (default) and steer queue behind the running turn, interrupt stops it first", async () => {
-		for (const mode of [undefined, "queue", "steer"]) {
+	it("message_thread modes: queue (default) waits for the turn's end, steer is released for the next step, interrupt stops first", async () => {
+		for (const mode of [undefined, "queue"]) {
 			const f = writeFixture({ t1: chat({ turnStatus: "running" }) });
 			expect(
 				await run(f.tools, "message_thread", { id: "t1", text: "x", mode }),
 			).toContain("Queued the message");
 			expect(f.stop).not.toHaveBeenCalled();
 			expect(f.send).toHaveBeenCalledTimes(1);
+			// not released: it waits for the turn's end (or Send)
+			expect(
+				(f.send.mock.calls[0] as unknown[] | undefined)?.[2],
+			).not.toHaveProperty("released");
 		}
+		const steer = writeFixture({ t1: chat({ turnStatus: "running" }) });
+		const steered = await run(steer.tools, "message_thread", {
+			id: "t1",
+			text: "use port 4001",
+			mode: "steer",
+		});
+		expect(steered).toContain("Steering");
+		expect(steered).toContain("next step");
+		expect(steer.stop).not.toHaveBeenCalled();
+		expect(steer.send).toHaveBeenCalledTimes(1);
+		// released: the running turn takes it at its next step, with no extra turn
+		expect(
+			(steer.send.mock.calls[0] as unknown[] | undefined)?.[2],
+		).toMatchObject({
+			text: "use port 4001",
+			released: true,
+		});
+		// an idle thread: steer behaves like send (it starts a turn)
+		const idleSteer = writeFixture({ t1: chat() }, "running");
+		expect(
+			await run(idleSteer.tools, "message_thread", {
+				id: "t1",
+				text: "go",
+				mode: "steer",
+			}),
+		).toContain("its turn started");
+		expect(
+			(idleSteer.send.mock.calls[0] as unknown[] | undefined)?.[2],
+		).not.toHaveProperty("released");
 		const order: string[] = [];
 		const f = writeFixture({ t1: chat({ turnStatus: "running" }) }, "running");
 		f.stop.mockImplementation(async () => {
@@ -421,7 +454,7 @@ describe("ySquaredTools write tools", () => {
 		expect(idle.stop).not.toHaveBeenCalled();
 	});
 
-	it("the message_thread schema defaults the mode to queue and rejects an unknown one; the description says steer is queue", () => {
+	it("the message_thread schema defaults the mode to queue and rejects an unknown one; the description no longer says steer is queue", () => {
 		const f = writeFixture({ t1: chat() });
 		const tool = f.tools.message_thread as {
 			inputSchema: z.ZodType;
@@ -434,7 +467,10 @@ describe("ySquaredTools write tools", () => {
 			tool.inputSchema.safeParse({ id: "t1", text: "x", mode: "now" }).success,
 		).toBe(false);
 		expect(tool.description).toContain('"interrupt"');
-		expect(tool.description).toContain('"steer" is the same as "queue"');
+		expect(tool.description).not.toContain("same as");
+		expect(tool.description).toContain('"steer" delivers it at the thread');
+		expect(tool.description).toContain("10 s late");
+		expect(tool.description).toContain("after its next tool call");
 	});
 });
 

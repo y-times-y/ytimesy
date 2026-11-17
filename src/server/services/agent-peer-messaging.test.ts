@@ -4,7 +4,9 @@ import { newSidekickState } from "#/domain/sidekick";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	deliverAgentPeerMessage,
+	interruptAgentWithMessage,
 	queueAgentPeerMessage,
+	queueAgentPeerMessageAfterTurn,
 } from "./agent-peer-messaging";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -16,6 +18,18 @@ const fake = vi.hoisted(() => ({
 	accepted: vi.fn(async () => false),
 	removePending: vi.fn(),
 	activeTurn: vi.fn(async () => false),
+	queueRunning: vi.fn(
+		async () => "queued" as "queued" | "not-running" | "full",
+	),
+	restore: vi.fn(async () => {}),
+	stopKeeping: vi.fn(),
+}));
+vi.mock("../adapters/queued-user-messages", () => ({
+	queueUserMessageWhileRunning: fake.queueRunning,
+	restoreQueuedUserMessage: fake.restore,
+}));
+vi.mock("./queued-user-messages", () => ({
+	stopTurnKeepingQueue: fake.stopKeeping,
 }));
 vi.mock("../adapters/api-turns", () => ({
 	hasActiveApiTurn: fake.activeTurn,
@@ -303,5 +317,94 @@ describe("queued steering delivery", () => {
 		await expect(
 			deliverAgentPeerMessage(machines, message, "job"),
 		).rejects.toThrow("dispatch failed");
+	});
+});
+
+describe("agent_send queue and interrupt", () => {
+	it("queue stores the helper's waiting row (released false, the parent's steering text, the helper's own route)", async () => {
+		const result = await queueAgentPeerMessageAfterTurn(
+			requiredSession("root"),
+			"b",
+			"  Then add tests.  ",
+			"req-1",
+		);
+		expect(result).toBe("queued");
+		expect(fake.queueRunning).toHaveBeenCalledWith(
+			"owner",
+			"b",
+			expect.objectContaining({
+				released: false,
+				harnessId: "codex",
+				modelId: "model",
+				item: expect.objectContaining({
+					kind: "userMessage",
+					id: "root:req-1",
+					text: expect.stringContaining("Then add tests."),
+				}),
+				message: expect.stringContaining("steering your brief"),
+			}),
+		);
+		// no steering mailbox row, no job: it waits for the helper's turn end
+		expect(fake.stage).not.toHaveBeenCalled();
+		expect(fake.enqueue).not.toHaveBeenCalled();
+	});
+
+	it("queue reports a full queue and a turn that ended, and refuses non-children", async () => {
+		fake.queueRunning.mockResolvedValueOnce("full");
+		expect(
+			await queueAgentPeerMessageAfterTurn(
+				requiredSession("root"),
+				"b",
+				"x",
+				"r",
+			),
+		).toBe("full");
+		fake.queueRunning.mockResolvedValueOnce("not-running");
+		expect(
+			await queueAgentPeerMessageAfterTurn(
+				requiredSession("root"),
+				"b",
+				"x",
+				"r",
+			),
+		).toBe("not-running");
+		await expect(
+			queueAgentPeerMessageAfterTurn(requiredSession("root"), "root", "x", "r"),
+		).rejects.toThrow("not available");
+	});
+
+	it("interrupt puts the message first in line, then stops the turn keeping the queue", async () => {
+		const order: string[] = [];
+		fake.restore.mockImplementation(async () => {
+			order.push("restore");
+		});
+		fake.stopKeeping.mockImplementation(() => {
+			order.push("stop");
+			return Effect.succeed({});
+		});
+		await interruptAgentWithMessage(
+			machines,
+			requiredSession("root"),
+			"b",
+			"Wrong way, do this.",
+			"req-2",
+		);
+		expect(order).toEqual(["restore", "stop"]);
+		expect(fake.restore).toHaveBeenCalledWith(
+			"b",
+			expect.objectContaining({
+				released: false,
+				item: expect.objectContaining({ id: "root:req-2" }),
+			}),
+		);
+		expect(fake.stopKeeping).toHaveBeenCalledWith(
+			machines,
+			expect.objectContaining({
+				sessionId: "b",
+				userId: "owner",
+				harnessId: "codex",
+				createNew: false,
+			}),
+		);
 	});
 });
