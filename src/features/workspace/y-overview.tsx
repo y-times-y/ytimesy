@@ -36,9 +36,15 @@ export function YOverview({
 	pullRequests,
 	live,
 	renderedAtMs,
+	labelPrefix,
 	onOpenThread,
+	onOpenPullRequest,
 }: {
 	projectId: string;
+	/** The project's thread-label prefix (thread-label.ts): rows show each thread's id. */
+	labelPrefix?: string;
+	/** Opens a pull request in the app (its thread, then the pull request panel); the row falls back to its thread. */
+	onOpenPullRequest?: (row: ThreadPullRequestRow) => void;
 	pullRequests: readonly RepositoryPullRequest[];
 	/** The panel is on screen: keep the threads fresh. */
 	live: boolean;
@@ -63,7 +69,11 @@ export function YOverview({
 			if (!next.delete(group)) next.add(group);
 			return next;
 		});
-	const overview = yOverview({ chats: chats.data ?? [], pullRequests });
+	const overview = yOverview({
+		chats: chats.data ?? [],
+		pullRequests,
+		labelPrefix,
+	});
 	const empty =
 		!overview.needsYou.length &&
 		!overview.inProgress.length &&
@@ -123,6 +133,7 @@ export function YOverview({
 						row={row}
 						nowMs={nowMs}
 						onOpen={onOpenThread}
+						onOpenPullRequest={onOpenPullRequest}
 					/>
 				))}
 			</YOverviewGroup>
@@ -194,14 +205,17 @@ function YOverviewRow({
 	detail,
 	age,
 	onOpen,
+	hint,
 }: {
 	threadId: string;
+	/** The row's tooltip. */
+	hint?: string;
 	status: string;
 	icon: ReactNode;
 	title: ReactNode;
 	detail: ReactNode;
 	age: string | null;
-	onOpen: (threadId: string) => void;
+	onOpen: (threadId: string, event: MouseEvent) => void;
 }) {
 	return (
 		<li>
@@ -209,7 +223,8 @@ function YOverviewRow({
 				type="button"
 				className="y-overview-row"
 				data-status={status}
-				onClick={() => onOpen(threadId)}
+				title={hint}
+				onClick={(event) => onOpen(threadId, event.nativeEvent)}
 			>
 				<span className="y-overview-icon">{icon}</span>
 				<span className="y-overview-copy">
@@ -238,9 +253,9 @@ function NeedsYouItem({
 			status="needs-you"
 			icon={<Icon size={15} strokeWidth={2} aria-hidden="true" />}
 			title={row.title}
-			detail={row.detail}
+			detail={<ThreadId label={row.label}>{row.detail}</ThreadId>}
 			age={compactRelativeAge(row.updatedAt, nowMs)}
-			onOpen={onOpen}
+			onOpen={(id) => onOpen(id)}
 		/>
 	);
 }
@@ -260,10 +275,35 @@ function InProgressItem({
 			status="in-progress"
 			icon={<MatrixDotLoader className="y-overview-working" />}
 			title={row.title}
-			detail={runningForText(row.workingSince, nowMs)}
+			detail={
+				<ThreadId label={row.label}>
+					{runningForText(row.workingSince, nowMs)}
+				</ThreadId>
+			}
 			age={compactRelativeAge(row.updatedAt, nowMs)}
-			onOpen={onOpen}
+			onOpen={(id) => onOpen(id)}
 		/>
+	);
+}
+
+/** The thread's short label before a row's second line: "WEB-3F9A · running 3m". */
+function ThreadId({
+	label,
+	children,
+}: {
+	label: string | null;
+	children: ReactNode;
+}) {
+	return label ? (
+		<>
+			<span className="y-overview-id">{label}</span>
+			<span className="y-overview-dot" aria-hidden="true">
+				·
+			</span>
+			{children}
+		</>
+	) : (
+		<>{children}</>
 	);
 }
 
@@ -271,10 +311,12 @@ function PullRequestItem({
 	row,
 	nowMs,
 	onOpen,
+	onOpenPullRequest,
 }: {
 	row: ThreadPullRequestRow;
 	nowMs: number;
 	onOpen: (threadId: string) => void;
+	onOpenPullRequest?: (row: ThreadPullRequestRow) => void;
 }) {
 	const Icon = row.draft ? GitPullRequestDraft : GitPullRequest;
 	const hasCounts = row.additions !== null || row.deletions !== null;
@@ -282,6 +324,7 @@ function PullRequestItem({
 		<YOverviewRow
 			threadId={row.threadId}
 			status={row.draft ? "draft" : "pull-request"}
+			hint={`${row.owner}/${row.repo}#${row.number}: opens the pull request here; Ctrl or ⌘ click opens GitHub`}
 			icon={<Icon size={15} strokeWidth={2} aria-hidden="true" />}
 			title={
 				<>
@@ -311,11 +354,20 @@ function PullRequestItem({
 							<span data-diff="removed">−{row.deletions ?? 0}</span>
 						</span>
 					) : null}
-					<span className="y-overview-via">· via {row.threadTitle}</span>
+					<span className="y-overview-via">
+						· via {row.threadLabel ?? row.threadTitle}
+					</span>
 				</>
 			}
 			age={compactRelativeAge(row.updatedAt, nowMs)}
-			onOpen={onOpen}
+			onOpen={(threadId, event) => {
+				if (event.ctrlKey || event.metaKey) {
+					window.open(row.url, "_blank", "noopener,noreferrer");
+					return;
+				}
+				if (onOpenPullRequest) onOpenPullRequest(row);
+				else onOpen(threadId);
+			}}
 		/>
 	);
 }

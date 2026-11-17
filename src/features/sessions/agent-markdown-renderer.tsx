@@ -27,6 +27,7 @@ import {
 } from "#/domain/markdown-text";
 import { readableModelCitations } from "#/domain/model-citation";
 import type { FileChangeEntry } from "#/domain/session-item";
+import type { ThreadDirectory } from "#/domain/thread-label";
 import {
 	type FileReference,
 	fileReferenceLabel,
@@ -36,17 +37,22 @@ import {
 import { AgentChip, AgentMentionContext } from "./agent-chip";
 import {
 	EventLine,
+	IssueChip,
 	PullRequestChip,
+	ReferenceContext,
 	StatusParagraph,
 	ThreadChip,
 } from "./agent-reference-chips";
 import {
 	eventMarker,
 	fitsEventLine,
+	ISSUE_SCHEME,
 	isEventKind,
+	issueReference,
 	PULL_REQUEST_SCHEME,
 	pullRequestReference,
-	pullRequestSegments,
+	referenceKey,
+	referenceSegments,
 	statusMarker,
 	THREAD_SCHEME,
 	threadReference,
@@ -73,6 +79,7 @@ function sanitizeKeepingReferences() {
 					...(schema.protocols?.href ?? []),
 					THREAD_SCHEME,
 					PULL_REQUEST_SCHEME,
+					ISSUE_SCHEME,
 				],
 			},
 		},
@@ -84,7 +91,7 @@ function sanitizeKeepingReferences() {
 const markdownPlugins = [defaultRehypePlugins.raw, sanitizeKeepingReferences()];
 
 const REFERENCE_LINK = new RegExp(
-	`^(${THREAD_SCHEME}|${PULL_REQUEST_SCHEME}):`,
+	`^(${THREAD_SCHEME}|${PULL_REQUEST_SCHEME}|${ISSUE_SCHEME}):`,
 	"i",
 );
 
@@ -156,6 +163,21 @@ function rehypeAgentNames(options: { readonly names: readonly string[] }) {
 	return (tree: HastNode) => visit(tree);
 }
 
+/** "owner/repo#12", the text of a link made from a mention in prose. */
+const issueName = (issue: { owner: string; repo: string; number: number }) =>
+	`${issue.owner}/${issue.repo}#${issue.number}`;
+
+type ReferenceOptions = {
+	readonly defaultRepository?: string | null;
+	readonly threads?: ThreadDirectory;
+};
+
+/** Cheap pre-check: only text with a possible reference is split. */
+const mayReference = (text: string) =>
+	text.includes("#") ||
+	text.includes("pr:") ||
+	/[A-Z0-9]-[0-9A-F]{4}/.test(text);
+
 /**
  * After sanitizing: a paragraph that starts with an event marker
  * (`::finished …`) becomes a div marked as that event, or as a status
@@ -165,7 +187,7 @@ function rehypeAgentNames(options: { readonly names: readonly string[] }) {
  * divs are ours). A `pr:owner/repo#123` in prose becomes a link to that
  * pull request.
  */
-function rehypeReferences() {
+function rehypeReferences(options: ReferenceOptions = {}) {
 	const skip = new Set(["code", "pre", "a", "button"]);
 	const markEvent = (paragraph: HastNode) => {
 		const first = paragraph.children?.[0];
@@ -190,17 +212,25 @@ function rehypeReferences() {
 				if (!skip.has(child.tagName ?? "")) visit(child);
 				return [child];
 			}
-			if (child.type !== "text" || !child.value?.includes("pr:"))
+			if (child.type !== "text" || !child.value || !mayReference(child.value))
 				return [child];
-			return pullRequestSegments(child.value).map((segment) =>
-				segment.kind === "text"
-					? { type: "text", value: segment.text }
-					: {
-							type: "element",
-							tagName: "a",
-							properties: { href: segment.pullRequest.url },
-							children: [{ type: "text", value: segment.pullRequest.url }],
-						},
+			return referenceSegments(child.value, options).map(
+				(segment): HastNode => {
+					if (segment.kind === "text")
+						return { type: "text", value: segment.text };
+					const [href, text] =
+						segment.kind === "pullRequest"
+							? [segment.pullRequest.url, segment.pullRequest.url]
+							: segment.kind === "issue"
+								? [segment.issue.url, issueName(segment.issue)]
+								: [`${THREAD_SCHEME}:${segment.id}`, segment.label];
+					return {
+						type: "element",
+						tagName: "a",
+						properties: { href },
+						children: [{ type: "text", value: text }],
+					};
+				},
 			);
 		});
 	};
@@ -246,15 +276,25 @@ export function AgentMarkdown({
 		() => new Set(sharedKey ? sharedKey.split("\n") : []),
 		[sharedKey],
 	);
+	const references = useContext(ReferenceContext);
+	const defaultRepository = references?.defaultRepository;
+	const threads = references?.threads;
+	const projectPullRequests = references?.pullRequests;
 	const rehypePlugins = useMemo<RehypePlugins>(
 		() => [
 			...markdownPlugins,
-			rehypeReferences,
+			[rehypeReferences, { defaultRepository, threads }],
 			[rehypeAgentNames, { names: [...agentNames].sort() }],
 		],
-		[agentNames],
+		[agentNames, defaultRepository, threads],
 	);
 	const components = useMemo<Components>(() => {
+		const labelById = new Map(
+			[...(threads ?? [])].map(([label, thread]) => [
+				thread.id,
+				{ label, title: thread.title },
+			]),
+		);
 		const agentByName = new Map<string, MentionAgent>(
 			agents?.map((agent) => [agent.name, agent]) ?? [],
 		);
@@ -277,7 +317,38 @@ export function AgentMarkdown({
 			a: ({ href, children }) => {
 				const label = markdownChildText(children);
 				const thread = threadReference(href);
-				if (thread) return <ThreadChip id={thread} title={children} />;
+				if (thread) {
+					const known = labelById.get(thread);
+					return (
+						<ThreadChip
+							id={thread}
+							label={known?.label}
+							title={known && label === known.label ? known.title : children}
+						/>
+					);
+				}
+				const issue = issueReference(href);
+				if (issue) {
+					const asPullRequest = projectPullRequests?.has(referenceKey(issue));
+					const text =
+						label &&
+						label !== href &&
+						label !== issue.url &&
+						label !== issueName(issue)
+							? children
+							: undefined;
+					return asPullRequest ? (
+						<PullRequestChip
+							pullRequest={{
+								...issue,
+								url: `https://github.com/${issue.owner}/${issue.repo}/pull/${issue.number}`,
+							}}
+							label={text}
+						/>
+					) : (
+						<IssueChip issue={issue} label={text} />
+					);
+				}
 				const pullRequest = pullRequestReference(href);
 				if (pullRequest)
 					return (
@@ -367,6 +438,8 @@ export function AgentMarkdown({
 		agentNames,
 		onOpenAgent,
 		sharedNames,
+		threads,
+		projectPullRequests,
 	]);
 	return (
 		<Streamdown
