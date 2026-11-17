@@ -851,7 +851,7 @@ button:enabled:active {
 	overflow-y: auto;
 	margin-bottom: 4px;
 }
-.sidebar-section + .sidebar-section {
+.sidebar-y-section + .sidebar-y-section {
 	margin-top: 6px;
 }
 .sidebar-section-header {
@@ -886,7 +886,7 @@ button:enabled:active {
 	background: #ffffff14;
 	color: #f2f2f2;
 }
-.sidebar-section .sidebar-chats {
+.sidebar-y-section .sidebar-chats {
 	margin: 0;
 }
 /* A two-line row: the title over a grey line of metadata. */
