@@ -29,6 +29,11 @@ export const CREW_WAKE_DELAY_MS = 30_000;
 /** The same for a thread that needs the person or failed: they want it sooner. */
 export const CREW_URGENT_WAKE_DELAY_MS = 15_000;
 export const CREW_WAKES_PER_HOUR = 24;
+/** A wake that could not be enqueued is tried again this many times in all. */
+export const CREW_WAKE_RETRIES = 8;
+/** The wait before retry `failures`: 30 s, 1 min, 2 min, then 5 min at most. */
+export const wakeRetryDelayMs = (failures: number) =>
+	Math.min(30_000 * 2 ** Math.max(0, failures - 1), 5 * 60_000);
 export const CREW_HOUR_MS = 60 * 60 * 1000;
 /** A thread working this long with no wake since gets a "still working" heartbeat wake. */
 export const CREW_HEARTBEAT_AFTER_MS = 5 * 60 * 1000;

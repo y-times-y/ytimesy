@@ -596,20 +596,32 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 					hasY2: !!crew.ySquaredId,
 				})}`,
 			);
+			const note = {
+				...derived,
+				sessionId: scope.sessionId,
+				userId: scope.userId,
+				projectId,
+				ySquaredId: crew.ySquaredId,
+			};
+			const send = () =>
+				this.env.Y_SQUARED_CREWS.getByName(
+					projectId,
+					durableObjectLocation(),
+				).noteThread(note);
+			// A turn end is what Y² wakes for: one more try if the note's request
+			// to the crew failed, so a blip does not lose it.
 			this.ctx.waitUntil(
-				this.env.Y_SQUARED_CREWS.getByName(projectId, durableObjectLocation())
-					.noteThread({
-						...derived,
-						sessionId: scope.sessionId,
-						userId: scope.userId,
-						projectId,
-						ySquaredId: crew.ySquaredId,
-					})
-					.catch((error: unknown) =>
+				send().catch(async (error: unknown) => {
+					console.warn("Crew was not told the thread's state; trying again.", {
+						cause: stepFailureCause(error),
+					});
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+					await send().catch((again: unknown) =>
 						console.warn("Crew was not told the thread's state.", {
-							cause: stepFailureCause(error),
+							cause: stepFailureCause(again),
 						}),
-					),
+					);
+				}),
 			);
 		} catch (error) {
 			console.warn("Crew was not told the thread's state.", {

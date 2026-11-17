@@ -12,8 +12,8 @@ import { withDatabaseScope } from "../adapters/database-scope";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { sendComposerMessage } from "../services/queued-user-messages";
+import { runCrewAlarm } from "./crew-alarm";
 import type { EdgeExecutorEnvironment } from "./environment";
-import { stepFailureCause } from "./step-failure-cause";
 import { SqliteYSquaredCrew } from "./y-squared-crew-store";
 
 /**
@@ -68,50 +68,13 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 	}
 
 	async alarm() {
-		const decided = this.store.takeWake(Date.now());
-		const log = (extra: Record<string, unknown>) =>
-			console.log(
-				`crew.wake ${JSON.stringify({
-					action: decided.action,
-					reason:
-						decided.action === "send"
-							? "due"
-							: decided.action === "capped"
-								? "hourly-cap"
-								: "nothing-due",
-					events: "eventsUpTo" in decided ? decided.eventsUpTo : null,
-					...extra,
-				})}`,
-			);
-		if (decided.action === "capped") {
-			log({ enqueued: false });
-			if (decided.retryAt !== undefined)
-				await this.ctx.storage.setAlarm(decided.retryAt);
-			return;
-		}
-		if (decided.action === "none") {
-			log({ enqueued: false });
-			if (decided.rearmAt !== null)
-				await this.ctx.storage.setAlarm(decided.rearmAt);
-			return;
-		}
-		// The next heartbeat, if a thread is still working.
-		if (decided.rearmAt !== null)
-			await this.ctx.storage.setAlarm(decided.rearmAt);
-		const target = this.store.target();
-		if (!target) {
-			log({ enqueued: false, skipped: "no-y2-target" });
-			return;
-		}
-		try {
-			await this.enqueueWake(target, decided.next.lastWakeAt, decided.body);
-			this.store.wakeSent(decided.eventsUpTo);
-			log({ enqueued: true });
-		} catch (error) {
-			log({ enqueued: false, error: stepFailureCause(error) });
-			console.warn("Y² was not woken.", { cause: stepFailureCause(error) });
-			this.store.returnWake();
-		}
+		await runCrewAlarm({
+			store: this.store,
+			now: Date.now(),
+			enqueue: (target, at, body) => this.enqueueWake(target, at, body),
+			setAlarm: (at) => this.ctx.storage.setAlarm(at),
+			log: (line) => console.log(line),
+		});
 	}
 
 	/** Exactly one Y² turn, through the same send path as a person's message. */
@@ -127,7 +90,7 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 					target.userId,
 					target.sessionId,
 				);
-				if (!chat?.listedModelId) return;
+				if (!chat?.listedModelId) return false;
 				await Effect.runPromise(
 					sendComposerMessage(
 						createFreestyleWorkspaceMachines(
@@ -147,6 +110,7 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 						},
 					),
 				);
+				return true;
 			},
 			null,
 		);

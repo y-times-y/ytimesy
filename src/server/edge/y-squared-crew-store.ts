@@ -6,6 +6,7 @@ import {
 	CREW_RETENTION_MS,
 	CREW_STARTED_WAKE_EVERY_MS,
 	CREW_WAITING_HINT_TTL_MS,
+	CREW_WAKE_RETRIES,
 	CREW_Y2_SENT_TTL_MS,
 	type CrewNote,
 	type CrewRow,
@@ -19,6 +20,7 @@ import {
 	decideWake,
 	heartbeatDueAt,
 	type WakeState,
+	wakeRetryDelayMs,
 } from "../../domain/y-squared-crew";
 
 type Binding = string | number | null;
@@ -42,6 +44,7 @@ type WakeRow = {
 	pruned_at: number;
 	pending_due_at: number | null;
 	last_heartbeat_at: number;
+	wake_failures: number;
 };
 
 const PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -106,6 +109,10 @@ export class SqliteYSquaredCrew {
 		if (!wakeColumns.has("last_heartbeat_at"))
 			sql.exec(
 				"alter table wake_state add column last_heartbeat_at integer not null default 0",
+			);
+		if (!wakeColumns.has("wake_failures"))
+			sql.exec(
+				"alter table wake_state add column wake_failures integer not null default 0",
 			);
 		// What changed since Y²'s last wake (told in the next wake's message),
 		// and the sends Y² itself made (so its threads' starts are not "the person's").
@@ -610,17 +617,32 @@ export class SqliteYSquaredCrew {
 	/** The wake was enqueued: its changes are told, forget them. */
 	wakeSent(eventsUpTo: number) {
 		this.sql.exec("delete from wake_events where id<=?", eventsUpTo);
+		this.sql.exec("update wake_state set wake_failures=0 where id=1");
 	}
 
-	/** The wake could not be enqueued: hand it back for the next note to re-arm. */
-	returnWake() {
+	/**
+	 * The wake could not be enqueued (a database hiccup, Y²'s chat not
+	 * readable): it stays pending with its changes, due again after a growing
+	 * wait, and the alarm is re-armed for it. Returns when to retry, null once
+	 * it has failed too often (the next note re-arms it).
+	 */
+	returnWake(now: number): { retryAt: number | null } {
 		const state = this.wakeState();
+		const failures = this.wakeRow().wake_failures + 1;
+		const retryAt = now + wakeRetryDelayMs(failures);
 		this.saveWake({
 			...state,
 			pending: true,
 			wakesThisHour: Math.max(0, state.wakesThisHour - 1),
 			alarmAt: null,
 		});
+		this.sql.exec(
+			"update wake_state set wake_failures=?,pending_due_at=? where id=1",
+			failures,
+			retryAt,
+		);
+		if (failures >= CREW_WAKE_RETRIES) return { retryAt: null };
+		return { retryAt: this.rearm(now) ?? retryAt };
 	}
 }
 
