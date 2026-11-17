@@ -26,7 +26,6 @@ import {
 	type SidebarSort,
 	sidebarIsPinnedInStorage,
 } from "#/domain/sidebar-chats";
-import { SIDEBAR_COLLAPSED_Y2_KEY } from "#/domain/sidebar-tree";
 import { fitDraftHeight } from "../sessions/fit-draft-height";
 
 /**
@@ -44,8 +43,6 @@ export type FirstPaintChoices = {
 	readonly sidebarOpen: boolean;
 	readonly sidebarSort: SidebarSort;
 	readonly collapsedProjectIds: readonly string[];
-	/** Y projects whose threads are folded under their Y² row. */
-	readonly collapsedY2ProjectIds: readonly string[];
 	readonly pinnedChatIds: readonly string[];
 };
 
@@ -68,7 +65,6 @@ export const SERVER_FIRST_PAINT: FirstPaintChoices = {
 	sidebarOpen: false,
 	sidebarSort: "projects",
 	collapsedProjectIds: [],
-	collapsedY2ProjectIds: [],
 	pinnedChatIds: [],
 };
 
@@ -76,7 +72,6 @@ const STORAGE_KEYS = {
 	sidebarPinned: SIDEBAR_PINNED_STORAGE_KEY,
 	sidebarSort: SIDEBAR_SORT_KEY,
 	collapsedProjects: SIDEBAR_COLLAPSED_PROJECTS_KEY,
-	collapsedY2: SIDEBAR_COLLAPSED_Y2_KEY,
 	pinnedChats: SIDEBAR_PINNED_CHATS_KEY,
 };
 
@@ -106,7 +101,6 @@ export function readFirstPaintChoices(
 		sidebarOpen: !compact && parsePinned(stored(keys.sidebarPinned)),
 		sidebarSort: parseSort(stored(keys.sidebarSort)),
 		collapsedProjectIds: parseIds(stored(keys.collapsedProjects)),
-		collapsedY2ProjectIds: parseIds(stored(keys.collapsedY2)),
 		pinnedChatIds: parseIds(stored(keys.pinnedChats)),
 	};
 }
@@ -114,7 +108,7 @@ export function readFirstPaintChoices(
 /**
  * Self-contained, like readFirstPaintChoices. The sheet only sets custom
  * properties that styles.css reads (--chat-pinned, --folder-chats,
- * --folder-chevron, --y2-branch, --y2-chevron); React's own attributes replace it after hydration.
+ * --folder-chevron); React's own attributes replace it after hydration.
  */
 export function showFirstPaintChoices(choices: FirstPaintChoices) {
 	window.__YT_BOOT__ = choices;
@@ -132,14 +126,6 @@ export function showFirstPaintChoices(choices: FirstPaintChoices) {
 					(id) =>
 						`.sidebar-project[data-project-id="${id}"]{--folder-chats:none;--folder-chevron:none}`,
 				),
-		)
-		.concat(
-			choices.collapsedY2ProjectIds
-				.filter(plain)
-				.map(
-					(id) =>
-						`.sidebar-y2[data-project-id="${id}"]{--y2-branch:none;--y2-chevron:none;--y2-toggle-shown:1}`,
-				),
 		);
 	if (!rules.length) return;
 	try {
@@ -156,8 +142,9 @@ export function showFirstPaintChoices(choices: FirstPaintChoices) {
  * Self-contained, inlined right after the sidebar's server HTML: what needs
  * both the rows and this browser's storage. It marks unread replies from the
  * seen chats, and shows saved pins that sit past a fold (Recent's Done rows,
- * the finished threads in a Y project's Y section). Rows carry data-seen-key, data-updated-at,
- * data-unread-mark, data-foldable and data-done-overflow while hydrating.
+ * the finished threads past the Threads section's Settled fold). Rows carry
+ * data-seen-key, data-updated-at, data-unread-mark, data-group and
+ * data-done-overflow while hydrating.
  */
 export function markFirstPaintRows(
 	keys: { readonly seen: string; readonly seenSince: string },
@@ -206,16 +193,16 @@ export function markFirstPaintRows(
 		);
 	}
 	const folds = [
-		// Recent folds each section's Done on its own (Y, then plain chats).
+		// The Threads section folds its finished threads into Settled; Recent's
+		// plain Chats fold their Done group on their own.
 		{
-			scope: ".sidebar-recent",
-			rows: '[data-group="done"][data-section="y"] .sidebar-chat-row',
+			scope: ".sidebar-threads-section",
+			rows: '.sidebar-chat-row[data-group="done"]',
 		},
 		{
 			scope: ".sidebar-recent",
 			rows: '[data-group="done"][data-section="plain"] .sidebar-chat-row',
 		},
-		{ scope: ".sidebar-y2-threads", rows: ".sidebar-chat-row[data-foldable]" },
 	];
 	for (const { scope, rows: rowsSelector } of folds) {
 		const foldable = rows(`${scope} ${rowsSelector}`);

@@ -7,6 +7,8 @@ import {
 	ChevronRight,
 	CircleDot,
 	Clock3,
+	Cloud,
+	Cpu,
 	GitMerge,
 	GitPullRequest,
 	GitPullRequestClosed,
@@ -19,7 +21,13 @@ import {
 	X,
 } from "lucide-react";
 import { DropdownMenu, Tooltip as TooltipPrimitive } from "radix-ui";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { Wordmark } from "#/components/brand/wordmark";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { titleWithShortcut } from "#/domain/keyboard-shortcuts";
@@ -65,10 +73,10 @@ import {
 	withProjectExpanded,
 } from "#/domain/sidebar-chats";
 import {
-	SIDEBAR_COLLAPSED_Y2_KEY,
-	type Y2ThreadTree,
+	threadSections,
+	type Y2Row,
 	y2NeedsYouLabel,
-	y2ThreadTree,
+	y2Rows,
 } from "#/domain/sidebar-tree";
 import {
 	accountDisplayName,
@@ -140,8 +148,8 @@ interface ProjectSidebarProps {
 	account?: SidebarAccount;
 }
 
-/** Recent's chat sections below the Y² group: Y projects' threads, and plain chats. */
-type RecentSection = "y" | "plain";
+/** Recent's chat section below the Y² and Threads sections: plain projects' chats. */
+type RecentSection = "plain";
 
 export function ProjectSidebar({
 	projects,
@@ -201,12 +209,6 @@ export function ProjectSidebar({
 	const [pinnedChatIds, setPinnedChatIds] = useState(
 		firstPaint.choices.pinnedChatIds,
 	);
-	const [collapsedY2Ids, setCollapsedY2Ids] = useState(
-		firstPaint.choices.collapsedY2ProjectIds,
-	);
-	const [y2ThreadsExpanded, setY2ThreadsExpanded] = useState(false);
-	// Only a fold the user opens animates in, never the page's first paint.
-	const [y2Toggled, setY2Toggled] = useState(false);
 	const [sort, setSort] = useState(firstPaint.choices.sidebarSort);
 	// Until hydrated this renders the server's markup: both sort views, no
 	// pins, folds or unread marks. The first-paint script shows the saved
@@ -215,7 +217,6 @@ export function ProjectSidebar({
 	const shownSort = hydrated ? sort : null;
 	const shownPinnedIds = hydrated ? pinnedChatIds : [];
 	const shownCollapsedIds = hydrated ? collapsedProjectIds : [];
-	const shownCollapsedY2Ids = hydrated ? collapsedY2Ids : [];
 	const shownSeenKeys = hydrated ? seenKeys : [];
 	const shownSeenSinceMs = hydrated ? seenSinceMs : null;
 	const firstPaintView = (view: SidebarSort) => (hydrated ? undefined : view);
@@ -229,9 +230,25 @@ export function ProjectSidebar({
 						?.chats ?? []),
 	}));
 	const recent = recentSections(groups, shownPinnedIds);
-	const [yDoneExpanded, setYDoneExpanded] = useState(false);
+	const [settledExpanded, setSettledExpanded] = useState(false);
 	const [plainDoneExpanded, setPlainDoneExpanded] = useState(false);
-	const orderedProjects = projectsByRecentActivity(projects, groups);
+	// Y projects (their Y² chat is listed) live in the Y² and Threads sections,
+	// the same in both sort views; the sort only orders the plain projects.
+	const yRows = y2Rows({
+		y2: recent.y2,
+		threads: recent.y,
+		statusOf: chatStatus,
+	});
+	const yProjectIds = new Set(yRows.map(({ project }) => project.id));
+	// The Threads "+" starts a chat in the open Y project, or in the only one.
+	const newThreadProject =
+		yRows.find(({ project }) => project.id === selectedProjectId)?.project ??
+		(yRows.length === 1 ? yRows[0]?.project : undefined);
+	// The Chats header and sort only matter while plain projects exist.
+	const showPlain = projects.length > 0 && yRows.length < projects.length;
+	const orderedProjects = projectsByRecentActivity(projects, groups).filter(
+		(project) => !yProjectIds.has(project.id),
+	);
 	function chooseSort(next: SidebarSort) {
 		setSort(next);
 		writeStorage(SIDEBAR_SORT_KEY, next);
@@ -279,13 +296,6 @@ export function ProjectSidebar({
 		);
 	}
 
-	function toggleY2Threads(projectId: string) {
-		const next = toggleCollapsedProjectIds(collapsedY2Ids, projectId);
-		setCollapsedY2Ids(next);
-		setY2Toggled(true);
-		writeStorage(SIDEBAR_COLLAPSED_Y2_KEY, collapsedProjectStorageValue(next));
-	}
-
 	function persistPinned(next: readonly string[]) {
 		setPinnedChatIds(next);
 		writeStorage(SIDEBAR_PINNED_CHATS_KEY, pinnedChatStorageValue(next));
@@ -304,24 +314,14 @@ export function ProjectSidebar({
 		persistCollapsed(toggleCollapsedProjectIds(collapsedProjectIds, projectId));
 	}
 
-	/** The open project's chats: a Y² tree in a Y project, else a flat list. */
-	function projectChatList(project: Project) {
+	/** A plain project's chats, pinned first. */
+	function projectChatList() {
 		if (chats.length === 0) return <p className="sidebar-empty">{emptyCopy}</p>;
-		const tree = y2ThreadTree({
-			chats,
-			pinnedIds: shownPinnedIds,
-			selectedChatId,
-			statusOf: chatStatus,
-			expanded: y2ThreadsExpanded,
-			keepFolded: !hydrated,
-		});
 		return (
 			<ul className="sidebar-chats">
-				{tree
-					? y2Tree(project, tree)
-					: chatsWithPinnedFirst(chats, shownPinnedIds).map((chat) =>
-							chatRow(chat),
-						)}
+				{chatsWithPinnedFirst(chats, shownPinnedIds).map((chat) =>
+					chatRow(chat),
+				)}
 			</ul>
 		);
 	}
@@ -498,173 +498,209 @@ export function ProjectSidebar({
 		);
 	}
 
-	/** A Recent section's label ("Y", "Chats"): the Y² group's heading style, a divider above. */
-	function sectionLabel(section: RecentSection, label: string) {
+	/** A top-level section's header row: the title left, its actions right. */
+	function sectionHeader(id: string, title: string, action?: ReactNode) {
 		return (
-			<li
-				key={`label-${section}`}
-				className="sidebar-section-label"
-				data-section-label={section}
-			>
-				<h3 className="sidebar-status-heading sidebar-y2-heading">
-					<span>{label}</span>
+			<div className="sidebar-status-heading sidebar-section-header">
+				<h3 className="sidebar-section-title" id={`sidebar-section-${id}`}>
+					{title}
 				</h3>
-			</li>
+				{action ? (
+					<div className="sidebar-section-actions">{action}</div>
+				) : null}
+			</div>
 		);
 	}
 
 	/**
-	 * Recent's Y² group, above the status groups: one row per Y project, so a
-	 * Y² that waits on the person shows here once (not again under Needs you).
+	 * The Y² section: one flat row per Y project (the header is the only "Y²"
+	 * text): the mark, the project's name, its last activity and a grey line
+	 * summarising its threads.
 	 */
-	function y2Section(rows: readonly { chat: SidebarChat; project: Project }[]) {
+	function y2Section(rows: readonly Y2Row<Project>[]) {
 		if (!rows.length) return null;
 		return (
-			<li key="y2" className="sidebar-status-group" data-group="y2">
-				<h3 className="sidebar-status-heading sidebar-y2-heading">
-					<YSquaredMark size={16} />
-					<span>Y²</span>
-					<span className="sidebar-status-count">{rows.length}</span>
-				</h3>
-				<ul className="sidebar-chats">
-					{rows.map(({ chat, project }) => chatRow(chat, { project }))}
+			<section
+				className="sidebar-section sidebar-y2-section"
+				data-section="y2"
+				aria-labelledby="sidebar-section-y2"
+			>
+				{sectionHeader("y2", "Y²")}
+				<ul className="sidebar-chats sidebar-y2-list">
+					{rows.map((row) => y2Row(row))}
 				</ul>
-			</li>
+			</section>
 		);
 	}
 
-	/**
-	 * The project's Y² chat heading its threads. Before hydration the branch
-	 * renders open with every thread; the first-paint sheet folds what this
-	 * browser saved (--y2-branch, data-done-overflow).
-	 */
-	function y2Tree(project: Project, tree: Y2ThreadTree<SidebarChat>) {
-		const head = tree.head;
-		const selected = head.id === selectedChatId;
-		const open = !shownCollapsedY2Ids.includes(project.id);
-		const shown = rowStatus(head, {
+	function y2Row({
+		chat,
+		project,
+		working,
+		needsYou,
+		summary,
+		activityAt,
+	}: Y2Row<Project>) {
+		const selected = chat.id === selectedChatId;
+		const name = projectDisplayName(project);
+		const shown = rowStatus(chat, {
 			keys: shownSeenKeys,
 			sinceMs: shownSeenSinceMs,
 		});
-		const branchId = `sidebar-y2-branch-${project.id}`;
-		const needsYou = tree.needsYouCount;
-		const hasThreads = tree.threads.length > 0;
+		const age = compactRelativeAge(activityAt ?? chat.updatedAt, nowMs);
 		return (
 			<li
-				key={head.id}
-				className="sidebar-y2"
+				key={chat.id}
+				className="sidebar-chat-row sidebar-y2-row"
+				data-chat-id={chat.id}
 				data-project-id={project.id}
-				data-open={open}
-				data-toggled={y2Toggled ? "true" : undefined}
+				data-selected={selected}
+				data-role="y2"
+				{...firstPaintMarks(chat)}
 			>
-				<div className="sidebar-y2-section" data-section="y2">
-					<h3 className="sidebar-status-heading sidebar-y2-heading sidebar-y2-label">
-						<YSquaredMark size={16} />
-						<span>Y²</span>
-					</h3>
-					<div
-						className="sidebar-chat-row sidebar-y2-row"
-						data-chat-id={head.id}
-						data-selected={selected}
-						data-role="y2"
-						{...firstPaintMarks(head)}
-					>
+				<button
+					type="button"
+					className="sidebar-chat"
+					data-selected={selected}
+					data-status={shown.kind}
+					title={`${name} · ${summary}`}
+					aria-current={selected ? "page" : undefined}
+					onPointerEnter={() => onChatIntent?.(chat.id)}
+					onFocus={() => onChatIntent?.(chat.id)}
+					onClick={() =>
+						project.id !== selectedProjectId && onSelectChatInProject
+							? onSelectChatInProject(project.id, chat.id)
+							: onSelectChat?.(chat.id)
+					}
+				>
+					<span className="sidebar-chat-lead" aria-hidden="true">
+						<YSquaredMark size={16} live={working > 0} />
+					</span>
+					<span className="sidebar-chat-body">
+						<span className="sidebar-chat-title">{name}</span>
+						<span className="sidebar-chat-meta">{summary}</span>
+					</span>
+				</button>
+				<div className="sidebar-chat-trailing">
+					{shown.kind !== "idle" ? (
+						<SidebarChatStatusMark
+							status={shown}
+							label={sidebarChatStatusLabel(shown, nowMs)}
+							age={null}
+						/>
+					) : needsYou ? (
+						<span
+							className="sidebar-chat-status"
+							data-status="asking"
+							role="img"
+							aria-label={y2NeedsYouLabel(needsYou)}
+						>
+							<MessageCircleQuestion
+								size={14}
+								strokeWidth={2}
+								aria-hidden="true"
+							/>
+						</span>
+					) : age ? (
+						<span className="sidebar-chat-age">{age}</span>
+					) : null}
+				</div>
+			</li>
+		);
+	}
+
+	/**
+	 * The Threads section: the Y projects' threads as one flat list (Needs
+	 * you, Working, the latest finished), the rest folded into "Settled N".
+	 * Before hydration the Settled rows render hidden, so the rows script can
+	 * show a saved pin that sits past the fold.
+	 */
+	function threadsSection(
+		rows: readonly { chat: SidebarChat; project: Project }[],
+		newThreadProject: Project | undefined,
+	) {
+		if (!yRows.length) return null;
+		const { list, settled } = threadSections(rows, chatStatus, selectedChatId);
+		const settledOpen = settledExpanded || !hydrated;
+		const newThreadName = newThreadProject
+			? projectDisplayName(newThreadProject)
+			: "";
+		return (
+			<section
+				className="sidebar-section sidebar-threads-section"
+				data-section="threads"
+				aria-labelledby="sidebar-section-threads"
+			>
+				{sectionHeader(
+					"threads",
+					"Threads",
+					newThreadProject ? (
 						<button
 							type="button"
-							className="sidebar-chat"
-							data-selected={selected}
-							data-status={shown.kind}
-							title="Y²: what is going on across this project's threads"
-							aria-current={selected ? "page" : undefined}
-							onPointerEnter={() => onChatIntent?.(head.id)}
-							onFocus={() => onChatIntent?.(head.id)}
-							onClick={() => onSelectChat?.(head.id)}
+							className="sidebar-section-add"
+							aria-label={`New chat in ${newThreadName}`}
+							title={titleWithShortcut("New chat", newChatHint)}
+							data-active={
+								newThreadProject.id === selectedProjectId && newChatActive
+									? "true"
+									: undefined
+							}
+							onClick={() => {
+								persistCollapsed(
+									withProjectExpanded(collapsedProjectIds, newThreadProject.id),
+								);
+								onNewChat(newThreadProject.id);
+							}}
 						>
-							<span className="sidebar-chat-lead" aria-hidden="true">
-								<YSquaredMark size={16} live={tree.workingCount > 0} />
-							</span>
-							<span className="sidebar-chat-title">Y²</span>
-							{needsYou ? (
-								<span className="sr-only">{y2NeedsYouLabel(needsYou)}</span>
-							) : null}
-							{shown.kind === "working" ? (
-								<span className="sr-only">Working</span>
-							) : null}
+							<Plus size={14} strokeWidth={1.5} />
 						</button>
-						<div className="sidebar-chat-trailing">
-							{shown.kind === "working" || shown.kind === "unread" ? (
-								<SidebarChatStatusMark
-									status={shown}
-									label={sidebarChatStatusLabel(shown, nowMs)}
-									age={null}
-								/>
-							) : null}
-						</div>
-					</div>
-				</div>
-				{hasThreads ? (
-					<div
-						className="sidebar-y2-section sidebar-y2-threads-section"
-						data-section="y"
-					>
-						<div className="sidebar-status-heading sidebar-y2-heading sidebar-y2-label">
-							<h3 className="sidebar-y2-label-text">Y</h3>
-							<div className="sidebar-y2-label-trailing">
-								<button
-									type="button"
-									className="sidebar-y2-toggle"
-									aria-label={
-										open ? "Collapse Y² threads" : "Expand Y² threads"
-									}
-									title={open ? "Collapse threads" : "Expand threads"}
-									aria-expanded={open}
-									aria-controls={open ? branchId : undefined}
-									onClick={() => toggleY2Threads(project.id)}
-								>
-									<ChevronRight
-										className="sidebar-y2-chevron"
-										size={14}
-										strokeWidth={1.5}
-									/>
-								</button>
-								{needsYou ? (
-									<span className="sidebar-y2-count" aria-hidden="true">
-										{needsYou}
-									</span>
-								) : null}
-							</div>
-						</div>
-						{open ? (
-							<div className="sidebar-y2-branch" id={branchId}>
-								<ul
-									className="sidebar-chats sidebar-y2-threads"
-									aria-label="Threads"
-								>
-									{tree.threads.map((thread) =>
-										chatRow(thread.chat, {
-											pastFold: thread.pastFold,
-											foldable: thread.foldable,
-											nested: true,
-										}),
-									)}
-								</ul>
-								{tree.overflowCount ? (
-									<button
-										type="button"
-										className="sidebar-show-more sidebar-y2-more"
-										aria-expanded={y2ThreadsExpanded}
-										onClick={() => setY2ThreadsExpanded((value) => !value)}
-									>
-										{y2ThreadsExpanded
-											? "Show fewer"
-											: `Show ${tree.overflowCount} more`}
-									</button>
-								) : null}
-							</div>
+					) : null,
+				)}
+				{list.length ? (
+					<ul className="sidebar-chats sidebar-threads">
+						{list.map(({ chat, project }) =>
+							chatRow(chat, { project, thread: true }),
+						)}
+					</ul>
+				) : settled.length ? null : (
+					<p className="sidebar-empty">No threads yet.</p>
+				)}
+				{settled.length ? (
+					<div className="sidebar-settled" data-open={settledOpen}>
+						<button
+							type="button"
+							className="sidebar-settled-toggle"
+							aria-expanded={settledOpen}
+							aria-controls="sidebar-settled-list"
+							onClick={() => setSettledExpanded((value) => !value)}
+						>
+							<ChevronRight
+								className="sidebar-settled-chevron"
+								size={14}
+								strokeWidth={1.5}
+								aria-hidden="true"
+							/>
+							<span>Settled</span>
+							<span className="sidebar-status-count">{settled.length}</span>
+						</button>
+						{settledOpen ? (
+							<ul
+								id="sidebar-settled-list"
+								className="sidebar-chats sidebar-threads sidebar-settled-list"
+								aria-label="Settled threads"
+							>
+								{settled.map(({ chat, project }) =>
+									chatRow(chat, {
+										project,
+										thread: true,
+										pastFold: !hydrated,
+									}),
+								)}
+							</ul>
 						) : null}
 					</div>
 				) : null}
-			</li>
+			</section>
 		);
 	}
 
@@ -673,16 +709,14 @@ export function ProjectSidebar({
 		{
 			project,
 			pastFold = false,
-			foldable = false,
-			nested = false,
+			thread = false,
 		}: {
-			/** In Recent: the project the chat belongs to. */
+			/** In Recent and Threads: the project the chat belongs to. */
 			project?: Project;
+			/** Before hydration: past the Settled fold, hidden unless a saved pin. */
 			pastFold?: boolean;
-			/** Under Y², before hydration: the rows script may fold it. */
-			foldable?: boolean;
-			/** A thread under Y²: a waiting thread shows a dot. */
-			nested?: boolean;
+			/** A Threads row: flat, a second line of metadata, a waiting thread shows a dot. */
+			thread?: boolean;
 		} = {},
 	) {
 		const status = chatStatus(chat);
@@ -694,9 +728,7 @@ export function ProjectSidebar({
 		const age = compactRelativeAge(chat.updatedAt, nowMs);
 		const pinned = shownPinnedIds.includes(chat.id);
 		const projectName = project ? projectDisplayName(project) : null;
-		// In Recent, a project's Y² chat reads as the project's overview: the Y²
-		// mark in the icon column, the project's name as its title.
-		const y2OfProject = chat.role === "y2" && project ? project : null;
+		const prInMeta = thread && shown.kind === "pr" ? shown.pr : null;
 		const row = (
 			<li
 				key={chat.id}
@@ -705,8 +737,9 @@ export function ProjectSidebar({
 				data-selected={chat.id === selectedChatId}
 				data-pinned={pinned ? "true" : undefined}
 				data-role={chat.role}
+				data-variant={thread ? "thread" : undefined}
+				data-group={thread ? status : undefined}
 				data-done-overflow={pastFold ? "true" : undefined}
-				data-foldable={foldable && !hydrated ? "true" : undefined}
 				{...firstPaintMarks(chat)}
 			>
 				<button
@@ -725,9 +758,7 @@ export function ProjectSidebar({
 					title={
 						label
 							? undefined
-							: y2OfProject
-								? `Y² · ${projectName}`
-								: [chat.title, projectName].filter(Boolean).join(" · ")
+							: [chat.title, projectName].filter(Boolean).join(" · ")
 					}
 					aria-current={chat.id === selectedChatId ? "page" : undefined}
 					onPointerEnter={() => onChatIntent?.(chat.id)}
@@ -738,54 +769,85 @@ export function ProjectSidebar({
 							: onSelectChat?.(chat.id)
 					}
 				>
-					{/* The icon column every sidebar row shares: in Recent, the
-					    chat's project; under a project, empty so titles line up
-					    with the project's name. */}
-					<span className="sidebar-chat-lead" aria-hidden="true">
-						{y2OfProject ? (
-							<YSquaredMark size={16} live={chatRunning(chat)} />
-						) : project ? (
-							<span
-								className="sidebar-project-dot"
-								style={{ background: projectColor(project.id) }}
-							/>
-						) : null}
-					</span>
-					<span className="sidebar-chat-title">
-						{y2OfProject ? projectName : chat.title}
-					</span>
-					{y2OfProject ? (
-						<span className="sr-only">Y²</span>
-					) : projectName ? (
-						<span className="sr-only">{projectName}</span>
-					) : null}
+					{thread ? (
+						<span className="sidebar-chat-body">
+							<span className="sidebar-chat-title">{chat.title}</span>
+							<span className="sidebar-chat-meta">
+								{project ? (
+									<span className="sidebar-chat-meta-project">
+										<span
+											className="sidebar-project-dot"
+											style={{ background: projectColor(project.id) }}
+											aria-hidden="true"
+										/>
+										<span>{projectName}</span>
+									</span>
+								) : null}
+								{chat.listedModelId ? (
+									<span
+										className="sidebar-chat-meta-icon"
+										data-meta="model"
+										title={chat.listedModelId}
+									>
+										<Cpu size={12} strokeWidth={1.5} aria-hidden="true" />
+										<span className="sr-only">{chat.listedModelId}</span>
+									</span>
+								) : null}
+								{chat.workspaceId ? (
+									<span
+										className="sidebar-chat-meta-icon"
+										data-meta="machine"
+										title="Has a cloud workspace"
+									>
+										<Cloud size={12} strokeWidth={1.5} aria-hidden="true" />
+										<span className="sr-only">Cloud workspace</span>
+									</span>
+								) : null}
+							</span>
+						</span>
+					) : (
+						<>
+							{/* The icon column every sidebar row shares: in Recent, the
+							    chat's project; under a project, empty so titles line up
+							    with the project's name. */}
+							<span className="sidebar-chat-lead" aria-hidden="true">
+								{project ? (
+									<span
+										className="sidebar-project-dot"
+										style={{ background: projectColor(project.id) }}
+									/>
+								) : null}
+							</span>
+							<span className="sidebar-chat-title">{chat.title}</span>
+							{projectName ? (
+								<span className="sr-only">{projectName}</span>
+							) : null}
+						</>
+					)}
 					{shown.kind === "working" ? (
 						<span className="sr-only">Working</span>
 					) : null}
 				</button>
 				<div className="sidebar-chat-trailing">
-					{/* Y² is the project's own chat: always on top, and it stays while Y is on. */}
-					{chat.role === "y2" ? null : (
-						<button
-							type="button"
-							className="sidebar-chat-pin"
-							aria-label={pinned ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
-							aria-pressed={pinned}
-							title={pinned ? "Unpin chat" : "Pin chat"}
-							data-pinned={pinned ? "true" : undefined}
-							onClick={(event) => {
-								event.stopPropagation();
-								persistPinned(togglePinnedChatIds(pinnedChatIds, chat.id));
-							}}
-						>
-							<Pin
-								size={14}
-								strokeWidth={1.5}
-								fill={pinned ? "currentColor" : "none"}
-							/>
-						</button>
-					)}
-					{onDeleteChat && chat.role !== "y2" ? (
+					<button
+						type="button"
+						className="sidebar-chat-pin"
+						aria-label={pinned ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
+						aria-pressed={pinned}
+						title={pinned ? "Unpin chat" : "Pin chat"}
+						data-pinned={pinned ? "true" : undefined}
+						onClick={(event) => {
+							event.stopPropagation();
+							persistPinned(togglePinnedChatIds(pinnedChatIds, chat.id));
+						}}
+					>
+						<Pin
+							size={14}
+							strokeWidth={1.5}
+							fill={pinned ? "currentColor" : "none"}
+						/>
+					</button>
+					{onDeleteChat ? (
 						<button
 							type="button"
 							className="sidebar-chat-archive"
@@ -808,9 +870,24 @@ export function ProjectSidebar({
 								? () => onOpenChatPullRequest(project?.id, chat.id)
 								: undefined
 						}
-						askingAsDot={nested}
+						askingAsDot={thread}
+						prInMeta={thread}
 					/>
 				</div>
+				{prInMeta ? (
+					<div className="sidebar-chat-meta-end">
+						<SidebarChatPr
+							pr={prInMeta}
+							label={label}
+							hashed
+							onOpen={
+								onOpenChatPullRequest
+									? () => onOpenChatPullRequest(project?.id, chat.id)
+									: undefined
+							}
+						/>
+					</div>
+				) : null}
 			</li>
 		);
 		if (!label) return row;
@@ -957,7 +1034,13 @@ export function ProjectSidebar({
 							</button>
 						</nav>
 					) : null}
-					{projects.length ? (
+					{yRows.length ? (
+						<div className="sidebar-y-sections">
+							{y2Section(yRows)}
+							{threadsSection(recent.y, newThreadProject)}
+						</div>
+					) : null}
+					{showPlain ? (
 						<div className="sidebar-list-header">
 							<span>Chats</span>
 							<DropdownMenu.Root
@@ -1007,31 +1090,17 @@ export function ProjectSidebar({
 							</DropdownMenu.Root>
 						</div>
 					) : null}
-					{projects.length && shownSort !== "projects" ? (
-						recent.y2.length || recent.y.length || recent.plain.length ? (
+					{showPlain && shownSort !== "projects" ? (
+						recent.plain.length ? (
 							<ul
 								className="sidebar-recent sidebar-status-groups"
 								data-sort-view={firstPaintView("recent")}
 							>
-								{y2Section(recent.y2)}
-								{recent.y.length ? (
-									<>
-										{sectionLabel("y", "Y")}
-										{statusBlock("y", recent.y, yDoneExpanded, () =>
-											setYDoneExpanded(true),
-										)}
-									</>
-								) : null}
-								{recent.plain.length ? (
-									<>
-										{recent.y.length ? sectionLabel("plain", "Chats") : null}
-										{statusBlock("plain", recent.plain, plainDoneExpanded, () =>
-											setPlainDoneExpanded(true),
-										)}
-									</>
-								) : null}
+								{statusBlock("plain", recent.plain, plainDoneExpanded, () =>
+									setPlainDoneExpanded(true),
+								)}
 							</ul>
-						) : (
+						) : yRows.length ? null : (
 							<p
 								className="sidebar-empty"
 								data-sort-view={firstPaintView("recent")}
@@ -1040,7 +1109,7 @@ export function ProjectSidebar({
 							</p>
 						)
 					) : null}
-					{projects.length && shownSort !== "recent" ? (
+					{showPlain && shownSort !== "recent" ? (
 						<ul
 							className="sidebar-projects"
 							data-sort-view={firstPaintView("projects")}
@@ -1141,7 +1210,7 @@ export function ProjectSidebar({
 												</button>
 											</div>
 										</div>
-										{open ? projectChatList(project) : null}
+										{open ? projectChatList() : null}
 									</li>
 								);
 							})}
@@ -1222,6 +1291,7 @@ function SidebarChatStatusMark({
 	age,
 	onOpenPullRequest,
 	askingAsDot = false,
+	prInMeta = false,
 }: {
 	status: SidebarChatStatus;
 	label: string | null;
@@ -1229,6 +1299,8 @@ function SidebarChatStatusMark({
 	onOpenPullRequest?: () => void;
 	/** Under Y²: waiting on the user reads as the badge's colour, a dot. */
 	askingAsDot?: boolean;
+	/** A Threads row shows its pull request on the second line: the time stays here. */
+	prInMeta?: boolean;
 }) {
 	const time = age ? <span className="sidebar-chat-age">{age}</span> : null;
 	switch (status.kind) {
@@ -1274,6 +1346,7 @@ function SidebarChatStatusMark({
 				</span>
 			);
 		case "pr":
+			if (prInMeta) return time;
 			return (
 				<SidebarChatPr
 					pr={status.pr}
@@ -1304,10 +1377,13 @@ function SidebarChatPr({
 	pr,
 	label,
 	onOpen,
+	hashed = false,
 }: {
 	pr: SidebarPullRequest;
 	label: string | null;
 	onOpen?: () => void;
+	/** Shown as "#105" (a Threads row's badge) rather than "105". */
+	hashed?: boolean;
 }) {
 	const Icon = {
 		open: GitPullRequest,
@@ -1340,7 +1416,7 @@ function SidebarChatPr({
 			}}
 		>
 			<Icon size={14} strokeWidth={2} aria-hidden="true" />
-			<span aria-hidden="true">{pr.number}</span>
+			<span aria-hidden="true">{hashed ? `#${pr.number}` : pr.number}</span>
 			{pr.checks === "passed" ? (
 				<Check
 					className="sidebar-chat-check"
