@@ -20,6 +20,8 @@ import { CodexMark } from "#/features/sessions/codex-mark";
 import { GrokMark } from "#/features/sessions/grok-mark";
 import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
 import { GithubMark } from "#/features/workspace/github-mark";
+import { DISCORD_URL } from "./community-links";
+import { DiscordMark } from "./discord-mark";
 import { AppShot, SHOT_HELPERS } from "./landing-app-shot";
 import {
 	BENCH_COLUMNS,
@@ -65,6 +67,17 @@ export function LandingHeader({ signedIn = false }: { signedIn?: boolean }) {
 					>
 						<GithubMark size={18} />
 						<span>GitHub</span>
+					</a>
+					<a
+						className="landing-github-link"
+						href={DISCORD_URL}
+						target="_blank"
+						rel="noreferrer"
+						aria-label="Join the ytimesy Discord"
+						title="Join the ytimesy Discord"
+					>
+						<DiscordMark size={18} />
+						<span>Discord</span>
 					</a>
 					{signedIn ? (
 						<a className="landing-button" href="/">
@@ -517,6 +530,16 @@ export function SiteFooter() {
 				>
 					<GithubMark size={15} />
 					Open-source harness
+					<ArrowUpRight size={13} aria-hidden="true" />
+				</a>
+				<a
+					className="landing-harness-link"
+					href={DISCORD_URL}
+					target="_blank"
+					rel="noreferrer"
+				>
+					<DiscordMark size={15} />
+					Discord
 					<ArrowUpRight size={13} aria-hidden="true" />
 				</a>
 				<Link to="/blog">Blog</Link>

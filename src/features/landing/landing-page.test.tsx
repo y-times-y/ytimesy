@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vitest";
+import { DISCORD_URL } from "./community-links";
 
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({
@@ -83,6 +84,9 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	expect(header).toContain('href="https://github.com/y-times-y/harness"');
 	expect(header).toContain('aria-label="Open-source harness on GitHub"');
 	expect(header).toContain("GitHub");
+	expect(header).toContain(`href="${DISCORD_URL}"`);
+	expect(header).toContain('aria-label="Join the ytimesy Discord"');
+	expect(html).toContain("Discord");
 	expect(html).not.toContain('href="https://github.com/y-times-y/ytimesy"');
 	// No emoji anywhere on the page.
 	expect(/\p{Extended_Pictographic}/u.test(text)).toBe(false);
