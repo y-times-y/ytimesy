@@ -357,6 +357,19 @@ button:enabled:active {
 .sidebar-status-group:first-child .sidebar-status-heading {
 	margin-top: 0;
 }
+/* Recent: a labelled section ("Y", "Chats") below the Y² group: the same
+   label style, a divider above, its status groups beneath. */
+.sidebar-section-label {
+	margin-top: 10px;
+	border-top: 1px solid var(--menu-divider);
+}
+.sidebar-section-label .sidebar-status-heading {
+	margin-top: 6px;
+	margin-bottom: 0;
+}
+.sidebar-section-label + .sidebar-status-group .sidebar-status-heading {
+	margin-top: 2px;
+}
 .sidebar-status-count {
 	color: #5c5c5c;
 	font-variant-numeric: tabular-nums;
@@ -841,14 +854,16 @@ button:enabled:active {
 	fill-opacity: var(--chat-pinned, 0);
 }
 /* ---- Y² tree (src/domain/sidebar-tree.ts) ----------------------------
-   In a Y project the Y² row heads the project's threads, which hang under
-   its mark on a quiet guide line, their titles aligned with "Y²". Before
-   hydration the boot sheet folds a saved branch through --y2-branch,
-   --y2-chevron and --y2-toggle-shown (src/features/app/first-paint.ts). */
+   In a Y project two labelled sections sit under the project row: "Y²"
+   (the overview row) and, past a divider, "Y" (the threads Y² watches,
+   with the fold toggle and needs-you count on its label). The threads are
+   not inside the Y² row. Before hydration the boot sheet folds a saved
+   Y section through --y2-branch, --y2-chevron and --y2-toggle-shown
+   (src/features/app/first-paint.ts). */
 .sidebar-y2 {
 	/* A child of its project: one icon column in from the project's folder
-	   row, so the Y² mark sits under the folder icon's right edge, not level
-	   with it. The threads' branch and guide line sit inside, one level deeper. */
+	   row, so the section labels sit under the folder icon's right edge, not
+	   level with it. */
 	padding-left: var(--list-icon-size);
 	display: flex;
 	flex-direction: column;
@@ -864,6 +879,28 @@ button:enabled:active {
 }
 .sidebar-y2-row .sidebar-chat-trailing {
 	gap: 4px;
+}
+.sidebar-y2-section > .sidebar-y2-label {
+	margin: 0 0 2px;
+}
+.sidebar-y2-threads-section {
+	margin-top: 6px;
+	padding-top: 4px;
+	border-top: 1px solid var(--menu-divider);
+}
+.sidebar-y2-threads-section > .sidebar-y2-label {
+	margin-top: 2px;
+}
+.sidebar-y2-label-text {
+	margin: 0;
+	font: inherit;
+	letter-spacing: inherit;
+}
+.sidebar-y2-label-trailing {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: auto;
 }
 .sidebar-y2-count {
 	display: inline-grid;
@@ -896,7 +933,7 @@ button:enabled:active {
 		opacity 120ms ease,
 		color 120ms ease;
 }
-.sidebar-y2-row:hover .sidebar-y2-toggle,
+.sidebar-y2-label:hover .sidebar-y2-toggle,
 .sidebar-y2-toggle:focus-visible {
 	opacity: 1;
 }
@@ -915,21 +952,10 @@ button:enabled:active {
 		opacity: 1;
 	}
 }
-/* Threads start past the guide; the guide runs down the mark's centre. */
+/* Threads' titles line up with the "Y" label's text, under the divider. */
 .sidebar-y2-branch {
-	position: relative;
 	display: var(--y2-branch, block);
 	padding-left: calc(var(--list-row-pad-x) + var(--list-icon-size));
-}
-.sidebar-y2-branch::before {
-	content: "";
-	position: absolute;
-	top: 0;
-	bottom: 4px;
-	left: calc(var(--list-row-pad-x) + var(--list-icon-size) / 2 - 0.5px);
-	width: 1px;
-	border-radius: 1px;
-	background: var(--menu-divider);
 }
 .sidebar-y2[data-toggled] .sidebar-y2-branch {
 	animation: sidebar-y2-open 160ms ease-out;

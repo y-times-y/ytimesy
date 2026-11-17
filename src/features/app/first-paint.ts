@@ -156,7 +156,7 @@ export function showFirstPaintChoices(choices: FirstPaintChoices) {
  * Self-contained, inlined right after the sidebar's server HTML: what needs
  * both the rows and this browser's storage. It marks unread replies from the
  * seen chats, and shows saved pins that sit past a fold (Recent's Done rows,
- * the finished threads under Y²). Rows carry data-seen-key, data-updated-at,
+ * the finished threads in a Y project's Y section). Rows carry data-seen-key, data-updated-at,
  * data-unread-mark, data-foldable and data-done-overflow while hydrating.
  */
 export function markFirstPaintRows(
@@ -206,9 +206,14 @@ export function markFirstPaintRows(
 		);
 	}
 	const folds = [
+		// Recent folds each section's Done on its own (Y, then plain chats).
 		{
 			scope: ".sidebar-recent",
-			rows: '[data-group="done"] .sidebar-chat-row',
+			rows: '[data-group="done"][data-section="y"] .sidebar-chat-row',
+		},
+		{
+			scope: ".sidebar-recent",
+			rows: '[data-group="done"][data-section="plain"] .sidebar-chat-row',
 		},
 		{ scope: ".sidebar-y2-threads", rows: ".sidebar-chat-row[data-foldable]" },
 	];

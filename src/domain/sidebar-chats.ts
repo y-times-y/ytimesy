@@ -529,6 +529,27 @@ export function recentSidebarChats<P extends { readonly id: string }>(
 	];
 }
 
+/**
+ * Recent's three sections. Y²: each Y project's Y² chat. Y: the other chats of
+ * Y projects (a project is a Y project when its chats include a Y² chat), the
+ * threads Y² watches. Plain: the chats of projects without Y. Y and plain
+ * keep recentSidebarChats' order (pinned on top, then newest activity first);
+ * a chat is in exactly one section, so a Y² that needs the person shows once.
+ */
+export function recentSections<P extends { readonly id: string }>(
+	groups: readonly ProjectChats<P>[],
+	pinnedIds: readonly string[] = [],
+): { y2: RecentRow<P>[]; y: RecentRow<P>[]; plain: RecentRow<P>[] } {
+	const y2 = recentY2Chats(groups);
+	const yProjects = new Set(y2.map(({ project }) => project.id));
+	const rows = recentSidebarChats(groups, pinnedIds);
+	return {
+		y2,
+		y: rows.filter(({ project }) => yProjects.has(project.id)),
+		plain: rows.filter(({ project }) => !yProjects.has(project.id)),
+	};
+}
+
 /** Projects ordered by their newest chat's activity; projects without chats keep their order, last. */
 export function projectsByRecentActivity<P extends { readonly id: string }>(
 	projects: readonly P[],
