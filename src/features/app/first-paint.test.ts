@@ -192,7 +192,10 @@ function runRowsScript(input: {
 }
 
 const UNREAD_ROWS = "[data-unread-mark]";
-const DONE_ROWS = '.sidebar-recent [data-group="done"] .sidebar-chat-row';
+const DONE_ROWS =
+	'.sidebar-recent [data-group="done"][data-section="plain"] .sidebar-chat-row';
+const Y_DONE_ROWS =
+	'.sidebar-recent [data-group="done"][data-section="y"] .sidebar-chat-row';
 const reply = (id: string, updatedAt: string): FakeRow => ({
 	dataset: {
 		chatId: id,
@@ -261,7 +264,24 @@ describe("first-paint rows script", () => {
 		);
 	});
 
-	it("shows a saved pin past the fold of Y²'s finished threads", () => {
+	it("folds the Y section's Done apart from the plain chats' Done", () => {
+		const row = (id: string, overflow = false): FakeRow => ({
+			dataset: { chatId: id, doneOverflow: overflow ? "true" : undefined },
+		});
+		const css = runRowsScript({
+			pinnedChatIds: ["late"],
+			rows: {
+				[Y_DONE_ROWS]: [row("a"), row("b"), row("late", true)],
+				[DONE_ROWS]: [row("p1"), row("p2")],
+			},
+		});
+		expect(css).toBe(
+			'.sidebar-recent [data-chat-id="b"]{display:none}' +
+				'.sidebar-recent [data-chat-id="late"]{display:flex}',
+		);
+	});
+
+	it("shows a saved pin past the fold of a Y project's finished threads", () => {
 		const row = (id: string, overflow = false): FakeRow => ({
 			dataset: {
 				chatId: id,

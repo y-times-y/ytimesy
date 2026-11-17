@@ -15,6 +15,7 @@ import {
 	projectFolderIsExpanded,
 	projectsByRecentActivity,
 	projectsLatestChatsToReadAhead,
+	recentSections,
 	recentSidebarChats,
 	recentY2Chats,
 	type SidebarChat,
@@ -483,6 +484,61 @@ describe("sidebar sort", () => {
 			recentSidebarChats(mixed, ["a1", "a-y2"]).map((row) => row.chat.id),
 		).toEqual(["a1", "b1", "c1"]);
 		expect(recentY2Chats(groups)).toEqual([]);
+	});
+
+	it("splits Recent into Y², Y and plain: a chat is in exactly one", () => {
+		const y2 = (id: string, updatedAt: string) => ({
+			id,
+			title: "Y²",
+			role: "y2" as const,
+			updatedAt,
+		});
+		const mixed = [
+			{
+				project: a,
+				chats: [
+					y2("a-y2", "2026-10-20T00:00:00Z"),
+					{ id: "a1", title: "Old", updatedAt: "2026-10-01T00:00:00Z" },
+					{ id: "a2", title: "Newer", updatedAt: "2026-10-12T00:00:00Z" },
+				],
+			},
+			{
+				project: b,
+				chats: [
+					y2("b-y2", "2026-10-25T00:00:00Z"),
+					{ id: "b1", title: "New", updatedAt: "2026-10-19T00:00:00Z" },
+				],
+			},
+			{
+				project: c,
+				chats: [
+					{ id: "c1", title: "Plain", updatedAt: "2026-10-15T00:00:00Z" },
+					{ id: "c2", title: "Plain old", updatedAt: "2026-10-02T00:00:00Z" },
+				],
+			},
+		];
+		const ids = (rows: { chat: { id: string } }[]) =>
+			rows.map((row) => row.chat.id);
+		const split = recentSections(mixed);
+		expect(ids(split.y2)).toEqual(["b-y2", "a-y2"]);
+		expect(ids(split.y)).toEqual(["b1", "a2", "a1"]);
+		expect(ids(split.plain)).toEqual(["c1", "c2"]);
+		// Pins lead within their own section only; a Y² id (stale pin) never moves.
+		const pinned = recentSections(mixed, ["a1", "c2", "a-y2"]);
+		expect(ids(pinned.y)).toEqual(["a1", "b1", "a2"]);
+		expect(ids(pinned.plain)).toEqual(["c2", "c1"]);
+		expect(ids(pinned.y2)).toEqual(["b-y2", "a-y2"]);
+		// Together they are exactly recentY2Chats plus recentSidebarChats.
+		expect(
+			[...ids(split.y2), ...ids(split.y), ...ids(split.plain)].sort(),
+		).toEqual(
+			[...ids(recentY2Chats(mixed)), ...ids(recentSidebarChats(mixed))].sort(),
+		);
+		// Without Y everything is plain.
+		const none = recentSections([mixed[2]]);
+		expect(none.y2).toEqual([]);
+		expect(none.y).toEqual([]);
+		expect(ids(none.plain)).toEqual(["c1", "c2"]);
 	});
 
 	it("orders projects by their newest chat, empty projects last in their order", () => {

@@ -482,25 +482,55 @@ describe("a Y project's sidebar", () => {
 	const head = (html: string) =>
 		html.slice(
 			html.indexOf('class="sidebar-chat-row sidebar-y2-row"'),
-			html.indexOf('<div class="sidebar-y2-branch"'),
+			html.indexOf('data-section="y"'),
 		);
+	const ySection = (html: string) =>
+		html.slice(html.indexOf('data-section="y"'));
 
-	it("heads the threads with Y²: its mark, a needs-you count, no pin or archive", () => {
+	it("labels Y² and Y as separate sections: the Y threads are not inside the Y² row", () => {
+		const html = renderY({ [CHAT_SEEN_SINCE_STORAGE_KEY]: "1" });
+		const y2Start = html.indexOf('data-section="y2"');
+		const yStart = html.indexOf('data-section="y"');
+		expect(y2Start).toBeGreaterThan(-1);
+		expect(yStart).toBeGreaterThan(y2Start);
+		const y2Section = html.slice(y2Start, yStart);
+		// Y²: its label with the mark, then its one row; none of the threads.
+		expect(y2Section).toContain('sidebar-y2-label"><span class="y2-mark"');
+		expect(y2Section).toContain("<span>Y²</span>");
+		expect(y2Section.match(/data-role="y2"/g)).toHaveLength(1);
+		expect(y2Section).not.toContain("sidebar-y2-branch");
+		expect(y2Section).not.toContain(">Thread 0<");
+		// Y: its own label, the threads after it.
+		const y = ySection(html);
+		expect(y).toContain('<h3 class="sidebar-y2-label-text">Y</h3>');
+		expect(y.indexOf("sidebar-y2-label-text")).toBeLessThan(
+			y.indexOf("sidebar-y2-branch"),
+		);
+		expect(y).toContain(">Thread 0<");
+		expect(y).not.toContain('data-role="y2"');
+		// The two sections are siblings in the project's tree.
+		expect(html.slice(y2Start - 60, y2Start)).toContain("sidebar-y2-section");
+		expect(html.slice(yStart - 90, yStart)).toContain(
+			'class="sidebar-y2-section sidebar-y2-threads-section"',
+		);
+	});
+
+	it("heads the Y² row with its mark, no pin or archive; the Y label holds the toggle and needs-you count", () => {
 		const html = renderY({ [CHAT_SEEN_SINCE_STORAGE_KEY]: "1" });
 		expect(head(html)).toContain('class="y2-mark"');
 		expect(head(html)).toContain('<span class="sidebar-chat-title">Y²</span>');
-		expect(head(html)).toContain(
+		expect(ySection(html)).toContain(
 			'<span class="sidebar-y2-count" aria-hidden="true">2</span>',
 		);
 		expect(head(html)).toContain("2 threads need you");
 		expect(head(html)).not.toContain("sidebar-chat-pin");
 		expect(head(html)).not.toContain("sidebar-chat-archive");
-		expect(head(html)).toContain(
+		expect(ySection(html)).toContain(
 			'aria-label="Collapse Y² threads" title="Collapse threads" aria-expanded="true" aria-controls="sidebar-y2-branch-alpha"',
 		);
 	});
 
-	it("nests the threads under Y², waiting ones with a dot, the finished past eight folded", () => {
+	it("lists the Y section's threads, waiting ones with a dot, the finished past eight folded", () => {
 		const html = renderY({ [CHAT_SEEN_SINCE_STORAGE_KEY]: "1" });
 		const branch = html.slice(html.indexOf('<div class="sidebar-y2-branch"'));
 		expect(branch).toContain('class="sidebar-chats sidebar-y2-threads"');
@@ -521,6 +551,8 @@ describe("a Y project's sidebar", () => {
 		const html = renderY({
 			[SIDEBAR_COLLAPSED_Y2_KEY]: JSON.stringify(["alpha"]),
 		});
+		// The Y label stays (with the toggle); only its threads fold.
+		expect(ySection(html)).toContain("sidebar-y2-label-text");
 		expect(html).toContain(
 			'class="sidebar-y2" data-project-id="alpha" data-open="false"',
 		);
@@ -619,6 +651,68 @@ describe("Recent with Y² projects", () => {
 	it("shows nothing extra when no project has Y", () => {
 		const out = render("recent");
 		expect(out).not.toContain('data-group="y2"');
+		expect(out).not.toContain("sidebar-section-label");
+		expect(out).not.toContain('data-section="y"');
+	});
+
+	it("labels the Y² group, then a Y section for the Y projects' chats, then plain chats", () => {
+		const gamma = project("gamma", "Gamma");
+		const mixed = [
+			...groups,
+			{
+				project: gamma,
+				chats: [
+					{ id: "g1", title: "Gamma plain", updatedAt: "2026-10-22T00:00:00Z" },
+					{
+						id: "g-ask",
+						title: "Gamma asks",
+						updatedAt: "2026-10-17T00:00:00Z",
+						waitingOn: "question" as const,
+					},
+				],
+			},
+		];
+		const out = render("recent", true, {
+			projects: [alpha, beta, gamma],
+			projectChats: mixed,
+			chats: mixed[0].chats,
+		});
+		const at = (needle: string) => out.indexOf(needle);
+		const yLabel = at('data-section-label="y"');
+		const plainLabel = at('data-section-label="plain"');
+		expect(at('data-group="y2"')).toBeLessThan(yLabel);
+		expect(yLabel).toBeLessThan(plainLabel);
+		expect(out).toContain(
+			'<h3 class="sidebar-status-heading sidebar-y2-heading"><span>Y</span></h3>',
+		);
+		expect(out).toContain("<span>Chats</span>");
+		// Y projects' chats sit between the Y label and the plain label.
+		const ySlice = out.slice(yLabel, plainLabel);
+		expect(ySlice).toContain(">Asks<");
+		expect(ySlice).toContain(">Beta thread<");
+		expect(ySlice).not.toContain("Gamma");
+		expect(ySlice).not.toContain('data-role="y2"');
+		const plainSlice = out.slice(plainLabel);
+		expect(plainSlice).toContain(">Gamma plain<");
+		expect(plainSlice).toContain(">Gamma asks<");
+		expect(plainSlice).not.toContain(">Asks<");
+		expect(out.slice(0, yLabel)).not.toContain("Gamma");
+		// Each section has its own status groups.
+		expect(ySlice).toContain('data-group="needs-you" data-section="y"');
+		expect(plainSlice).toContain('data-group="needs-you" data-section="plain"');
+		expect(out.match(/data-role="y2"/g)).toHaveLength(2);
+	});
+
+	it("leaves a Y project without threads unlabelled in Y and plain chats unlabelled without any Y", () => {
+		const out = render("recent", true, {
+			projectChats: [
+				{ project: alpha, chats: [y2Chat("2026-10-20T00:00:00Z")] },
+			],
+			chats: [y2Chat("2026-10-20T00:00:00Z")],
+			projects: [alpha],
+		});
+		expect(out).toContain('data-group="y2"');
+		expect(out).not.toContain("sidebar-section-label");
 	});
 });
 
@@ -627,6 +721,13 @@ describe("Projects view hierarchy (styles)", () => {
 		new URL("../../styles.css", import.meta.url),
 		"utf8",
 	);
+	it("separates the Y section with a divider and drops the nesting guide line", () => {
+		expect(css).toMatch(
+			/\.sidebar-y2-threads-section \{[^}]*border-top: 1px solid var\(--menu-divider\);/,
+		);
+		expect(css).not.toContain(".sidebar-y2-branch::before");
+	});
+
 	it("indents Y² one icon column under its project, threads one level deeper", () => {
 		expect(css).toMatch(
 			/\.sidebar-y2 \{[^}]*padding-left: var\(--list-icon-size\);/,
