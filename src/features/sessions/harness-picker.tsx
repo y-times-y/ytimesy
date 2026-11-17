@@ -1,10 +1,6 @@
-import {
-	type QueryClient,
-	useQuery,
-	useQueryClient,
-} from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Check, ChevronDown, Search, Star, Zap } from "lucide-react";
+import { Check, ChevronDown, RefreshCw, Search, Star, Zap } from "lucide-react";
 import { contextWindowLabel } from "#/domain/context-window-option";
 import "./model-picker.css";
 import { type ReactNode, useState } from "react";
@@ -25,7 +21,6 @@ import {
 } from "#/domain/claude-code-route";
 import { parseModelRouteId } from "#/domain/model-connection";
 import { apiPickerSections } from "#/domain/provider-access";
-import { authClient } from "#/features/auth/client";
 import {
 	ModelPickerUsage,
 	useCloudUsageWindows,
@@ -33,12 +28,12 @@ import {
 import { AgentProviderMark } from "./agent-provider-mark";
 import { ApiModelBrowser } from "./api-model-browser";
 import { getClaudeSubscription } from "./claude-subscription.fn";
+import { codexCatalogKey } from "./codex-catalog-store";
 import {
 	type ComposerSpeed,
 	type SessionModel,
 	sessionModelsFromListed,
 } from "./model-capabilities";
-import { getAgentModelCatalog } from "./model-catalog.fn";
 import { getModelConnections } from "./model-connections.fn";
 import {
 	ModelFavoriteButton,
@@ -60,66 +55,13 @@ import {
 	usePrefetchPlanUsage,
 } from "./plan-usage";
 import { SubscriptionMark } from "./subscription-mark";
+import { useCodexCatalog } from "./use-codex-catalog";
 
 /** The composer's model button; Cmd+Shift+M clicks it. */
 export const MODEL_PICKER_ID = "session-harness-select";
 
-const CODEX_CATALOG_STALE_MS = 5 * 60_000;
-
 /** Shared with the composer's own read of the Codex catalog (session-launcher). */
-export function codexCatalogKey(userId: string | undefined) {
-	return ["agent-model-catalog", userId, "codex"] as const;
-}
-
-/**
- * Starts the ChatGPT plan's model catalog read before the Codex section is
- * opened; a fresh cached read is reused, and one in flight is shared.
- */
-export function prefetchCodexCatalog(
-	client: QueryClient,
-	userId: string | undefined,
-	load: () => Promise<unknown>,
-) {
-	if (!userId) return Promise.resolve();
-	return client.prefetchQuery({
-		queryKey: codexCatalogKey(userId),
-		queryFn: load,
-		staleTime: CODEX_CATALOG_STALE_MS,
-		retry: false,
-	});
-}
-
-/**
- * The Codex section's own list, whatever harness is active: never the API
- * models. It loads when the composer mounts, so opening the picker is instant.
- */
-function useCodexCatalog() {
-	const identity = authClient.useSession();
-	const userId = identity.data?.user.id;
-	const loadCatalog = useServerFn(getAgentModelCatalog);
-	const queryClient = useQueryClient();
-	const catalog = useQuery({
-		queryKey: codexCatalogKey(userId),
-		enabled: Boolean(userId),
-		queryFn: () => loadCatalog({ data: { provider: "codex" } }),
-		staleTime: CODEX_CATALOG_STALE_MS,
-	});
-	return {
-		models: catalog.data ? sessionModelsFromListed(catalog.data) : [],
-		status: (catalog.isError && !catalog.data
-			? "error"
-			: catalog.isPending
-				? "loading"
-				: "ready") as "loading" | "error" | "ready",
-		retry: () => {
-			void catalog.refetch();
-		},
-		prefetch: () =>
-			void prefetchCodexCatalog(queryClient, userId, () =>
-				loadCatalog({ data: { provider: "codex" } }),
-			),
-	};
-}
+export { codexCatalogKey };
 
 /** Skeleton rows in the list's own row style while a catalog loads. */
 function ModelListSkeleton() {
@@ -242,16 +184,27 @@ export function HarnessPicker({
 		Boolean(grokSubscription),
 	);
 	const codexCatalog = useCodexCatalog();
-	const prefetchPlanUsage = () => {
-		prefetchUsage();
-		codexCatalog.prefetch();
-	};
+	// Hover and focus warm only the plan usage: the Codex list comes from the
+	// saved copy (or one read when there is none), never from the trigger.
+	const prefetchPlanUsage = prefetchUsage;
 	// The Codex section reads its own list; the active harness's `models` only
 	// stand in for it when Codex is the active harness.
-	const codexModels = harnessId === "codex" ? models : codexCatalog.models;
-	const codexStatus =
-		harnessId === "codex" ? catalogStatus : codexCatalog.status;
-	const codexRetry = harnessId === "codex" ? onConnect : codexCatalog.retry;
+	// The account's own list wins (it is what "Refresh models" updates); the
+	// active harness's models stand in while it has none.
+	const accountModels = codexCatalog.models
+		? sessionModelsFromListed(codexCatalog.models)
+		: [];
+	const codexModels = accountModels.length
+		? accountModels
+		: harnessId === "codex"
+			? models
+			: [];
+	const codexStatus = accountModels.length
+		? "ready"
+		: harnessId === "codex"
+			? catalogStatus
+			: codexCatalog.status;
+	const codexRetry = harnessId === "codex" ? onConnect : codexCatalog.refetch;
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
 	const [favorites, setFavorites] = useState<readonly string[]>([]);
@@ -572,6 +525,9 @@ export function HarnessPicker({
 								visibleModels={visibleModels}
 								status={codexStatus}
 								onRetry={codexRetry}
+								onRefresh={codexCatalog.refresh}
+								refreshing={codexCatalog.refreshing}
+								refreshDisabled={codexCatalog.cooling}
 								search={search}
 								modelId={harnessId === "codex" ? modelId : ""}
 								modelsEnabled={modelsEnabled}
@@ -606,6 +562,9 @@ export function CodexSection({
 	visibleModels,
 	status,
 	onRetry,
+	onRefresh,
+	refreshing = false,
+	refreshDisabled = false,
 	search,
 	modelId,
 	modelsEnabled,
@@ -619,6 +578,10 @@ export function CodexSection({
 	visibleModels: readonly SessionModel[];
 	status: "loading" | "error" | "ready";
 	onRetry?: () => void;
+	/** Reads the account's list again (once a minute at most; the caller limits it). */
+	onRefresh?: () => void;
+	refreshing?: boolean;
+	refreshDisabled?: boolean;
 	search: string;
 	modelId: string;
 	modelsEnabled: boolean;
@@ -633,6 +596,19 @@ export function CodexSection({
 			<div className="model-section-head">
 				<h3>Codex</h3>
 				{usage}
+				{onRefresh ? (
+					<button
+						type="button"
+						className="model-section-refresh"
+						aria-label="Refresh model list"
+						title="Check your ChatGPT plan for new models"
+						disabled={refreshDisabled || refreshing}
+						data-refreshing={refreshing}
+						onClick={onRefresh}
+					>
+						<RefreshCw size={12} aria-hidden="true" />
+					</button>
+				) : null}
 			</div>
 			<p className="model-browser-caption">ChatGPT subscription</p>
 			<div className="model-picker-list">
@@ -830,16 +806,9 @@ function CodexModelSearch({
 	renderFavorite?: RenderModelFavorite;
 	onSelect: (id: string) => void;
 }) {
-	const identity = authClient.useSession();
-	const loadCatalog = useServerFn(getAgentModelCatalog);
-	const catalog = useQuery({
-		queryKey: ["agent-model-catalog", identity.data?.user.id, "codex"],
-		enabled: Boolean(identity.data?.user.id),
-		queryFn: () => loadCatalog({ data: { provider: "codex" } }),
-		staleTime: 60_000,
-	});
-	const models = catalog.data
-		? sessionModelsFromListed(catalog.data)
+	const catalog = useCodexCatalog();
+	const models = catalog.models
+		? sessionModelsFromListed(catalog.models)
 		: fallbackModels;
 	const results = models
 		.filter(

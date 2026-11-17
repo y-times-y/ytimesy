@@ -264,11 +264,17 @@ export function codexTurnContext(
 	};
 }
 type Catalog = z.infer<typeof catalogSchema>;
-/** Fresh for a minute; past that, served while a refresh runs (plans rarely change). */
-const CATALOG_FRESH_MS = 60_000;
-const CATALOG_STALE_MS = 10 * 60_000;
+/**
+ * Fresh for 15 minutes; past that, served (up to 6 hours) while a refresh
+ * runs. A plan's models change rarely: the browsers decide when to ask again
+ * (CODEX_CATALOG_EPOCH), and a forced read skips the fresh copy.
+ */
+const CATALOG_FRESH_MS = 15 * 60_000;
+const CATALOG_STALE_MS = 6 * 3600_000;
 type CatalogEntry = {
 	expires: number;
+	/** A load of this entry is still running (one in flight per user). */
+	pending?: boolean;
 	promise: Promise<Catalog>;
 	/** The last catalog read, kept as plain data (never a pending request). */
 	value?: { catalog: Catalog; until: number };
@@ -354,15 +360,18 @@ function loadCatalog(
 	const entry: CatalogEntry = {
 		expires: Date.now() + CATALOG_FRESH_MS,
 		promise,
+		pending: true,
 		...(previous ? { value: previous } : {}),
 		...invocationSharedRead(promise),
 	};
 	catalogs.set(userId, entry);
 	promise.then(
 		(catalog) => {
+			entry.pending = false;
 			entry.value = { catalog, until: Date.now() + CATALOG_STALE_MS };
 		},
 		() => {
+			entry.pending = false;
 			// A failed refresh keeps a still-valid earlier catalog; otherwise the
 			// next read loads again.
 			if (catalogs.get(userId) !== entry) return;
@@ -380,12 +389,19 @@ function loadCatalog(
 	return promise;
 }
 
-async function subscriptionCatalog(userId: string) {
+async function subscriptionCatalog(
+	userId: string,
+	options: { force?: boolean } = {},
+) {
 	if (!(await hasManagedCodexAuth(userId))) {
 		catalogs.delete(userId);
 		throw new Error("Connect Codex before starting this agent.");
 	}
 	const cached = catalogs.get(userId);
+	// A forced read skips the fresh copy and is answered by a new load, unless
+	// one is already running: that one is as fresh as a new one.
+	if (options.force && !(cached?.pending && usableInThisInvocation(cached)))
+		return loadCatalog(userId, cached?.value);
 	const fresh = !!cached && cached.expires > Date.now();
 	if (cached && fresh && usableInThisInvocation(cached)) return cached.promise;
 	// Past a minute (or while another request refreshes it): answer from the
@@ -411,8 +427,9 @@ export function warmCodexSubscriptionCatalog(userId: string) {
 
 export async function codexSubscriptionCatalog(
 	userId: string,
+	options: { force?: boolean } = {},
 ): Promise<ListedModel[]> {
-	const catalog = await subscriptionCatalog(userId);
+	const catalog = await subscriptionCatalog(userId, options);
 	return catalog.models
 		.filter((row) => row.visibility !== "hide")
 		.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))

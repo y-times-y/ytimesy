@@ -1,4 +1,8 @@
 import { APICallError, RetryError } from "ai";
+import {
+	MODEL_UNAVAILABLE_FAILURE,
+	modelUnavailableDetail,
+} from "./codex-model-unavailable";
 import { CoordinationFailure } from "./conversation-turn-control";
 import {
 	isWorkspaceAtCapacity,
@@ -993,8 +997,15 @@ export function apiModelFailureMessage(error: unknown): string {
 			return "Your model provider is limiting requests right now. Wait a minute, then retry.";
 		if (code === "invalid_api_key")
 			return "Your API key was rejected. Replace it in Settings > Agents.";
-		if (code === "model_not_found" || code === "invalid_model")
-			return "This model isn't available from your provider. Pick another model.";
+		if (
+			code === "model_not_found" ||
+			code === "invalid_model" ||
+			((error.statusCode === 400 ||
+				error.statusCode === 403 ||
+				error.statusCode === 404) &&
+				modelUnavailableDetail(detail))
+		)
+			return MODEL_UNAVAILABLE_FAILURE;
 		if (
 			code === "context_length_exceeded" ||
 			(inspectDetails &&

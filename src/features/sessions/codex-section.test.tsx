@@ -1,37 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ComponentProps, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-import {
-	CodexSection,
-	codexCatalogKey,
-	HarnessPicker,
-	prefetchCodexCatalog,
-} from "./harness-picker";
+import { describe, expect, it } from "vitest";
+import { CodexSection, HarnessPicker } from "./harness-picker";
 import { sessionModelsFromListed } from "./model-capabilities";
-
-describe("Codex catalog prefetch", () => {
-	it("starts one catalog read under the composer's own key", async () => {
-		const client = new QueryClient();
-		const spy = vi.spyOn(client, "prefetchQuery");
-		const load = vi.fn(async () => [{ id: "gpt-x", label: "GPT X" }]);
-		await Promise.all([
-			prefetchCodexCatalog(client, "u1", load),
-			prefetchCodexCatalog(client, "u1", load),
-		]);
-		expect(spy).toHaveBeenCalledTimes(2);
-		expect(load).toHaveBeenCalledTimes(1);
-		expect(client.getQueryData(codexCatalogKey("u1"))).toEqual([
-			{ id: "gpt-x", label: "GPT X" },
-		]);
-	});
-	it("does nothing before the user is known", async () => {
-		const client = new QueryClient();
-		const load = vi.fn(async () => []);
-		await prefetchCodexCatalog(client, undefined, load);
-		expect(load).not.toHaveBeenCalled();
-	});
-});
 
 const apiModels = sessionModelsFromListed([
 	{ id: "route:c1/openrouter/claude-api-x", label: "API Claude X" },

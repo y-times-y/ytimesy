@@ -105,3 +105,20 @@ in Settings", so a refused request looked like an expired sign-in.
 - Every status change logs `Grok plan connection status changed.` with
   from/to, cause, HTTP status and a redacted body snippet (`xaiLogSnippet`);
   a sign-in logs which status it replaced.
+
+
+## Codex model list: saved per account, re-checked on real triggers
+
+The only authority on what a ChatGPT plan may use is ChatGPT's live catalog (`codex/models?client_version=<pinned CLI>`, read in src/server/adapters/codex-subscription.ts). A model OpenAI has not rolled out to an account must not show for it, and every read costs a request, so the browser keeps the user's own copy and the developers control when it is asked again.
+
+- **Saved copy**: localStorage under `ytimesy:codex-catalog:<user>:<PINNED_CODEX_CLI_VERSION>:<CODEX_CATALOG_EPOCH>` with `savedAt` (src/features/sessions/codex-catalog-store.ts; defensive parse, bounded size, corrupt data ignored). The picker, its search and the composer read it with no request; hover and focus never fetch the list.
+- **Re-check only on a real trigger**: (a) no copy for the current key (first visit on a device, storage cleared, pin changed, epoch bumped): one read on the next visit; (b) a Codex turn fails because the model is unavailable to the plan (failure text `MODEL_UNAVAILABLE_FAILURE`, src/domain/codex-model-unavailable.ts): the copy is dropped and the list is read once, bypassing the server cache; (c) the "Refresh model list" button in the Codex section header, once per 60 s, bypassing the server cache (how a person picks up a rollout that reached their account after the last check); (d) safety net: a copy older than 48 h (`CODEX_CATALOG_REFRESH_AFTER_MS`) is re-read once in the background at the next mount.
+- **Server**: the per-user catalog is fresh for 15 min and served stale for up to 6 h while it refreshes; one load in flight per user; `force` skips the fresh copy; `codex.catalog` logs once per actual load.
+- **Discovery**: `codex.response_headers` logs the header names (never values) of a /responses answer at most once an hour per isolate, to learn whether ChatGPT sends a model-list version header (the Codex CLI relies on `x-models-etag`). Nothing acts on it yet.
+
+### When OpenAI launches a Codex model
+
+1. Bump `CODEX_CATALOG_EPOCH` in src/domain/codex-catalog-epoch.ts. Every user then re-checks their own account once on their next visit (and only accounts that were rolled out the model will list it).
+2. Add the model to the places that know new OpenAI models: api-model-list, model-pricing, model-context-windows and model-failover (src/domain).
+3. Changing the pinned Codex CLI version (`PINNED_CODEX_CLI_VERSION`) also changes the key, so it needs no separate bump.
+

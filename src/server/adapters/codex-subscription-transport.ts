@@ -13,6 +13,7 @@ import {
 	relayEgressBlock,
 	upstreamEgressBlock,
 } from "#/domain/codex-egress";
+import { modelUnavailableDetail } from "#/domain/codex-model-unavailable";
 import {
 	signDeliveryRequest,
 	verifyDeliveryRequest,
@@ -34,6 +35,33 @@ const backend = "https://chatgpt.com/backend-api";
 const maximumBytes = 8 * 1024 * 1024;
 const catalogPath = `codex/models?client_version=${PINNED_CODEX_CLI_VERSION}`;
 const subscriptionEgress = new AsyncLocalStorage<typeof fetch>();
+
+/**
+ * Discovery only: which header names ChatGPT sends on a /responses answer, to
+ * learn whether it announces a model-list version (the Codex CLI relies on an
+ * ETag-style `x-models-etag`). Names only, never values; once an hour per
+ * isolate. Nothing acts on it.
+ */
+const RESPONSE_HEADER_LOG_MS = 3600_000;
+let responseHeadersLoggedAt = Number.NEGATIVE_INFINITY;
+export function logCodexResponseHeaderNames(
+	headers: Headers,
+	now = Date.now(),
+) {
+	if (now - responseHeadersLoggedAt < RESPONSE_HEADER_LOG_MS) return;
+	responseHeadersLoggedAt = now;
+	console.info("codex.response_headers", {
+		names: [...headers.keys()]
+			.map((name) => name.toLowerCase())
+			.sort()
+			.slice(0, 80),
+	});
+}
+
+/** Test hook: forget when the header names were last logged. */
+export function forgetCodexResponseHeaderLogForTests() {
+	responseHeadersLoggedAt = Number.NEGATIVE_INFINITY;
+}
 
 /** Invocation-local VPC egress; never changes another chat's transport. */
 export function withCodexSubscriptionEgress<T>(
@@ -352,6 +380,9 @@ async function throughEgress(
 					blocked,
 				});
 			recordStepTiming(`egress:${path.id}`, Date.now() - startedAt, startedAt);
+			// A relay answers with its own few headers; it logs the upstream's.
+			if (options.inference && path.kind !== "relay")
+				logCodexResponseHeaderNames(attempt.response.headers);
 			if (options.inference) markTurnPhase(`egress:${path.id}`);
 			return attempt.response;
 		}
@@ -636,6 +667,8 @@ export async function handleCodexSubscriptionRelay(
 				...(body === undefined ? {} : { body }),
 			});
 		});
+		if (operation.kind === "inference")
+			logCodexResponseHeaderNames(response.headers);
 		if (!response.ok) {
 			// Only a spent allowance's reset time and whether this host's egress
 			// was blocked cross the relay; never the upstream body.
@@ -655,6 +688,27 @@ export async function handleCodexSubscriptionRelay(
 						},
 					},
 					{ status: 429, headers: { "Cache-Control": "no-store" } },
+				);
+			// A model this account is not offered: only that fact crosses the
+			// relay, as the code the turn's failure wording keys on.
+			if (
+				(response.status === 400 ||
+					response.status === 403 ||
+					response.status === 404) &&
+				modelUnavailableDetail(text.slice(0, 4096))
+			)
+				return Response.json(
+					{
+						error: {
+							type: "invalid_request_error",
+							code: "model_not_found",
+							message: "Model unavailable for this account.",
+						},
+					},
+					{
+						status: response.status,
+						headers: { "Cache-Control": "no-store" },
+					},
 				);
 			return Response.json(
 				{

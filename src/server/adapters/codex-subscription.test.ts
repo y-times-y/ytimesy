@@ -708,7 +708,7 @@ it("sends a step's first request with the token read while building it, and read
 	expect(mocks.auth.mock.calls.length).toBe(reads + 1);
 });
 
-it("answers from the last catalog past a minute while it refreshes, and loads again once it is too old", async () => {
+it("answers from the last catalog past 15 minutes while it refreshes, and loads again once it is too old (6 hours)", async () => {
 	vi.useFakeTimers({ toFake: ["Date"] });
 	try {
 		const catalog = (slug: string) =>
@@ -720,18 +720,19 @@ it("answers from the last catalog past a minute while it refreshes, and loads ag
 			.mockResolvedValueOnce(catalog("third"));
 		const owner = "stale-catalog-owner";
 		expect((await codexSubscriptionCatalog(owner))[0].id).toBe("first");
-		// Fresh: no request.
+		// Fresh (up to 15 minutes): no request.
+		vi.setSystemTime(Date.now() + 14 * 60_000);
 		expect((await codexSubscriptionCatalog(owner))[0].id).toBe("first");
 		expect(fetch).toHaveBeenCalledTimes(1);
 		// Stale: answered at once from the last read, refreshed alongside.
-		vi.setSystemTime(Date.now() + 90_000);
+		vi.setSystemTime(Date.now() + 2 * 60_000);
 		expect((await codexSubscriptionCatalog(owner))[0].id).toBe("first");
 		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
 		await vi.waitFor(async () =>
 			expect((await codexSubscriptionCatalog(owner))[0].id).toBe("second"),
 		);
 		// Too old to serve: loaded before answering.
-		vi.setSystemTime(Date.now() + 11 * 60_000);
+		vi.setSystemTime(Date.now() + 6 * 3600_000 + 60_000);
 		expect((await codexSubscriptionCatalog(owner))[0].id).toBe("third");
 		expect(fetch).toHaveBeenCalledTimes(3);
 	} finally {
@@ -803,4 +804,36 @@ it("never waits on another invocation's pending catalog read", async () => {
 	);
 	expect(models[0].id).toBe("own");
 	expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("a forced read skips the fresh copy, shares one load in flight per user, and logs codex.catalog once per load", async () => {
+	const info = vi.spyOn(console, "info").mockImplementation(() => {});
+	const catalogLogs = () =>
+		info.mock.calls.filter(([name]) => name === "codex.catalog").length;
+	let release: (response: Response) => void = () => {};
+	const fetch = vi
+		.spyOn(globalThis, "fetch")
+		.mockResolvedValueOnce(
+			new Response(JSON.stringify({ models: [{ slug: "one" }] })),
+		)
+		.mockImplementationOnce(
+			() => new Promise<Response>((resolve) => (release = resolve)),
+		);
+	const owner = "forced-catalog-owner";
+	expect((await codexSubscriptionCatalog(owner))[0].id).toBe("one");
+	// Fresh: answered from the copy, no request, no log.
+	expect((await codexSubscriptionCatalog(owner))[0].id).toBe("one");
+	expect(fetch).toHaveBeenCalledTimes(1);
+	expect(catalogLogs()).toBe(1);
+	// Forced twice at once: one request between them, and it bypasses the copy.
+	const first = codexSubscriptionCatalog(owner, { force: true });
+	const second = codexSubscriptionCatalog(owner, { force: true });
+	const plain = codexSubscriptionCatalog(owner);
+	await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+	release(new Response(JSON.stringify({ models: [{ slug: "two" }] })));
+	expect((await first)[0].id).toBe("two");
+	expect((await second)[0].id).toBe("two");
+	expect((await plain)[0].id).toBe("two");
+	expect(fetch).toHaveBeenCalledTimes(2);
+	expect(catalogLogs()).toBe(2);
 });
