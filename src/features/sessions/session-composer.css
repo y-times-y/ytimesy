@@ -3082,6 +3082,9 @@ button.helper-card:hover {
 .helper-card-verb[data-verb="failed"] {
 	color: #f87171;
 }
+.helper-card-verb[data-verb="unstarted"] {
+	color: #a3a3a3;
+}
 .helper-card-time {
 	flex: 0 0 auto;
 	margin-left: auto;

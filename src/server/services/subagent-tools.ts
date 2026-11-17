@@ -66,6 +66,18 @@ import {
 	type WriterPatch,
 } from "#/domain/subagent";
 import {
+	COULDNT_START_PREFIX,
+	couldntStartMessage,
+	hasInternalFailureText,
+	plainStartReason,
+	SUBAGENT_START_ATTEMPTS,
+	SUBAGENT_START_BACKOFF_MS,
+	type SubagentStartError,
+	SubagentStartRefused,
+	type SubagentStartStage,
+	startStageError,
+} from "#/domain/subagent-start";
+import {
 	type SubagentNode,
 	type SubagentTreeSession,
 	subagentNodeRemaining,
@@ -73,6 +85,7 @@ import {
 } from "#/domain/subagent-tree";
 import { budgetTokenWeight } from "#/domain/subagent-usage";
 import { Y_AGENT_TOOL_DESCRIPTION } from "#/domain/y-agent";
+import { releaseAgentTaskStart } from "../adapters/agent-capacity";
 import {
 	type AgentSessionRecord,
 	agentSessionItemsOfKindsForOwner,
@@ -145,6 +158,14 @@ export type SubagentToolDeps = {
 	/** Every route the user can use now (role models are checked against it). */
 	readonly routes: (userId: string) => Promise<readonly FailoverConnection[]>;
 	readonly markFailed: (sessionId: string) => Promise<unknown>;
+	/** Undoes a failed start's reservation; false when its first turn is already queued. */
+	readonly releaseStart: (
+		userId: string,
+		projectId: string,
+		taskId: string,
+	) => Promise<boolean>;
+	/** One structured `subagent.start_failed` warning per failed attempt. */
+	readonly logStartFailure: (event: SubagentStartFailure) => void;
 	readonly takeReport: typeof takeSubagentReport;
 	readonly message: typeof queueAgentPeerMessage;
 	readonly stop: typeof requestSubagentStop;
@@ -181,10 +202,19 @@ const defaultDeps: SubagentToolDeps = {
 	fork: (...args) => forkWriterWorkspace(...args),
 	saveProviderRef: (...args) => saveAgentSessionProviderRef(...args),
 	mergeFork: (...args) => mergeSubagentFork(...args),
-	start: (scope, taskId, options) =>
-		Effect.runPromise(startPreparedAgentTask(scope, taskId, options)),
+	start: async (scope, taskId, options) => {
+		// Either, not runPromise: a failure keeps its typed error and cause
+		// instead of becoming a FiberFailure.
+		const result = await Effect.runPromise(
+			Effect.either(startPreparedAgentTask(scope, taskId, options)),
+		);
+		if (result._tag === "Left") throw result.left;
+		return result.right;
+	},
 	routes: (userId) => failoverConnections(userId),
 	markFailed: (sessionId) => saveAgentTaskState(sessionId, "failed"),
+	releaseStart: (...args) => releaseAgentTaskStart(...args),
+	logStartFailure: (event) => logSubagentStartFailure(event),
 	takeReport: (...args) => takeSubagentReport(...args),
 	message: (...args) => queueAgentPeerMessage(...args),
 	stop: (...args) => requestSubagentStop(...args),
@@ -195,6 +225,28 @@ const defaultDeps: SubagentToolDeps = {
 		if (infrastructureAdmissionEnabled()) await assertUsageWindowsOpen(userId);
 	},
 };
+
+export type SubagentStartFailure = {
+	readonly stage: SubagentStartStage;
+	readonly retryable: boolean;
+	readonly cause: string;
+	readonly attempt: number;
+};
+
+/** Names no user content: the failed call's message only, bounded and scrubbed. */
+function logSubagentStartFailure(event: SubagentStartFailure) {
+	console.warn("subagent.start_failed", {
+		stage: event.stage,
+		retryable: event.retryable,
+		attempt: event.attempt,
+		cause: event.cause
+			.replace(
+				/(?:Bearer\s+|\b(?:sk|ghp|gho|xox[bp])[-_])[A-Za-z0-9._-]{8,}/g,
+				"[redacted]",
+			)
+			.slice(0, 300),
+	});
+}
 
 export type SubagentToolContext = {
 	/** The unwrapped machines (a fork and the parent's VM are both addressed). */
@@ -1139,68 +1191,137 @@ async function spawnSubagent(
 		...(placement === "shared-writer" ? { sharedWriter: true } : {}),
 	});
 	const childId = child.id;
-	try {
-		if (input.sidekick)
-			budget = {
-				...budget,
-				sidekick: newSidekickState(budget, new Date(deps.now()).toISOString(), {
-					...input.sidekick,
-					model: model.listedModelId,
-					pair: fusionPairProfile(parent.listedModelId, model.listedModelId),
-				}),
-			};
-		await deps.saveSpec(parent.userId, childId, { role, budget });
-		// Round 1's base: the lead's checkout before the sidekick starts.
-		if (budget.sidekick) {
-			const label = (await loadTreeFor(deps, parent)).nodes.find(
-				(node) => node.id === childId,
-			)?.label;
-			const base = label
-				? await roundBase(context, deps, workspace, label, 1)
-				: undefined;
-			if (base) {
-				const sidekick: SidekickState = {
-					...budget.sidekick,
-					rounds: budget.sidekick.rounds.map((round) =>
-						round.n === 1 ? { ...round, base } : round,
-					),
-				};
-				budget = { ...budget, sidekick };
-				await deps.saveSidekick(childId, sidekick);
+	const startScope = {
+		userId: parent.userId,
+		projectId: parent.projectId,
+		sessionId: parent.id,
+		harnessId: parent.harness,
+		createNew: false,
+	};
+	// Retried attempts reuse this one child row and whatever an earlier attempt
+	// already finished: the spec, the fork VM, the saved fork record.
+	let specSaved = false;
+	let fork: Awaited<ReturnType<typeof deps.fork>> | undefined;
+	let forkRecorded = false;
+	let stage: SubagentStartStage = "save-spec";
+	let lastFailure: SubagentStartError | undefined;
+	let made = 0;
+	for (let attempt = 1; attempt <= SUBAGENT_START_ATTEMPTS; attempt++) {
+		made = attempt;
+		try {
+			if (!specSaved) {
+				stage = "save-spec";
+				if (input.sidekick)
+					budget = {
+						...budget,
+						sidekick: newSidekickState(
+							budget,
+							new Date(deps.now()).toISOString(),
+							{
+								...input.sidekick,
+								model: model.listedModelId,
+								pair: fusionPairProfile(
+									parent.listedModelId,
+									model.listedModelId,
+								),
+							},
+						),
+					};
+				await deps.saveSpec(parent.userId, childId, { role, budget });
+				// Round 1's base: the lead's checkout before the sidekick starts.
+				if (budget.sidekick) {
+					const label = (await loadTreeFor(deps, parent)).nodes.find(
+						(node) => node.id === childId,
+					)?.label;
+					const base = label
+						? await roundBase(context, deps, workspace, label, 1)
+						: undefined;
+					if (base) {
+						const sidekick: SidekickState = {
+							...budget.sidekick,
+							rounds: budget.sidekick.rounds.map((round) =>
+								round.n === 1 ? { ...round, base } : round,
+							),
+						};
+						budget = { ...budget, sidekick };
+						await deps.saveSidekick(childId, sidekick);
+					}
+				}
+				specSaved = true;
 			}
-		}
-		if (placement === "fork") {
-			const fork = await deps.fork({
-				machines: context.machines,
-				parentVm: workspace.vm,
-				slug: agentSessionMachineSlug(childId),
+			if (placement === "fork") {
+				if (!fork) {
+					stage = "fork";
+					fork = await deps.fork({
+						machines: context.machines,
+						parentVm: workspace.vm,
+						slug: agentSessionMachineSlug(childId),
+					});
+				}
+				if (!forkRecorded) {
+					stage = "fork";
+					await deps.saveProviderRef(childId, fork.vm);
+					await deps.mergeFork(childId, {
+						vmId: fork.vm,
+						sourceVmId: workspace.vm,
+						forkMs: fork.forkMs,
+						bootedAt: new Date(deps.now()).toISOString(),
+						base: fork.base,
+						parentHead: fork.parentHead,
+					});
+					forkRecorded = true;
+				}
+			}
+			stage = "reserve";
+			await deps.start(
+				startScope,
+				childId,
+				model.reasoning ? { reasoning: model.reasoning } : undefined,
+			);
+			return { childId, budget, placement, model, notice };
+		} catch (cause) {
+			const failure = startStageError(stage, cause);
+			lastFailure = failure;
+			deps.logStartFailure({
+				stage: failure.stage,
+				retryable: failure.retryable,
+				cause: failure.causeMessage,
+				attempt,
 			});
-			await deps.saveProviderRef(childId, fork.vm);
-			await deps.mergeFork(childId, {
-				vmId: fork.vm,
-				sourceVmId: workspace.vm,
-				forkMs: fork.forkMs,
-				bootedAt: new Date(deps.now()).toISOString(),
-				base: fork.base,
-				parentHead: fork.parentHead,
-			});
+			// Release a half-started reservation so the next attempt reserves the
+			// same row again; when a turn is already queued the send got through.
+			let released = true;
+			if (
+				failure.stage === "enqueue-first-turn" ||
+				failure.stage === "reserve"
+			) {
+				released = await deps
+					.releaseStart(parent.userId, parent.projectId, childId)
+					.catch(() => false);
+				if (!released && failure.stage === "enqueue-first-turn")
+					return { childId, budget, placement, model, notice };
+			}
+			const last = attempt === SUBAGENT_START_ATTEMPTS;
+			if (!failure.retryable || last || context.signal.aborted || !released)
+				break;
+			await deps.sleep(
+				SUBAGENT_START_BACKOFF_MS[attempt - 1] as number,
+				context.signal,
+			);
 		}
-		await deps.start(
-			{
-				userId: parent.userId,
-				projectId: parent.projectId,
-				sessionId: parent.id,
-				harnessId: parent.harness,
-				createNew: false,
-			},
-			childId,
-			model.reasoning ? { reasoning: model.reasoning } : undefined,
-		);
-	} catch (cause) {
-		await deps.markFailed(childId).catch(() => {});
-		throw cause;
 	}
-	return { childId, budget, placement, model, notice };
+	await deps.markFailed(childId).catch(() => {});
+	const failure = lastFailure as SubagentStartError;
+	const original = failure.causeMessage;
+	throw new SubagentStartRefused(
+		failure.retryable
+			? couldntStartMessage(failure.stage, original, made)
+			: original && !hasInternalFailureText(original)
+				? original
+				: `${COULDNT_START_PREFIX} (${plainStartReason(failure.stage, original)}). Nothing was changed.`,
+		failure.stage,
+		failure.retryable,
+	);
 }
 
 /**

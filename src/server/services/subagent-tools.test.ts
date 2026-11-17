@@ -12,6 +12,7 @@ import {
 	type SidekickState,
 } from "#/domain/sidekick";
 import type { SubagentRole } from "#/domain/subagent";
+import { SubagentStartError } from "#/domain/subagent-start";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	checkerWorkerTools,
@@ -137,6 +138,8 @@ function harness(
 		start: vi.fn(async () => ({})),
 		routes: vi.fn(async () => []),
 		markFailed: vi.fn(async () => {}),
+		releaseStart: vi.fn(async () => true),
+		logStartFailure: vi.fn(),
 		takeReport: vi.fn(async () => null),
 		message: vi.fn(async () => ({}) as never),
 		stop: vi.fn(async () => {}),
@@ -358,19 +361,145 @@ describe("agent tool", () => {
 		});
 	});
 
-	it("marks the child failed when the fork or start fails", async () => {
+	it("marks the child failed when the fork fails for good, with a plain message", async () => {
 		const { deps, call } = harness({
 			deps: {
 				fork: vi.fn(async () => {
-					throw new Error("snapshot refused");
+					throw new Error("bad input for the fork");
 				}),
 			},
 		});
 		await expect(
 			call("agent", { role: "writer", title: "x", brief: "y" }),
-		).rejects.toThrow("snapshot refused");
+		).rejects.toThrow("bad input for the fork");
 		expect(deps.markFailed).toHaveBeenCalledWith("child-1");
 		expect(deps.start).not.toHaveBeenCalled();
+		expect(deps.fork).toHaveBeenCalledTimes(1);
+	});
+
+	describe("start retries", () => {
+		const args = { role: "writer", title: "x", brief: "y" };
+		const transient = () => new Error("ECONNRESET while copying the VM");
+
+		it("retries a transient first start: one row, one fork, one start, no failure, no markFailed", async () => {
+			const start = vi
+				.fn()
+				.mockRejectedValueOnce(
+					Object.assign(
+						new Error("An unknown error occurred in Effect.tryPromise"),
+						{
+							error: transient(),
+						},
+					),
+				)
+				.mockResolvedValue({});
+			const { deps, call, sessions } = harness({ deps: { start } });
+			const result = await call("agent", args);
+			expect(result.taskId).toBe("child-1");
+			expect(start).toHaveBeenCalledTimes(2);
+			expect(deps.openTask).toHaveBeenCalledTimes(1);
+			expect(deps.fork).toHaveBeenCalledTimes(1);
+			expect(deps.saveSpec).toHaveBeenCalledTimes(1);
+			expect(deps.markFailed).not.toHaveBeenCalled();
+			expect(deps.releaseStart).toHaveBeenCalledTimes(1);
+			expect(sessions.filter((entry) => entry.parentSessionId)).toHaveLength(1);
+			expect(deps.sleep).toHaveBeenCalledWith(400, expect.anything());
+			expect(JSON.stringify(result)).not.toMatch(/Effect|couldn't/i);
+		});
+
+		it("reuses a fork that an earlier attempt finished", async () => {
+			const start = vi
+				.fn()
+				.mockRejectedValueOnce(transient())
+				.mockRejectedValueOnce(transient())
+				.mockResolvedValue({});
+			const { deps, call } = harness({ deps: { start } });
+			await call("agent", args);
+			expect(deps.fork).toHaveBeenCalledTimes(1);
+			expect(deps.mergeFork).toHaveBeenCalledTimes(1);
+			expect(deps.sleep).toHaveBeenNthCalledWith(2, 1200, expect.anything());
+		});
+
+		it("retries a refused fork copy", async () => {
+			const fork = vi
+				.fn()
+				.mockRejectedValueOnce(new Error("VM copy refused: resource busy"))
+				.mockResolvedValue({
+					vm: WorkspaceId("vm-fork"),
+					forkMs: 1,
+					cwd: "/x",
+					base: "b",
+					parentHead: "h",
+				});
+			const { deps, call } = harness({ deps: { fork } });
+			await call("agent", args);
+			expect(fork).toHaveBeenCalledTimes(2);
+			expect(deps.openTask).toHaveBeenCalledTimes(1);
+			expect(deps.start).toHaveBeenCalledTimes(1);
+		});
+
+		it("fails cleanly after every attempt: plain message, logged per attempt, row marked failed", async () => {
+			const start = vi.fn(async () => {
+				throw Object.assign(
+					new Error("An unknown error occurred in Effect.tryPromise"),
+					{ error: new Error("ETIMEDOUT talking to the provider") },
+				);
+			});
+			const { deps, call, sessions } = harness({ deps: { start } });
+			const error = await call("agent", args).then(
+				() => null,
+				(e: Error & { retryable?: boolean; stage?: string }) => e,
+			);
+			expect(error?.message).toBe(
+				"Couldn't start the helper (the machine took too long to respond). I retried 3 times. Try again in a moment; nothing was changed.",
+			);
+			expect(error?.message).not.toMatch(/Effect|tryPromise/);
+			expect(error?.retryable).toBe(true);
+			expect(start).toHaveBeenCalledTimes(3);
+			expect(deps.logStartFailure).toHaveBeenCalledTimes(3);
+			expect(deps.logStartFailure).toHaveBeenLastCalledWith({
+				stage: "reserve",
+				retryable: true,
+				cause: "ETIMEDOUT talking to the provider",
+				attempt: 3,
+			});
+			expect(deps.markFailed).toHaveBeenCalledTimes(1);
+			expect(deps.openTask).toHaveBeenCalledTimes(1);
+			expect(sessions.filter((entry) => entry.parentSessionId)).toHaveLength(1);
+			// Every reservation was released, but the last (marked failed instead).
+			expect(deps.releaseStart).toHaveBeenCalledTimes(3);
+		});
+
+		it("does not retry a permanent error", async () => {
+			const start = vi.fn(async () => {
+				throw new Error(
+					"The subagent is already running or no longer available.",
+				);
+			});
+			const { deps, call } = harness({ deps: { start } });
+			await expect(call("agent", args)).rejects.toThrow("already running");
+			expect(start).toHaveBeenCalledTimes(1);
+			expect(deps.sleep).not.toHaveBeenCalled();
+			expect(deps.logStartFailure).toHaveBeenCalledWith(
+				expect.objectContaining({ retryable: false, attempt: 1 }),
+			);
+		});
+
+		it("treats a first turn that already queued as started", async () => {
+			const start = vi.fn(async () => {
+				throw new SubagentStartError(
+					"enqueue-first-turn",
+					new Error("ECONNRESET after queueing"),
+					true,
+				);
+			});
+			const releaseStart = vi.fn(async () => false);
+			const { deps, call } = harness({ deps: { start, releaseStart } });
+			const result = await call("agent", args);
+			expect(result.taskId).toBe("child-1");
+			expect(start).toHaveBeenCalledTimes(1);
+			expect(deps.markFailed).not.toHaveBeenCalled();
+		});
 	});
 
 	it("checks the usage windows before opening a child or forking its VM", async () => {
