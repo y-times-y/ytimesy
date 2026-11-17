@@ -113,7 +113,7 @@ const finish = (id: string, title: string) =>
 	});
 
 describe("a thread's turn end reaches Y²", () => {
-	it("wakes an idle Y² once, 30 s after the turn ended, naming the thread", async () => {
+	it("wakes an idle Y² once, 10 s after the turn ended, naming the thread", async () => {
 		const w = world();
 		w.note1(note(), T0);
 		w.note1(finish("t1", "Fix sign-up"), T0 + 5_000);

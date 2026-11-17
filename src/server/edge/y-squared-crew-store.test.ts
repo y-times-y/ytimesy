@@ -557,11 +557,13 @@ describe("wake policy: long-running heartbeat", () => {
 			note({ sessionId: "t2", state: "finished" }),
 			T0 + 240_000,
 		);
-		expect(settled.alarmAt).toBe(T0 + 270_000);
-		const fired = fire(crew, T0 + 270_000);
+		expect(settled.alarmAt).toBe(T0 + 240_000 + CREW_WAKE_DELAY_MS);
+		const fired = fire(crew, T0 + 240_000 + CREW_WAKE_DELAY_MS);
 		// t1 has been quiet only since that wake
-		expect(fired.rearmAt).toBe(T0 + 270_000 + CREW_HEARTBEAT_AFTER_MS);
-		expect(fired.body).toContain('"Fix sign-up" still working, 5 min.');
+		expect(fired.rearmAt).toBe(
+			T0 + 240_000 + CREW_WAKE_DELAY_MS + CREW_HEARTBEAT_AFTER_MS,
+		);
+		expect(fired.body).toContain('"Fix sign-up" still working, 4 min.');
 	});
 
 	it("sets no alarm when nothing is working, and none is left behind", () => {

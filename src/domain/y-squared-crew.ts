@@ -25,9 +25,9 @@ export const CREW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * A wake for a finished turn (or a thread the person started) never comes
  * sooner than this after the note that asked for it, or the previous wake.
  */
-export const CREW_WAKE_DELAY_MS = 30_000;
+export const CREW_WAKE_DELAY_MS = 10_000;
 /** The same for a thread that needs the person or failed: they want it sooner. */
-export const CREW_URGENT_WAKE_DELAY_MS = 15_000;
+export const CREW_URGENT_WAKE_DELAY_MS = 5_000;
 export const CREW_WAKES_PER_HOUR = 24;
 /** A wake that could not be enqueued is tried again this many times in all. */
 export const CREW_WAKE_RETRIES = 8;
