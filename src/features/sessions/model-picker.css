@@ -1,9 +1,11 @@
 .harness-picker {
+	position: relative;
 	width: min(360px, calc(100vw - 24px));
 	max-height: min(420px, var(--radix-popover-content-available-height), 70dvh);
 	padding: 0;
 	gap: 0;
-	overflow: hidden;
+	/* Visible so the detail card can sit beside the list; the body clips its own scroll. */
+	overflow: visible;
 	border: 1px solid var(--menu-border);
 	border-radius: var(--menu-radius);
 	background: var(--menu-bg);
@@ -720,5 +722,285 @@
 @keyframes model-section-refresh-spin {
 	to {
 		transform: rotate(360deg);
+	}
+}
+
+/* ---- Rows: price and check slot, fixed so nothing shifts ---- */
+.model-picker-body {
+	border-radius: 0 0 var(--menu-radius) var(--menu-radius);
+}
+.model-row-price {
+	flex: none;
+	margin-left: auto;
+	padding-left: 12px;
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.model-row-price[data-plan] {
+	font-size: 11px;
+}
+.model-picker-option > .model-row-price,
+.model-browser-option > .model-row-price {
+	flex: none;
+	overflow: visible;
+}
+.model-row-check,
+.model-picker-option > .model-row-check,
+.model-browser-option > .model-row-check {
+	display: grid;
+	flex: 0 0 14px;
+	overflow: visible;
+	place-items: center;
+	width: 14px;
+	height: 14px;
+	color: var(--list-text-strong);
+}
+.model-picker-option > span:not(.model-row-price):not(.model-row-check),
+.model-browser-option > span:not(.model-row-price):not(.model-row-check) {
+	flex: 1;
+}
+.model-picker-row,
+.model-picker-option,
+.model-browser-option,
+.model-favorite,
+.model-row-info {
+	transition:
+		background-color 120ms ease-out,
+		color 120ms ease-out,
+		opacity 140ms ease-out;
+}
+.model-picker-row:focus-within {
+	background: var(--list-hover-bg);
+}
+.model-picker-row:focus-within .model-favorite,
+.model-picker-row:focus-within .model-row-info {
+	opacity: 1;
+}
+
+/* Sticky section headers while the list scrolls. */
+.model-picker-catalog > .model-section-head,
+.model-picker-catalog > h3 {
+	position: sticky;
+	top: calc(var(--menu-pad) * -1);
+	z-index: 2;
+	background: var(--menu-bg);
+}
+
+/* The touch way into the detail card; mice use hover. */
+.model-row-info {
+	display: none;
+	flex: 0 0 32px;
+	place-items: center;
+	height: var(--list-row-height);
+	border: 0;
+	border-radius: var(--list-row-radius);
+	background: transparent;
+	color: var(--list-text-muted);
+	cursor: pointer;
+}
+@media (hover: none), (max-width: 759px) {
+	.model-row-info {
+		display: grid;
+	}
+}
+
+/* ---- Detail card ---- */
+.model-detail {
+	box-sizing: border-box;
+	width: 100%;
+	border-top: 1px solid var(--menu-divider);
+	background: var(--menu-bg);
+	color: var(--list-text);
+	font-size: var(--list-font-size);
+	animation: model-detail-in 140ms ease-out;
+}
+@keyframes model-detail-in {
+	from {
+		opacity: 0;
+	}
+}
+.model-detail-head {
+	display: flex;
+	align-items: center;
+	gap: var(--list-row-gap);
+	width: 100%;
+	min-height: 40px;
+	padding: 0 calc(var(--menu-pad) + var(--list-row-pad-x));
+	border: 0;
+	background: transparent;
+	color: var(--list-text-strong);
+	text-align: left;
+	font-size: var(--list-font-size);
+	cursor: pointer;
+}
+.model-detail-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.model-detail-summary {
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+	font-variant-numeric: tabular-nums;
+}
+.model-detail[data-expanded="false"] .model-detail-body {
+	display: none;
+}
+.model-detail-body {
+	padding: 0 calc(var(--menu-pad) + var(--list-row-pad-x)) var(--menu-pad);
+}
+.model-detail-facts {
+	display: grid;
+	gap: 6px;
+	margin: 0;
+}
+.model-detail-facts > div {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+}
+.model-detail-facts dt {
+	color: var(--list-text-muted);
+}
+.model-detail-facts dd {
+	margin: 0;
+	color: var(--list-text-strong);
+	font-variant-numeric: tabular-nums;
+}
+.model-detail-reasoning {
+	margin-top: 12px;
+	padding-top: 10px;
+	border-top: 1px solid var(--menu-divider);
+}
+.model-detail-reasoning-head {
+	display: flex;
+	justify-content: space-between;
+	margin-bottom: 8px;
+	color: var(--list-text-muted);
+}
+.model-detail-reasoning-head > :last-child {
+	color: var(--list-text-strong);
+}
+.model-detail-favorite {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	width: 100%;
+	min-height: 34px;
+	margin-top: 12px;
+	border: 0;
+	border-radius: var(--list-row-radius);
+	background: var(--list-hover-bg);
+	color: var(--list-text);
+	font-size: var(--list-font-size);
+	cursor: pointer;
+	transition: background-color 120ms ease-out;
+}
+.model-detail-favorite:hover {
+	background: var(--list-selected-bg);
+}
+
+/* ---- Reasoning slider: n segments, ticks between, a thumb on the chosen one ---- */
+.reasoning-slider {
+	position: relative;
+	display: grid;
+	grid-template-columns: repeat(var(--steps), 1fr);
+	height: 34px;
+	border-radius: var(--list-row-radius);
+	background: var(--list-hover-bg);
+	outline-offset: 2px;
+}
+.reasoning-slider:focus-visible {
+	outline: 2px solid var(--list-text-muted);
+}
+.reasoning-slider-fill {
+	position: absolute;
+	inset: 0 auto 0 0;
+	width: calc((var(--index) + 1) / var(--steps) * 100%);
+	border-radius: inherit;
+	background: color-mix(in srgb, var(--list-text-strong) 22%, transparent);
+	transition: width 160ms ease-out;
+}
+.reasoning-slider-step {
+	position: relative;
+	z-index: 1;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	cursor: pointer;
+}
+.reasoning-slider-tick {
+	width: 1px;
+	height: 10px;
+	background: var(--list-text-muted);
+	opacity: 0.6;
+}
+.reasoning-slider-step[data-active] .reasoning-slider-tick {
+	opacity: 0;
+}
+.reasoning-slider-thumb {
+	position: absolute;
+	top: 3px;
+	bottom: 3px;
+	left: calc(var(--index) / var(--steps) * 100% + 3px);
+	width: calc(100% / var(--steps) - 6px);
+	border-radius: calc(var(--list-row-radius) - 2px);
+	background: var(--list-text-strong);
+	box-shadow: 0 1px 3px #0006;
+	pointer-events: none;
+	transition: left 160ms ease-out;
+}
+
+/* Desktop: the card sits beside the list, bottom-aligned. */
+@media (min-width: 760px) and (hover: hover) {
+	.model-detail {
+		position: absolute;
+		bottom: 0;
+		left: calc(100% + 8px);
+		width: 260px;
+		border: 1px solid var(--menu-border);
+		border-radius: var(--menu-radius);
+		box-shadow: var(--menu-shadow);
+	}
+	.model-detail-head {
+		min-height: 44px;
+		cursor: default;
+		pointer-events: none;
+	}
+	.model-detail-summary {
+		display: none;
+	}
+	.model-detail[data-expanded="false"] .model-detail-body {
+		display: block;
+	}
+}
+@media (max-width: 480px) {
+	.model-row-info {
+		height: 44px;
+		flex-basis: 38px;
+	}
+	.reasoning-slider {
+		height: 40px;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.model-picker-row,
+	.model-picker-option,
+	.model-browser-option,
+	.model-favorite,
+	.model-row-info,
+	.model-detail,
+	.model-detail-favorite,
+	.reasoning-slider-fill,
+	.reasoning-slider-thumb {
+		animation: none;
+		transition: none;
 	}
 }
