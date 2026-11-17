@@ -492,11 +492,12 @@ describe("Y projects: the Y² and Threads sections", () => {
 
 	for (const sort of ["recent", "projects"] as const) {
 		describe(`${sort} view`, () => {
-			it("has one Y² text: the section header, never a second label in the row", () => {
+			it('labels the section "Super agent" once (the mark is already there), never a second label in the row', () => {
 				const html = view(sort);
-				expect(html.match(/Y²/g)).toHaveLength(1);
+				expect(html.match(/Super agent/g)).toHaveLength(1);
+				expect(html).not.toContain("Y²");
 				expect(html).toContain(
-					'<h3 class="sidebar-section-title" id="sidebar-section-y2">Y²</h3>',
+					'<h3 class="sidebar-section-title" id="sidebar-section-y2">Super agent</h3>',
 				);
 				expect(html).toContain('aria-labelledby="sidebar-section-y2"');
 				expect(html).toContain('aria-labelledby="sidebar-section-threads"');

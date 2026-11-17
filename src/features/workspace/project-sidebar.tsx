@@ -527,7 +527,7 @@ export function ProjectSidebar({
 				data-section="y2"
 				aria-labelledby="sidebar-section-y2"
 			>
-				{sectionHeader("y2", "Y²")}
+				{sectionHeader("y2", "Super agent")}
 				<ul className="sidebar-chats sidebar-y2-list">
 					{rows.map((row) => y2Row(row))}
 				</ul>
