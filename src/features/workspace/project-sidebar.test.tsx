@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -540,5 +541,98 @@ describe("a Y project's sidebar", () => {
 		expect(tree).toContain(">Thread 9<");
 		expect(tree.match(/data-done-overflow="true"/g)).toHaveLength(2);
 		expect(tree.match(/data-foldable="true"/g)).toHaveLength(10);
+	});
+});
+
+describe("Recent with Y² projects", () => {
+	const y2Chat = (updatedAt: string, waitingOn?: "question"): SidebarChat => ({
+		id: `${updatedAt}-y2`,
+		title: "Y²",
+		role: "y2",
+		updatedAt,
+		waitingOn,
+	});
+	const groups = [
+		{
+			project: alpha,
+			chats: [
+				y2Chat("2026-10-20T00:00:00Z"),
+				{
+					id: "a-ask",
+					title: "Asks",
+					updatedAt: "2026-10-19T00:00:00Z",
+					waitingOn: "question" as const,
+				},
+				{ id: "a-old", title: "Old", updatedAt: "2026-10-01T00:00:00Z" },
+			],
+		},
+		{
+			project: beta,
+			chats: [
+				y2Chat("2026-10-21T00:00:00Z", "question"),
+				{ id: "b1", title: "Beta thread", updatedAt: "2026-10-18T00:00:00Z" },
+			],
+		},
+	];
+	const html = (hydrated = true) =>
+		render("recent", hydrated, {
+			projectChats: groups,
+			chats: groups[0].chats,
+		});
+	const group = (out: string, name: string) => {
+		const start = out.indexOf(`data-group="${name}"`);
+		const next = out.indexOf('class="sidebar-status-group"', start + 1);
+		return out.slice(start, next === -1 ? undefined : next);
+	};
+
+	it("puts the Y² chats in their own group on top, named by project", () => {
+		const out = html();
+		expect(out.indexOf('data-group="y2"')).toBeLessThan(
+			out.indexOf('data-group="needs-you"'),
+		);
+		const y2 = group(out, "y2");
+		expect(y2).toContain("sidebar-y2-heading");
+		expect(y2.match(/data-role="y2"/g)).toHaveLength(2);
+		expect(y2.match(/class="y2-mark"/g)?.length).toBeGreaterThanOrEqual(3);
+		expect(y2.indexOf(">Beta<")).toBeLessThan(y2.indexOf(">Alpha<"));
+		expect(y2).toContain('title="Y² · Alpha"');
+		expect(y2).not.toContain("Asks");
+		expect(y2).not.toContain("sidebar-chat-pin");
+	});
+
+	it("keeps Y threads in the status groups and a waiting Y² only in its own group", () => {
+		const out = html();
+		expect(group(out, "needs-you")).toContain(">Asks<");
+		expect(group(out, "needs-you")).not.toContain('data-role="y2"');
+		expect(group(out, "done")).toContain(">Beta thread<");
+		expect(out.match(/data-role="y2"/g)).toHaveLength(2);
+		// The waiting Y² shows its status mark in the Y² group.
+		expect(group(out, "y2")).toContain('data-status="asking"');
+	});
+
+	it("leaves the Y² group out of the rows script's fold while hydrating", () => {
+		const out = html(false);
+		expect(group(out, "y2")).not.toContain("data-done-overflow");
+		expect(group(out, "y2")).toContain("data-seen-key");
+	});
+
+	it("shows nothing extra when no project has Y", () => {
+		const out = render("recent");
+		expect(out).not.toContain('data-group="y2"');
+	});
+});
+
+describe("Projects view hierarchy (styles)", () => {
+	const css = readFileSync(
+		new URL("../../styles.css", import.meta.url),
+		"utf8",
+	);
+	it("indents Y² one icon column under its project, threads one level deeper", () => {
+		expect(css).toMatch(
+			/\.sidebar-y2 \{[^}]*padding-left: var\(--list-icon-size\);/,
+		);
+		expect(css).toMatch(
+			/\.sidebar-y2-branch \{[^}]*padding-left: calc\(var\(--list-row-pad-x\) \+ var\(--list-icon-size\)\);/,
+		);
 	});
 });

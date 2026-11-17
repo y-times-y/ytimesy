@@ -53,6 +53,7 @@ import {
 	projectFolderIsExpanded,
 	projectsByRecentActivity,
 	recentSidebarChats,
+	recentY2Chats,
 	SIDEBAR_COLLAPSED_PROJECTS_KEY,
 	SIDEBAR_PINNED_CHATS_KEY,
 	SIDEBAR_SORT_KEY,
@@ -232,6 +233,7 @@ export function ProjectSidebar({
 						?.chats ?? []),
 	}));
 	const recentChats = recentSidebarChats(groups, shownPinnedIds);
+	const recentY2 = recentY2Chats(groups);
 	const [doneExpanded, setDoneExpanded] = useState(false);
 	const orderedProjects = projectsByRecentActivity(projects, groups);
 	function chooseSort(next: SidebarSort) {
@@ -432,6 +434,26 @@ export function ProjectSidebar({
 	}
 
 	/**
+	 * Recent's Y² group, above the status groups: one row per Y project, so a
+	 * Y² that waits on the person shows here once (not again under Needs you).
+	 */
+	function y2Section(rows: readonly { chat: SidebarChat; project: Project }[]) {
+		if (!rows.length) return null;
+		return (
+			<li key="y2" className="sidebar-status-group" data-group="y2">
+				<h3 className="sidebar-status-heading sidebar-y2-heading">
+					<YSquaredMark size={16} />
+					<span>Y²</span>
+					<span className="sidebar-status-count">{rows.length}</span>
+				</h3>
+				<ul className="sidebar-chats">
+					{rows.map(({ chat, project }) => chatRow(chat, { project }))}
+				</ul>
+			</li>
+		);
+	}
+
+	/**
 	 * The project's Y² chat heading its threads. Before hydration the branch
 	 * renders open with every thread; the first-paint sheet folds what this
 	 * browser saved (--y2-branch, data-done-overflow).
@@ -574,6 +596,9 @@ export function ProjectSidebar({
 		const age = compactRelativeAge(chat.updatedAt, nowMs);
 		const pinned = shownPinnedIds.includes(chat.id);
 		const projectName = project ? projectDisplayName(project) : null;
+		// In Recent, a project's Y² chat reads as the project's overview: the Y²
+		// mark in the icon column, the project's name as its title.
+		const y2OfProject = chat.role === "y2" && project ? project : null;
 		const row = (
 			<li
 				key={chat.id}
@@ -602,7 +627,9 @@ export function ProjectSidebar({
 					title={
 						label
 							? undefined
-							: [chat.title, projectName].filter(Boolean).join(" · ")
+							: y2OfProject
+								? `Y² · ${projectName}`
+								: [chat.title, projectName].filter(Boolean).join(" · ")
 					}
 					aria-current={chat.id === selectedChatId ? "page" : undefined}
 					onPointerEnter={() => onChatIntent?.(chat.id)}
@@ -617,15 +644,23 @@ export function ProjectSidebar({
 					    chat's project; under a project, empty so titles line up
 					    with the project's name. */}
 					<span className="sidebar-chat-lead" aria-hidden="true">
-						{project ? (
+						{y2OfProject ? (
+							<YSquaredMark size={16} live={chatRunning(chat)} />
+						) : project ? (
 							<span
 								className="sidebar-project-dot"
 								style={{ background: projectColor(project.id) }}
 							/>
 						) : null}
 					</span>
-					<span className="sidebar-chat-title">{chat.title}</span>
-					{projectName ? <span className="sr-only">{projectName}</span> : null}
+					<span className="sidebar-chat-title">
+						{y2OfProject ? projectName : chat.title}
+					</span>
+					{y2OfProject ? (
+						<span className="sr-only">Y²</span>
+					) : projectName ? (
+						<span className="sr-only">{projectName}</span>
+					) : null}
 					{shown.kind === "working" ? (
 						<span className="sr-only">Working</span>
 					) : null}
@@ -875,8 +910,9 @@ export function ProjectSidebar({
 						</div>
 					) : null}
 					{projects.length && shownSort !== "projects" ? (
-						recentChats.length ? (
+						recentChats.length || recentY2.length ? (
 							<RecentSections
+								y2={y2Section(recentY2)}
 								sections={sidebarStatusSections(
 									recentChats,
 									(row) => chatStatus(row.chat),
@@ -1037,12 +1073,15 @@ type StatusSections = ReturnType<
 
 /** The Recent list by status: Needs you, Working, then Done (folded after a few). */
 function RecentSections({
+	y2,
 	sections,
 	firstPaintDone,
 	render,
 	onShowMore,
 	firstPaintView,
 }: {
+	/** The Y² group (one Y² chat per Y project), above the status groups. */
+	y2: ReactNode;
 	sections: StatusSections;
 	/** Before hydration: every Done row, so saved pins past the fold can show. */
 	firstPaintDone?: StatusSections["done"];
@@ -1061,6 +1100,7 @@ function RecentSections({
 			className="sidebar-recent sidebar-status-groups"
 			data-sort-view={firstPaintView}
 		>
+			{y2}
 			{render(
 				"needs-you",
 				"Needs you",

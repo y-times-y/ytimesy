@@ -484,17 +484,44 @@ export type ProjectChats<P extends { readonly id: string }> = {
 	readonly chats: readonly SidebarChat[];
 };
 
+type RecentRow<P> = { readonly chat: SidebarChat; readonly project: P };
+
+const newestFirst = <P>(rows: RecentRow<P>[]) =>
+	rows.sort((a, b) => activityMs(b.chat) - activityMs(a.chat));
+
 /**
- * Every chat across projects, newest activity first (pinned chats on top),
- * each with the project it belongs to.
+ * Recent's Y² group: each Y project's Y² chat (src/domain/y-squared.ts), newest
+ * activity first. Y² is the project's own overview, not a thread, so it never
+ * mixes with recentSidebarChats; it cannot be pinned.
+ */
+export function recentY2Chats<P extends { readonly id: string }>(
+	groups: readonly ProjectChats<P>[],
+): RecentRow<P>[] {
+	return newestFirst(
+		groups.flatMap(({ project, chats }) =>
+			chats
+				.filter((chat) => chat.role === "y2")
+				.map((chat) => ({ chat, project })),
+		),
+	);
+}
+
+/**
+ * Every ordinary chat and Y thread across projects (not the Y² chats, see
+ * recentY2Chats), newest activity first (pinned chats on top), each with the
+ * project it belongs to.
  */
 export function recentSidebarChats<P extends { readonly id: string }>(
 	groups: readonly ProjectChats<P>[],
 	pinnedIds: readonly string[] = [],
-): { readonly chat: SidebarChat; readonly project: P }[] {
-	const rows = groups
-		.flatMap(({ project, chats }) => chats.map((chat) => ({ chat, project })))
-		.sort((a, b) => activityMs(b.chat) - activityMs(a.chat));
+): RecentRow<P>[] {
+	const rows = newestFirst(
+		groups.flatMap(({ project, chats }) =>
+			chats
+				.filter((chat) => chat.role !== "y2")
+				.map((chat) => ({ chat, project })),
+		),
+	);
 	const pinned = new Set(pinnedIds);
 	return [
 		...rows.filter((row) => pinned.has(row.chat.id)),
