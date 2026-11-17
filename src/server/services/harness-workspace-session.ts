@@ -7,13 +7,13 @@ import type {
 } from "#/domain/message-attachment";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
+import { startStageError } from "#/domain/subagent-start";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	claimChatForSend,
 	releaseChatClaim,
 	releasingChatClaimOnFailure,
-	saveAgentTaskState,
 	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
 import { warmCodexSubscriptionCatalog } from "../adapters/codex-subscription";
@@ -53,32 +53,36 @@ export function startPreparedAgentTask(
 ): Effect.Effect<{ id: string; machineId: string | null }, unknown> {
 	return Effect.gen(function* () {
 		if (!scope.projectId) throw new Error("The project is not available.");
-		const { task } = yield* Effect.tryPromise(() =>
-			prepareAgentTaskStart({
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				taskSessionId,
-			}),
-		);
+		// Every promise on this path carries its stage and the original error
+		// (the unmapped form reports only Effect's "unknown error" text).
+		const { task } = yield* Effect.tryPromise({
+			try: () =>
+				prepareAgentTaskStart({
+					userId: scope.userId,
+					projectId: scope.projectId as string,
+					taskSessionId,
+				}),
+			catch: (cause) => startStageError("reserve", cause),
+		});
 		if (!task.taskPrompt || !task.listedModelId)
 			throw new Error("The subagent is missing its brief or model.");
 		const send =
 			task.harness === "api" ? sendApiWorkspaceTask : sendSubscriptionTask;
-		yield* Effect.tryPromise(() =>
-			send(
-				taskScope(scope, task),
-				{
-					text: task.taskPrompt as string,
-					modelId: task.listedModelId as string,
-					...(options?.reasoning ? { variant: options.reasoning } : {}),
-				},
-				true,
-			),
-		).pipe(
-			Effect.tapError(() =>
-				Effect.tryPromise(() => saveAgentTaskState(task.id, "failed")),
-			),
-		);
+		yield* Effect.tryPromise({
+			try: () =>
+				send(
+					taskScope(scope, task),
+					{
+						text: task.taskPrompt as string,
+						modelId: task.listedModelId as string,
+						...(options?.reasoning ? { variant: options.reasoning } : {}),
+					},
+					true,
+				),
+			catch: (cause) => startStageError("enqueue-first-turn", cause),
+		});
+		// A failure leaves the row reserved: subagent-tools releases it for a
+		// retry (releaseAgentTaskStart) or marks it failed.
 		return { id: task.id, machineId: task.providerRef };
 	});
 }

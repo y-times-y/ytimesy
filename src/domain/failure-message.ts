@@ -3,11 +3,40 @@ import {
 	USAGE_WINDOW_REFUSAL_PATTERN,
 } from "./infrastructure-usage";
 
-const GENERIC_EFFECT_PROMISE_FAILURE =
+/** Effect's default message for `Effect.tryPromise(fn)` without a `catch`. */
+export const EFFECT_GENERIC_FAILURE =
 	"An unknown error occurred in Effect.tryPromise";
+const GENERIC_EFFECT_PROMISE_FAILURE = EFFECT_GENERIC_FAILURE;
+export const GENERIC_SERVER_FAILURE =
+	"Something went wrong on our side. It's been logged; try again.";
+
+/**
+ * The generic boundary: text that reaches a tool result or the UI. Effect's
+ * default text (and its FiberFailure wrapper) becomes plain words, with the
+ * stage when the failure carries one.
+ */
+export function plainFailureText(text: string, stage?: string): string {
+	if (!/Effect\.tryPromise|FiberFailure|UnknownException/.test(text))
+		return text;
+	return stage
+		? `${GENERIC_SERVER_FAILURE} (stage: ${stage})`
+		: GENERIC_SERVER_FAILURE;
+}
+
+function failureStage(cause: unknown, depth = 0): string | undefined {
+	if (!cause || typeof cause !== "object" || depth > 6) return undefined;
+	const record = cause as { stage?: unknown; error?: unknown; cause?: unknown };
+	if (typeof record.stage === "string") return record.stage;
+	return (
+		failureStage(record.error, depth + 1) ??
+		failureStage(record.cause, depth + 1)
+	);
+}
 
 export function failureMessage(cause: unknown): string {
 	const message = unwrapFailureMessage(cause, new Set());
+	if (!message && hasGenericEffectText(cause))
+		return plainFailureText(EFFECT_GENERIC_FAILURE, failureStage(cause));
 	return (
 		(message && usageCapFailureMessage(message)) ||
 		message ||
@@ -57,6 +86,22 @@ export function isWorkspaceAtCapacity(message: string) {
 export function isWorkspaceComputeAllowanceExhausted(message: string) {
 	return /allowance for vcpu_time|memory_time has been used|compute allowance|vCPU-hour allowance/i.test(
 		message,
+	);
+}
+
+function hasGenericEffectText(cause: unknown, depth = 0): boolean {
+	if (typeof cause === "string") return cause.includes(EFFECT_GENERIC_FAILURE);
+	if (!cause || typeof cause !== "object" || depth > 6) return false;
+	const record = cause as {
+		message?: unknown;
+		error?: unknown;
+		cause?: unknown;
+	};
+	return (
+		(typeof record.message === "string" &&
+			record.message.includes(EFFECT_GENERIC_FAILURE)) ||
+		hasGenericEffectText(record.error, depth + 1) ||
+		hasGenericEffectText(record.cause, depth + 1)
 	);
 }
 

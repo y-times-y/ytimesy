@@ -832,7 +832,7 @@ const HelperFinishCard = memo(function HelperFinishCard({
 				<span className="helper-card-name">{card.name}</span>
 				<span className="helper-card-task">
 					<span className="helper-card-verb" data-verb={card.verb}>
-						{card.verb}
+						{card.label}
 					</span>
 					{` · ${card.task}`}
 				</span>

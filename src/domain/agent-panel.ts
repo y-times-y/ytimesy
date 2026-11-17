@@ -10,6 +10,7 @@ import {
 } from "./child-task-activity";
 import { commandActivityTitle } from "./command-activity-title";
 import { mcpServerLabel } from "./connector-name";
+import { plainFailureText } from "./failure-message";
 import { fileChangeActivity } from "./file-change-copy";
 import {
 	type AgentIcon,
@@ -696,7 +697,9 @@ export function helperFinishCard(
 	identity?: Pick<HelperIdentity, "name" | "task">,
 ): {
 	readonly name: string;
-	readonly verb: "finished" | "failed";
+	readonly verb: "finished" | "failed" | "unstarted";
+	/** The verb as shown: "Couldn't start" for a helper that never got going. */
+	readonly label: string;
 	readonly task: string;
 	readonly duration: string;
 	readonly line: string;
@@ -708,9 +711,17 @@ export function helperFinishCard(
 	const error = failed
 		? [...items].reverse().find((item) => item.kind === "error")
 		: undefined;
-	const line =
-		error?.kind === "error"
-			? firstLine(visibleErrorMessage(error), 240)
+	// Failed with no report and no work: the start itself failed (the parent
+	// was told why). A muted "Couldn't start", not a red failure.
+	const unstarted =
+		failed &&
+		!error &&
+		!body &&
+		!items.some((item) => item.kind !== "userMessage");
+	const line = unstarted
+		? "Nothing was changed. Ask for it again in a moment."
+		: error?.kind === "error"
+			? firstLine(plainFailureText(visibleErrorMessage(error)), 240)
 			: reportSummaryLine(body) || reportSummaryLine(lastAgentText(items));
 	const metric = helperMetric(task);
 	const meta = task.summary ? splitReportHeader(task.summary).meta : null;
@@ -720,7 +731,8 @@ export function helperFinishCard(
 	);
 	return {
 		name: identity?.name ?? helperName(task.title),
-		verb: failed ? "failed" : "finished",
+		verb: unstarted ? "unstarted" : failed ? "failed" : "finished",
+		label: unstarted ? "Couldn't start" : failed ? "failed" : "finished",
 		task: identity?.task ?? helperName(task.title),
 		duration:
 			metric.endedAt === undefined

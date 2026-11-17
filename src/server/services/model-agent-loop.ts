@@ -33,6 +33,7 @@ import {
 	DegenerateOutput,
 	whitespaceRun,
 } from "#/domain/degenerate-output";
+import { plainFailureText } from "#/domain/failure-message";
 import {
 	harnessModelFamily,
 	harnessModelToolInstructions,
@@ -1578,7 +1579,10 @@ async function executeModelSteps(
 						name: part.toolName,
 						output:
 							part.error instanceof Error
-								? part.error.message
+								? plainFailureText(
+										part.error.message,
+										(part.error as { stage?: string }).stage,
+									)
 								: "Tool execution failed.",
 						failed: true,
 					});

@@ -589,6 +589,35 @@ describe("session timeline after a reload", () => {
 		);
 	});
 
+	it("says Couldn't start on a helper that never started, with no raw error", () => {
+		const task = {
+			id: "h1",
+			parentSessionId: "root",
+			title: "Fix the parser",
+			label: "Task 1",
+			depth: 1,
+			status: "failed",
+			prompt: "",
+			placement: "fresh",
+			access: "read_write",
+			summary: null,
+			harnessId: "api",
+			listedModelId: null,
+			createdAt: new Date(1_000).toISOString(),
+			updatedAt: new Date(2_000).toISOString(),
+			items: [],
+			turnStatus: "failed",
+		} as AgentTaskActivity;
+		const html = render(
+			[user("ask"), spawn, answer("a1", "Started a helper.")],
+			"completed",
+			[task],
+		);
+		expect(html).toContain('data-verb="unstarted">Couldn&#x27;t start</span>');
+		expect(html).toContain("Nothing was changed.");
+		expect(html).not.toMatch(/Effect|tryPromise|data-verb="failed"/);
+	});
+
 	it("marks a stopped turn with a muted Stopped line", () => {
 		const html = render(
 			withStoppedNotice(

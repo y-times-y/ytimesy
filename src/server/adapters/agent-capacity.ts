@@ -41,3 +41,28 @@ export async function reserveAgentTaskStart(
 		?.parent_session_id;
 	if (parent) noteUserHub(userId, [hubTopic.agents(parent)]);
 }
+
+/**
+ * Undoes reserveAgentTaskStart after a failed first send, so a retry can
+ * reserve the same row again (one row, one reservation). Returns false when
+ * the row is not reserved or a turn is already queued or running for it: the
+ * send got through, and the start must not be repeated.
+ */
+export async function releaseAgentTaskStart(
+	userId: string,
+	projectId: string,
+	taskId: string,
+): Promise<boolean> {
+	const result = await database().query(
+		`update agent_session set task_state='draft',turn_status='idle',updated_at=now()
+		where id=$3 and user_id=$1 and project_id=$2 and parent_session_id is not null
+		and task_state='working'
+		and not exists(select 1 from api_turn t where t.session_id=$3 and t.state in ('queued','running'))
+		returning id,parent_session_id`,
+		[userId, projectId, taskId],
+	);
+	const parent = (result.rows[0] as { parent_session_id?: string } | undefined)
+		?.parent_session_id;
+	if (parent) noteUserHub(userId, [hubTopic.agents(parent)]);
+	return !!result.rowCount;
+}
