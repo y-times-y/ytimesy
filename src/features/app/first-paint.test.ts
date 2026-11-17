@@ -13,7 +13,6 @@ import {
 	SIDEBAR_PINNED_STORAGE_KEY,
 	SIDEBAR_SORT_KEY,
 } from "#/domain/sidebar-chats";
-import { SIDEBAR_COLLAPSED_Y2_KEY } from "#/domain/sidebar-tree";
 import {
 	COMPOSER_DRAFT_SCRIPT,
 	FIRST_PAINT_ROWS_SCRIPT,
@@ -78,7 +77,6 @@ const saved = {
 	[SIDEBAR_PINNED_STORAGE_KEY]: "1",
 	[SIDEBAR_SORT_KEY]: "recent",
 	[SIDEBAR_COLLAPSED_PROJECTS_KEY]: JSON.stringify(["project-1"]),
-	[SIDEBAR_COLLAPSED_Y2_KEY]: JSON.stringify(["project-2"]),
 	[SIDEBAR_PINNED_CHATS_KEY]: JSON.stringify(["chat-1", "chat-2"]),
 };
 
@@ -124,7 +122,6 @@ describe("first-paint script", () => {
 			sidebarOpen: true,
 			sidebarSort: "recent",
 			collapsedProjectIds: ["project-1"],
-			collapsedY2ProjectIds: ["project-2"],
 			pinnedChatIds: ["chat-1", "chat-2"],
 		});
 		expect(page.document.documentElement.dataset).toEqual({
@@ -136,8 +133,7 @@ describe("first-paint script", () => {
 		expect(sheet?.text).toBe(
 			'.sidebar-chat-row[data-chat-id="chat-1"]{--chat-pinned:1}' +
 				'.sidebar-chat-row[data-chat-id="chat-2"]{--chat-pinned:1}' +
-				'.sidebar-project[data-project-id="project-1"]{--folder-chats:none;--folder-chevron:none}' +
-				'.sidebar-y2[data-project-id="project-2"]{--y2-branch:none;--y2-chevron:none;--y2-toggle-shown:1}',
+				'.sidebar-project[data-project-id="project-1"]{--folder-chats:none;--folder-chevron:none}',
 		);
 	});
 
@@ -194,8 +190,8 @@ function runRowsScript(input: {
 const UNREAD_ROWS = "[data-unread-mark]";
 const DONE_ROWS =
 	'.sidebar-recent [data-group="done"][data-section="plain"] .sidebar-chat-row';
-const Y_DONE_ROWS =
-	'.sidebar-recent [data-group="done"][data-section="y"] .sidebar-chat-row';
+const THREADS_DONE_ROWS =
+	'.sidebar-threads-section .sidebar-chat-row[data-group="done"]';
 const reply = (id: string, updatedAt: string): FakeRow => ({
 	dataset: {
 		chatId: id,
@@ -264,45 +260,49 @@ describe("first-paint rows script", () => {
 		);
 	});
 
-	it("folds the Y section's Done apart from the plain chats' Done", () => {
+	it("folds the Threads section's Settled apart from the plain chats' Done", () => {
 		const row = (id: string, overflow = false): FakeRow => ({
 			dataset: { chatId: id, doneOverflow: overflow ? "true" : undefined },
 		});
 		const css = runRowsScript({
 			pinnedChatIds: ["late"],
 			rows: {
-				[Y_DONE_ROWS]: [row("a"), row("b"), row("late", true)],
+				[THREADS_DONE_ROWS]: [row("a"), row("b"), row("late", true)],
 				[DONE_ROWS]: [row("p1"), row("p2")],
 			},
 		});
 		expect(css).toBe(
-			'.sidebar-recent [data-chat-id="b"]{display:none}' +
-				'.sidebar-recent [data-chat-id="late"]{display:flex}',
+			'.sidebar-threads-section [data-chat-id="b"]{display:none}' +
+				'.sidebar-threads-section [data-chat-id="late"]{display:flex}',
 		);
 	});
 
-	it("shows a saved pin past the fold of a Y project's finished threads", () => {
+	it("shows a saved pin past the Settled fold of the Threads section", () => {
 		const row = (id: string, overflow = false): FakeRow => ({
 			dataset: {
 				chatId: id,
-				foldable: "true",
 				doneOverflow: overflow ? "true" : undefined,
 			},
 		});
 		const css = runRowsScript({
 			pinnedChatIds: ["late"],
 			rows: {
-				".sidebar-y2-threads .sidebar-chat-row[data-foldable]": [
-					row("a"),
-					row("b"),
-					row("late", true),
-				],
+				[THREADS_DONE_ROWS]: [row("a"), row("b"), row("late", true)],
 			},
 		});
 		expect(css).toBe(
-			'.sidebar-y2-threads [data-chat-id="b"]{display:none}' +
-				'.sidebar-y2-threads [data-chat-id="late"]{display:flex}',
+			'.sidebar-threads-section [data-chat-id="b"]{display:none}' +
+				'.sidebar-threads-section [data-chat-id="late"]{display:flex}',
 		);
+	});
+
+	it("asks for the Threads section's rows by data-group, not the old nested branch", () => {
+		expect(FIRST_PAINT_ROWS_SCRIPT).toContain(".sidebar-threads-section");
+		expect(FIRST_PAINT_ROWS_SCRIPT).toMatch(
+			/\.sidebar-chat-row\[data-group=\\?"done\\?"\]/,
+		);
+		expect(FIRST_PAINT_ROWS_SCRIPT).not.toContain("sidebar-y2");
+		expect(FIRST_PAINT_SCRIPT).not.toContain("--y2-");
 	});
 });
 

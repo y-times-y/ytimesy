@@ -351,24 +351,8 @@ button:enabled:active {
 	font-weight: var(--list-heading-weight);
 	letter-spacing: 0.02em;
 }
-.sidebar-y2-heading {
-	color: var(--list-text-strong);
-}
 .sidebar-status-group:first-child .sidebar-status-heading {
 	margin-top: 0;
-}
-/* Recent: a labelled section ("Y", "Chats") below the Y² group: the same
-   label style, a divider above, its status groups beneath. */
-.sidebar-section-label {
-	margin-top: 10px;
-	border-top: 1px solid var(--menu-divider);
-}
-.sidebar-section-label .sidebar-status-heading {
-	margin-top: 6px;
-	margin-bottom: 0;
-}
-.sidebar-section-label + .sidebar-status-group .sidebar-status-heading {
-	margin-top: 2px;
 }
 .sidebar-status-count {
 	color: #5c5c5c;
@@ -853,139 +837,161 @@ button:enabled:active {
 	fill: currentColor;
 	fill-opacity: var(--chat-pinned, 0);
 }
-/* ---- Y² tree (src/domain/sidebar-tree.ts) ----------------------------
-   In a Y project two labelled sections sit under the project row: "Y²"
-   (the overview row) and, past a divider, "Y" (the threads Y² watches,
-   with the fold toggle and needs-you count on its label). The threads are
-   not inside the Y² row. Before hydration the boot sheet folds a saved
-   Y section through --y2-branch, --y2-chevron and --y2-toggle-shown
-   (src/features/app/first-paint.ts). */
-.sidebar-y2 {
-	/* A child of its project: one icon column in from the project's folder
-	   row, so the section labels sit under the folder icon's right edge, not
-	   level with it. */
-	padding-left: var(--list-icon-size);
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	min-width: 0;
+/* ---- Y² and Threads sections (src/domain/sidebar-tree.ts) ----------
+   Two flat, top-level sections of equal weight, never nested under a
+   project: "Y²" (one row per Y project: mark, project name, age, a grey
+   summary line) and "Threads" (the Y projects' threads, one flat list: title
+   and age, then a grey line with the project, model, machine and PR). The
+   structure comes from the section headers and the second line, not from
+   indentation or a guide line. */
+.sidebar-y-sections {
+	flex: 0 1 auto;
+	min-height: 0;
+	max-height: 62%;
+	overflow-y: auto;
+	margin-bottom: 4px;
 }
-.sidebar-y2[data-open="false"] {
-	--y2-toggle-shown: 1;
-}
-.sidebar-y2-row .sidebar-chat-title {
-	color: var(--list-text-strong);
-	font-weight: 600;
-}
-.sidebar-y2-row .sidebar-chat-trailing {
-	gap: 4px;
-}
-.sidebar-y2-section > .sidebar-y2-label {
-	margin: 0 0 2px;
-}
-.sidebar-y2-threads-section {
+.sidebar-section + .sidebar-section {
 	margin-top: 6px;
-	padding-top: 4px;
-	border-top: 1px solid var(--menu-divider);
 }
-.sidebar-y2-threads-section > .sidebar-y2-label {
-	margin-top: 2px;
+.sidebar-section-header {
+	justify-content: space-between;
+	margin: 6px 0 2px;
+	color: var(--list-text-strong);
 }
-.sidebar-y2-label-text {
+.sidebar-section-title {
 	margin: 0;
 	font: inherit;
 	letter-spacing: inherit;
 }
-.sidebar-y2-label-trailing {
+.sidebar-section-actions {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	margin-left: auto;
+	gap: 2px;
 }
-.sidebar-y2-count {
-	display: inline-grid;
-	place-items: center;
-	min-width: 16px;
-	height: 16px;
-	margin-left: 2px;
-	padding: 0 5px;
-	border-radius: 999px;
-	background: var(--accent-blue);
-	color: #fff;
-	font-size: 10.5px;
-	font-weight: 600;
-	font-variant-numeric: tabular-nums;
-	line-height: 1;
-}
-.sidebar-y2-toggle {
+.sidebar-section-add {
 	display: grid;
 	place-items: center;
-	width: 18px;
-	height: 18px;
+	width: 22px;
+	height: 22px;
 	margin: 0;
 	padding: 0;
 	border: 0;
-	border-radius: 5px;
+	border-radius: 6px;
 	background: transparent;
 	color: var(--list-icon-color);
-	opacity: var(--y2-toggle-shown, 0);
-	transition:
-		opacity 120ms ease,
-		color 120ms ease;
 }
-.sidebar-y2-label:hover .sidebar-y2-toggle,
-.sidebar-y2-toggle:focus-visible {
-	opacity: 1;
-}
-.sidebar-y2-toggle:hover {
+.sidebar-section-add:hover,
+.sidebar-section-add[data-active="true"] {
 	background: #ffffff14;
 	color: #f2f2f2;
 }
-.sidebar-y2-chevron {
+.sidebar-section .sidebar-chats {
+	margin: 0;
+}
+/* A two-line row: the title over a grey line of metadata. */
+.sidebar-chat-body {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.sidebar-chat-meta {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--list-text-muted);
+	font-size: 11px;
+	line-height: 1.2;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidebar-chat-meta-project {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.sidebar-chat-meta-project > span:last-child {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.sidebar-chat-meta-icon {
+	display: inline-grid;
+	flex: 0 0 auto;
+	place-items: center;
+}
+.sidebar-y2-row .sidebar-chat-title,
+.sidebar-chat-row[data-variant="thread"] .sidebar-chat-title {
+	color: var(--list-text-strong);
+	font-weight: 600;
+}
+/* A thread row: the button (title and metadata) spans both lines, the age
+   sits top right and the pull request bottom right, in one grid, so the PR
+   link is never nested inside the button. */
+.sidebar-chat-row[data-variant="thread"] {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-rows: auto auto;
+	align-items: center;
+	padding-block: 4px;
+}
+.sidebar-chat-row[data-variant="thread"] > .sidebar-chat {
+	grid-column: 1;
+	grid-row: 1 / span 2;
+	min-height: 0;
+}
+.sidebar-chat-row[data-variant="thread"] > .sidebar-chat-trailing {
+	grid-column: 2;
+	grid-row: 1;
+}
+.sidebar-chat-meta-end {
+	grid-column: 2;
+	grid-row: 2;
+	display: flex;
+	justify-content: flex-end;
+	padding-right: 6px;
+}
+.sidebar-settled {
+	margin-top: 2px;
+}
+.sidebar-settled-toggle {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	min-height: 28px;
+	padding: 0 var(--list-row-pad-x);
+	border: 0;
+	border-radius: var(--list-row-radius);
+	background: transparent;
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+	text-align: left;
+}
+.sidebar-settled-toggle:hover {
+	background: var(--list-hover-bg);
+	color: var(--list-text-strong);
+}
+.sidebar-settled-chevron {
 	transition: transform 160ms ease;
 }
-.sidebar-y2[data-open="true"] .sidebar-y2-chevron {
-	transform: var(--y2-chevron, rotate(90deg));
-}
-@media (hover: none) {
-	.sidebar-y2-toggle {
-		opacity: 1;
-	}
-}
-/* Threads' titles line up with the "Y" label's text, under the divider. */
-.sidebar-y2-branch {
-	display: var(--y2-branch, block);
-	padding-left: calc(var(--list-row-pad-x) + var(--list-icon-size));
-}
-.sidebar-y2[data-toggled] .sidebar-y2-branch {
-	animation: sidebar-y2-open 160ms ease-out;
-}
-@keyframes sidebar-y2-open {
-	from {
-		opacity: 0;
-		transform: translateY(-3px);
-	}
+.sidebar-settled[data-open="true"] .sidebar-settled-chevron {
+	transform: rotate(90deg);
 }
 @media (prefers-reduced-motion: reduce) {
-	.sidebar-y2[data-toggled] .sidebar-y2-branch,
-	.sidebar-y2-chevron {
-		animation: none;
+	.sidebar-settled-chevron {
 		transition: none;
 	}
 }
-.sidebar-y2 .sidebar-y2-threads {
-	margin: 0;
-}
-.sidebar-y2-threads .sidebar-chat-lead {
+/* Before hydration the Settled rows render; the rows script shows saved pins. */
+.sidebar-settled-list [data-done-overflow] {
 	display: none;
-}
-/* Before hydration every thread renders; the rows script swaps in saved pins. */
-.sidebar-y2-threads [data-done-overflow] {
-	display: none;
-}
-.sidebar-y2-more {
-	width: 100%;
-	margin-top: 2px;
 }
 /* A thread waiting on the user: the badge's colour, the unread dot's shape. */
 .sidebar-chat-needs-you {

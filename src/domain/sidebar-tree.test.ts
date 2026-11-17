@@ -1,128 +1,185 @@
 import { describe, expect, it } from "vitest";
-import type { SidebarChat, SidebarStatusGroup } from "./sidebar-chats";
 import {
-	Y2_THREADS_VISIBLE,
+	recentSections,
+	type SidebarChat,
+	type SidebarStatusGroup,
+} from "./sidebar-chats";
+import {
+	THREADS_SETTLED_AFTER,
+	threadSections,
 	y2NeedsYouLabel,
-	y2ThreadTree,
+	y2Rows,
+	y2Summary,
 } from "./sidebar-tree";
 
-const y2: SidebarChat = { id: "y2", title: "Y²", role: "y2" };
-const finished = (count: number, from = 0): SidebarChat[] =>
-	Array.from({ length: count }, (_, index) => ({
-		id: `t${from + index}`,
-		title: `Thread ${from + index}`,
-	}));
+const alpha = { id: "alpha" };
+const beta = { id: "beta" };
+const y2 = (updatedAt?: string): SidebarChat => ({
+	id: "y2",
+	title: "Y²",
+	role: "y2",
+	updatedAt,
+});
+const thread = (id: string, updatedAt?: string): SidebarChat => ({
+	id,
+	title: id,
+	updatedAt,
+});
+const statusFrom =
+	(statuses: Record<string, SidebarStatusGroup>) => (chat: SidebarChat) =>
+		statuses[chat.id] ?? "done";
 
-function tree(
-	chats: readonly SidebarChat[],
-	options: {
-		pinnedIds?: readonly string[];
-		selectedChatId?: string;
-		statuses?: Record<string, SidebarStatusGroup>;
-		expanded?: boolean;
-		keepFolded?: boolean;
-	} = {},
-) {
-	return y2ThreadTree({
-		chats,
-		pinnedIds: options.pinnedIds ?? [],
-		selectedChatId: options.selectedChatId,
-		statusOf: (chat) => options.statuses?.[chat.id] ?? "done",
-		expanded: options.expanded ?? false,
-		keepFolded: options.keepFolded,
-	});
-}
-
-const ids = (result: ReturnType<typeof tree>) =>
-	result?.threads.map((thread) => thread.chat.id);
-
-describe("Y² thread tree", () => {
-	it("is only for a project with a Y² chat", () => {
-		expect(tree(finished(3))).toBeNull();
+describe("y2Summary", () => {
+	it("counts what works and what needs the person", () => {
+		expect(y2Summary({ working: 2, needsYou: 1, total: 5 })).toBe(
+			"2 working · 1 needs you",
+		);
+		expect(y2Summary({ working: 0, needsYou: 3, total: 3 })).toBe(
+			"3 needs you",
+		);
+		expect(y2Summary({ working: 1, needsYou: 0, total: 1 })).toBe("1 working");
 	});
 
-	it("heads the threads with Y², wherever the list put it", () => {
-		const result = tree([...finished(2), y2]);
-		expect(result?.head.id).toBe("y2");
-		expect(ids(result)).toEqual(["t0", "t1"]);
+	it("says All idle with the thread count, or that there are none", () => {
+		expect(y2Summary({ working: 0, needsYou: 0, total: 3 })).toBe(
+			"All idle · 3 threads",
+		);
+		expect(y2Summary({ working: 0, needsYou: 0, total: 1 })).toBe(
+			"All idle · 1 thread",
+		);
+		expect(y2Summary({ working: 0, needsYou: 0, total: 0 })).toBe(
+			"No threads yet",
+		);
+	});
+});
+
+describe("y2Rows", () => {
+	const groups = [
+		{
+			project: alpha,
+			chats: [
+				y2("2026-10-01T00:00:00Z"),
+				thread("a-run", "2026-10-02T00:00:00Z"),
+				thread("a-ask", "2026-10-03T00:00:00Z"),
+				thread("a-done", "2026-10-04T00:00:00Z"),
+			],
+		},
+		{
+			project: beta,
+			chats: [{ ...y2("2026-10-10T00:00:00Z"), id: "y2b" }],
+		},
+	];
+	const sections = recentSections(groups);
+	const rows = y2Rows({
+		y2: sections.y2,
+		threads: sections.y,
+		statusOf: statusFrom({ "a-run": "working", "a-ask": "needs-you" }),
 	});
 
-	it("lists pinned threads first, the rest in the order they came", () => {
-		expect(ids(tree([y2, ...finished(4)], { pinnedIds: ["t2"] }))).toEqual([
-			"t2",
-			"t0",
-			"t1",
-			"t3",
-		]);
-	});
-
-	it("folds finished threads past the first few, never active or open ones", () => {
-		const chats = [
-			y2,
-			...finished(Y2_THREADS_VISIBLE + 3),
-			{ id: "asks", title: "Asks" },
-			{ id: "busy", title: "Busy" },
-			{ id: "open", title: "Open" },
-		];
-		const result = tree(chats, {
-			selectedChatId: "open",
-			statuses: { asks: "needs-you", busy: "working" },
+	it("makes one row per Y project with its summary and counts", () => {
+		const row = rows.find((r) => r.project.id === "alpha");
+		expect(rows).toHaveLength(2);
+		expect(row).toMatchObject({
+			working: 1,
+			needsYou: 1,
+			total: 3,
+			summary: "1 working · 1 needs you",
 		});
-		expect(result?.overflowCount).toBe(3);
-		expect(ids(result)).toEqual([
-			...finished(Y2_THREADS_VISIBLE).map((chat) => chat.id),
-			"asks",
-			"busy",
-			"open",
-		]);
-		expect(result?.threads.filter((thread) => thread.foldable)).toHaveLength(
-			Y2_THREADS_VISIBLE,
+		expect(rows.find((r) => r.project.id === "beta")?.summary).toBe(
+			"No threads yet",
 		);
 	});
 
-	it("shows every thread once expanded, still counting what folds", () => {
-		const result = tree([y2, ...finished(Y2_THREADS_VISIBLE + 2)], {
-			expanded: true,
-		});
-		expect(result?.threads).toHaveLength(Y2_THREADS_VISIBLE + 2);
-		expect(result?.threads.some((thread) => thread.pastFold)).toBe(false);
-		expect(result?.overflowCount).toBe(2);
+	it("takes the newest of the Y² chat's and its threads' activity, newest project first", () => {
+		expect(rows.map((r) => r.project.id)).toEqual(["beta", "alpha"]);
+		expect(rows[1]?.activityAt).toBe("2026-10-04T00:00:00Z");
 	});
 
-	it("lets pins take the fold's first slots", () => {
-		const chats = [y2, ...finished(Y2_THREADS_VISIBLE + 1)];
-		const late = `t${Y2_THREADS_VISIBLE}`;
-		const result = tree(chats, { pinnedIds: [late] });
-		expect(ids(result)?.[0]).toBe(late);
-		expect(ids(result)).not.toContain(`t${Y2_THREADS_VISIBLE - 1}`);
-	});
-
-	it("keeps folded threads, marked, for the server's first paint", () => {
-		const result = tree([y2, ...finished(Y2_THREADS_VISIBLE + 2)], {
-			keepFolded: true,
-		});
-		expect(result?.threads).toHaveLength(Y2_THREADS_VISIBLE + 2);
+	it("makes no row for a project without Y", () => {
+		const plain = recentSections([
+			{ project: alpha, chats: [thread("p1", "2026-10-01T00:00:00Z")] },
+		]);
 		expect(
-			result?.threads.filter((thread) => thread.pastFold).map((t) => t.chat.id),
-		).toEqual([`t${Y2_THREADS_VISIBLE}`, `t${Y2_THREADS_VISIBLE + 1}`]);
+			y2Rows({ y2: plain.y2, threads: plain.y, statusOf: () => "done" }),
+		).toEqual([]);
+		expect(plain.plain).toHaveLength(1);
+	});
+});
+
+describe("threadSections", () => {
+	const row = (id: string) => ({ chat: thread(id), project: alpha });
+	const many = (count: number, from = 0) =>
+		Array.from({ length: count }, (_, i) => row(`d${from + i}`));
+
+	it("orders Needs you, then Working, then Done, each in the order given", () => {
+		const rows = [row("d1"), row("w1"), row("n1"), row("d2"), row("n2")];
+		const out = threadSections(
+			rows,
+			statusFrom({ w1: "working", n1: "needs-you", n2: "needs-you" }),
+		);
+		expect(out.list.map((r) => r.chat.id)).toEqual([
+			"n1",
+			"n2",
+			"w1",
+			"d1",
+			"d2",
+		]);
+		expect(out.settled).toEqual([]);
 	});
 
-	it("counts the threads that need the user", () => {
-		const result = tree([y2, ...finished(4)], {
-			statuses: {
-				y2: "needs-you",
-				t0: "needs-you",
-				t1: "needs-you",
-				t2: "working",
-			},
-		});
-		// Y²'s own state is not a thread's.
-		expect(result?.needsYouCount).toBe(2);
-		expect(result?.workingCount).toBe(1);
+	it("folds finished threads past the first few into Settled, active ones never", () => {
+		const rows = [...many(8), row("w1")];
+		const out = threadSections(rows, statusFrom({ w1: "working" }));
+		expect(THREADS_SETTLED_AFTER).toBe(5);
+		expect(out.list.map((r) => r.chat.id)).toEqual([
+			"w1",
+			...many(5).map((r) => r.chat.id),
+		]);
+		expect(out.settled.map((r) => r.chat.id)).toEqual(["d5", "d6", "d7"]);
 	});
 
-	it("words the badge for screen readers", () => {
+	it("keeps the open thread out of Settled", () => {
+		const out = threadSections(many(8), statusFrom({}), "d7");
+		expect(out.list.map((r) => r.chat.id)).toContain("d7");
+		expect(out.settled.map((r) => r.chat.id)).toEqual(["d5", "d6"]);
+	});
+
+	it("keeps the order it was given, so pinned rows (sorted first upstream) stay in view", () => {
+		const sections = recentSections(
+			[
+				{
+					project: alpha,
+					chats: [
+						y2(),
+						...Array.from({ length: 8 }, (_, i) =>
+							thread(`t${i}`, `2026-10-${10 + i}T00:00:00Z`),
+						),
+					],
+				},
+			],
+			["t0"],
+		);
+		const out = threadSections(sections.y, statusFrom({}));
+		expect(out.list[0]?.chat.id).toBe("t0");
+		expect(out.settled.map((r) => r.chat.id)).not.toContain("t0");
+	});
+});
+
+describe("recentSections with Y projects", () => {
+	it("leaves a plain project's chats in plain, Y² chats out of threads", () => {
+		const out = recentSections([
+			{ project: alpha, chats: [y2(), thread("a1")] },
+			{ project: beta, chats: [thread("b1")] },
+		]);
+		expect(out.y.map((r) => r.chat.id)).toEqual(["a1"]);
+		expect(out.plain.map((r) => r.chat.id)).toEqual(["b1"]);
+		expect(out.y2.map((r) => r.chat.id)).toEqual(["y2"]);
+	});
+});
+
+describe("y2NeedsYouLabel", () => {
+	it("pluralises", () => {
 		expect(y2NeedsYouLabel(1)).toBe("1 thread needs you");
-		expect(y2NeedsYouLabel(3)).toBe("3 threads need you");
+		expect(y2NeedsYouLabel(2)).toBe("2 threads need you");
 	});
 });
