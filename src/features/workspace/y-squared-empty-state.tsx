@@ -12,7 +12,7 @@ export function YSquaredEmptyState({
 }) {
 	return (
 		<div className="y-squared-empty">
-			<YSquaredMark size={40} />
+			<YSquaredMark size={40} live />
 			<p className="y-squared-empty-text">{Y_SQUARED_EMPTY_TEXT}</p>
 			<ul className="y-squared-suggestions" aria-label="Ask Y²">
 				{Y_SQUARED_SUGGESTIONS.map((text) => (
