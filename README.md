@@ -31,7 +31,7 @@ The place to build software with AI engineers. Describe what you want and agents
 - **Fixes its own failing checks.** When a test fails, the chat picks it up and keeps going.
 - **Remembers how you work.** "Use pnpm, not npm" is learned once and kept.
 - **Keeps working when you leave.** Close the tab; the work continues and you reconnect later.
-- **Bring your own model.** Your ChatGPT, Claude or Grok subscription, or your own API keys, on one harness. Nothing silently falls back to paid inference.
+- **Bring your own subscription or API key.** Use your ChatGPT, Claude or Grok subscription, or your own API keys, on one harness. Nothing silently falls back to paid inference.
 
 <div align="center">
 <img src="docs/images/app.png" alt="A task split across three agents, with the diff and progress in the right sidebar" width="900">
