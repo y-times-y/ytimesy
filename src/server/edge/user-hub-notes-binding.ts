@@ -19,6 +19,7 @@ export function registerUserHubNotes(env: EdgeExecutorEnvironment) {
 			thread: (sessionId) => crew().thread(sessionId),
 			reconcile: (rows) => crew().reconcile(rows),
 			noteWaiting: (hint) => crew().noteWaiting(hint),
+			noteY2Sent: (sessionId) => crew().noteY2Sent(sessionId),
 		};
 	});
 }

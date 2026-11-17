@@ -5934,3 +5934,111 @@ details.environment-build[open] > summary .session-activity-chevron {
 .session-markdown [data-event="failed"] {
 	--event-icon: #ff6764;
 }
+
+/* ── Y² status card (src/features/workspace/y-squared-card.tsx) ───────────
+   Pinned at the top of the Y² chat: threads by what they need, with a client
+   ticking clock. Same list tokens as the overview. */
+.y-card {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	width: 100%;
+	max-width: 720px;
+	margin: 0 auto 12px;
+	padding: 10px 8px;
+	border: 1px solid #ffffff12;
+	border-radius: 10px;
+	background: #ffffff05;
+	font-size: var(--list-font-size);
+}
+.y-card-heading {
+	margin: 0 0 2px;
+	padding: 0 var(--list-row-pad-x);
+	color: var(--list-text-muted);
+	font-size: 11px;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.y-card-rows {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.y-card-row {
+	display: flex;
+	align-items: center;
+}
+.y-card-open {
+	display: flex;
+	flex: 1;
+	align-items: flex-start;
+	gap: var(--list-row-gap);
+	min-width: 0;
+	padding: 5px var(--list-row-pad-x);
+	border: 0;
+	border-radius: 7px;
+	background: transparent;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.y-card-open:hover {
+	background: #ffffff0a;
+}
+.y-card-open:focus-visible {
+	outline: 2px solid #aaa;
+	outline-offset: -2px;
+}
+.y-card-icon {
+	display: inline-flex;
+	flex: none;
+	width: 16px;
+	justify-content: center;
+	padding-top: 2px;
+	color: var(--list-icon-color);
+}
+.y-card-row[data-status="needs-you"] .y-card-icon {
+	color: #e5a54b;
+}
+.y-card-done-dot {
+	width: 6px;
+	height: 6px;
+	margin-top: 4px;
+	border-radius: 50%;
+	background: var(--list-text-muted);
+}
+.y-card-copy {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+}
+.y-card-title {
+	overflow: hidden;
+	color: var(--list-text-strong);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.y-card-request,
+.y-card-waits {
+	overflow: hidden;
+	color: var(--list-text-muted);
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.y-card-elapsed {
+	flex: none;
+	color: var(--list-text-secondary);
+	font-variant-numeric: tabular-nums;
+}
+.y-card-pr {
+	display: inline-flex;
+	flex: none;
+	padding: 6px;
+	color: var(--list-icon-color);
+}
+.y-card-pr:hover {
+	color: var(--list-text-strong);
+}

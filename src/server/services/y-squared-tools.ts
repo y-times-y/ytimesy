@@ -114,6 +114,10 @@ function rowFromSidebar(chat: Sidebar): CrewRow {
 		updatedAt: Date.parse(chat.workingSince ?? chat.updatedAt ?? "") || 0,
 		createdAt: 0,
 		lastActiveAt: 0,
+		workingSince:
+			state === "working"
+				? Date.parse(chat.workingSince ?? chat.updatedAt ?? "") || null
+				: null,
 	};
 }
 
@@ -159,6 +163,13 @@ export function ySquaredTools(input: {
 				.update(parts.join("\u0000"))
 				.digest("hex")}`,
 		);
+	/** Tells the crew Y² is about to send (before it does), so that thread's start is not taken for the person's. */
+	const markSent = async (sessionId: string | null) => {
+		await deps
+			.crew(input.projectId)
+			?.noteY2Sent?.(sessionId)
+			.catch(() => undefined);
+	};
 	const noThread = "No such thread in this project.";
 	const noMachines = "Threads cannot be run here.";
 	/** Metadata of the project's threads: the cold start and where no crew exists. */
@@ -233,6 +244,7 @@ export function ySquaredTools(input: {
 				if (starts >= Y_SQUARED_MAX_STARTS_PER_TURN)
 					return `Not started: at most ${Y_SQUARED_MAX_STARTS_PER_TURN} threads may be started in one turn. Tell the person what is left to start.`;
 				starts++;
+				await markSent(null);
 				const sent = await deps.send(
 					input.machines,
 					{
@@ -257,10 +269,21 @@ export function ySquaredTools(input: {
 		[Y_SQUARED_MESSAGE_THREAD_TOOL]: tool({
 			description: Y_SQUARED_MESSAGE_THREAD_DESCRIPTION,
 			inputSchema: messageThreadInput,
-			execute: async ({ id, text }) => {
+			execute: async ({ id, text, mode }) => {
 				if (!input.machines || !input.modelId) return noMachines;
 				const chat = await ownThread(id);
 				if (!chat) return noThread;
+				await markSent(chat.id);
+				const interrupted =
+					mode === "interrupt" && chat.turnStatus === "running";
+				if (interrupted)
+					await deps.stop(input.machines, {
+						userId: input.userId,
+						projectId: input.projectId,
+						sessionId: chat.id,
+						harnessId: chat.harness,
+						createNew: false,
+					});
 				const sent = await deps.send(
 					input.machines,
 					{
@@ -277,6 +300,12 @@ export function ySquaredTools(input: {
 					},
 				);
 				if (sent.failed) return `Not sent: ${sent.failed}`;
+				if (interrupted)
+					return `Stopped the running turn of "${chat.title}" and sent the message; ${
+						sent.turnStatus === "running"
+							? "its new turn started."
+							: "it is queued and starts by itself."
+					}`;
 				return chat.turnStatus === "running"
 					? `Queued the message in "${chat.title}"; it goes in when its current turn ends.`
 					: sent.turnStatus === "running"

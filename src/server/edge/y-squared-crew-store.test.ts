@@ -1,13 +1,20 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
+	CREW_HEARTBEAT_AFTER_MS,
+	CREW_HEARTBEAT_EVERY_MS,
 	CREW_HOUR_MS,
 	CREW_RETENTION_MS,
+	CREW_STARTED_WAKE_EVERY_MS,
+	CREW_URGENT_WAKE_DELAY_MS,
 	CREW_WAKE_DELAY_MS,
 	CREW_WAKES_PER_HOUR,
+	CREW_WORKING_MAX_MS,
+	CREW_Y2_SENT_TTL_MS,
 	type CrewNote,
 	crewFromSettledItems,
 	crewProjectFor,
+	crewRequestFromStartItems,
 	parseCrewNote,
 	parseCrewWaitingHint,
 } from "../../domain/y-squared-crew";
@@ -131,19 +138,28 @@ describe("crew rows", () => {
 describe("wakes", () => {
 	it("progress notes never wake; a note that matters sets pending and one alarm", () => {
 		const crew = new SqliteYSquaredCrew(sql() as never);
-		expect(crew.noteThread(note(), T0).alarmAt).toBeNull();
+		// a working note only arms the heartbeat, never a wake
+		expect(crew.noteThread(note(), T0).alarmAt).toBe(
+			T0 + CREW_HEARTBEAT_AFTER_MS,
+		);
 		expect(crew.wakeState().pending).toBe(false);
 		const first = crew.noteThread(note({ state: "finished" }), T0 + 10);
 		expect(first.alarmAt).toBe(T0 + 10 + CREW_WAKE_DELAY_MS);
-		// more notes before the alarm fires coalesce into the same alarm
+		// more notes before the alarm fires coalesce into the same alarm...
+		const more = crew.noteThread(
+			note({ sessionId: "t3", state: "finished" }),
+			T0 + 15,
+		);
+		expect(more.alarmAt).toBeNull();
+		// ...except one that needs the person sooner pulls it earlier
 		const second = crew.noteThread(
 			note({ sessionId: "t2", state: "waiting", waitingOn: "question" }),
 			T0 + 20,
 		);
-		expect(second.alarmAt).toBeNull();
+		expect(second.alarmAt).toBe(T0 + 20 + CREW_URGENT_WAKE_DELAY_MS);
 	});
 
-	it("an alarm sends exactly one wake and records it; the next waits 45 s after it", () => {
+	it("an alarm sends exactly one wake and records it; the next waits 15 s after it", () => {
 		const crew = new SqliteYSquaredCrew(sql() as never);
 		const { alarmAt } = crew.noteThread(note({ state: "finished" }), T0);
 		const fired = crew.takeWake(alarmAt as number);
@@ -159,7 +175,9 @@ describe("wakes", () => {
 			note({ sessionId: "t2", state: "failed", waitingOn: "failed" }),
 			(alarmAt as number) + 1_000,
 		);
-		expect(next.alarmAt).toBe((alarmAt as number) + 1_000 + CREW_WAKE_DELAY_MS);
+		expect(next.alarmAt).toBe(
+			(alarmAt as number) + 1_000 + CREW_URGENT_WAKE_DELAY_MS,
+		);
 	});
 
 	it("caps wakes per hour and holds the extra one until the hour rolls over", () => {
@@ -184,8 +202,8 @@ describe("wakes", () => {
 		now = alarmAt as number;
 		const capped = crew.takeWake(now);
 		expect(capped.action).toBe("capped");
-		// the hour window opened at the first wake (T0 + 45 s)
-		expect(capped.retryAt).toBe(T0 + CREW_WAKE_DELAY_MS + CREW_HOUR_MS);
+		// the hour window opened at the first wake (T0 + 15 s)
+		expect(capped.retryAt).toBe(T0 + CREW_URGENT_WAKE_DELAY_MS + CREW_HOUR_MS);
 		expect(crew.wakeState().pending).toBe(true);
 		expect(crew.takeWake(capped.retryAt as number).action).toBe("send");
 	});
@@ -289,7 +307,7 @@ describe("waiting hint (a settle note that lost what the thread waits on)", () =
 			waitingOn: "question",
 			lastReply: "Which one?",
 		});
-		expect(settled.alarmAt).toBe(T0 + 2_000 + CREW_WAKE_DELAY_MS);
+		expect(settled.alarmAt).toBe(T0 + 2_000 + CREW_URGENT_WAKE_DELAY_MS);
 	});
 
 	it("upgrades a row the settle note already wrote as finished", () => {
@@ -464,5 +482,290 @@ describe("created, last request and last activity", () => {
 				lastRequest: "  hi\n there ",
 			})?.lastRequest,
 		).toBe("hi there");
+	});
+});
+
+/** Fires the alarm and insists it sends (narrows the result). */
+function fire(crew: SqliteYSquaredCrew, at: number) {
+	const fired = crew.takeWake(at);
+	if (fired.action !== "send")
+		throw new Error(`expected a send, got ${fired.action}`);
+	return fired;
+}
+
+describe("wake policy: debounce by kind", () => {
+	it.each([
+		["finished", CREW_WAKE_DELAY_MS],
+		["waiting", CREW_URGENT_WAKE_DELAY_MS],
+		["failed", CREW_URGENT_WAKE_DELAY_MS],
+	] as const)("a %s turn wakes after %i ms", (state, delay) => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		const { alarmAt } = crew.noteThread(
+			note({ state, waitingOn: state === "waiting" ? "question" : null }),
+			T0,
+		);
+		expect(alarmAt).toBe(T0 + delay);
+	});
+
+	it("wakes on every turn settle, not only a whole thread done", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		let now = T0;
+		for (let turn = 0; turn < 3; turn++) {
+			crew.noteThread(note(), now);
+			now += 10_000;
+			const { alarmAt } = crew.noteThread(
+				note({ state: "finished", lastReply: `done ${turn}` }),
+				now,
+			);
+			expect(alarmAt).not.toBeNull();
+			now = alarmAt as number;
+			fire(crew, now);
+			now += 60_000;
+		}
+		expect(crew.wakeState().wakesThisHour).toBe(3);
+	});
+});
+
+describe("wake policy: long-running heartbeat", () => {
+	it("arms one alarm 5 min after a thread starts, then every 10 min, and names who is working", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		expect(crew.noteThread(note(), T0).alarmAt).toBe(
+			T0 + CREW_HEARTBEAT_AFTER_MS,
+		);
+		// a second working note re-arms nothing
+		expect(
+			crew.noteThread(note({ sessionId: "t2", title: "Docs" }), T0 + 60_000)
+				.alarmAt,
+		).toBeNull();
+		const first = fire(crew, T0 + CREW_HEARTBEAT_AFTER_MS);
+		expect(first.body).toContain("Still working:");
+		expect(first.body).toContain('"Fix sign-up" still working, 5 min.');
+		expect(first.body).toContain('"Docs" still working, 4 min.');
+		expect(first.rearmAt).toBe(
+			T0 + CREW_HEARTBEAT_AFTER_MS + CREW_HEARTBEAT_EVERY_MS,
+		);
+		const second = fire(crew, first.rearmAt as number);
+		expect(second.body).toContain("15 min.");
+		expect(crew.wakeState().wakesThisHour).toBe(2);
+	});
+
+	it("a wake in between restarts the five minutes", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(note(), T0);
+		crew.noteThread(note({ sessionId: "t2" }), T0);
+		const settled = crew.noteThread(
+			note({ sessionId: "t2", state: "finished" }),
+			T0 + 240_000,
+		);
+		expect(settled.alarmAt).toBe(T0 + 270_000);
+		const fired = fire(crew, T0 + 270_000);
+		// t1 has been quiet only since that wake
+		expect(fired.rearmAt).toBe(T0 + 270_000 + CREW_HEARTBEAT_AFTER_MS);
+		expect(fired.body).toContain('"Fix sign-up" still working, 5 min.');
+	});
+
+	it("sets no alarm when nothing is working, and none is left behind", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(note(), T0);
+		const { alarmAt } = crew.noteThread(
+			note({ state: "finished" }),
+			T0 + 1_000,
+		);
+		const fired = fire(crew, alarmAt as number);
+		expect(fired.rearmAt).toBeNull();
+		expect(crew.wakeState().alarmAt).toBeNull();
+		// a stale alarm that fires with nothing to do sends nothing and arms nothing
+		const idle = crew.takeWake(T0 + 3_600_000);
+		expect(idle).toMatchObject({ action: "none", rearmAt: null });
+	});
+
+	it("an early alarm sends nothing and sets the real one", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(note(), T0);
+		const early = crew.takeWake(T0 + 1_000);
+		expect(early).toMatchObject({
+			action: "none",
+			rearmAt: T0 + CREW_HEARTBEAT_AFTER_MS,
+		});
+		expect(crew.wakeState().wakesThisHour).toBe(0);
+	});
+
+	it("ignores a thread 'working' for over six hours (a lost settle note)", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(note(), T0);
+		const late = crew.takeWake(T0 + CREW_WORKING_MAX_MS + 1_000);
+		expect(late).toMatchObject({ action: "none", rearmAt: null });
+	});
+
+	it("counts toward the hourly cap and a capped heartbeat is not left pending", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		let now = T0;
+		for (let i = 0; i < CREW_WAKES_PER_HOUR; i++) {
+			const { alarmAt } = crew.noteThread(
+				note({ sessionId: `t${i}`, state: "finished" }),
+				now,
+			);
+			now = alarmAt as number;
+			fire(crew, now);
+		}
+		const started = crew.noteThread(note({ sessionId: "w" }), now);
+		const capped = crew.takeWake(started.alarmAt as number);
+		expect(capped.action).toBe("capped");
+		expect(crew.wakeState().pending).toBe(false);
+		// the next hour window sends the heartbeat
+		const retry = fire(crew, capped.retryAt as number);
+		expect(retry.body).toContain("still working");
+	});
+});
+
+describe("wake policy: threads the person starts themselves", () => {
+	const direct = (over: Partial<CrewNote> = {}) =>
+		note({ lastRequest: "Fix the sign-up form", ...over });
+
+	it("a thread the person started wakes Y² and Y² is told what they asked", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		const { alarmAt } = crew.noteThread(direct(), T0);
+		expect(alarmAt).toBe(T0 + CREW_WAKE_DELAY_MS);
+		expect(crew.wakeState().pending).toBe(true);
+		const fired = fire(crew, alarmAt as number);
+		expect(fired.body).toContain(
+			'The person started "Fix sign-up" themselves (Fix the sign-up form).',
+		);
+	});
+
+	it("wakes at most once per thread per 10 minutes; the rest are only told at the next wake", () => {
+		const db = sql();
+		const crew = new SqliteYSquaredCrew(db as never);
+		const first = crew.noteThread(direct(), T0);
+		fire(crew, first.alarmAt as number);
+		crew.wakeSent(99);
+		crew.noteThread(note({ state: "finished" }), T0 + 60_000);
+		fire(crew, T0 + 60_000 + CREW_WAKE_DELAY_MS);
+		crew.wakeSent(99);
+		// the person messages the same thread again two minutes in: no wake
+		crew.noteThread(direct({ lastRequest: "Also add a test" }), T0 + 120_000);
+		expect(crew.wakeState().pending).toBe(false);
+		expect(db.count("wake_events")).toBe(1);
+		// ...Y² still hears of it with the next wake
+		crew.noteThread(note({ state: "finished" }), T0 + 150_000);
+		const next = fire(crew, T0 + 150_000 + CREW_WAKE_DELAY_MS);
+		expect(next.body).toContain(
+			'You were not part of this: "Fix sign-up" got a message from the person (Also add a test).',
+		);
+		// after ten minutes a new start wakes again
+		crew.noteThread(
+			direct({ lastRequest: "One more" }),
+			T0 + CREW_STARTED_WAKE_EVERY_MS + 1_000,
+		);
+		expect(crew.wakeState().pending).toBe(true);
+	});
+
+	it("never wakes for a thread Y² itself sent into or started", () => {
+		const db = sql();
+		const crew = new SqliteYSquaredCrew(db as never);
+		crew.noteY2Sent("t1", T0);
+		crew.noteThread(direct(), T0 + 1_000);
+		expect(crew.wakeState().pending).toBe(false);
+		// a thread Y² started is new: its id was not known when it marked
+		crew.noteY2Sent(null, T0);
+		crew.noteThread(direct({ sessionId: "fresh" }), T0 + 2_000);
+		expect(crew.wakeState().pending).toBe(false);
+		expect(db.count("wake_events")).toBe(0);
+		// each mark is used once
+		crew.noteThread(note({ state: "finished" }), T0 + 3_000);
+		crew.noteThread(direct(), T0 + 4_000);
+		expect(crew.wakeState().pending).toBe(true);
+	});
+
+	it("a Y² mark older than its life no longer hides the person's own message", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteY2Sent("t1", T0);
+		crew.noteThread(direct(), T0 + CREW_Y2_SENT_TTL_MS + 1_000);
+		expect(crew.wakeState().pending).toBe(true);
+	});
+
+	it("a start with no request (a wake or an automatic turn) is not the person's message", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(note(), T0);
+		expect(crew.wakeState().pending).toBe(false);
+	});
+
+	it("keeps the changes for a wake that could not be sent", () => {
+		const db = sql();
+		const crew = new SqliteYSquaredCrew(db as never);
+		const { alarmAt } = crew.noteThread(
+			note({ state: "finished", prUrl: "https://x/pull/12" }),
+			T0,
+		);
+		const fired = fire(crew, alarmAt as number);
+		expect(fired.body).toContain(
+			'"Fix sign-up" finished its turn (pull request https://x/pull/12).',
+		);
+		crew.returnWake();
+		expect(db.count("wake_events")).toBe(1);
+		crew.wakeSent(fired.eventsUpTo);
+		expect(db.count("wake_events")).toBe(0);
+	});
+});
+
+describe("working since", () => {
+	it("is set by the start note, kept by repeats, cleared on settle and listed", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(note(), T0);
+		expect(crew.thread("t1")?.workingSince).toBe(T0);
+		crew.noteThread(note({ lastRequest: "more" }), T0 + 5_000);
+		expect(crew.thread("t1")?.workingSince).toBe(T0);
+		expect(crew.list().rows[0]?.workingSince).toBe(T0);
+		crew.noteThread(note({ state: "finished" }), T0 + 9_000);
+		expect(crew.thread("t1")?.workingSince).toBeNull();
+		crew.noteThread(note(), T0 + 20_000);
+		expect(crew.thread("t1")?.workingSince).toBe(T0 + 20_000);
+	});
+
+	it("takes the sidebar's start time when reconciled", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.reconcile([
+			{
+				sessionId: "s",
+				title: "S",
+				state: "working",
+				waitingOn: null,
+				prUrl: null,
+				lastReply: null,
+				lastRequest: null,
+				updatedAt: T0,
+				createdAt: 0,
+				lastActiveAt: 0,
+				workingSince: T0 - 60_000,
+			},
+		]);
+		expect(crew.thread("s")?.workingSince).toBe(T0 - 60_000);
+	});
+});
+
+describe("the start note's request", () => {
+	const msg = (text: string, wake = false) =>
+		({
+			kind: "userMessage",
+			id: "m",
+			text,
+			...(wake ? { wake: true } : {}),
+		}) as never;
+
+	it("is the person's message the turn began with, never a wake or an older one", () => {
+		expect(crewRequestFromStartItems([msg("Fix  the\nform")])).toBe(
+			"Fix the form",
+		);
+		expect(
+			crewRequestFromStartItems([msg("older"), msg("tick", true)]),
+		).toBeNull();
+		expect(
+			crewRequestFromStartItems([
+				msg("ask"),
+				{ kind: "agentMessage", id: "a", text: "ok" } as never,
+			]),
+		).toBeNull();
+		expect(crewRequestFromStartItems([])).toBeNull();
+		expect(crewRequestFromStartItems([msg("x".repeat(500))])?.length).toBe(200);
 	});
 });

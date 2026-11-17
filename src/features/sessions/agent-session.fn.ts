@@ -18,6 +18,7 @@ import { startAfterResponse } from "#/server/adapters/after-response";
 import { listSidebarAgentSessions } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { ensureYSquaredChat, projectYMode } from "#/server/adapters/y-mode";
+import { ySquaredCrewFor } from "#/server/adapters/y-squared-crew-client";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 import { relayConversationDeliveriesOnce } from "#/server/jobs/conversation-delivery";
@@ -90,6 +91,44 @@ export const listProjectAgentSessions = createServerFn({ method: "GET" })
 			return [];
 		}
 	});
+
+/**
+ * What the Y² status card adds to the sidebar's rows: each thread's last
+ * request and pull request, from the project's crew (one Durable Object
+ * request, no transcript, no database read of chats). Read once per change
+ * of the card's rows, never on a timer. Empty without a crew binding.
+ */
+export const readYSquaredCrewCard = createServerFn({ method: "GET" })
+	.validator((data: { projectId?: string } | undefined) => ({
+		projectId: typeof data?.projectId === "string" ? data.projectId.trim() : "",
+	}))
+	.handler(
+		async ({
+			data,
+		}): Promise<
+			readonly {
+				readonly sessionId: string;
+				readonly lastRequest: string | null;
+				readonly prUrl: string | null;
+			}[]
+		> => {
+			if (!data.projectId) return [];
+			try {
+				const user = await requireUser(getRequest().headers);
+				const yMode = await projectYMode(user.id, data.projectId);
+				if (!yMode?.enabled) return [];
+				const crew = ySquaredCrewFor(data.projectId);
+				if (!crew) return [];
+				return (await crew.list()).rows.map((row) => ({
+					sessionId: row.sessionId,
+					lastRequest: row.lastRequest,
+					prUrl: row.prUrl,
+				}));
+			} catch {
+				return [];
+			}
+		},
+	);
 
 export const startProjectAgentSession = createServerFn({ method: "POST" })
 	.validator(
