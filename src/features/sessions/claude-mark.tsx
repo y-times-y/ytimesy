@@ -5,7 +5,7 @@ export function ClaudeMark({ size = 24 }: { size?: number }) {
 	return (
 		<svg
 			aria-hidden="true"
-			fill="#ffffff"
+			fill="currentColor"
 			height={size}
 			viewBox="0 0 100 100"
 			width={size}

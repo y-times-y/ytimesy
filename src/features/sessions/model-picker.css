@@ -674,3 +674,21 @@
 	padding: 0 var(--list-row-pad-x);
 	border-top: 0;
 }
+/* A model list's rows while its catalog loads (the project picker's shimmer). */
+.model-picker-skeleton .model-picker-option {
+	margin: 2px 0;
+	border-radius: var(--list-row-radius);
+	background: linear-gradient(
+		90deg,
+		#ffffff08 25%,
+		#ffffff12 50%,
+		#ffffff08 75%
+	);
+	background-size: 200% 100%;
+	animation: project-picker-shimmer 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.model-picker-skeleton .model-picker-option {
+		animation: none;
+	}
+}
