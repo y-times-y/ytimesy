@@ -189,6 +189,9 @@ const catalogSchema = z.object({
 			slug: z.string(),
 			display_name: z.string().optional(),
 			visibility: z.string().optional(),
+			// Only logged (codex.catalog): which models the account is offered at
+			// the pinned client version, and any minimum version they carry.
+			minimal_client_version: z.string().optional(),
 			supported_reasoning_levels: z
 				.array(z.object({ effort: z.string() }))
 				.optional(),
@@ -332,7 +335,22 @@ function loadCatalog(
 				connection,
 			),
 		)
-		.then((value) => catalogSchema.parse(value));
+		.then((value) => catalogSchema.parse(value))
+		.then((catalog) => {
+			// One line per catalog load: model names only (no ids of people), so a
+			// missing model can be told apart from a hidden or version-gated one.
+			console.info("codex.catalog", {
+				clientVersion: PINNED_CODEX_CLI_VERSION,
+				count: catalog.models.length,
+				models: catalog.models
+					.slice(0, 40)
+					.map(
+						(row) =>
+							`${row.slug}${row.visibility ? `:${row.visibility}` : ""}${row.minimal_client_version ? `@${row.minimal_client_version}` : ""}`,
+					),
+			});
+			return catalog;
+		});
 	const entry: CatalogEntry = {
 		expires: Date.now() + CATALOG_FRESH_MS,
 		promise,
