@@ -478,6 +478,21 @@ export function sessionItemsQueuedWithUser(
 }
 
 /**
+ * Earlier waiting messages delivered together with a send as one turn: each
+ * keeps its own bubble, ahead of the send's. A message already in the
+ * transcript (by id) is not added twice.
+ */
+export function sessionItemsWithMergedUsers(
+	items: readonly SessionItem[],
+	merged: readonly UserMessageItem[] | undefined,
+): SessionItem[] {
+	let next = [...items];
+	for (const item of merged ?? [])
+		if (!sendWasQueued(next, item.id)) next = [...next, item];
+	return next;
+}
+
+/**
  * The user's message a send adds to the transcript (sessionItemsQueuedWithUser
  * without the transcript: a send that appends it in the database). Null for
  * an empty message.
@@ -707,10 +722,16 @@ export function itemsKeepingMessageInFlight(
 export function markedQueuedSend(
 	items: readonly SessionItem[],
 	messageId: string,
+	/** Steered: the run reads it at its next step, as after Send on a waiting message. */
+	released = false,
 ): SessionItem[] {
 	return items.map((item) =>
 		item.kind === "userMessage" && item.id === messageId
-			? { ...item, queued: true as const }
+			? {
+					...item,
+					queued: true as const,
+					...(released ? { released: true as const } : {}),
+				}
 			: item,
 	);
 }

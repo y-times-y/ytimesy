@@ -12,10 +12,12 @@ import type {
 	IncomingAttachment,
 	MessageAttachment,
 } from "#/domain/message-attachment";
+import type { MergedQueuedTurn } from "#/domain/queued-merge";
 import {
 	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
+	sessionItemsWithMergedUsers,
 	sessionTitleFromItems,
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
@@ -201,6 +203,8 @@ export async function sendSubscriptionTask(
 	input: {
 		text: string;
 		modelId: string;
+		/** Waiting messages delivered with this one as a single turn (queued-merge.ts). */
+		merged?: MergedQueuedTurn;
 		runtimeText?: string;
 		/** A runtime-switch envelope, sent only when no structured history carries over. */
 		runtimeHandoff?: string;
@@ -338,7 +342,7 @@ export async function sendSubscriptionTask(
 		),
 	]);
 	const items = sessionItemsQueuedWithUser(
-		view.items,
+		sessionItemsWithMergedUsers(view.items, input.merged?.items),
 		input.text,
 		input.idempotencyKey,
 		input.approvesPlan,
@@ -350,7 +354,8 @@ export async function sendSubscriptionTask(
 		text: input.text,
 		runtimeText: input.runtimeText,
 		handoff: input.runtimeHandoff,
-		attachments,
+		// A merged turn's text already carries every message's attachment note.
+		attachments: input.merged ? undefined : attachments,
 	});
 	if (!previous)
 		messages = reconstructedContextTransition(

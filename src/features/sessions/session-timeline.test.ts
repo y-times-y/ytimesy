@@ -213,7 +213,7 @@ describe("session timeline live collapse", () => {
 		expect(waiting).toContain("Waiting for helpers");
 		expect(waiting).not.toContain(">Thinking<");
 	});
-	it("shows Edit and Send on a message queued in this chat", () => {
+	it("shows Edit and Steer now on a message queued in this chat", () => {
 		const html = renderToString(
 			createElement(SessionTimeline, {
 				turnStatus: "running",
@@ -232,7 +232,7 @@ describe("session timeline live collapse", () => {
 		expect(html).toContain("Also update the README");
 		expect(html).toContain("Queued in this chat");
 		expect(html).toContain("Edit");
-		expect(html).toContain("Send");
+		expect(html).toContain("Steer now");
 	});
 	it("shows a helper's own conversation with senders and steering still queued", () => {
 		const html = renderToString(

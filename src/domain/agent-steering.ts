@@ -52,6 +52,15 @@ export function parseSteering(
 	};
 }
 
+/**
+ * Who a steering message came from, as its first line names it (the parent's
+ * title and id, or the user writing directly); null for any other text. Two
+ * waiting messages share an origin only when this is equal.
+ */
+export function steeringOrigin(text: string): string | null {
+	return STEERING.exec(text)?.[1] ?? null;
+}
+
 /** The lead's note that the user wrote to one of its helpers. */
 export function userSteeringNotice(name: string, message: string) {
 	const words = message.replace(/\s+/g, " ").trim();

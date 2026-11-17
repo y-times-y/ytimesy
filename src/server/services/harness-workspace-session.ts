@@ -6,6 +6,7 @@ import type {
 	MessageAttachment,
 } from "#/domain/message-attachment";
 import { publicFailureMessage } from "#/domain/project-workspace";
+import type { MergedQueuedTurn } from "#/domain/queued-merge";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { startStageError } from "#/domain/subagent-start";
 import {
@@ -131,6 +132,11 @@ export function sendHarnessWorkspaceTask(
 		/** The route's alternate context window (context-window-option.ts). */
 		readonly alternateContext?: boolean;
 		readonly runtimeText?: string;
+		/**
+		 * Waiting messages delivered with this one as a single turn: their own
+		 * bubbles come first, and the model reads `modelText` for all of them.
+		 */
+		readonly merged?: MergedQueuedTurn;
 		/** A runtime-switch envelope, used only when no structured history carries over. */
 		readonly runtimeHandoff?: string;
 		readonly idempotencyKey?: string;
@@ -216,7 +222,7 @@ export function sendHarnessWorkspaceTask(
 					scope,
 					{
 						...input,
-						runtimeText: input.text,
+						runtimeText: input.merged?.modelText ?? input.text,
 						...(runtimeHandoff ? { runtimeHandoff } : {}),
 					},
 					false,

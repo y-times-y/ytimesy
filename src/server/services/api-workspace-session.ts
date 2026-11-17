@@ -23,6 +23,7 @@ import {
 	connectionModelSpeeds,
 	parseModelRouteId,
 } from "#/domain/model-connection";
+import type { MergedQueuedTurn } from "#/domain/queued-merge";
 import type { SendBlocker } from "#/domain/send-blocked";
 import {
 	queuedUserItem,
@@ -30,6 +31,7 @@ import {
 	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
+	sessionItemsWithMergedUsers,
 	sessionTitleFromItems,
 } from "#/domain/session-item";
 import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
@@ -197,6 +199,8 @@ export async function sendApiWorkspaceTask(
 		speed?: "standard" | ApiModelSpeedId;
 		/** The route's alternate context window; absent on internal follow-ups. */
 		alternateContext?: boolean;
+		/** Waiting messages delivered with this one as a single turn (queued-merge.ts). */
+		merged?: MergedQueuedTurn;
 		runtimeText?: string;
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
@@ -378,8 +382,9 @@ export async function sendApiWorkspaceTask(
 				previous: history,
 				items,
 				text: input.text,
-				runtimeText: input.runtimeText,
-				attachments,
+				runtimeText: input.runtimeText ?? input.merged?.modelText,
+				// A merged turn's text already carries every attachment note.
+				attachments: input.merged ? undefined : attachments,
 			});
 			if (!history)
 				messages = reconstructedContextTransition(
@@ -496,8 +501,9 @@ async function sendClaudeCodeTask(
 				previous: history,
 				items,
 				text: input.text,
-				runtimeText: input.runtimeText,
-				attachments,
+				runtimeText: input.runtimeText ?? input.merged?.modelText,
+				// A merged turn's text already carries every attachment note.
+				attachments: input.merged ? undefined : attachments,
 			});
 			if (!history)
 				messages = reconstructedContextTransition(
@@ -634,12 +640,14 @@ function sendItems(
 		readonly text: string;
 		readonly idempotencyKey?: string;
 		readonly approvesPlan?: boolean;
+		readonly merged?: MergedQueuedTurn;
 	},
 	attachments: readonly MessageAttachment[],
 ): SentItems {
+	const earlier = input.merged?.items ?? [];
 	if (current) {
 		const items = sessionItemsQueuedWithUser(
-			current,
+			sessionItemsWithMergedUsers(current, earlier),
 			input.text,
 			input.idempotencyKey,
 			input.approvesPlan,
@@ -655,8 +663,8 @@ function sendItems(
 	);
 	if (!item) throw new Error("Write a message before sending.");
 	return {
-		items: [item],
-		write: { items: [], appendItems: [item] },
+		items: [...earlier, item],
+		write: { items: [], appendItems: [...earlier, item] },
 		appended: true,
 	};
 }

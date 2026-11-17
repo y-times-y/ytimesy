@@ -949,7 +949,7 @@ const QueuedMessage = memo(function QueuedMessage({
 						: stopping
 							? "Stopping…"
 							: item.released
-								? "Sending now (after any running tool)"
+								? "Steering now (read at the next step, after any running tool)"
 								: "Queued in this chat"}
 				</span>
 				{onEdit ? (
@@ -989,11 +989,11 @@ const QueuedMessage = memo(function QueuedMessage({
 					<button
 						type="button"
 						className="session-queued-action"
-						aria-label="Send queued message"
+						aria-label="Steer queued message"
 						title={
 							item.released
 								? "Sending now, after any running tool"
-								: "Send now: the agent reads it right away, after any running tool"
+								: "Steer now: the running turn reads it at its next step, after any running tool. The other queued messages stay queued."
 						}
 						disabled={!shown}
 						onClick={() => {
@@ -1002,7 +1002,7 @@ const QueuedMessage = memo(function QueuedMessage({
 							setDraft(null);
 						}}
 					>
-						Send
+						Steer now
 					</button>
 				) : null}
 				{onRemove ? (

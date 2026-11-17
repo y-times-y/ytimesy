@@ -1,5 +1,6 @@
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { jsonbText } from "#/domain/jsonb";
+import { MESSAGE_ATTACHMENT_LIMITS } from "#/domain/message-attachment";
 import { QUEUED_MESSAGES_PER_CHAT_LIMIT } from "#/domain/peer-inbox-injection";
 import type { UserMessageItem } from "#/domain/session-item";
 import { wakeConversationProgress } from "./conversation-progress-wake";
@@ -209,27 +210,75 @@ export async function releaseQueuedUserMessage(
 }
 
 /**
- * Takes the oldest waiting message once the chat has no running turn, so it
- * can start the next one. Racing callers take it at most once.
+ * What may share one turn: the same origin (the person's own messages, or one
+ * sender's steering text: a different agent's never joins them), the same
+ * route and settings, and no first-send fields (a setup request or a new
+ * chat's base branch goes alone). Equal keys, consecutive in order, merge.
  */
+const mergeKeySql = `concat_ws('|',
+  coalesce(substring(q.queued_send->'item'->>'text' from '^Message from ([^\\n]+):\\n\\n'),''),
+  q.queued_send->>'harnessId', q.queued_send->>'modelId', q.queued_send->>'variant',
+  q.queued_send->>'speed', q.queued_send->>'fast', q.queued_send->>'alternateContext',
+  case when coalesce(q.queued_send->>'environmentSetup','')='true' or q.queued_send->>'baseBranch' is not null then q.id else '' end)`;
+
+/**
+ * Takes the waiting messages that start the chat's next turn once it has no
+ * running turn, oldest first, in one statement: the oldest one, then every
+ * message right behind it that may share its turn (mergeKeySql), up to
+ * `limit` messages (the per-chat queue cap by default) and one turn's
+ * attachment limits (the first message always goes). Taking them deletes
+ * them together, so they are delivered together. Racing callers take each
+ * message at most once.
+ */
+export async function takeNextQueuedUserMessages(
+	userId: string,
+	sessionId: string,
+	limit = QUEUED_MESSAGES_PER_CHAT_LIMIT,
+): Promise<QueuedUserSend[]> {
+	const result = await database().query<{
+		rn: string | number;
+		message: string;
+		queued_send: Omit<QueuedUserSend, "message">;
+	}>(
+		`with eligible as (
+		  select q.id, q.created_at, q.message, q.queued_send, ${mergeKeySql} as k,
+		   coalesce(jsonb_array_length(q.queued_send->'item'->'attachments'),0) as files,
+		   coalesce((select sum((a->>'size')::bigint) from jsonb_array_elements(coalesce(q.queued_send->'item'->'attachments','[]'::jsonb)) a),0) as bytes
+		  from agent_peer_inbox q join agent_session s on s.id=q.recipient_id
+		  where q.recipient_id=$1 and s.user_id=$2 and s.turn_status<>'running'
+		   and not q.accepted and q.queued_send is not null and not ${heldForSetupSql}
+		  order by q.created_at,q.id for update of q skip locked),
+		 numbered as (
+		  select e.*, row_number() over w as rn, sum(files) over w as cum_files,
+		   sum(bytes) over w as cum_bytes, first_value(k) over w as head_k
+		  from eligible e window w as (order by created_at,id)),
+		 stop as (
+		  select min(rn) as at from numbered
+		  where k<>head_k or rn>$3 or (rn>1 and (cum_files>$4 or cum_bytes>$5))),
+		 taken as (
+		  delete from agent_peer_inbox q using numbered n, stop
+		  where q.id=n.id and n.rn < coalesce(stop.at, 2147483647)
+		  returning n.rn, q.message, q.queued_send)
+		 select rn, message, queued_send from taken order by rn`,
+		[
+			sessionId,
+			userId,
+			Math.max(1, limit),
+			MESSAGE_ATTACHMENT_LIMITS.files,
+			MESSAGE_ATTACHMENT_LIMITS.totalBytes,
+		],
+	);
+	return [...result.rows]
+		.sort((a, b) => Number(a.rn) - Number(b.rn))
+		.map((row) => ({ ...row.queued_send, message: row.message }));
+}
+
+/** The oldest waiting message alone (a held send's own delivery). */
 export async function takeNextQueuedUserMessage(
 	userId: string,
 	sessionId: string,
 ): Promise<QueuedUserSend | null> {
-	const result = await database().query<{
-		message: string;
-		queued_send: Omit<QueuedUserSend, "message">;
-	}>(
-		`delete from agent_peer_inbox where id=(
-		  select q.id from agent_peer_inbox q join agent_session s on s.id=q.recipient_id
-		  where q.recipient_id=$1 and s.user_id=$2 and s.turn_status<>'running'
-		  and not q.accepted and q.queued_send is not null and not ${heldForSetupSql}
-		  order by q.created_at,q.id limit 1 for update of q skip locked)
-		 returning message,queued_send`,
-		[sessionId, userId],
-	);
-	const row = result.rows[0];
-	return row ? { ...row.queued_send, message: row.message } : null;
+	return (await takeNextQueuedUserMessages(userId, sessionId, 1))[0] ?? null;
 }
 
 /** A taken message whose turn could not start goes back first in line. */
@@ -243,6 +292,41 @@ export async function restoreQueuedUserMessage(
 		  values($1,$2,$3,$4::jsonb,'-infinity') on conflict(id) do nothing returning recipient_id)
 		 update agent_session set items=items where id in (select recipient_id from restored)`,
 		[inboxId(send.item.id), sessionId, message, jsonbText(stored)],
+	);
+	forgetPeerInboxObservation(sessionId);
+	await wakeConversationProgress();
+}
+
+/**
+ * Taken messages whose turn could not start go back, still in their order and
+ * ahead of everything waiting (the first as restoreQueuedUserMessage; the
+ * rest just after it, in the order they were taken).
+ */
+export async function restoreQueuedUserMessages(
+	sessionId: string,
+	sends: readonly QueuedUserSend[],
+) {
+	if (sends.length < 2) {
+		for (const send of sends) await restoreQueuedUserMessage(sessionId, send);
+		return;
+	}
+	await database().query(
+		`with restored as (
+		  insert into agent_peer_inbox(id,recipient_id,message,queued_send,created_at)
+		  select x.id,$1,x.message,x.stored::jsonb,
+		   case when x.n=1 then '-infinity'::timestamptz else timestamptz 'epoch' + (x.n * interval '1 millisecond') end
+		  from unnest($2::text[],$3::text[],$4::text[]) with ordinality as x(id,message,stored,n)
+		  on conflict(id) do nothing returning recipient_id)
+		 update agent_session set items=items where id in (select recipient_id from restored)`,
+		[
+			sessionId,
+			sends.map((send) => inboxId(send.item.id)),
+			sends.map((send) => send.message),
+			sends.map((send) => {
+				const { message: _message, ...stored } = send;
+				return jsonbText(stored);
+			}),
+		],
 	);
 	forgetPeerInboxObservation(sessionId);
 	await wakeConversationProgress();

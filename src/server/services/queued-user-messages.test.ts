@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 	queue: vi.fn(),
 	queued: vi.fn(async () => [] as unknown[]),
 	take: vi.fn(),
-	restore: vi.fn(async () => {}),
+	restore: vi.fn(async (..._args: unknown[]) => {}),
 	remove: vi.fn(async () => true),
 	update: vi.fn(async () => true),
 	release: vi.fn(
@@ -76,7 +76,15 @@ vi.mock("../adapters/queued-user-messages", () => ({
 	queueUserMessageWhileRunning: mocks.queue,
 	queuedUserMessageItems: mocks.queued,
 	takeNextQueuedUserMessage: mocks.take,
+	// The turn-end drain takes a batch; a mocked single send is a batch of one.
+	takeNextQueuedUserMessages: async (...args: unknown[]) => {
+		const taken = await (mocks.take as (...a: unknown[]) => unknown)(...args);
+		return Array.isArray(taken) ? taken : taken ? [taken] : [];
+	},
 	restoreQueuedUserMessage: mocks.restore,
+	restoreQueuedUserMessages: async (id: string, sends: unknown[]) => {
+		for (const send of sends) await mocks.restore(id, send);
+	},
 	removeQueuedUserMessage: mocks.remove,
 	updateQueuedUserMessage: mocks.update,
 	releaseQueuedUserMessage: mocks.release,
@@ -454,6 +462,127 @@ it("puts a message back when its turn cannot start", async () => {
 	mocks.send.mockClear();
 	await startQueuedUserTurn(machines, "owner", "chat");
 	expect(mocks.send).not.toHaveBeenCalled();
+});
+
+const batchSend = (id: string, text: string, extra = {}) => ({
+	item: { kind: "userMessage", id, text, ...extra },
+	message: text,
+	harnessId: "api",
+	modelId: "connection|model",
+});
+const idle = () =>
+	mocks.session.mockResolvedValue({
+		id: "chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "idle",
+		items: [],
+	});
+
+it("starts several waiting messages as one turn: the last is the send, the earlier ones keep their bubbles", async () => {
+	idle();
+	const a = batchSend("a", "First", { attachments: [{ id: "f1" }] });
+	const b = batchSend("b", "Second");
+	const c = batchSend("c", "Third");
+	mocks.take.mockResolvedValue([a, b, c]);
+	expect(await startQueuedUserTurn(machines, "owner", "chat")).toBe(true);
+	expect(mocks.send).toHaveBeenCalledOnce();
+	const [, , task] = mocks.send.mock.calls[0] as unknown[] as [
+		unknown,
+		unknown,
+		Record<string, unknown>,
+	];
+	expect(task).toMatchObject({
+		text: "Third",
+		idempotencyKey: "c",
+		merged: {
+			items: [a.item, b.item],
+			modelText:
+				"Message 1 of 3:\nFirst\n\nMessage 2 of 3:\nSecond\n\nMessage 3 of 3:\nThird",
+		},
+	});
+	expect(task).not.toHaveProperty("runtimeText");
+	expect(mocks.restore).not.toHaveBeenCalled();
+});
+
+it("sends one waiting message as before, with no merge", async () => {
+	idle();
+	mocks.take.mockResolvedValue([batchSend("a", "Only")]);
+	await startQueuedUserTurn(machines, "owner", "chat");
+	expect(mocks.send.mock.calls[0]?.[2]).not.toHaveProperty("merged");
+});
+
+it("puts every merged message back, in order, when their turn cannot start", async () => {
+	idle();
+	const batch = [batchSend("a", "First"), batchSend("b", "Second")];
+	mocks.take.mockResolvedValue(batch);
+	mocks.send.mockReturnValue(
+		Effect.succeed({
+			...view("idle"),
+			connection: { status: "failed", message: "Model removed." },
+		}),
+	);
+	expect(await startQueuedUserTurn(machines, "owner", "chat")).toBe(false);
+	expect(
+		mocks.restore.mock.calls.map((call) => (call as unknown[])[1]),
+	).toEqual(batch);
+});
+
+it("sends a merged batch of one sender's steering with the steering text as the model's text", async () => {
+	idle();
+	const steer = (id: string, word: string) => {
+		const text = `Message from Lead (x):\n\n${word}\n\nCoordination message ID: ${id}`;
+		return {
+			item: { kind: "userMessage", id, text },
+			message: `${text}\n\nNote`,
+			harnessId: "api",
+			modelId: "connection|model",
+		};
+	};
+	mocks.take.mockResolvedValue([steer("a", "one"), steer("b", "two")]);
+	await startQueuedUserTurn(machines, "owner", "chat");
+	const task = mocks.send.mock.calls[0]?.[2] as Record<string, string>;
+	expect(task.runtimeText).toContain("Message 1 of 2:");
+	expect(task.runtimeText).toContain("Message 2 of 2:");
+});
+
+it("a merged batch never queues behind a turn that started meanwhile: it goes back whole", async () => {
+	mocks.session.mockResolvedValue({
+		id: "chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "running",
+		items: [],
+	});
+	const batch = [batchSend("a", "First"), batchSend("b", "Second")];
+	mocks.take.mockResolvedValue(batch);
+	expect(await startQueuedUserTurn(machines, "owner", "chat")).toBe(false);
+	expect(mocks.queue).not.toHaveBeenCalled();
+	expect(mocks.send).not.toHaveBeenCalled();
+	expect(mocks.restore).toHaveBeenCalledTimes(2);
+});
+
+it("steers a new message while a turn runs by queuing it already released", async () => {
+	mocks.session.mockResolvedValue({
+		id: "chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "running",
+		items: [],
+	});
+	await Effect.runPromise(
+		sendComposerMessage(machines, scope, {
+			text: "Use the other API",
+			modelId: "connection|model",
+			idempotencyKey: messageId,
+			released: true,
+		}),
+	);
+	expect(mocks.queue).toHaveBeenCalledWith(
+		"owner",
+		"chat",
+		expect.objectContaining({ released: true }),
+	);
 });
 
 it("keeps queued messages through Stop and starts them once nothing runs", async () => {

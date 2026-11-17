@@ -14,6 +14,7 @@ import {
 	startsSetupBesideTask,
 	workspaceEnvironmentIsReady,
 } from "#/domain/project-workspace";
+import { type MergedQueuedTurn, mergedQueuedTurn } from "#/domain/queued-merge";
 import type { UserMessageItem } from "#/domain/session-item";
 import {
 	sendWasQueued,
@@ -55,8 +56,9 @@ import {
 	releaseHeldUserMessages,
 	releaseQueuedUserMessage,
 	removeQueuedUserMessage,
-	restoreQueuedUserMessage,
+	restoreQueuedUserMessages,
 	takeNextQueuedUserMessage,
+	takeNextQueuedUserMessages,
 	updateQueuedUserMessage,
 } from "../adapters/queued-user-messages";
 import { workspaceForProject } from "../adapters/workspaces";
@@ -278,6 +280,9 @@ async function queueBehindRunningTurn(
 		session = await agentSessionMetadataForOwner(scope.userId, session.id);
 		if (session?.turnStatus !== "running") return {};
 	}
+	// A merged batch is one turn's start: queued alone it would drop the
+	// earlier messages (deliverQueuedSend puts them all back).
+	if (input.merged) throw new Error("A turn is already running.");
 	if (await sessionHoldsUserMessage(scope.userId, session.id, messageId))
 		return { view: await publicSessionView(scope) };
 	const attachments = input.storedAttachments
@@ -532,7 +537,7 @@ async function deliverHeldSendsInChat(
 	if (!(await releaseHeldUserMessages(sessionId))) return false;
 	const next = await takeNextQueuedUserMessage(userId, sessionId);
 	if (!next) return false;
-	return deliverQueuedSend(machines, userId, sessionId, next);
+	return deliverQueuedSend(machines, userId, sessionId, [next]);
 }
 
 /** What the model reads for a queued message: its text, files and mention note. */
@@ -550,34 +555,43 @@ async function queuedModelText(
 
 /**
  * Starts the next turn with the oldest message still waiting once the chat's
- * turn has ended (completed, failed or stopped). A message whose turn cannot
- * start goes back to the front of the queue, still visible and removable.
+ * turn has ended (completed, failed or stopped), together with the messages
+ * right behind it that may share its turn (one round trip: takeNextQueuedUserMessages).
+ * Messages that cannot start their turn go back to the front of the queue,
+ * still visible and removable.
  */
 export async function startQueuedUserTurn(
 	machines: WorkspaceMachines,
 	userId: string,
 	sessionId: string,
 ) {
-	const next = await takeNextQueuedUserMessage(userId, sessionId);
-	if (!next) return false;
-	return deliverQueuedSend(machines, userId, sessionId, next);
+	const batch = await takeNextQueuedUserMessages(userId, sessionId);
+	if (!batch.length) return false;
+	return deliverQueuedSend(machines, userId, sessionId, batch);
 }
 
 /**
- * Starts a turn with one waiting message. A failure puts that message back
- * at the front of the queue. Send and the turn-end drain share this.
- * Returns whether the turn started.
+ * Starts a turn with the waiting messages taken together: one message, or
+ * several of one origin merged (queued-merge.ts: each keeps its own bubble,
+ * the model reads one numbered request; the last message is the send, its id
+ * the turn's idempotency key, and all were taken, so delivered, together). A
+ * failure puts them all back at the front of the queue, in order. Send and
+ * the turn-end drain share this. Returns whether the turn started.
  */
 async function deliverQueuedSend(
 	machines: WorkspaceMachines,
 	userId: string,
 	sessionId: string,
-	next: QueuedUserSend,
+	batch: readonly QueuedUserSend[],
 ): Promise<boolean> {
+	const next = batch[batch.length - 1];
+	if (!next) return false;
+	const merged: MergedQueuedTurn | undefined = mergedQueuedTurn(batch);
+	const restore = () => restoreQueuedUserMessages(sessionId, batch);
 	try {
 		const session = await agentSessionMetadataForOwner(userId, sessionId);
 		if (!session) {
-			await restoreQueuedUserMessage(sessionId, next).catch(() => {});
+			await restore().catch(() => {});
 			return false;
 		}
 		const view = await Effect.runPromise(
@@ -595,8 +609,9 @@ async function deliverQueuedSend(
 					// An agent's queued message (agent_send) starts the turn with the
 					// text the model reads (the sender's role note), as its steering does.
 					...(parseSteering(next.item.text) && next.message !== next.item.text
-						? { runtimeText: next.message }
+						? { runtimeText: merged?.modelText ?? next.message }
 						: {}),
+					...(merged ? { merged } : {}),
 					modelId: next.modelId,
 					...(next.variant ? { variant: next.variant } : {}),
 					...(next.speed ? { speed: next.speed } : {}),
@@ -616,7 +631,7 @@ async function deliverQueuedSend(
 			throw new Error(view.connection.message);
 		return true;
 	} catch (cause) {
-		await restoreQueuedUserMessage(sessionId, next).catch(() => {});
+		await restore().catch(() => {});
 		console.warn(
 			"A queued message could not start its turn; it waits in the chat.",
 			cause instanceof Error ? cause.name : "unknown",
@@ -708,7 +723,7 @@ export function releaseQueuedComposerMessage(
 				machines,
 				scope.userId,
 				scope.sessionId,
-				outcome.send,
+				[outcome.send],
 			);
 			if (!started) throw new Error("That message could not be sent.");
 		}
