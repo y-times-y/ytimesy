@@ -123,3 +123,8 @@ This wires the direct adapter's telemetry and the live Settings query, but does
 not switch ordinary Codex chats or the durable job dispatcher away from the
 native runtime. That routing change is separate; the direct adapter is not
 represented as a fully deployed production runtime.
+
+## Pins
+
+- Codex CLI pin: `PINNED_CODEX_CLI_VERSION` is **0.169.0** (stable, released 2026-11-13; bumped 2026-11-17 from 0.167.1) in `src/domain/guest-cli-pin.ts`. It is the `client_version` of `codex/models` and the version native-Codex evaluations install. The bump is for GPT-6.2 Sol and GPT-6.2 Astra.
+- The live ChatGPT-plan model catalog for 0.169.0 was **not verified**: no credentials were available, so whether `gpt-6.2-sol` and `gpt-6.2-astra` appear in it is untested.

@@ -303,6 +303,14 @@ describe("model equivalence", () => {
 		expect(new Set(tiered).size).toBe(tiered.length);
 		expect(modelTier("anthropic/claude-opus-5.5")).toBe("frontier");
 		expect(modelTier("meta/muse-wonder")).toBeNull();
+		expect(modelTier("openai/gpt-6.2-sol")).toBe("frontier");
+		expect(modelTier("openai/gpt-6.2-astra")).toBe("frontier");
+		expect(SUBSCRIPTION_MODEL_EQUIVALENTS["gpt-6.2-sol"]).toBe(
+			"openai/gpt-6.2-sol",
+		);
+		expect(SUBSCRIPTION_MODEL_EQUIVALENTS["gpt-6.2-astra"]).toBe(
+			"openai/gpt-6.2-astra",
+		);
 	});
 });
 

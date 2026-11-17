@@ -48,6 +48,38 @@ export type ModelPrice = TokenPrices & {
  * - GLM 5.3: https://docs.z.ai/guides/overview/pricing.
  */
 export const KNOWN_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
+	// GPT-6.2 Sol / Astra: developers.openai.com/api/docs/models/gpt-6.2-sol and
+	// .../gpt-6.2-astra. Over 272K input tokens the whole request reprices:
+	// input and cache x2, output x1.5. OpenRouter ids are unverified (same
+	// naming pattern as the GPT-6.1 entries).
+	"openai/gpt-6.2-sol": {
+		input: 2,
+		output: 10,
+		cacheRead: 0.1,
+		cacheWrite: 2.5,
+		longContext: {
+			aboveInputTokens: 272_000,
+			input: 4,
+			output: 15,
+			cacheRead: 0.2,
+			cacheWrite: 5,
+		},
+	},
+	"openai/gpt-6.2-astra": {
+		input: 8,
+		output: 40,
+		cacheRead: 0.4,
+		// The model page lists no cache-write price for Astra; 1.25x input, as
+		// the other OpenAI entries.
+		cacheWrite: 10,
+		longContext: {
+			aboveInputTokens: 272_000,
+			input: 16,
+			output: 60,
+			cacheRead: 0.8,
+			cacheWrite: 20,
+		},
+	},
 	"openai/gpt-6.1-sol": {
 		input: 2,
 		output: 10,

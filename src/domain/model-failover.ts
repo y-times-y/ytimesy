@@ -198,6 +198,8 @@ export function orderedFailoverConnections<
  */
 export const SUBSCRIPTION_MODEL_EQUIVALENTS: Readonly<Record<string, string>> =
 	{
+		"gpt-6.2-sol": "openai/gpt-6.2-sol",
+		"gpt-6.2-astra": "openai/gpt-6.2-astra",
 		"gpt-6.1-sol": "openai/gpt-6.1-sol",
 		"gpt-6.1-terra": "openai/gpt-6.1-terra",
 		"gpt-6-astra": "openai/gpt-6-astra",
@@ -213,10 +215,12 @@ export type ModelTier = "frontier" | "balanced" | "fast";
  */
 export const MODEL_TIERS: Readonly<Record<ModelTier, readonly string[]>> = {
 	frontier: [
+		"openai/gpt-6.2-sol",
 		"openai/gpt-6.1-sol",
 		"anthropic/claude-opus-5.5",
 		"google/gemini-4-carbon",
 		"google/gemini-4-argon",
+		"openai/gpt-6.2-astra",
 		"openai/gpt-6-astra",
 		"x-ai/grok-4.7",
 	],

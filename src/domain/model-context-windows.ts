@@ -18,6 +18,8 @@ type KnownModelLimits = {
  * model with a smaller window (Bedrock's Claude, 200K) states it explicitly.
  */
 const KNOWN_MODEL_LIMITS: Readonly<Record<string, KnownModelLimits>> = {
+	"gpt-6.2-sol": { contextWindow: 1_050_000, imageInput: true },
+	"gpt-6.2-astra": { contextWindow: 1_050_000, imageInput: true },
 	"gpt-6.1-sol": { contextWindow: 1_050_000, imageInput: true },
 	"gpt-6.1-terra": { contextWindow: 1_050_000, imageInput: true },
 	"gpt-6-sol": { contextWindow: 1_050_000, imageInput: true },
