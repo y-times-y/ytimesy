@@ -88,6 +88,24 @@ const XAI_PRIORITY: ApiModelSpeed = {
 };
 
 export const API_MODEL_LIST: readonly ListedApiModel[] = [
+	// OpenRouter ids for the two GPT-6.2 models are unverified (assumed to
+	// follow the GPT-6.1 naming pattern).
+	{
+		author: "openai",
+		label: "GPT-6.2 Sol",
+		openRouterId: "openai/gpt-6.2-sol",
+		directId: "gpt-6.2-sol",
+		speeds: [OPENAI_FAST, OPENAI_ULTRAFAST],
+		longContext: OPENAI_LONG_CONTEXT,
+	},
+	{
+		author: "openai",
+		label: "GPT-6.2 Astra",
+		openRouterId: "openai/gpt-6.2-astra",
+		directId: "gpt-6.2-astra",
+		speeds: [OPENAI_FAST, OPENAI_ULTRAFAST],
+		longContext: OPENAI_LONG_CONTEXT,
+	},
 	{
 		author: "openai",
 		label: "GPT-6.1 Sol",

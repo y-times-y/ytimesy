@@ -112,6 +112,35 @@ describe("price table", () => {
 		});
 		expect(modelPrice("gpt-6.1-terra")).toBe(terra);
 		expect(modelPrice("codex:gpt-6.1-terra")).toBe(terra);
+		const sol62 = modelPrice("openai/gpt-6.2-sol");
+		expect(sol62).toMatchObject({
+			input: 2,
+			cacheRead: 0.1,
+			cacheWrite: 2.5,
+			output: 10,
+			longContext: {
+				aboveInputTokens: 272_000,
+				input: 4,
+				output: 15,
+				cacheRead: 0.2,
+			},
+		});
+		expect(modelPrice("gpt-6.2-sol")).toBe(sol62);
+		expect(modelPrice("codex:gpt-6.2-sol")).toBe(sol62);
+		const astra62 = modelPrice("openai/gpt-6.2-astra");
+		expect(astra62).toMatchObject({
+			input: 8,
+			cacheRead: 0.4,
+			output: 40,
+			longContext: {
+				aboveInputTokens: 272_000,
+				input: 16,
+				output: 60,
+				cacheRead: 0.8,
+			},
+		});
+		expect(modelPrice("gpt-6.2-astra")).toBe(astra62);
+		expect(modelPrice("codex:gpt-6.2-astra")).toBe(astra62);
 		expect(
 			modelPrice(
 				`api/${"5".repeat(8)}-5555-4555-8555-${"5".repeat(12)}/${encodeURIComponent("moonshotai/kimi-k3")}`,
