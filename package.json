@@ -1,6 +1,7 @@
 {
 	"name": "ytimesy",
 	"private": true,
+	"license": "MIT",
 	"type": "module",
 	"imports": {
 		"#/*": "./src/*"

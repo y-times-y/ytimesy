@@ -10,7 +10,7 @@
 	"engines": {
 		"node": ">=22.13"
 	},
-	"license": "UNLICENSED",
+	"license": "MIT",
 	"homepage": "https://ytimesy.com",
 	"scripts": {
 		"build": "node build.mjs",
