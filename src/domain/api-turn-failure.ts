@@ -862,6 +862,11 @@ const UNKNOWN_MODEL_FAILURE =
 /** What a Y² turn's refused workspace rejects with (it has no machine). */
 export const Y_SQUARED_NO_WORKSPACE = "Y² has no workspace.";
 
+/** Whether this is the error a Y² turn's refused workspace rejects with. */
+export function isYSquaredNoWorkspace(error: unknown) {
+	return error instanceof Error && error.message === Y_SQUARED_NO_WORKSPACE;
+}
+
 const Y_SQUARED_NO_WORKSPACE_MESSAGE =
 	"Y² reached for a workspace, and it has none: it only reads and steers other chats. This is a ytimesy bug, not a model or provider failure. Nothing was sent to the model; report it, and use a normal chat in the meantime.";
 

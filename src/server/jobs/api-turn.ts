@@ -16,6 +16,7 @@ import {
 	ClaudeSubscriptionRefused,
 	failureCause,
 	IncompleteAgentTurn,
+	isYSquaredNoWorkspace,
 	LifecycleHookRefusal,
 	SafeApiModelFailure,
 	Y_SQUARED_NO_WORKSPACE,
@@ -2375,7 +2376,10 @@ async function runApiTurnAttempt(
 					history,
 				);
 				// A lean surface has no archive tools: it searches a file instead.
-				const file = await surface.lean?.saveHistory(reference, history);
+				// Y² has no VM to hold the history file.
+				const file = ySquared
+					? undefined
+					: await surface.lean?.saveHistory(reference, history);
 				return file ? { file } : reference;
 			},
 			instructions: turnInstructions(
@@ -2444,7 +2448,9 @@ async function runApiTurnAttempt(
 				return hooks.drain(history);
 			},
 			afterTools: async (history) =>
-				hooks.drain(await repositoryContext.afterTools(history)),
+				hooks.drain(
+					ySquared ? history : await repositoryContext.afterTools(history),
+				),
 			prepareMessages: async (history) => {
 				// Each model call starts with no tool run yet: Send may cut it.
 				toolsStarted = false;
@@ -2467,30 +2473,36 @@ async function runApiTurnAttempt(
 					failureStage = "model";
 				}
 				history = withCompactInstruction(history);
-				history = hooks.drain(await repositoryContext.prepare(history));
-				history = await withBackgroundCommandContext({
-					workspace,
-					sessionId: owner.id,
-					items,
-					messages: history,
-					signal: abort.signal,
-					commandReader,
-					checkpoint: async (injected) => {
-						messages = injected;
-						await saveCheckpoint();
-						await publishProgress?.("running");
-					},
-				});
+				// Y² has no checkout to read evidence from and runs no
+				// command, so none of the workspace reads below apply to it.
+				if (!ySquared) history = await repositoryContext.prepare(history);
+				history = hooks.drain(history);
+				if (!ySquared)
+					history = await withBackgroundCommandContext({
+						workspace,
+						sessionId: owner.id,
+						items,
+						messages: history,
+						signal: abort.signal,
+						commandReader,
+						checkpoint: async (injected) => {
+							messages = injected;
+							await saveCheckpoint();
+							await publishProgress?.("running");
+						},
+					});
 				// Background commands that exited since the last step: their cards and notices.
-				const background = await withBackgroundCommandNotices({
-					workspace,
-					sessionId: owner.id,
-					items,
-					messages: history,
-				}).catch((error: unknown) => {
-					console.warn("Background commands were not observed.", error);
-					return null;
-				});
+				const background = ySquared
+					? null
+					: await withBackgroundCommandNotices({
+							workspace,
+							sessionId: owner.id,
+							items,
+							messages: history,
+						}).catch((error: unknown) => {
+							console.warn("Background commands were not observed.", error);
+							return null;
+						});
 				if (background?.changed) {
 					items = background.items;
 					history = messages = background.messages;
@@ -3027,8 +3039,9 @@ async function runApiTurnAttempt(
 		// Background command exits already announced or seen reach their cards; new exits wake the chat later.
 		// A turn that only answered does not wait for a machine still being
 		// prepared to read them (an earlier turn's dev server, say).
+		// Y² ran no command and has no machine to read them from.
 		const background =
-			checkoutReady || !answerOnly()
+			!ySquared && (checkoutReady || !answerOnly())
 				? await withBackgroundCommandNotices({
 						workspace,
 						sessionId: owner.id,
@@ -3040,7 +3053,7 @@ async function runApiTurnAttempt(
 		if (background?.changed) items = background.items;
 		// No background command of this chat runs any more: its VM gets the
 		// short idle timeout back unless another chat's command runs on it.
-		if (checkoutReady || !answerOnly())
+		if (!ySquared && (checkoutReady || !answerOnly()))
 			await settleIdleTimeoutAfterTurn({ workspace, items });
 		// A push card answered during the last step still gets its notice.
 		const pushResults = await withPushResultNotices({
@@ -3052,19 +3065,21 @@ async function runApiTurnAttempt(
 		if (pushResults) items = pushResults.items;
 		// A model stop is not proof that detached verification finished. Re-observe at the publication boundary.
 		const historyBeforeCompletion = messages;
-		const finalHistory = await withBackgroundCommandContext({
-			workspace,
-			sessionId: owner.id,
-			items,
-			messages,
-			signal: abort.signal,
-			commandReader,
-			checkpoint: async (injected) => {
-				messages = injected;
-				await saveCheckpoint();
-				await publishProgress?.("running");
-			},
-		});
+		const finalHistory = ySquared
+			? messages
+			: await withBackgroundCommandContext({
+					workspace,
+					sessionId: owner.id,
+					items,
+					messages,
+					signal: abort.signal,
+					commandReader,
+					checkpoint: async (injected) => {
+						messages = injected;
+						await saveCheckpoint();
+						await publishProgress?.("running");
+					},
+				});
 		const pendingCommands = pendingAgentCommandIds(items);
 		if (pendingCommands.length || finalHistory !== historyBeforeCompletion) {
 			if (step) {
@@ -3499,6 +3514,11 @@ async function runApiTurnAttempt(
 				stage: coordinationFailure ? "coordination" : failureStage,
 				...apiTurnFailureClassification(coordinationFailure ?? error),
 				...(turnCause ? { cause: turnCause } : {}),
+				// Where a Y² turn reached for a workspace it does not have:
+				// frames only (no message text, no user content).
+				...(isYSquaredNoWorkspace(coordinationFailure ?? error)
+					? { stack: errorStackFrames(error) }
+					: {}),
 				// Development diagnostics only: messages can contain provider details.
 				...(debugTurnErrors() && error instanceof Error
 					? {
@@ -3836,6 +3856,17 @@ async function runApiTurnAttempt(
  * Development eval users pick harness variants per run; everyone else (and
  * production) gets the default. Fixed for the turn.
  */
+/** The first frames of an error's stack, without its message (no user content). */
+function errorStackFrames(error: unknown, frames = 10) {
+	if (!(error instanceof Error) || !error.stack) return undefined;
+	return error.stack
+		.split("\n")
+		.filter((line) => /^\s+at /.test(line))
+		.slice(0, frames)
+		.map((line) => line.trim())
+		.join(" | ");
+}
+
 /** A turn's workspace that every caller is refused (a chat without a machine). */
 function refusedApiTurnWorkspace(
 	reason: string,
