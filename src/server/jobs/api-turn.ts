@@ -18,6 +18,7 @@ import {
 	IncompleteAgentTurn,
 	LifecycleHookRefusal,
 	SafeApiModelFailure,
+	Y_SQUARED_NO_WORKSPACE,
 } from "#/domain/api-turn-failure";
 import type { ApiTurnSettings } from "#/domain/api-turn-settings";
 import { attemptLimit } from "#/domain/attempt-loop";
@@ -1259,7 +1260,7 @@ async function runApiTurnAttempt(
 		// Y² has no machine: a path that still asks for one fails instead of
 		// copying or waking a VM.
 		const prepareWorkspace = ySquared
-			? refusedApiTurnWorkspace("Y² has no workspace.")
+			? refusedApiTurnWorkspace(Y_SQUARED_NO_WORKSPACE)
 			: deferredApiTurnWorkspace(
 					turnMachines,
 					owner,
@@ -2423,16 +2424,19 @@ async function runApiTurnAttempt(
 				if (!claudeCode) thinkingPause?.toolEnded(call.toolCallId);
 			},
 			isUserRequest: (message) => isUserRequestMessage(items, message),
-			compactionSnapshot: compactionStateSnapshot({
-				workspace,
-				baseRef: async () => {
-					const first = items.find((item) => item.kind === "userMessage");
-					return first && writable
-						? conversationPointCodeRef(owner.userId, owner.id, first.id)
-						: undefined;
-				},
-				runningIds: () => pendingAgentCommandIds(items),
-			}),
+			// Y² has no checkout to describe in a compaction.
+			compactionSnapshot: ySquared
+				? undefined
+				: compactionStateSnapshot({
+						workspace,
+						baseRef: async () => {
+							const first = items.find((item) => item.kind === "userMessage");
+							return first && writable
+								? conversationPointCodeRef(owner.userId, owner.id, first.id)
+								: undefined;
+						},
+						runningIds: () => pendingAgentCommandIds(items),
+					}),
 			restoreInstructions: async (history) => {
 				if (!ySquared)
 					history = await repositoryContext.restoreInstructions(history);
@@ -2533,7 +2537,13 @@ async function runApiTurnAttempt(
 				// The project's setup finished after this chat's machine booted
 				// without its template: its install runs here (no command of the
 				// agent's is running between steps), then one note.
-				if (setupCatchUpReady && owner.projectId && !owner.parentSessionId) {
+				// Y² has no machine to install into.
+				if (
+					setupCatchUpReady &&
+					!ySquared &&
+					owner.projectId &&
+					!owner.parentSessionId
+				) {
 					const caughtUp = await withSetupCatchUp({
 						sessionId: owner.id,
 						userId: owner.userId,
@@ -2950,8 +2960,9 @@ async function runApiTurnAttempt(
 		// A turn that ran no tool able to change files has nothing to commit:
 		// it ends at its answer, without waiting for a checkout still being
 		// prepared (its tools would have waited for it, and the metadata guard).
+		// Y² has no workspace: whatever it ran, nothing there changed or commits.
 		const answerOnly = () =>
-			!claudeCode && !turnMayHaveChangedWorkspace(items, turn.id);
+			!claudeCode && (ySquared || !turnMayHaveChangedWorkspace(items, turn.id));
 		// An early first request: the step ends only once its checkout is
 		// ready (a workspace failure fails the turn as before, and the turn's
 		// code point exists) and the UserPromptSubmit check passed. Feedback
