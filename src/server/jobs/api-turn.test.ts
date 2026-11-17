@@ -2211,6 +2211,7 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		expect(y2?.tools).toEqual([
 			"ask_user",
 			"message_thread",
+			"schedule",
 			"start_thread",
 			"stop_thread",
 			"thread",
