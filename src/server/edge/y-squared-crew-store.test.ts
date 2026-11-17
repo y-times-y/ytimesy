@@ -341,3 +341,128 @@ describe("waiting hint (a settle note that lost what the thread waits on)", () =
 		expect(parseCrewWaitingHint(null)).toBeNull();
 	});
 });
+
+describe("created, last request and last activity", () => {
+	it("records created once, the last request, and bumps last active on every note", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(note(), T0);
+		expect(crew.thread("t1")).toMatchObject({
+			createdAt: T0,
+			lastActiveAt: T0,
+			lastRequest: null,
+		});
+		crew.noteThread(
+			note({
+				state: "finished",
+				lastReply: "Done",
+				lastRequest: "Add --verbose",
+			}),
+			T0 + 60_000,
+		);
+		// the next turn's start note carries no request: the last one stays
+		crew.noteThread(note(), T0 + 120_000);
+		expect(crew.thread("t1")).toMatchObject({
+			createdAt: T0,
+			lastActiveAt: T0 + 120_000,
+			lastRequest: "Add --verbose",
+			lastReply: "Done",
+		});
+		crew.noteThread(
+			note({
+				state: "finished",
+				lastReply: "Done",
+				lastRequest: "x".repeat(500),
+			}),
+			T0 + 180_000,
+		);
+		expect(crew.thread("t1")?.lastRequest).toHaveLength(200);
+		expect(crew.thread("t1")?.createdAt).toBe(T0);
+	});
+
+	it("an unchanged note writes nothing, a new request does", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		const settled = note({
+			state: "finished",
+			lastReply: "ok",
+			lastRequest: "A",
+		});
+		crew.noteThread(settled, T0);
+		crew.noteThread(settled, T0 + 1000);
+		expect(crew.thread("t1")?.lastActiveAt).toBe(T0);
+		crew.noteThread({ ...settled, lastRequest: "B" }, T0 + 2000);
+		expect(crew.thread("t1")).toMatchObject({
+			lastRequest: "B",
+			lastActiveAt: T0 + 2000,
+		});
+	});
+
+	it("lists the most recently active first within a state", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		const done = (id: string) =>
+			note({ sessionId: id, state: "finished", lastReply: "ok" });
+		crew.noteThread(done("old"), T0);
+		crew.noteThread(done("new"), T0 + 5000);
+		expect(crew.list().rows.map((row) => row.sessionId)).toEqual([
+			"new",
+			"old",
+		]);
+	});
+
+	it("adds the columns to a table an earlier deploy made, keeping its rows", () => {
+		const db = sql();
+		db.exec(`create table crew(
+			session_id text primary key, title text not null, state text not null,
+			waiting_on text, pr_url text, last_reply text, updated_at integer not null)`);
+		db.exec(
+			"insert into crew values('old','Old thread','finished',null,null,'Done',?)",
+			T0,
+		);
+		const crew = new SqliteYSquaredCrew(db as never);
+		expect(crew.thread("old")).toMatchObject({
+			title: "Old thread",
+			createdAt: 0,
+			lastRequest: null,
+			lastActiveAt: T0,
+			lastReply: "Done",
+		});
+		// a second start (the object wakes again) adds nothing and keeps the data
+		const again = new SqliteYSquaredCrew(db as never);
+		expect(again.thread("old")?.lastActiveAt).toBe(T0);
+		crew.noteThread(
+			note({
+				sessionId: "old",
+				state: "finished",
+				lastReply: "Done",
+				lastRequest: "Q",
+			}),
+			T0 + 1,
+		);
+		expect(crew.thread("old")).toMatchObject({
+			createdAt: 0,
+			lastRequest: "Q",
+		});
+	});
+
+	it("takes the last request from a settled transcript, never from a wake", () => {
+		const items = [
+			{ kind: "userMessage", id: "a", text: "Add --verbose" },
+			{ kind: "agentMessage", id: "b", text: "Done" },
+			{ kind: "userMessage", id: "c", text: "Now add --quiet" },
+			{ kind: "userMessage", id: "d", text: "PR merged", wake: true },
+			{ kind: "agentMessage", id: "e", text: "Added" },
+		] as never;
+		expect(crewFromSettledItems(items, "completed")).toMatchObject({
+			lastRequest: "Now add --quiet",
+			title: "Add --verbose",
+		});
+		expect(
+			parseCrewNote({
+				sessionId: "t",
+				userId: "u",
+				projectId: "p",
+				state: "finished",
+				lastRequest: "  hi\n there ",
+			})?.lastRequest,
+		).toBe("hi there");
+	});
+});

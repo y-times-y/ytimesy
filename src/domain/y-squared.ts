@@ -117,6 +117,9 @@ export function ySquaredInstructions() {
 		"- Start a thread only with a self-contained brief (goal, constraints, what done looks like): the thread cannot see this chat. Never start more threads than the work needs; one thread per independent piece of work. A started thread may be queued behind the budget or concurrency limit: say how many were started and how many are queued, from the tool results.",
 		"- Never poll. After starting or messaging threads, end your turn: you wake by yourself when a thread finishes or needs the person. Do not call `threads` again just to see progress.",
 		"- Report in at most 100 words.",
+		`- For "which thread did X", "which was last used" or "which thread created Y": answer from each thread's created, last active, last request and last reply in \`${Y_SQUARED_THREADS_TOOL}\`, and name that thread as a link. If none fits, say so and name the closest.`,
+		`- Say plainly what is not recorded, never only "I can't see": who or which agent built Y² itself, work done outside this project's threads, and anything older than the crew's records (a thread shows "created not recorded" when it predates them). Then give a next step: open the most recently active thread, or ask it with \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\`.`,
+		"- Report only on this project's threads. Never mention a tool, connection or server failure that is not about them.",
 		"- A line starting with ::finished, ::merged, ::failed or ::needs-you is a centered event line for one short event across threads, at most 6 words and no links, for example:\n  ::finished All 3 threads finished\n  Never put a sentence or a thread's details on an event line.",
 	].join("\n");
 }
@@ -149,6 +152,10 @@ export type ThreadDigest = {
 	readonly lastReply: string | null;
 	readonly pullRequest: string | null;
 	readonly updatedAt: string | null;
+	/** When the crew first noted the thread (ISO); null when not recorded. */
+	readonly createdAt: string | null;
+	/** When the person or a wake last used the thread (ISO); null when not recorded. */
+	readonly lastActiveAt: string | null;
 };
 
 const clip = (text: string, limit = SNIPPET) => {
@@ -212,6 +219,8 @@ export function threadDigest(input: {
 			: null,
 		...facts,
 		updatedAt: input.updatedAt,
+		createdAt: null,
+		lastActiveAt: null,
 	};
 }
 
@@ -221,22 +230,53 @@ const ORDER: Record<ThreadDigest["status"], number> = {
 	idle: 2,
 };
 
-/** The overview Y² reads: threads that need the person first, then working, then idle. */
-export function threadsOverview(digests: readonly ThreadDigest[]) {
+/** "3 h ago": how long before `now` something happened. */
+export function relativeTime(at: number, now: number) {
+	const minutes = Math.max(0, Math.round((now - at) / 60_000));
+	if (minutes < 1) return "just now";
+	if (minutes < 60) return `${minutes} min ago`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 48) return `${hours} h ago`;
+	return `${Math.round(hours / 24)} days ago`;
+}
+
+/** One short line: when the thread was last used and created, or that it is not recorded. */
+export function threadTimesText(thread: ThreadDigest, now: number) {
+	const active = Date.parse(thread.lastActiveAt ?? thread.updatedAt ?? "");
+	const created = Date.parse(thread.createdAt ?? "");
+	return [
+		Number.isFinite(active)
+			? `last active ${relativeTime(active, now)}`
+			: "last active not recorded",
+		Number.isFinite(created)
+			? `created ${new Date(created).toISOString().slice(0, 10)}`
+			: "created not recorded",
+	].join(" · ");
+}
+
+/** The overview Y² reads: threads that need the person first, then working, then idle (most recently active first). */
+export function threadsOverview(
+	digests: readonly ThreadDigest[],
+	now: number = Date.now(),
+) {
 	if (!digests.length) return "No threads in this project yet.";
 	return [...digests]
 		.sort(
 			(a, b) =>
 				ORDER[a.status] - ORDER[b.status] ||
-				(b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
+				(b.lastActiveAt ?? b.updatedAt ?? "").localeCompare(
+					a.lastActiveAt ?? a.updatedAt ?? "",
+				),
 		)
 		.map((thread) =>
 			[
 				`- [${thread.status}] "${thread.title}" (id ${thread.id})`,
-				thread.waitingOn ? `  waiting: it ${thread.waitingOn}` : "",
-				thread.workingForMinutes !== null
-					? `  working for ${thread.workingForMinutes} min`
-					: "",
+				thread.waitingOn
+					? `  waiting: it ${thread.waitingOn}`
+					: thread.workingForMinutes !== null
+						? `  working for ${thread.workingForMinutes} min`
+						: "",
+				`  ${threadTimesText(thread, now)}`,
 				thread.lastRequest ? `  last request: ${thread.lastRequest}` : "",
 				thread.lastReply ? `  last reply: ${thread.lastReply}` : "",
 				thread.pullRequest ? `  pull request: ${thread.pullRequest}` : "",

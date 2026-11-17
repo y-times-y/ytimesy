@@ -1,6 +1,7 @@
 import { Y_SQUARED_THREAD_LIMIT } from "../../domain/y-squared";
 import {
 	CREW_REPLY_LIMIT,
+	CREW_REQUEST_LIMIT,
 	CREW_RETENTION_MS,
 	CREW_WAITING_HINT_TTL_MS,
 	type CrewNote,
@@ -45,7 +46,30 @@ export class SqliteYSquaredCrew {
 	constructor(private readonly sql: CrewSql) {
 		sql.exec(`create table if not exists crew(
 			session_id text primary key, title text not null, state text not null,
-			waiting_on text, pr_url text, last_reply text, updated_at integer not null)`);
+			waiting_on text, pr_url text, last_reply text, updated_at integer not null,
+			created_at integer not null default 0, last_request text,
+			last_active_at integer not null default 0)`);
+		// A table an earlier deploy made lacks the newer columns: add them,
+		// once each. Old rows keep working: created is "not recorded" (0) and
+		// the last activity is taken from their last note.
+		const columns = new Set(
+			sql
+				.exec<{ name: string }>("select name from pragma_table_info('crew')")
+				.toArray()
+				.map((column) => column.name),
+		);
+		if (!columns.has("created_at"))
+			sql.exec(
+				"alter table crew add column created_at integer not null default 0",
+			);
+		if (!columns.has("last_request"))
+			sql.exec("alter table crew add column last_request text");
+		if (!columns.has("last_active_at")) {
+			sql.exec(
+				"alter table crew add column last_active_at integer not null default 0",
+			);
+			sql.exec("update crew set last_active_at=updated_at");
+		}
 		sql.exec(`create table if not exists wake_state(
 			id integer primary key check(id=1), last_wake_at integer not null default 0,
 			wakes_this_hour integer not null default 0, hour_start integer not null default 0,
@@ -138,9 +162,10 @@ export class SqliteYSquaredCrew {
 				waiting_on: string | null;
 				pr_url: string | null;
 				last_reply: string | null;
+				last_request: string | null;
 				updated_at: number;
 			}>(
-				"select title,state,waiting_on,pr_url,last_reply,updated_at from crew where session_id=?",
+				"select title,state,waiting_on,pr_url,last_reply,last_request,updated_at from crew where session_id=?",
 				hint.sessionId,
 			)
 			.toArray()[0];
@@ -158,6 +183,7 @@ export class SqliteYSquaredCrew {
 					waitingOn: hint.waitingOn,
 					prUrl: existing.pr_url,
 					lastReply: existing.last_reply,
+					lastRequest: existing.last_request,
 					userId: hint.userId,
 					projectId: hint.projectId,
 					ySquaredId: hint.ySquaredId,
@@ -191,13 +217,15 @@ export class SqliteYSquaredCrew {
 				waiting_on: string | null;
 				pr_url: string | null;
 				last_reply: string | null;
+				last_request: string | null;
 			}>(
-				"select title,state,waiting_on,pr_url,last_reply from crew where session_id=?",
+				"select title,state,waiting_on,pr_url,last_reply,last_request from crew where session_id=?",
 				note.sessionId,
 			)
 			.toArray()[0];
 		const title = existing?.title || note.title;
 		const reply = note.lastReply?.slice(0, CREW_REPLY_LIMIT) ?? null;
+		const request = note.lastRequest?.slice(0, CREW_REQUEST_LIMIT) || null;
 		const unchanged =
 			existing &&
 			existing.state === note.state &&
@@ -205,21 +233,28 @@ export class SqliteYSquaredCrew {
 			existing.pr_url === note.prUrl &&
 			// A working note carries no reply: keep the last one shown.
 			(note.state === "working" || existing.last_reply === reply) &&
+			// A start note carries no request: keep the last one.
+			(!request || existing.last_request === request) &&
 			existing.title === title;
 		if (!unchanged) {
 			this.sql.exec(
-				`insert into crew(session_id,title,state,waiting_on,pr_url,last_reply,updated_at)
-				 values(?,?,?,?,?,?,?)
+				`insert into crew(session_id,title,state,waiting_on,pr_url,last_reply,updated_at,
+				 created_at,last_request,last_active_at)
+				 values(?,?,?,?,?,?,?,?,?,?)
 				 on conflict(session_id) do update set title=excluded.title,state=excluded.state,
 				 waiting_on=excluded.waiting_on,pr_url=excluded.pr_url,
 				 last_reply=coalesce(excluded.last_reply,crew.last_reply),
-				 updated_at=excluded.updated_at`,
+				 last_request=coalesce(excluded.last_request,crew.last_request),
+				 updated_at=excluded.updated_at,last_active_at=excluded.last_active_at`,
 				note.sessionId,
 				title,
 				note.state,
 				note.waitingOn,
 				note.prUrl,
 				note.state === "working" ? null : reply,
+				now,
+				now,
+				request,
 				now,
 			);
 		}
@@ -271,11 +306,14 @@ export class SqliteYSquaredCrew {
 				waiting_on: string | null;
 				pr_url: string | null;
 				last_reply: string | null;
+				last_request: string | null;
 				updated_at: number;
+				created_at: number;
+				last_active_at: number;
 			}>(
 				`select * from crew order by
 				 case state when 'waiting' then 0 when 'failed' then 0 when 'working' then 1 else 2 end,
-				 updated_at desc limit ?`,
+				 last_active_at desc, updated_at desc limit ?`,
 				Math.min(limit, Y_SQUARED_THREAD_LIMIT),
 			)
 			.toArray();
@@ -303,8 +341,9 @@ export class SqliteYSquaredCrew {
 		if (this.wakeRow().reconciled === 1) return false;
 		for (const row of rows.slice(0, limit))
 			this.sql.exec(
-				`insert or ignore into crew(session_id,title,state,waiting_on,pr_url,last_reply,updated_at)
-				 values(?,?,?,?,?,?,?)`,
+				`insert or ignore into crew(session_id,title,state,waiting_on,pr_url,last_reply,updated_at,
+				 created_at,last_request,last_active_at)
+				 values(?,?,?,?,?,?,?,?,?,?)`,
 				row.sessionId,
 				row.title,
 				row.state,
@@ -312,6 +351,9 @@ export class SqliteYSquaredCrew {
 				row.prUrl,
 				row.lastReply?.slice(0, CREW_REPLY_LIMIT) ?? null,
 				row.updatedAt,
+				row.createdAt,
+				row.lastRequest?.slice(0, CREW_REQUEST_LIMIT) ?? null,
+				row.lastActiveAt || row.updatedAt,
 			);
 		this.sql.exec("update wake_state set reconciled=1 where id=1");
 		return true;
@@ -347,7 +389,10 @@ function toRow(row: {
 	waiting_on: string | null;
 	pr_url: string | null;
 	last_reply: string | null;
+	last_request: string | null;
 	updated_at: number;
+	created_at: number;
+	last_active_at: number;
 }): CrewRow {
 	return {
 		sessionId: row.session_id,
@@ -356,6 +401,9 @@ function toRow(row: {
 		waitingOn: row.waiting_on,
 		prUrl: row.pr_url,
 		lastReply: row.last_reply,
+		lastRequest: row.last_request,
 		updatedAt: row.updated_at,
+		createdAt: row.created_at,
+		lastActiveAt: row.last_active_at || row.updated_at,
 	};
 }

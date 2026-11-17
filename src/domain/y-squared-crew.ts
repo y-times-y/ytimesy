@@ -17,6 +17,8 @@ export type CrewState = "working" | "waiting" | "finished" | "failed";
 
 /** Longest last reply kept per thread. */
 export const CREW_REPLY_LIMIT = 300;
+/** Longest last request kept per thread. */
+export const CREW_REQUEST_LIMIT = 200;
 /** Rows untouched this long are dropped. */
 export const CREW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** A wake never comes sooner than this after the note that asked for it, or the previous wake. */
@@ -31,6 +33,8 @@ export type CrewNote = {
 	readonly waitingOn: string | null;
 	readonly prUrl: string | null;
 	readonly lastReply: string | null;
+	/** What the person last asked the thread; absent on a start note and on older notes. */
+	readonly lastRequest?: string | null;
 	/** Who to wake, and Y²'s own chat (never woken by its own notes). */
 	readonly userId: string;
 	readonly projectId: string;
@@ -84,6 +88,7 @@ export function parseCrewNote(value: unknown): CrewNote | null {
 		waitingOn,
 		prUrl: text(note.prUrl ?? note.pullRequest, 300) || null,
 		lastReply: text(note.lastReply ?? note.reply, CREW_REPLY_LIMIT) || null,
+		lastRequest: text(note.lastRequest, CREW_REQUEST_LIMIT) || null,
 		ySquaredId: text(note.ySquaredId, 64) || null,
 	};
 }
@@ -130,7 +135,10 @@ export function crewNoteMatters(state: CrewState) {
 export function crewFromSettledItems(
 	items: readonly SessionItem[],
 	turnStatus: SessionTurnStatus,
-): Pick<CrewNote, "state" | "waitingOn" | "prUrl" | "lastReply" | "title"> {
+): Pick<
+	CrewNote,
+	"state" | "waitingOn" | "prUrl" | "lastReply" | "lastRequest" | "title"
+> {
 	const waiting = chatWaitingOn(items, turnStatus);
 	const facts = threadHistoryFacts(items);
 	const pull = facts.pullRequest?.split(" ")[1] ?? null;
@@ -145,6 +153,11 @@ export function crewFromSettledItems(
 		lastReply: facts.lastReply
 			? facts.lastReply.slice(0, CREW_REPLY_LIMIT)
 			: null,
+		// The person's last request (never a wake), from the transcript the
+		// chat object already holds.
+		lastRequest: facts.lastRequest
+			? facts.lastRequest.slice(0, CREW_REQUEST_LIMIT)
+			: null,
 		title:
 			firstRequest && "text" in firstRequest ? text(firstRequest.text, 80) : "",
 	};
@@ -157,7 +170,14 @@ export type CrewRow = {
 	readonly waitingOn: string | null;
 	readonly prUrl: string | null;
 	readonly lastReply: string | null;
+	/** What the person last asked the thread (at most 200 characters). */
+	readonly lastRequest: string | null;
+	/** Last note of any kind. */
 	readonly updatedAt: number;
+	/** When the crew first noted the thread; 0: not recorded. */
+	readonly createdAt: number;
+	/** When the person or a wake last used the thread; 0: not recorded. */
+	readonly lastActiveAt: number;
 };
 
 /** A crew row as the digest the threads tool prints. */
@@ -174,10 +194,14 @@ export function crewDigest(row: CrewRow, now: number): ThreadDigest {
 			row.state === "working"
 				? Math.max(0, Math.round((now - row.updatedAt) / 60_000))
 				: null,
-		lastRequest: null,
+		lastRequest: row.lastRequest,
 		lastReply: row.lastReply,
 		pullRequest: row.prUrl,
 		updatedAt: new Date(row.updatedAt).toISOString(),
+		createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : null,
+		lastActiveAt: row.lastActiveAt
+			? new Date(row.lastActiveAt).toISOString()
+			: null,
 	};
 }
 

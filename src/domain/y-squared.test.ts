@@ -5,10 +5,12 @@ import type { SessionItem } from "./session-item";
 import { chatsWithPinnedFirst } from "./sidebar-chats";
 import { turnMayHaveChangedWorkspace } from "./turn-saving";
 import {
+	relativeTime,
 	threadDigest,
 	threadHistoryFacts,
 	threadsOverview,
 	withoutClaudeCodeModels,
+	Y_SQUARED_MESSAGE_THREAD_TOOL,
 	Y_SQUARED_THREADS_TOOL,
 	Y_SQUARED_TOOLS,
 	ySquaredInstructions,
@@ -118,6 +120,30 @@ describe("Y² surface", () => {
 		const text = ySquaredInstructions();
 		expect(text).toContain("You never change, run or read code");
 		expect(text).toContain(`Call \`${Y_SQUARED_THREADS_TOOL}\` first`);
+	});
+
+	it("tells Y² to answer which-thread questions, name what is not recorded and stay on the project's threads", () => {
+		const text = ySquaredInstructions();
+		expect(text).toMatch(
+			/which thread did X.*created, last active, last request and last reply/,
+		);
+		expect(text).toContain("name that thread as a link");
+		expect(text).toContain("Say plainly what is not recorded");
+		expect(text).toContain("who or which agent built Y² itself");
+		expect(text).toContain("work done outside this project's threads");
+		expect(text).toContain("anything older than the crew's records");
+		expect(text).toContain("open the most recently active thread");
+		expect(text).toContain(`\`${Y_SQUARED_MESSAGE_THREAD_TOOL}\``);
+		expect(text).toContain(
+			"Never mention a tool, connection or server failure that is not about them",
+		);
+	});
+
+	it("formats times relative to now", () => {
+		expect(relativeTime(NOW - 20_000, NOW)).toBe("just now");
+		expect(relativeTime(NOW - 5 * 60_000, NOW)).toBe("5 min ago");
+		expect(relativeTime(NOW - 3 * 3_600_000, NOW)).toBe("3 h ago");
+		expect(relativeTime(NOW - 4 * 86_400_000, NOW)).toBe("4 days ago");
 	});
 
 	it("tells Y² to link threads by id and to put events on lines of their own", () => {

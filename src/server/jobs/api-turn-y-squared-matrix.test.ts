@@ -41,6 +41,8 @@ const mocks = vi.hoisted(() => ({
 	cancelRequested: vi.fn(),
 	variant: vi.fn(),
 	turnMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+	/** The user's configured MCP servers: a Y² turn must never even load them. */
+	mcpServers: vi.fn(async (..._args: unknown[]): Promise<unknown[]> => []),
 	/** Any workspace preparation of a normal chat; Y² must never reach it. */
 	workspace: vi.fn(),
 	checkedOut: vi.fn((): Promise<unknown> | undefined => undefined),
@@ -110,7 +112,7 @@ vi.mock("../adapters/context-archives", async (importOriginal) => ({
 	archiveModelContext: vi.fn(async () => ({ id: "archive" })),
 }));
 vi.mock("../adapters/mcp-servers", () => ({
-	connectableMcpServers: async () => [],
+	connectableMcpServers: mocks.mcpServers,
 }));
 vi.mock("../adapters/plugin-installs", () => ({
 	enabledPluginSkillIndex: async () => [],
@@ -1061,5 +1063,109 @@ describe("Y² on the Claude Code route", () => {
 		expect(JSON.stringify(mocks.finalize.mock.calls)).not.toContain(
 			"ytimesy bug",
 		);
+	});
+});
+
+describe("the user's MCP servers never reach a Y² turn", () => {
+	// A configured server that cannot be reached (nothing listens on port 1).
+	const broken = {
+		id: "gitlab",
+		name: "gitlab-gitlab",
+		url: "http://127.0.0.1:1/mcp",
+		auth: "none",
+		headers: {},
+	};
+	const notices = () =>
+		(
+			mocks.stepRuntime.mock.calls.flatMap(
+				(call) =>
+					((call[0] as LoopInput).messages ?? []) as { content: unknown }[],
+			) as { content: unknown }[]
+		)
+			.map((message) => String(message.content))
+			.filter((content) => content.includes("MCP servers"));
+	beforeEach(() => {
+		mocks.mcpServers.mockReset();
+		mocks.mcpServers.mockResolvedValue([broken]);
+		mocks.stepRuntime.mockReset();
+	});
+
+	it("api route: loads no MCP server and adds no 'unavailable' notice", async () => {
+		const { outcome } = await runCase({});
+		expect(outcome).toBe("completed");
+		expect(mocks.mcpServers).not.toHaveBeenCalled();
+		expect(notices()).toEqual([]);
+	});
+
+	it("Claude Code route: loads no MCP server and adds no notice either", async () => {
+		const keys = [
+			"YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED",
+			"YTIMESY_CLAUDE_RUNNER_URLS",
+			"YTIMESY_CLAUDE_RUNNER_SIGNING_KEY",
+			"YTIMESY_CLAUDE_RUNNER_USERS",
+		] as const;
+		const saved = keys.map((key) => process.env[key]);
+		process.env.YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED = "1";
+		process.env.YTIMESY_CLAUDE_RUNNER_URLS = "https://runner.example";
+		process.env.YTIMESY_CLAUDE_RUNNER_SIGNING_KEY = "A".repeat(64);
+		process.env.YTIMESY_CLAUDE_RUNNER_USERS = "owner";
+		mocks.claudeStep.mockClear();
+		try {
+			await runCase({ claude: true });
+			expect(mocks.claudeStep).toHaveBeenCalledOnce();
+			expect(mocks.mcpServers).not.toHaveBeenCalled();
+			const step = mocks.claudeStep.mock.calls[0]?.[0] as {
+				messages: { content: unknown }[];
+			};
+			expect(
+				step.messages.some((message) =>
+					String(message.content).includes("MCP servers"),
+				),
+			).toBe(false);
+		} finally {
+			keys.forEach((key, index) => {
+				if (saved[index] === undefined) delete process.env[key];
+				else process.env[key] = saved[index];
+			});
+		}
+	});
+
+	it("api route with a tool result and a later step: still none", async () => {
+		await runCase({ stepIndex: 2, resumed: true, toolResult: "threads" });
+		expect(mocks.mcpServers).not.toHaveBeenCalled();
+		expect(notices()).toEqual([]);
+	});
+
+	it("control: a normal chat loads them and is told which are unavailable", async () => {
+		mocks.stepRuntime.mockImplementation((input: LoopInput) =>
+			simulatedLoop(input, BASE),
+		);
+		mocks.variant.mockReturnValue({
+			...(await import("#/domain/harness-variant")).PRODUCT_HARNESS_VARIANT,
+		});
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			taskAccess: "read_write",
+		});
+		mocks.yMode.mockResolvedValue({ enabled: true, ySquaredId: "another" });
+		mocks.projectSecrets.mockResolvedValue({
+			envFile: "",
+			redact: [],
+			names: [],
+		});
+		mocks.peerInbox.mockImplementation(async (_id: string, h: unknown) => h);
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			turnFor(BASE, "turn-control-mcp"),
+			{
+				index: 1,
+				signal: new AbortController().signal,
+			},
+		);
+		expect(mocks.mcpServers).toHaveBeenCalled();
+		expect(notices().join("\n")).toContain("gitlab-gitlab");
 	});
 });

@@ -1744,6 +1744,7 @@ async function runApiTurnAttempt(
 		}
 		failureStage = "connection";
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
+		// Y² has no use for them: none are loaded, so none can be reported as failed.
 		// Connections are live HTTP clients bound to this step's request, so a
 		// step that calls a tool connects again; the tool lists are reused. A
 		// list with OAuth servers is re-read each step because a token refresh
@@ -1751,13 +1752,14 @@ async function runApiTurnAttempt(
 		const connecting = timed("turn:mcp", async () =>
 			connectMcpTools(
 				await Promise.all(
-					(
-						await turnMemo(
-							`${turn.id}:mcp-servers`,
-							() =>
-								connectableMcpServers(owner.userId, owner.projectId ?? null),
-							(servers) => servers.every((server) => server.auth !== "oauth"),
-						)
+					(ySquared
+						? []
+						: await turnMemo(
+								`${turn.id}:mcp-servers`,
+								() =>
+									connectableMcpServers(owner.userId, owner.projectId ?? null),
+								(servers) => servers.every((server) => server.auth !== "oauth"),
+							)
 					)
 						// OAuth servers join once the user has signed in.
 						.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
