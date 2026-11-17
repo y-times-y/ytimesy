@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Check, ChevronRight, LockKeyhole } from "lucide-react";
+import { LockKeyhole } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { MenuSelect } from "#/components/ui/menu-select";
 import { API_MODEL_LIST } from "#/domain/api-model-list";
@@ -25,6 +25,7 @@ import {
 	getModelConnections,
 	saveModelConnectionFn,
 } from "./model-connections.fn";
+import { ModelInfoButton, ModelRowMeta, useModelDetail } from "./model-detail";
 import type { RenderModelFavorite } from "./model-favorite-button";
 import { favoriteModelKey } from "./model-picker-favorites";
 import { ModelProviderLogo } from "./model-provider-logo";
@@ -59,6 +60,7 @@ export function ApiModelBrowser({
 	/** The plan's usage line, under its caption (Grok's own rail entry). */
 	usage?: ReactNode;
 }) {
+	const detail = useModelDetail();
 	const client = useQueryClient();
 	const identity = authClient.useSession();
 	const browse = useServerFn(getBrowseModels);
@@ -282,16 +284,27 @@ export function ApiModelBrowser({
 			/>
 			{visibleConnected.map((model) => {
 				const route = modelRouteId(model.connectionId, model.id);
-				const chosen = plan && route === selectedRoute;
+				const chosen = route === selectedRoute;
+				const spec = {
+					id: route,
+					provider: "api",
+					label: model.label,
+					logo: model.author === "x-ai" ? "grok" : model.author,
+					priceId: model.id,
+					plan,
+				} as const;
 				return (
 					<div
 						className="model-picker-row"
 						key={`${model.connectionId}:${model.id}`}
-						data-selected={plan ? chosen : undefined}
+						data-selected={chosen}
 					>
 						<button
 							type="button"
 							className="model-browser-option model-browser-choice"
+							data-model-option
+							aria-pressed={chosen}
+							{...detail?.rowProps(spec)}
 							onClick={() => {
 								update(connections.data ?? []);
 								onSelect(route);
@@ -306,15 +319,10 @@ export function ApiModelBrowser({
 									? model.label
 									: `${AUTHOR_LABELS[model.author] ?? model.author} · ${model.label}`}
 							</span>
-							{plan ? (
-								chosen ? (
-									<Check size={14} aria-hidden="true" />
-								) : null
-							) : (
-								<ChevronRight size={14} />
-							)}
+							<ModelRowMeta priceId={model.id} plan={plan} selected={chosen} />
 						</button>
 						{renderFavorite?.(route, model.label)}
+						<ModelInfoButton spec={spec} />
 					</div>
 				);
 			})}
