@@ -7,10 +7,16 @@ import {
 	parseCrewNote,
 	parseCrewWaitingHint,
 } from "../../domain/y-squared-crew";
+import {
+	parseScheduleCreate,
+	parseSettingsPatch,
+	scheduleInput,
+} from "../../domain/y-squared-proactive";
 import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { withDatabaseScope } from "../adapters/database-scope";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
+import type { YSquaredScheduleResult } from "../adapters/y-squared-crew-client";
 import { sendComposerMessage } from "../services/queued-user-messages";
 import { runCrewAlarm } from "./crew-alarm";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -60,6 +66,60 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 
 	async thread(sessionId: string) {
 		return this.store.thread(sessionId);
+	}
+
+	/** Y²'s `schedule` tool: create, list or cancel. One alarm slot: a new schedule only moves it earlier. */
+	async schedule(
+		raw: unknown,
+		target: { userId: string; ySquaredId: string },
+	): Promise<YSquaredScheduleResult> {
+		const parsed = scheduleInput.safeParse(raw);
+		if (!parsed.success)
+			return { ok: false, error: "That schedule request is not valid." };
+		const input = parsed.data;
+		const now = Date.now();
+		if (input.action === "list")
+			return { ok: true, action: "list", schedules: this.store.schedules() };
+		if (input.action === "cancel") {
+			if (!input.id)
+				return { ok: false, error: "Cancel needs the schedule's id." };
+			return {
+				ok: true,
+				action: "cancel",
+				cancelled: this.store.cancelSchedule(input.id),
+			};
+		}
+		const saved = this.store.settings().timezone;
+		const draft = parseScheduleCreate(input, { now, timezone: saved });
+		if (!draft.ok) return draft;
+		const created = this.store.createSchedule(draft.draft, target, now);
+		if (!created.ok) return created;
+		if (created.alarmAt !== null)
+			await this.ctx.storage.setAlarm(created.alarmAt);
+		return {
+			ok: true,
+			action: "create",
+			schedule: created.schedule,
+			usedUtcFallback: !saved && !input.timezone,
+		};
+	}
+
+	/** Settings (stall nudges, time zone), active schedules and today's proactive-wake count. */
+	async proactive() {
+		return this.store.proactiveStatus(Date.now());
+	}
+
+	async saveSettings(raw: unknown) {
+		const { settings, alarmAt } = this.store.saveSettings(
+			parseSettingsPatch(raw),
+			Date.now(),
+		);
+		if (alarmAt !== null) await this.ctx.storage.setAlarm(alarmAt);
+		return settings;
+	}
+
+	async cancelSchedule(id: string) {
+		return this.store.cancelSchedule(String(id).slice(0, 64));
 	}
 
 	/** The cold start's one fill from the sidebar's metadata. */

@@ -5,13 +5,26 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { useEffect } from "react";
+import {
+	describeSpec,
+	formatLocal,
+	type ScheduleView,
+	type YSquaredSettings,
+} from "#/domain/y-squared-proactive";
 import {
 	cacheWrite,
 	optimisticMutation,
 	saveErrorMessage,
 } from "#/lib/optimistic-mutation";
 import { SettingsSwitch } from "./settings-switch";
-import { readYModeFn, saveYModeFn } from "./y-mode.fn";
+import {
+	cancelYScheduleFn,
+	readYModeFn,
+	readYProactiveFn,
+	saveYModeFn,
+	saveYProactiveFn,
+} from "./y-mode.fn";
 
 export function yModeChange(
 	queryClient: QueryClient,
@@ -81,6 +94,151 @@ export function YModeSettings({ projectId }: { projectId: string }) {
 				</div>
 			</div>
 			{error ? <p role="alert">{error}</p> : null}
+			{setting.data?.enabled ? (
+				<YProactiveSettings projectId={projectId} />
+			) : null}
 		</section>
+	);
+}
+
+type ProactiveData = {
+	readonly settings: YSquaredSettings;
+	readonly schedules: readonly ScheduleView[];
+	readonly proactiveToday: number;
+	readonly proactiveLimit: number;
+};
+
+/** What Y² does on its own: stall nudges, the person's schedules and the daily wake cap. Presentational. */
+export function YProactiveView({
+	data,
+	pending,
+	onStallNudges,
+	onCancel,
+}: {
+	readonly data: ProactiveData;
+	readonly pending: boolean;
+	readonly onStallNudges: (enabled: boolean) => void;
+	readonly onCancel: (id: string) => void;
+}) {
+	const zone = data.settings.timezone;
+	return (
+		<div className="settings-group" data-testid="y-proactive">
+			<div className="settings-row">
+				<div className="settings-row-text">
+					<label htmlFor="y-stall-nudges" className="settings-row-title">
+						Nudge stuck and waiting threads
+					</label>
+					<span className="settings-row-meta">
+						Y² looks into a thread that works far longer than usual and reminds
+						you once if one waits on you.
+					</span>
+				</div>
+				<div className="settings-row-actions">
+					<SettingsSwitch
+						id="y-stall-nudges"
+						checked={data.settings.stallNudges}
+						disabled={pending}
+						onCheckedChange={onStallNudges}
+					/>
+				</div>
+			</div>
+			<div className="settings-row">
+				<div className="settings-row-text">
+					<span className="settings-row-title">Proactive wakes today</span>
+					<span className="settings-row-meta">
+						{data.proactiveToday} of {data.proactiveLimit} (schedules and
+						nudges; wakes for finished threads count separately).
+					</span>
+				</div>
+			</div>
+			<div className="settings-row">
+				<div className="settings-row-text">
+					<span className="settings-row-title">Schedules</span>
+					<span className="settings-row-meta">
+						{zone
+							? `Times use ${zone}.`
+							: "Times use UTC until your time zone is saved."}{" "}
+						Ask Y² for one: "every weekday 9am give me a digest".
+					</span>
+				</div>
+			</div>
+			{data.schedules.length ? (
+				<ul className="settings-list">
+					{data.schedules.map((schedule) => (
+						<li key={schedule.id} className="settings-row">
+							<div className="settings-row-text">
+								<span className="settings-row-title">{schedule.prompt}</span>
+								<span className="settings-row-meta">
+									{describeSpec(schedule.spec, schedule.timezone)}
+									{schedule.nextDueAt === null
+										? ""
+										: ` · next ${formatLocal(schedule.nextDueAt, schedule.timezone)}`}
+								</span>
+							</div>
+							<div className="settings-row-actions">
+								<button
+									type="button"
+									disabled={pending}
+									onClick={() => onCancel(schedule.id)}
+								>
+									Cancel
+								</button>
+							</div>
+						</li>
+					))}
+				</ul>
+			) : (
+				<p className="settings-row-meta">No schedules.</p>
+			)}
+		</div>
+	);
+}
+
+/** The browser's own time zone, saved once so schedules use it. */
+const browserZone = () => {
+	try {
+		return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+	} catch {
+		return null;
+	}
+};
+
+function YProactiveSettings({ projectId }: { projectId: string }) {
+	const read = useServerFn(readYProactiveFn);
+	const save = useServerFn(saveYProactiveFn);
+	const cancel = useServerFn(cancelYScheduleFn);
+	const queryClient = useQueryClient();
+	const queryKey = ["project-y-proactive", projectId];
+	const status = useQuery({
+		queryKey,
+		queryFn: () => read({ data: { projectId } }),
+	});
+	const refresh = () => queryClient.invalidateQueries({ queryKey });
+	const saveMutation = useMutation({
+		mutationFn: (patch: { stallNudges?: boolean; timezone?: string }) =>
+			save({ data: { projectId, ...patch } }),
+		onSuccess: refresh,
+	});
+	const cancelMutation = useMutation({
+		mutationFn: (id: string) => cancel({ data: { projectId, id } }),
+		onSuccess: refresh,
+	});
+	const zone = browserZone();
+	const saveZone = saveMutation.mutate;
+	const needsZone = Boolean(
+		status.data && !status.data.settings.timezone && zone,
+	);
+	// Saved once, the first time the settings are opened (schedules say UTC until then).
+	useEffect(() => {
+		if (needsZone && zone) saveZone({ timezone: zone });
+	}, [needsZone, zone, saveZone]);
+	if (!status.data) return null;
+	return (
+		<YProactiveView
+			data={status.data}
+			pending={saveMutation.isPending || cancelMutation.isPending}
+			onStallNudges={(stallNudges) => saveMutation.mutate({ stallNudges })}
+			onCancel={(id) => cancelMutation.mutate(id)}
+		/>
 	);
 }

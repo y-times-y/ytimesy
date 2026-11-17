@@ -13,6 +13,7 @@ import {
 	Y_SQUARED_THREAD_TOOL,
 	Y_SQUARED_THREADS_TOOL,
 } from "./y-squared";
+import { Y_SQUARED_SCHEDULE_TOOL } from "./y-squared-proactive";
 
 /** Lean tools that only read the checkout (or an image in it), and the display-only canvas. */
 const READ_ONLY_TOOLS = new Set<string>([
@@ -27,6 +28,7 @@ const READ_ONLY_TOOLS = new Set<string>([
 	Y_SQUARED_START_THREAD_TOOL,
 	Y_SQUARED_MESSAGE_THREAD_TOOL,
 	Y_SQUARED_STOP_THREAD_TOOL,
+	Y_SQUARED_SCHEDULE_TOOL,
 ]);
 
 /**

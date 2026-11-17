@@ -109,6 +109,7 @@ describe("Y² surface", () => {
 		expect([...Y_SQUARED_TOOLS].sort()).toEqual([
 			"ask_user",
 			"message_thread",
+			"schedule",
 			"start_thread",
 			"stop_thread",
 			"thread",
@@ -297,13 +298,13 @@ describe("Y² stays in the loop (instructions)", () => {
 		expect(text).toContain("Never go silent between a start and the end");
 	});
 
-	it("tells a short delta at every wake, and a brief line on a heartbeat", () => {
+	it("tells a short delta at every wake, and nothing on a quiet heartbeat", () => {
 		expect(text).toContain("At each wake give a short delta");
 		expect(text).toContain(
 			"A finished, PR #12 opened. B still working, 8 min.",
 		);
 		expect(text).toContain("never a full re-listing");
-		expect(text).toContain("On a still-working wake, one brief line");
+		expect(text).toContain("needs no message at all");
 		expect(text).toContain("You were not part of this: <thread> got <request>");
 	});
 
@@ -332,5 +333,38 @@ describe("Y² stays in the loop (instructions)", () => {
 		expect(text).toContain(
 			'Never say only "finished" or "open the thread to read it"',
 		);
+	});
+});
+
+describe("Y² acts on its own (instructions)", () => {
+	const text = ySquaredInstructions();
+
+	it("handles routine things itself and escalates only blockers and costly decisions", () => {
+		expect(text).toContain("Handle routine things yourself");
+		expect(text).toContain("re-send a thread that failed");
+		expect(text).toContain("steer a thread that looks stuck");
+		expect(text).toContain(
+			"start a follow-up thread the person already approved",
+		);
+		expect(text).toContain("Escalate only a real blocker");
+		expect(text).toContain("merge, deploy, delete, spend money");
+		expect(text).toContain("Ask ONE line");
+		expect(text).toContain("Never merge, deploy, delete or spend on your own");
+	});
+
+	it("never repeats a reminder and says what it does not track", () => {
+		expect(text).toContain("Never repeat a reminder");
+		expect(text).toContain("sent once");
+		expect(text).toContain("failing CI or sitting unmerged is not tracked");
+	});
+
+	it("schedules only on request, and ends proactive wakes quietly or with an ask", () => {
+		expect(text).toContain("Scheduled check-ins: only when the person asks");
+		expect(text).toContain("`schedule`");
+		expect(text).toContain("at most 10 active");
+		expect(text).toContain("Say the time zone you used");
+		expect(text).toContain("exactly NOTHING_TO_REPORT and nothing else");
+		expect(text).toContain("a concrete ask");
+		expect(text).toContain('Never post "all quiet"');
 	});
 });

@@ -22,6 +22,26 @@ import {
 	type WakeState,
 	wakeRetryDelayMs,
 } from "../../domain/y-squared-crew";
+import {
+	decideProactive,
+	nextDueAt,
+	nextTypicalWorkMs,
+	proactiveWakeLines,
+	type ScheduleDraft,
+	type ScheduleSpec,
+	type ScheduleStatus,
+	type ScheduleView,
+	type StallRow,
+	type StallSignal,
+	stallDueAt,
+	stallSignals,
+	Y_SQUARED_DAY_MS,
+	Y_SQUARED_ONCE_MISSED_AFTER_MS,
+	Y_SQUARED_PROACTIVE_WAKES_PER_DAY,
+	Y_SQUARED_SCHEDULE_KEEP_MS,
+	Y_SQUARED_SCHEDULE_LIMIT,
+	type YSquaredSettings,
+} from "../../domain/y-squared-proactive";
 
 type Binding = string | number | null;
 /** The part of a Durable Object's SQLite storage the store uses. */
@@ -45,7 +65,29 @@ type WakeRow = {
 	pending_due_at: number | null;
 	last_heartbeat_at: number;
 	wake_failures: number;
+	proactive_day_start: number;
+	proactive_today: number;
+	proactive_hold_until: number;
+	stall_nudges: number;
+	timezone: string | null;
 };
+
+type ScheduleRow = {
+	id: string;
+	prompt: string;
+	spec: string;
+	tz: string;
+	status: string;
+	next_due_at: number | null;
+	last_run_at: number | null;
+};
+
+/** What one wake carries beyond its events: due schedules and stall signals, consumed once it was enqueued. */
+export type DeliveredProactive = {
+	readonly scheduleIds: readonly string[];
+	readonly signals: readonly StallSignal[];
+};
+const NO_PROACTIVE: DeliveredProactive = { scheduleIds: [], signals: [] };
 
 const PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
 
@@ -89,6 +131,18 @@ export class SqliteYSquaredCrew {
 			sql.exec(
 				"alter table crew add column start_wake_at integer not null default 0",
 			);
+		// Stall signals: a moving average of this thread's turn durations, the
+		// working run already nudged, and the waiting reminders already sent.
+		for (const column of [
+			"typical_work_ms",
+			"stall_nudged_for",
+			"reminded_at",
+			"remind_n",
+		])
+			if (!columns.has(column))
+				sql.exec(
+					`alter table crew add column ${column} integer not null default 0`,
+				);
 		sql.exec(`create table if not exists wake_state(
 			id integer primary key check(id=1), last_wake_at integer not null default 0,
 			wakes_this_hour integer not null default 0, hour_start integer not null default 0,
@@ -114,6 +168,19 @@ export class SqliteYSquaredCrew {
 			sql.exec(
 				"alter table wake_state add column wake_failures integer not null default 0",
 			);
+		for (const [column, type] of [
+			["proactive_day_start", "integer not null default 0"],
+			["proactive_today", "integer not null default 0"],
+			["proactive_hold_until", "integer not null default 0"],
+			["stall_nudges", "integer not null default 1"],
+			["timezone", "text"],
+		] as const)
+			if (!wakeColumns.has(column))
+				sql.exec(`alter table wake_state add column ${column} ${type}`);
+		// The person's scheduled check-ins (at most 10 active).
+		sql.exec(`create table if not exists schedules(
+			id text primary key, prompt text not null, spec text not null, tz text not null,
+			status text not null, next_due_at integer, last_run_at integer, created_at integer not null)`);
 		// What changed since Y²'s last wake (told in the next wake's message),
 		// and the sends Y² itself made (so its threads' starts are not "the person's").
 		sql.exec(`create table if not exists wake_events(
@@ -263,8 +330,10 @@ export class SqliteYSquaredCrew {
 				last_reply: string | null;
 				last_request: string | null;
 				start_wake_at: number;
+				working_since: number | null;
+				typical_work_ms: number;
 			}>(
-				"select title,state,waiting_on,pr_url,last_reply,last_request,start_wake_at from crew where session_id=?",
+				"select title,state,waiting_on,pr_url,last_reply,last_request,start_wake_at,working_since,typical_work_ms from crew where session_id=?",
 				note.sessionId,
 			)
 			.toArray()[0];
@@ -291,6 +360,7 @@ export class SqliteYSquaredCrew {
 				 last_reply=coalesce(excluded.last_reply,crew.last_reply),
 				 last_request=coalesce(excluded.last_request,crew.last_request),
 				 updated_at=excluded.updated_at,last_active_at=excluded.last_active_at,
+				 reminded_at=0,remind_n=0,
 				 working_since=case when excluded.state='working'
 				  then coalesce(case when crew.state='working' then crew.working_since end,excluded.working_since)
 				  else null end`,
@@ -307,6 +377,21 @@ export class SqliteYSquaredCrew {
 				note.state === "working" ? now : null,
 			);
 		}
+		// A turn that just settled teaches the thread's usual duration.
+		if (
+			!unchanged &&
+			existing?.state === "working" &&
+			existing.working_since &&
+			note.state !== "working"
+		)
+			this.sql.exec(
+				"update crew set typical_work_ms=? where session_id=?",
+				nextTypicalWorkMs(
+					existing.typical_work_ms,
+					now - existing.working_since,
+				),
+				note.sessionId,
+			);
 		const wake = this.wakeRow();
 		const stale =
 			wake.user_id !== note.userId ||
@@ -449,11 +534,12 @@ export class SqliteYSquaredCrew {
 	 * whichever is sooner. Returns the time to set it for, null when none is
 	 * needed (nothing pending, nothing working) or one as early is set.
 	 */
-	private rearm(now: number): number | null {
+	private rearm(now: number, skipProactive = false): number | null {
 		const wake = this.wakeRow();
 		const due = [
 			wake.pending === 1 ? wake.pending_due_at : null,
 			this.heartbeatDue(now, wake),
+			...(skipProactive ? [] : this.proactiveDueTimes(now, wake)),
 		].filter((at): at is number => at !== null);
 		if (!due.length) return null;
 		const at = Math.min(...due);
@@ -462,8 +548,243 @@ export class SqliteYSquaredCrew {
 		return at;
 	}
 
+	/** The alarm slot's proactive candidates: the earliest active schedule and the earliest stall signal (never before a failed send's hold). */
+	private proactiveDueTimes(now: number, wake: WakeRow): number[] {
+		const times: number[] = [];
+		const schedule = this.sql
+			.exec<{ at: number | null }>(
+				"select min(next_due_at) as at from schedules where status='active'",
+			)
+			.toArray()[0]?.at;
+		if (schedule !== null && schedule !== undefined) times.push(schedule);
+		if (wake.stall_nudges === 1)
+			for (const row of this.stallRows()) {
+				const at = stallDueAt(row, now);
+				if (at !== null) times.push(at);
+			}
+		return times.map((at) => Math.max(at, wake.proactive_hold_until));
+	}
+
+	private stallRows(): StallRow[] {
+		return this.sql
+			.exec<{
+				session_id: string;
+				title: string;
+				state: string;
+				working_since: number | null;
+				updated_at: number;
+				typical_work_ms: number;
+				stall_nudged_for: number;
+				reminded_at: number;
+				remind_n: number;
+			}>(
+				"select session_id,title,state,working_since,updated_at,typical_work_ms,stall_nudged_for,reminded_at,remind_n from crew where state in ('working','waiting','failed')",
+			)
+			.toArray()
+			.map((row) => ({
+				sessionId: row.session_id,
+				title: row.title,
+				state: row.state as StallRow["state"],
+				workingSince: row.working_since,
+				updatedAt: row.updated_at,
+				typicalWorkMs: row.typical_work_ms,
+				stallNudgedFor: row.stall_nudged_for,
+				remindedAt: row.reminded_at,
+				remindCount: row.remind_n,
+			}));
+	}
+
+	/** After a wake went out the alarm may need to move to the next schedule or signal. */
+	rearmAfterSend(now: number) {
+		return this.rearm(now);
+	}
+
+	// ------------------------------------------------------------- settings
+
+	settings(): YSquaredSettings {
+		const row = this.wakeRow();
+		return { stallNudges: row.stall_nudges === 1, timezone: row.timezone };
+	}
+
+	saveSettings(patch: Partial<YSquaredSettings>, now: number) {
+		if (patch.stallNudges !== undefined)
+			this.sql.exec(
+				"update wake_state set stall_nudges=? where id=1",
+				patch.stallNudges ? 1 : 0,
+			);
+		if (patch.timezone !== undefined)
+			this.sql.exec(
+				"update wake_state set timezone=? where id=1",
+				patch.timezone,
+			);
+		return { settings: this.settings(), alarmAt: this.rearm(now) };
+	}
+
+	// ------------------------------------------------------------ schedules
+
+	private scheduleView(row: ScheduleRow): ScheduleView {
+		return {
+			id: row.id,
+			prompt: row.prompt,
+			spec: JSON.parse(row.spec) as ScheduleSpec,
+			timezone: row.tz,
+			status: row.status as ScheduleStatus,
+			nextDueAt: row.status === "active" ? row.next_due_at : null,
+			lastRunAt: row.last_run_at,
+		};
+	}
+
+	/** The active schedules, soonest first. */
+	schedules(): ScheduleView[] {
+		return this.sql
+			.exec<ScheduleRow>(
+				"select * from schedules where status='active' order by next_due_at",
+			)
+			.toArray()
+			.map((row) => this.scheduleView(row));
+	}
+
+	/** Proactive status for the settings and the schedule tool. */
+	proactiveStatus(now: number) {
+		const row = this.wakeRow();
+		return {
+			settings: this.settings(),
+			schedules: this.schedules(),
+			proactiveToday:
+				now - row.proactive_day_start >= Y_SQUARED_DAY_MS
+					? 0
+					: row.proactive_today,
+			proactiveLimit: Y_SQUARED_PROACTIVE_WAKES_PER_DAY,
+		};
+	}
+
+	createSchedule(
+		draft: ScheduleDraft,
+		target: { userId: string; ySquaredId: string },
+		now: number,
+	):
+		| { ok: true; schedule: ScheduleView; alarmAt: number | null }
+		| { ok: false; error: string } {
+		const active = this.sql
+			.exec<{ n: number }>(
+				"select count(*) as n from schedules where status='active'",
+			)
+			.toArray()[0]?.n;
+		if ((active ?? 0) >= Y_SQUARED_SCHEDULE_LIMIT)
+			return {
+				ok: false,
+				error: `This project already has ${Y_SQUARED_SCHEDULE_LIMIT} active schedules. Cancel one first.`,
+			};
+		const id = crypto.randomUUID().slice(0, 8);
+		this.sql.exec(
+			`insert into schedules(id,prompt,spec,tz,status,next_due_at,created_at)
+			 values(?,?,?,?,'active',?,?)`,
+			id,
+			draft.prompt,
+			JSON.stringify(draft.spec),
+			draft.timezone,
+			draft.nextDueAt,
+			now,
+		);
+		// Who the wake goes to: the schedule is made inside Y²'s own turn.
+		this.sql.exec(
+			"update wake_state set user_id=?,y2_session_id=? where id=1",
+			target.userId,
+			target.ySquaredId,
+		);
+		const created = this.sql
+			.exec<ScheduleRow>("select * from schedules where id=?", id)
+			.toArray()[0] as ScheduleRow;
+		return {
+			ok: true,
+			schedule: this.scheduleView(created),
+			alarmAt: this.rearm(now),
+		};
+	}
+
+	cancelSchedule(id: string) {
+		const before = this.sql
+			.exec<{ n: number }>(
+				"select count(*) as n from schedules where id=? and status='active'",
+				id,
+			)
+			.toArray()[0]?.n;
+		this.sql.exec(
+			"update schedules set status='cancelled',next_due_at=null where id=? and status='active'",
+			id,
+		);
+		return (before ?? 0) > 0;
+	}
+
+	/** One-time check-ins long overdue (the project was unreachable) are dropped, not fired late. */
+	private settleMissed(now: number) {
+		this.sql.exec(
+			"update schedules set status='missed' where status='active' and next_due_at is not null and next_due_at<? and spec=?",
+			now - Y_SQUARED_ONCE_MISSED_AFTER_MS,
+			JSON.stringify({ kind: "once" }),
+		);
+	}
+
+	/** Due schedules and stall signals; empty while a failed send holds them back. */
+	private dueProactive(now: number, wake: WakeRow) {
+		if (now < wake.proactive_hold_until)
+			return { schedules: [] as ScheduleRow[], signals: [] as StallSignal[] };
+		return {
+			schedules: this.sql
+				.exec<ScheduleRow>(
+					"select * from schedules where status='active' and next_due_at<=? order by next_due_at",
+					now,
+				)
+				.toArray(),
+			signals:
+				wake.stall_nudges === 1 ? stallSignals(this.stallRows(), now) : [],
+		};
+	}
+
+	/** A wake carrying these went out (or was skipped by the daily cap): they are not due again. */
+	private consumeProactive(items: DeliveredProactive, now: number) {
+		for (const id of items.scheduleIds) {
+			const row = this.sql
+				.exec<ScheduleRow>("select * from schedules where id=?", id)
+				.toArray()[0];
+			if (row?.status !== "active") continue;
+			const spec = JSON.parse(row.spec) as ScheduleSpec;
+			const next = nextDueAt(spec, row.tz, now);
+			if (next === null)
+				this.sql.exec(
+					"update schedules set status='done',next_due_at=null,last_run_at=? where id=?",
+					now,
+					id,
+				);
+			else
+				this.sql.exec(
+					"update schedules set next_due_at=?,last_run_at=? where id=?",
+					next,
+					now,
+					id,
+				);
+		}
+		for (const signal of items.signals)
+			if (signal.kind === "stalled")
+				this.sql.exec(
+					"update crew set stall_nudged_for=? where session_id=?",
+					signal.workingSince,
+					signal.sessionId,
+				);
+			else
+				this.sql.exec(
+					"update crew set reminded_at=?,remind_n=remind_n+1 where session_id=?",
+					now,
+					signal.sessionId,
+				);
+	}
+
 	/** Drops threads untouched for 30 days. */
 	prune(now: number) {
+		this.sql.exec(
+			"delete from schedules where status<>'active' and coalesce(last_run_at,created_at)<?",
+			now - Y_SQUARED_SCHEDULE_KEEP_MS,
+		);
 		this.sql.exec(
 			"delete from crew where updated_at<?",
 			now - CREW_RETENTION_MS,
@@ -551,12 +872,17 @@ export class SqliteYSquaredCrew {
 	 * `wakeSent` once it was enqueued.
 	 */
 	takeWake(now: number) {
+		this.settleMissed(now);
 		const state = this.wakeState();
 		const row = this.wakeRow();
 		const beat = this.heartbeatDue(now, row);
 		const pendingDue = state.pending && now >= (row.pending_due_at ?? 0);
 		const heartbeatDue = beat !== null && now >= beat;
-		if (!pendingDue && !heartbeatDue) {
+		const baseDue = pendingDue || heartbeatDue;
+		const proactive = this.dueProactive(now, row);
+		const hasProactive =
+			proactive.schedules.length > 0 || proactive.signals.length > 0;
+		if (!baseDue && !hasProactive) {
 			// An early or stale alarm: nothing to send; set the next one.
 			this.saveWake({ ...state, alarmAt: null });
 			return {
@@ -565,26 +891,66 @@ export class SqliteYSquaredCrew {
 				rearmAt: this.rearm(now),
 			};
 		}
-		const decided = decideWake({ ...state, pending: true }, now);
-		if (decided.action === "capped") {
-			// A heartbeat held by the cap is not a pending wake.
-			this.saveWake({
-				...decided.next,
-				pending: state.pending,
-				alarmAt: decided.retryAt ?? null,
-			});
+		let next: WakeState = { ...state, alarmAt: null, lastWakeAt: now };
+		if (baseDue) {
+			const decided = decideWake({ ...state, pending: true }, now);
+			if (decided.action === "capped") {
+				// A heartbeat held by the cap is not a pending wake. Due
+				// schedules and signals wait for the window too.
+				this.saveWake({
+					...decided.next,
+					pending: state.pending,
+					alarmAt: decided.retryAt ?? null,
+				});
+				return {
+					...decided,
+					action: "capped" as const,
+					rearmAt: null as number | null,
+				};
+			}
+			next = decided.next;
+		}
+		// Schedules, stall nudges and reminders count against their own daily
+		// cap, so the hourly one of event wakes is never starved by them.
+		let delivered = NO_PROACTIVE;
+		let counted = false;
+		if (hasProactive) {
+			const items: DeliveredProactive = {
+				scheduleIds: proactive.schedules.map((item) => item.id),
+				signals: proactive.signals,
+			};
+			const cap = decideProactive(
+				{
+					dayStart: row.proactive_day_start,
+					count: row.proactive_today,
+				},
+				now,
+			);
+			this.sql.exec(
+				"update wake_state set proactive_day_start=?,proactive_today=? where id=1",
+				cap.next.dayStart,
+				cap.next.count,
+			);
+			if (cap.allowed) {
+				delivered = items;
+				counted = true;
+			} else this.consumeProactive(items, now); // skipped for today, not replayed
+		}
+		if (!baseDue && !counted) {
+			this.saveWake({ ...state, alarmAt: null });
 			return {
-				...decided,
-				action: "capped" as const,
-				rearmAt: null as number | null,
+				action: "none" as const,
+				next: { ...state, alarmAt: null },
+				rearmAt: this.rearm(now),
 			};
 		}
-		this.saveWake(decided.next);
-		this.sql.exec(
-			"update wake_state set pending_due_at=null,last_heartbeat_at=case when ? then ? else last_heartbeat_at end where id=1",
-			heartbeatDue ? 1 : 0,
-			now,
-		);
+		this.saveWake(next);
+		if (baseDue)
+			this.sql.exec(
+				"update wake_state set pending_due_at=null,last_heartbeat_at=case when ? then ? else last_heartbeat_at end where id=1",
+				heartbeatDue ? 1 : 0,
+				now,
+			);
 		const events = this.sql
 			.exec<{
 				id: number;
@@ -604,29 +970,46 @@ export class SqliteYSquaredCrew {
 				since: thread.working_since,
 			})),
 			now,
+			proactive: proactiveWakeLines({
+				signals: delivered.signals,
+				schedules: proactive.schedules
+					.filter((item) => delivered.scheduleIds.includes(item.id))
+					.map((item) => ({ id: item.id, prompt: item.prompt })),
+			}),
 		});
 		return {
-			...decided,
 			action: "send" as const,
+			next,
 			body,
 			eventsUpTo: events.at(-1)?.id ?? 0,
-			rearmAt: this.rearm(now),
+			// What this wake carries is not due again once it is enqueued
+			// (rearmAfterSend then moves the alarm to the next one).
+			rearmAt: this.rearm(now, true),
+			delivered,
+			counted,
 		};
 	}
 
-	/** The wake was enqueued: its changes are told, forget them. */
-	wakeSent(eventsUpTo: number) {
+	/** The wake was enqueued: its changes are told, forget them; due schedules and signals it carried move on. */
+	wakeSent(
+		eventsUpTo: number,
+		delivered: DeliveredProactive = NO_PROACTIVE,
+		now = Date.now(),
+	) {
 		this.sql.exec("delete from wake_events where id<=?", eventsUpTo);
 		this.sql.exec("update wake_state set wake_failures=0 where id=1");
+		this.consumeProactive(delivered, now);
 	}
 
 	/**
 	 * The wake could not be enqueued (a database hiccup, Y²'s chat not
 	 * readable): it stays pending with its changes, due again after a growing
 	 * wait, and the alarm is re-armed for it. Returns when to retry, null once
-	 * it has failed too often (the next note re-arms it).
+	 * it has failed too often (the next note re-arms it). A wake that carried
+	 * schedules or signals gives its daily-cap slot back and holds them until
+	 * the retry.
 	 */
-	returnWake(now: number): { retryAt: number | null } {
+	returnWake(now: number, hadProactive = false): { retryAt: number | null } {
 		const state = this.wakeState();
 		const failures = this.wakeRow().wake_failures + 1;
 		const retryAt = now + wakeRetryDelayMs(failures);
@@ -641,6 +1024,11 @@ export class SqliteYSquaredCrew {
 			failures,
 			retryAt,
 		);
+		if (hadProactive)
+			this.sql.exec(
+				"update wake_state set proactive_today=max(0,proactive_today-1),proactive_hold_until=? where id=1",
+				retryAt,
+			);
 		if (failures >= CREW_WAKE_RETRIES) return { retryAt: null };
 		return { retryAt: this.rearm(now) ?? retryAt };
 	}

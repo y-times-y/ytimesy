@@ -29,6 +29,14 @@ import {
 	crewDigest,
 } from "#/domain/y-squared-crew";
 import {
+	describeSpec,
+	formatLocal,
+	scheduleInput,
+	scheduleLines,
+	Y_SQUARED_SCHEDULE_DESCRIPTION,
+	Y_SQUARED_SCHEDULE_TOOL,
+} from "#/domain/y-squared-proactive";
+import {
 	agentSessionMetadataForOwner,
 	listSidebarAgentSessions,
 } from "../adapters/agent-sessions";
@@ -333,6 +341,40 @@ export function ySquaredTools(input: {
 					: sent.turnStatus === "running"
 						? `Sent to "${chat.title}": its turn started.`
 						: `Queued the message for "${chat.title}" behind the budget/concurrency limit; it starts by itself when there is room.`;
+			},
+		}),
+		[Y_SQUARED_SCHEDULE_TOOL]: tool({
+			description: Y_SQUARED_SCHEDULE_DESCRIPTION,
+			inputSchema: scheduleInput,
+			execute: async (args) => {
+				const crew = deps.crew(input.projectId);
+				if (!crew?.schedule)
+					return "Schedules need the project's crew, which is not available here.";
+				const now = deps.now();
+				const result = await crew.schedule(args, {
+					userId: input.userId,
+					ySquaredId: input.selfId,
+				});
+				if (!result.ok) return `Not done: ${result.error}`;
+				if (result.action === "list")
+					return scheduleLines(result.schedules, now);
+				if (result.action === "cancel")
+					return result.cancelled
+						? "Cancelled."
+						: "No active schedule with that id.";
+				const s = result.schedule;
+				return [
+					`Scheduled (id ${s.id}): "${s.prompt}" · ${describeSpec(s.spec, s.timezone)} · next ${
+						s.nextDueAt === null
+							? "never"
+							: formatLocal(s.nextDueAt, s.timezone)
+					} (${s.timezone}).`,
+					result.usedUtcFallback
+						? "No time zone is saved for this person, so UTC was used. Tell them once, and that opening this project's Y settings saves their browser's zone; a different zone can be set by cancelling and creating it again with a timezone."
+						: "",
+				]
+					.filter(Boolean)
+					.join("\n");
 			},
 		}),
 		[Y_SQUARED_STOP_THREAD_TOOL]: tool({

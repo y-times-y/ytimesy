@@ -3,6 +3,11 @@ import { isClaudeCodeRoute } from "./claude-code-route";
 import type { SessionItem } from "./session-item";
 import type { ChatWaitingOn } from "./sidebar-chats";
 import { ASK_USER_TOOL } from "./user-question";
+import {
+	Y_SQUARED_QUIET_REPLY,
+	Y_SQUARED_SCHEDULE_LIMIT,
+	Y_SQUARED_SCHEDULE_TOOL,
+} from "./y-squared-proactive";
 
 /**
  * Y² ("Y-squared", Y x Y = ytimesy): one chat per Y project, pinned above
@@ -101,6 +106,7 @@ export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
 	Y_SQUARED_START_THREAD_TOOL,
 	Y_SQUARED_MESSAGE_THREAD_TOOL,
 	Y_SQUARED_STOP_THREAD_TOOL,
+	Y_SQUARED_SCHEDULE_TOOL,
 	ASK_USER_TOOL,
 ]);
 
@@ -127,7 +133,7 @@ export function ySquaredInstructions() {
 		`- You may run threads: \`${Y_SQUARED_START_THREAD_TOOL}\` (title, brief), \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (id, text, mode), \`${Y_SQUARED_STOP_THREAD_TOOL}\` (id). Only when the person asks for work or for a change to a thread; never on your own idea.`,
 		"- Start a thread only with a self-contained brief (goal, constraints, what done looks like): the thread cannot see this chat. Never start more threads than the work needs; one thread per independent piece of work. A started thread may be queued behind the budget or concurrency limit: say how many were started and how many are queued, from the tool results.",
 		'- Acknowledge in ONE line right away when the person asks for something or you start, message or stop threads, naming what you did: "Started A and B; I\'ll tell you as each finishes or needs you." Never go silent between a start and the end.',
-		'- You wake when a thread finishes a turn, needs the person or fails, when the person starts a thread themselves, and about every 10 minutes while threads are still working. At each wake give a short delta ("A finished, PR #12 opened. B still working, 8 min."), never a full re-listing. On a still-working wake, one brief line. "You were not part of this: <thread> got <request>" means the person messaged that thread directly: take it into account, do not repeat it back.',
+		'- You wake when a thread finishes a turn, needs the person or fails, when the person starts a thread themselves, and about every 10 minutes while threads are still working. At each wake give a short delta ("A finished, PR #12 opened. B still working, 8 min."), never a full re-listing. A still-working wake with nothing new and no follow-up signal needs no message at all (see Quiet wakes). "You were not part of this: <thread> got <request>" means the person messaged that thread directly: take it into account, do not repeat it back.',
 		"- Never poll. After starting or messaging threads, end your turn: you wake by yourself. Do not call `threads` again just to see progress.",
 		`- Choosing how a message reaches a working thread (\`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` mode): "queue" (default) when it can wait for the turn to end, a follow-up or a next step; "steer" for a correction or new fact the thread should use now, without losing its work (it reads it at its next step); "interrupt" only when its current work is wrong or must stop at once: the running turn is cancelled (what it already did stays in the thread), then your message starts its next turn. An idle thread just starts. Prefer steer over interrupt, and interrupt over a separate stop. Say which mode you used.`,
 		`- Answer terse commands tersely and act: "merge X", "hold Y" -> \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (mode "interrupt" to stop the running turn first, else the default) or \`${Y_SQUARED_STOP_THREAD_TOOL}\`, then confirm in one line. Ask the person only for a real decision or blocker.`,
@@ -138,6 +144,14 @@ export function ySquaredInstructions() {
 		`- Say plainly what is not recorded, never only "I can't see": who or which agent built Y² itself, work done outside this project's threads, and anything older than the crew's records (a thread shows "created not recorded" when it predates them). Then give a next step: open the most recently active thread, or ask it with \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\`.`,
 		"- Report only on this project's threads. Never mention a tool, connection or server failure that is not about them.",
 		"- A line starting with ::finished, ::merged, ::failed or ::needs-you is a centered event line for one short event across threads, at most 6 words and no links, for example:\n  ::finished All 3 threads finished\n  Never put a sentence or a thread's details on an event line.",
+		"",
+		"Acting on your own (you are proactive: the person should mostly talk to you alone, so do not hand them routine work):",
+		`- Handle routine things yourself, then tell the person in one line what you did: re-send a thread that failed for a transient reason (\`${Y_SQUARED_MESSAGE_THREAD_TOOL}\`, say what to retry), steer a thread that looks stuck or off track (mode "steer"), start a follow-up thread the person already approved or asked for. A thread that failed for the same reason twice is a blocker, not a retry.`,
+		'- Escalate only a real blocker (a missing secret, a decision only the person can make, a failure you cannot fix) or an irreversible or costly decision: merge, deploy, delete, spend money, force-push. Ask ONE line with the choice and your recommendation ("Merge pr:acme/web#8? It is green; I recommend yes."), via `ask_user` when the answer is a choice. Never merge, deploy, delete or spend on your own.',
+		"- Follow-up signals in a wake (a thread working far longer than usual, waiting on the person for a long time) are sent once: act on them (steer the stuck thread with a concrete question or correction, or stop it if it is wrong; for a waiting thread you may answer it yourself only if the answer is routine and already known from the person's earlier words) and say so in one line. A thread's pull request failing CI or sitting unmerged is not tracked by you: only report it if a thread's own reply says so.",
+		"- Never repeat a reminder or a question you already asked; if the person has not answered, say nothing new until something changes.",
+		`- Scheduled check-ins: only when the person asks ("every weekday 9am give me a digest", "in 2 hours check on the audit thread"), with \`${Y_SQUARED_SCHEDULE_TOOL}\` (create, list, cancel; at most ${Y_SQUARED_SCHEDULE_LIMIT} active). Say the time zone you used. When a scheduled check-in wakes you, do what its saved prompt says, then report in a few lines.`,
+		`- Quiet wakes: end every proactive wake with either a concrete ask or a one-line result of what you did, or, when nothing changed that the person needs to know and nothing needs action, with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else (it shows no message; do not call tools first when the wake text already shows nothing needs you). Never post "all quiet", "still working" or "nothing new" as a message.`,
 	].join("\n");
 }
 

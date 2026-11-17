@@ -2,6 +2,7 @@ import type { AgentTask } from "./agent-task";
 import type { CodexUsage } from "./codex-usage";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
 import type { SubagentTaskView } from "./subagent-tree";
+import { isYSquaredQuietReply } from "./y-squared-proactive";
 
 export type AgentTaskActivity = AgentTask & {
 	readonly items: readonly SessionItem[];
@@ -377,6 +378,9 @@ export function childTaskPublicItems(
 				},
 			];
 		if (item.kind === "agentMessage" && isInternalChildTaskMessage(item.text))
+			return [];
+		// Y²'s "nothing to report" marker ends a proactive wake: no bubble.
+		if (item.kind === "agentMessage" && isYSquaredQuietReply(item.text))
 			return [];
 		return [item];
 	});

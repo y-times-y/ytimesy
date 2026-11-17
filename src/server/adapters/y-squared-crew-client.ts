@@ -1,4 +1,35 @@
 import type { CrewRow, CrewWaitingHint } from "#/domain/y-squared-crew";
+import type {
+	ScheduleView,
+	YSquaredSettings,
+} from "#/domain/y-squared-proactive";
+
+/** The proactive side as the settings and Y²'s `schedule` tool read it (one Durable Object request each). */
+export type YSquaredProactiveStatus = {
+	readonly settings: YSquaredSettings;
+	readonly schedules: readonly ScheduleView[];
+	readonly proactiveToday: number;
+	readonly proactiveLimit: number;
+};
+export type YSquaredScheduleResult =
+	| { readonly ok: false; readonly error: string }
+	| {
+			readonly ok: true;
+			readonly action: "create";
+			readonly schedule: ScheduleView;
+			/** True when no time zone was saved or given: UTC was used. */
+			readonly usedUtcFallback: boolean;
+	  }
+	| {
+			readonly ok: true;
+			readonly action: "list";
+			readonly schedules: readonly ScheduleView[];
+	  }
+	| {
+			readonly ok: true;
+			readonly action: "cancel";
+			readonly cancelled: boolean;
+	  };
 
 /** One project's YSquaredCrew, as Y²'s tools call it (one request each). */
 export type YSquaredCrewClient = {
@@ -9,6 +40,15 @@ export type YSquaredCrewClient = {
 	noteY2Sent?(sessionId: string | null): Promise<void>;
 	/** A thread ended its turn on a card only the person can answer (see noteCrewWaiting). */
 	noteWaiting(hint: CrewWaitingHint): Promise<void>;
+	/** Y²'s `schedule` tool: create, list or cancel (the crew validates and stores). */
+	schedule?(
+		input: unknown,
+		target: { userId: string; ySquaredId: string },
+	): Promise<YSquaredScheduleResult>;
+	/** Settings, active schedules and the daily proactive-wake count. */
+	proactive?(): Promise<YSquaredProactiveStatus>;
+	saveSettings?(patch: unknown): Promise<YSquaredSettings>;
+	cancelSchedule?(id: string): Promise<boolean>;
 };
 
 let forProject: ((projectId: string) => YSquaredCrewClient) | null = null;

@@ -4,7 +4,9 @@ import type { SqliteYSquaredCrew } from "./y-squared-crew-store";
  * The crew's alarm: sends Y² its one debounced wake, and keeps the wake alive
  * when sending fails (a database hiccup, Y²'s chat not readable yet): the
  * changes stay pending and the alarm is set again, so a thread's turn end is
- * never dropped until the next note happens to come. Separate from the
+ * never dropped until the next note happens to come. The one alarm slot also
+ * serves scheduled check-ins and stall signals (the store picks the earliest);
+ * a wake that carries them is sent through the same path. Separate from the
  * Durable Object so it runs under test with a real store.
  */
 export async function runCrewAlarm(input: {
@@ -60,15 +62,23 @@ export async function runCrewAlarm(input: {
 			decided.body,
 		);
 		if (sent) {
-			store.wakeSent(decided.eventsUpTo);
-			log({ enqueued: true });
+			store.wakeSent(decided.eventsUpTo, decided.delivered, now);
+			log({
+				enqueued: true,
+				proactive:
+					decided.delivered.scheduleIds.length +
+					decided.delivered.signals.length,
+			});
+			// What the wake carried moved on: the alarm may need the next one.
+			const next = store.rearmAfterSend(now);
+			if (next !== null) await input.setAlarm(next);
 			return;
 		}
 		failure = "y2-chat-not-sendable";
 	} catch (error) {
 		failure = error instanceof Error ? error.message.slice(0, 200) : "error";
 	}
-	const retry = store.returnWake(now);
+	const retry = store.returnWake(now, decided.counted);
 	log({ enqueued: false, error: failure, retryAt: retry.retryAt });
 	if (retry.retryAt !== null) await input.setAlarm(retry.retryAt);
 }

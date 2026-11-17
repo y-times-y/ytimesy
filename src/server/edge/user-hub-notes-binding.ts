@@ -20,6 +20,10 @@ export function registerUserHubNotes(env: EdgeExecutorEnvironment) {
 			reconcile: (rows) => crew().reconcile(rows),
 			noteWaiting: (hint) => crew().noteWaiting(hint),
 			noteY2Sent: (sessionId) => crew().noteY2Sent(sessionId),
+			schedule: (input, target) => crew().schedule(input, target),
+			proactive: () => crew().proactive(),
+			saveSettings: (patch) => crew().saveSettings(patch),
+			cancelSchedule: (id) => crew().cancelSchedule(id),
 		};
 	});
 }

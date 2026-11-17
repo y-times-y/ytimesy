@@ -5,6 +5,7 @@ import {
 	threadHistoryFacts,
 	waitingOnText,
 } from "./y-squared";
+import { Y_SQUARED_QUIET_REPLY } from "./y-squared-proactive";
 
 /**
  * Y²'s crew: one row per thread of a Y project, kept by the project's
@@ -207,6 +208,8 @@ export function crewWakeBody(input: {
 		readonly since: number;
 	}[];
 	readonly now: number;
+	/** Due schedules and stall signals (proactiveWakeLines). */
+	readonly proactive?: readonly string[];
 }) {
 	const lines = input.events.map((event) => {
 		const detail = event.detail ? ` (${event.detail})` : "";
@@ -227,11 +230,16 @@ export function crewWakeBody(input: {
 		(thread) =>
 			`- "${thread.title}" still working, ${minutesText(input.now - thread.since)}.`,
 	);
+	const proactive = input.proactive ?? [];
 	return [
-		"Something changed in this project's threads.",
+		lines.length || working.length || !proactive.length
+			? "Something changed in this project's threads."
+			: "Proactive check-in: no thread changed.",
 		...(lines.length ? ["Since your last report:", ...lines] : []),
 		...(working.length ? ["Still working:", ...working] : []),
+		...proactive,
 		"Call `threads`, then call `thread` for each one that finished or needs the person and give the person a short delta with the substance: what it found or built, the decision they need to make, who is still working and for how long. Never just say it finished; do not list everything again.",
+		`If nothing here needs the person and nothing needs an action from you, reply with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else: it shows no message.`,
 	].join("\n");
 }
 
