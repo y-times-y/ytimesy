@@ -52,8 +52,8 @@ export function YSquaredMark({
 			>
 				<defs>
 					<linearGradient id={light} x1="0" y1="0" x2="1" y2="1">
-						<stop offset="0" stopColor="#93c5fd" />
-						<stop offset="1" stopColor="#a78bfa" />
+						<stop offset="0" stopColor="#ffffff" />
+						<stop offset="1" stopColor="#e5e7eb" />
 					</linearGradient>
 				</defs>
 				<path {...border} className="y2-mark-border" stroke="#F2F2F0" />

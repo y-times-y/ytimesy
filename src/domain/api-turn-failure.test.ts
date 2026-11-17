@@ -16,6 +16,7 @@ import {
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
 	visibleErrorMessage,
+	Y_SQUARED_NO_WORKSPACE,
 } from "./api-turn-failure";
 import {
 	FLEET_LIFETIME_CAP_MESSAGE,
@@ -675,4 +676,19 @@ it("keeps every failure's redacted cause for the owner, not just machine failure
 	expect(failureCause("plain text failure")).toBe("plain text failure");
 	expect(failureCause(undefined)).toBeNull();
 	expect(failureCause(new Error(" y".repeat(600)))?.length).toBe(600);
+});
+
+it("says what happened when a Y² turn reached for a workspace, not that the provider failed", () => {
+	const refused = new Error(Y_SQUARED_NO_WORKSPACE);
+	for (const stage of ["model", "workspace", "saving"] as const) {
+		const message = apiTurnFailureMessage(stage, refused);
+		expect(message).toContain("Y² reached for a workspace");
+		expect(message).not.toContain("provider didn't say why");
+	}
+	expect(
+		visibleErrorMessage({
+			message: apiTurnFailureMessage("model", new Error("unrelated")),
+			cause: `Error: ${Y_SQUARED_NO_WORKSPACE}`,
+		}),
+	).toContain("Y² reached for a workspace");
 });
