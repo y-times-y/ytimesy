@@ -10,9 +10,15 @@
  */
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Y_SQUARED_NO_WORKSPACE } from "#/domain/api-turn-failure";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	ClaudeRunnerTransportFailure,
+	Y_SQUARED_NO_WORKSPACE,
+} from "#/domain/api-turn-failure";
+import { claudeCodeTurnRevision } from "#/domain/claude-code-route";
+import type { ClaudeRunnerBox } from "#/domain/claude-runner";
 import { SessionItemId } from "#/domain/ids";
+import { ySquaredInstructions } from "#/domain/y-squared";
 import type { ApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -47,6 +53,23 @@ const mocks = vi.hoisted(() => ({
 	commandCompletions: vi.fn(),
 	codePoint: vi.fn(async (..._args: unknown[]) => {}),
 	imported: vi.fn(async (..._args: unknown[]): Promise<unknown[]> => []),
+	/** Y² on the Claude Code route: the step that would start `claude`. */
+	claudeStep: vi.fn(async (...args: unknown[]): Promise<unknown> => {
+		const input = args[0] as {
+			onEvent: (event: unknown) => Promise<void>;
+		};
+		await input.onEvent({ type: "text-delta", id: "t1", text: "All quiet." });
+		return {
+			messages: [{ role: "assistant", content: "All quiet." }],
+			outcome: "completed",
+		};
+	}),
+	claudeStop: vi.fn(async (..._args: unknown[]) => {}),
+}));
+vi.mock("../services/claude-code-turn", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../services/claude-code-turn")>()),
+	runClaudeCodeTurnStep: (...args: unknown[]) => mocks.claudeStep(...args),
+	stopClaudeCodeTurnRun: (...args: unknown[]) => mocks.claudeStop(...args),
 }));
 /** Y² never delivers peer messages to anything but its own history. */
 
@@ -238,6 +261,8 @@ type Condition = {
 	real: boolean;
 	/** An earlier turn's background command is still open in the transcript. */
 	openCommand: boolean;
+	/** The turn runs on the Claude Code route (Y² needs a Claude runner box). */
+	claude: boolean;
 };
 
 const BASE: Condition = {
@@ -263,6 +288,7 @@ const BASE: Condition = {
 	reportedDirectory: false,
 	real: false,
 	openCommand: false,
+	claude: false,
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: the model loop's input is large and only probed here
@@ -369,8 +395,8 @@ function turnFor(c: Condition, id: string): ApiTurn {
 		id,
 		session_id: "session",
 		user_id: "owner",
-		connection_id: "connection",
-		connection_revision: "revision",
+		connection_id: c.claude ? null : "connection",
+		connection_revision: c.claude ? claudeCodeTurnRevision() : "revision",
 		model_id: "claude-sonnet-5-5",
 		state: "running",
 		messages,
@@ -580,6 +606,18 @@ async function runCase(overrides: Partial<Condition>) {
 			resumed: c.resumed,
 			signal: new AbortController().signal,
 		} as never,
+		c.claude
+			? {
+					...(await import("./turn-ports-local")).localTurnPorts,
+					pinnedClaudeRunner: (runner: ClaudeRunnerBox) => runner,
+					claudeSubscriptionStatus: async () => ({
+						status: "connected",
+						message: null,
+						limitedUntil: null,
+						connectedAt: 0,
+					}),
+				}
+			: undefined,
 	);
 	return { outcome, c };
 }
@@ -939,5 +977,89 @@ describe("a Y² turn never reaches a workspace, whatever else is true of it", ()
 		} finally {
 			warn.mockRestore();
 		}
+	});
+});
+
+describe("Y² on the Claude Code route", () => {
+	const keys = [
+		"YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED",
+		"YTIMESY_CLAUDE_RUNNER_URLS",
+		"YTIMESY_CLAUDE_RUNNER_SIGNING_KEY",
+		"YTIMESY_CLAUDE_RUNNER_USERS",
+		"YTIMESY_CLAUDE_RUNNER_SESSIONS",
+	] as const;
+	const saved: Record<string, string | undefined> = {};
+	beforeEach(() => {
+		for (const key of keys) saved[key] = process.env[key];
+		process.env.YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED = "1";
+		mocks.claudeStep.mockClear();
+		mocks.claudeStop.mockClear();
+	});
+	afterEach(() => {
+		for (const key of keys)
+			if (saved[key] === undefined) delete process.env[key];
+			else process.env[key] = saved[key];
+	});
+	const withRunner = () => {
+		process.env.YTIMESY_CLAUDE_RUNNER_URLS = "https://runner.example";
+		process.env.YTIMESY_CLAUDE_RUNNER_SIGNING_KEY = "A".repeat(64);
+		process.env.YTIMESY_CLAUDE_RUNNER_USERS = "owner";
+		delete process.env.YTIMESY_CLAUDE_RUNNER_SESSIONS;
+	};
+
+	it("starts Claude with no workspace, no machines and Y²'s prompt and tools", async () => {
+		withRunner();
+		const { outcome } = await runCase({ claude: true });
+		expect(mocks.claudeStep).toHaveBeenCalledOnce();
+		const step = mocks.claudeStep.mock.calls[0]?.[0] as Record<string, unknown>;
+		expect(step.workspace).toBeUndefined();
+		expect(step.machines).toBeUndefined();
+		expect(step.ySquared).toEqual({
+			instructions: ySquaredInstructions(),
+		});
+		expect(step.runner).toMatchObject({
+			box: { baseUrl: "https://runner.example" },
+			workspaceTools: [],
+		});
+		expect((step.runner as Record<string, unknown>).boxTools).toBeUndefined();
+		expect(Object.keys(step.tools as object).sort()).toEqual(
+			[
+				"ask_user",
+				"message_thread",
+				"start_thread",
+				"stop_thread",
+				"thread",
+				"threads",
+			].sort(),
+		);
+		expect(outcome).toBe("completed");
+		expectNoWorkspace(outcome, { ...BASE, claude: true });
+	});
+
+	it("without a runner it never starts Claude and says what is missing", async () => {
+		delete process.env.YTIMESY_CLAUDE_RUNNER_URLS;
+		await runCase({ claude: true });
+		expect(mocks.claudeStep).not.toHaveBeenCalled();
+		const failed = mocks.finalize.mock.calls.find(
+			([, state]) => state === "failed",
+		);
+		expect(JSON.stringify(failed)).toContain(
+			"Y² on a Claude subscription needs the Claude runner",
+		);
+		expect(JSON.stringify(failed)).not.toContain("ytimesy bug");
+	});
+
+	it("a runner that cannot be reached is an outage the failover mechanism handles, never a ytimesy bug", async () => {
+		withRunner();
+		mocks.claudeStep.mockRejectedValueOnce(
+			new ClaudeRunnerTransportFailure("exec", "network"),
+		);
+		const { outcome } = await runCase({ claude: true });
+		// Reuses the existing outage handling: a retry on the route, then
+		// another route; the turn does not fail on the spot.
+		expect(["continue", "failed-over"]).toContain(outcome);
+		expect(JSON.stringify(mocks.finalize.mock.calls)).not.toContain(
+			"ytimesy bug",
+		);
 	});
 });

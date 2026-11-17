@@ -13,9 +13,11 @@ const fake = vi.hoisted(() => ({
 	refused: vi.fn(async () => false),
 	failover: vi.fn(async () => true),
 	ySquared: vi.fn(async () => false),
+	runner: vi.fn(async () => false),
 }));
 vi.mock("#/server/adapters/y-mode", () => ({
 	isYSquaredSession: fake.ySquared,
+	claudeCodeYSquaredAvailable: fake.runner,
 }));
 vi.mock("#/server/adapters/model-failover-preferences", () => ({
 	loadModelFailoverPreferences: async () => ({
@@ -108,6 +110,7 @@ beforeEach(() => {
 	fake.refused.mockReset().mockResolvedValue(false);
 	fake.failover.mockReset().mockResolvedValue(true);
 	fake.ySquared.mockReset().mockResolvedValue(false);
+	fake.runner.mockReset().mockResolvedValue(false);
 	fake.owner.mockResolvedValue({
 		id: "s1",
 		projectId: "p1",
@@ -232,9 +235,22 @@ it("sends on a refused Claude token while failover is on: the turn moves elsewhe
 });
 
 const Y2_REFUSAL =
-	"Y² can't run on a Claude subscription yet. Pick a Codex, Grok or API-key model for this chat.";
+	"Y² on a Claude subscription needs the Claude runner, which isn't enabled for your account. Pick a Codex, Grok or API-key model for this chat.";
 
-it("refuses a Y² send on a Claude Code model before anything is queued", async () => {
+it("sends a Y² turn on a Claude Code model when the user has a Claude runner", async () => {
+	fake.ySquared.mockResolvedValue(true);
+	fake.runner.mockResolvedValue(true);
+	await sendApiWorkspaceTask(scope, {
+		text: "What is going on?",
+		modelId: "claude-code/claude-sonnet-5-5",
+	});
+	expect(fake.runner).toHaveBeenCalled();
+	expect(fake.enqueue.mock.calls[0]?.[0]).toMatchObject({
+		revision: "claude-code:v1:{}",
+	});
+});
+
+it("refuses a Y² send on a Claude Code model without a runner, before anything is queued", async () => {
 	fake.ySquared.mockResolvedValue(true);
 	await expect(
 		sendApiWorkspaceTask(scope, {

@@ -4,6 +4,7 @@ import {
 	ApiTurnCancelled,
 	ClaudeCodeApiUnavailable,
 	ClaudeCodeRunFailure,
+	ClaudeRunnerRequired,
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 	CodexEgressUnavailable,
@@ -17,6 +18,7 @@ import {
 	SubscriptionUsageLimitReached,
 	UnsupportedEdgeModelEndpoint,
 	XaiSubscriptionUnavailable,
+	YSquaredClaudeRunnerUnreachable,
 } from "./api-turn-failure";
 import type { FailoverReason } from "./model-failover";
 import { ProjectSecretsPreparationFailure } from "./project-secret";
@@ -167,6 +169,9 @@ export function failoverReason(error: unknown): FailoverReason | null {
 		if (current instanceof ClaudeSubscriptionRefused) return "signed-out";
 		if (current instanceof ClaudeCodeApiUnavailable) return current.reason;
 		if (current instanceof ClaudeCodeRunFailure) return null;
+		// Y²'s runner box is down: another route can still answer.
+		if (current instanceof YSquaredClaudeRunnerUnreachable) return "outage";
+		if (current instanceof ClaudeRunnerRequired) return null;
 		// Every egress path is blocked: another provider route still works.
 		if (current instanceof CodexEgressUnavailable) return "outage";
 		if (current instanceof SubscriptionMetadataFailure)

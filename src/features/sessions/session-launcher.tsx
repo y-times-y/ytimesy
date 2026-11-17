@@ -149,6 +149,7 @@ import {
 	sentFileFields,
 } from "./attachment-tile";
 import { chatSideKeys } from "./chat-side-queries";
+import { getClaudeSubscription } from "./claude-subscription.fn";
 import { ContextUsage } from "./context-usage";
 import {
 	ConversationRecovery,
@@ -403,6 +404,18 @@ export function SessionLauncher({
 		placeholderData:
 			loadedCatalog?.harnessId === harnessId ? loadedCatalog.models : undefined,
 	});
+	// Y² has no machine for the Claude CLI: the Claude models are offered to
+	// it only when the user has a Claude runner box (one flag on the Claude
+	// subscription view the picker already reads, not a request of its own).
+	const loadClaudeView = useServerFn(getClaudeSubscription);
+	const claudeView = useQuery({
+		queryKey: ["claude-subscription"],
+		queryFn: () => loadClaudeView(),
+		staleTime: 30_000,
+		enabled: branchless,
+	});
+	const withoutClaudeCode =
+		branchless && !(claudeView.data?.enabled && claudeView.data.ySquaredRunner);
 	const models = useMemo(() => {
 		const listed = sessionModelsFromListed(
 			composerListedModels({
@@ -414,9 +427,9 @@ export function SessionLauncher({
 			}),
 		);
 		// Y² has no machine for the Claude CLI: no Claude subscription models.
-		return branchless ? withoutClaudeCodeModels(listed) : listed;
+		return withoutClaudeCode ? withoutClaudeCodeModels(listed) : listed;
 	}, [
-		branchless,
+		withoutClaudeCode,
 		session.models,
 		session.connection,
 		harnessId,
@@ -1538,7 +1551,7 @@ export function SessionLauncher({
 							) : null}
 						</div>
 					) : null}
-					{branchless &&
+					{withoutClaudeCode &&
 					[modelId, session.listedModelId, lastModelByHarness.api].some(
 						(id) => id && isClaudeCodeRoute(id),
 					) ? (
@@ -1736,7 +1749,7 @@ export function SessionLauncher({
 								harnessId={harnessId}
 								onHarnessIdChange={onHarnessIdChange}
 								models={models}
-								withoutClaudeCode={branchless}
+								withoutClaudeCode={withoutClaudeCode}
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
 								onModelIdChange={setModelId}

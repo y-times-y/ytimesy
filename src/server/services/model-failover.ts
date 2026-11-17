@@ -37,7 +37,10 @@ import { hasClaudeSubscription } from "../adapters/claude-subscription";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { listModelConnections } from "../adapters/model-connections";
 import { loadModelFailoverPreferences } from "../adapters/model-failover-preferences";
-import { isYSquaredSession } from "../adapters/y-mode";
+import {
+	claudeCodeYSquaredAvailable,
+	isYSquaredSession,
+} from "../adapters/y-mode";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 
 export { SUBSCRIPTION_LABEL } from "#/domain/model-failover";
@@ -200,10 +203,16 @@ export async function planModelFailover(input: {
 		route: serving,
 		label: previous?.label ?? routeLabel(connections, serving),
 	};
-	// Y² has no machine for Claude Code: it is never a fallback for Y².
+	// Y² has no machine for Claude Code: it is a fallback for Y² only when
+	// the user has a Claude runner box.
 	const fallbackConnections =
 		connections.some((row) => row.key === CLAUDE_CODE_KEY) &&
-		(await isYSquaredSession(turn.user_id, turn.session_id).catch(() => false))
+		(await isYSquaredSession(turn.user_id, turn.session_id).catch(
+			() => false,
+		)) &&
+		!(await claudeCodeYSquaredAvailable(turn.user_id, turn.session_id).catch(
+			() => false,
+		))
 			? connections.filter((row) => row.key !== CLAUDE_CODE_KEY)
 			: connections;
 	const candidates = failoverCandidates({
