@@ -13,6 +13,8 @@ import {
 	type ApiTurnFailureStage,
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
+	ClaudeRunnerRequired,
+	ClaudeRunnerTransportFailure,
 	ClaudeSubscriptionRefused,
 	failureCause,
 	IncompleteAgentTurn,
@@ -20,6 +22,7 @@ import {
 	LifecycleHookRefusal,
 	SafeApiModelFailure,
 	Y_SQUARED_NO_WORKSPACE,
+	YSquaredClaudeRunnerUnreachable,
 } from "#/domain/api-turn-failure";
 import type { ApiTurnSettings } from "#/domain/api-turn-settings";
 import { attemptLimit } from "#/domain/attempt-loop";
@@ -131,6 +134,7 @@ import {
 } from "#/domain/turn-saving";
 import { hubTopic } from "#/domain/user-hub";
 import { ASK_USER_TOOL } from "#/domain/user-question";
+import { ySquaredInstructions } from "#/domain/y-squared";
 import { apiReasoningEffort } from "#/server/adapters/api-reasoning-effort";
 import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
 import { lastUserMessageIndex } from "#/server/adapters/turn-items-storage";
@@ -1106,6 +1110,8 @@ async function runApiTurnAttempt(
 				sessionId: owner.id,
 				reader: isReaderRole(owner.agentRole) || sideReadOnly,
 			});
+			// Y² has no machine for the CLI: only a runner box can host it.
+			if (ySquared && !candidate) throw new ClaudeRunnerRequired();
 			activeClaudeRunner = candidate ? pinnedClaudeRunner(candidate) : null;
 			stopClaudeCodeRun = () =>
 				Promise.all([
@@ -2829,6 +2835,7 @@ async function runApiTurnAttempt(
 				// when the VM redacts them itself (both checked per grant).
 				const offerBoxTools = Boolean(
 					claudeRunner &&
+						!ySquared &&
 						surface.lean &&
 						!reader &&
 						claudeBoxToolsEnabled(process.env) &&
@@ -2842,7 +2849,9 @@ async function runApiTurnAttempt(
 				// without box tools. On the chat's VM, `claude` itself (and its
 				// model stream) runs there; box tools exec on it unseen here.
 				const bridgedPause =
-					claudeRunner && !offerBoxTools ? thinkingPause : undefined;
+					claudeRunner && !offerBoxTools && !ySquared
+						? thinkingPause
+						: undefined;
 				const claudeToolTime =
 					toolTime || bridgedPause
 						? {
@@ -2858,6 +2867,16 @@ async function runApiTurnAttempt(
 						: undefined;
 				const claudeResult = await timed("turn:claudeCode", () =>
 					runClaudeCodeTurnStep({
+						// Y² has no machine: the CLI runs on the runner box alone,
+						// with Y²'s own prompt and only its tools.
+						...(ySquared
+							? {
+									ySquared: { instructions: ySquaredInstructions() },
+								}
+							: {
+									workspace: checkout,
+									machines: unscopedMachines,
+								}),
 						userId: owner.userId,
 						sessionId: owner.id,
 						turnId: turn.id,
@@ -2868,8 +2887,6 @@ async function runApiTurnAttempt(
 						// Claude starts once the checkout is ready; ~/memory keeps
 						// cloning beside it (22-72 s per turn in production), and the
 						// tools that read it wait for it through `workspace`.
-						workspace: checkout,
-						machines: unscopedMachines,
 						messages,
 						// One workspace tool lifecycle on either host: commands must be
 						// registered for completion notices, Stop and restart recovery.
@@ -2882,7 +2899,7 @@ async function runApiTurnAttempt(
 							? {
 									runner: {
 										box: claudeRunner,
-										workspaceTools: Object.keys(surfaceTools),
+										workspaceTools: ySquared ? [] : Object.keys(surfaceTools),
 										...(offerBoxTools && surface.lean
 											? {
 													boxTools: {
@@ -2940,6 +2957,8 @@ async function runApiTurnAttempt(
 						},
 						inbox: takeSentMessages,
 						...(claudeToolTime ? { toolTime: claudeToolTime } : {}),
+					}).catch((error: unknown) => {
+						throw ySquared ? ySquaredClaudeFailure(error) : error;
 					}),
 				);
 				// The step is short (it follows the run's feed), so its grace
@@ -2974,7 +2993,7 @@ async function runApiTurnAttempt(
 		// prepared (its tools would have waited for it, and the metadata guard).
 		// Y² has no workspace: whatever it ran, nothing there changed or commits.
 		const answerOnly = () =>
-			!claudeCode && (ySquared || !turnMayHaveChangedWorkspace(items, turn.id));
+			ySquared || (!claudeCode && !turnMayHaveChangedWorkspace(items, turn.id));
 		// An early first request: the step ends only once its checkout is
 		// ready (a workspace failure fails the turn as before, and the turn's
 		// code point exists) and the UserPromptSubmit check passed. Feedback
@@ -3865,6 +3884,23 @@ function errorStackFrames(error: unknown, frames = 10) {
 		.slice(0, frames)
 		.map((line) => line.trim())
 		.join(" | ");
+}
+
+/**
+ * A Y² turn on Claude whose runner box could not be reached says so plainly
+ * (and may fail over); every other failure is its own. Nothing a runner box
+ * said is shown: its transport errors talk of commands Y² never runs.
+ */
+function ySquaredClaudeFailure(error: unknown) {
+	if (error instanceof ClaudeRunnerTransportFailure) {
+		console.warn("Y²'s Claude runner could not be reached.", {
+			operation: error.operation,
+			reason: error.reason,
+			httpStatus: error.httpStatus,
+		});
+		return new YSquaredClaudeRunnerUnreachable();
+	}
+	return error;
 }
 
 /** A turn's workspace that every caller is refused (a chat without a machine). */

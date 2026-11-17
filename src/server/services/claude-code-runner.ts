@@ -34,6 +34,7 @@ import {
 } from "#/domain/claude-feed";
 import {
 	CLAUDE_RUNNER_DISALLOWED_TOOLS,
+	CLAUDE_RUNNER_Y_SQUARED_DISALLOWED_TOOLS,
 	claudeRunnerPrompt,
 	claudeWorkspaceCommandsPrompt,
 } from "#/domain/claude-runner";
@@ -176,6 +177,13 @@ export type ClaudeCodeStepInput = {
 		readonly repository: string;
 		readonly workspaceTools: readonly string[];
 	};
+	/**
+	 * Y²: the run has no machine and no repository, and only ytimesy's tools
+	 * (docs/claude-code-placement.md). Needs `remote`. `instructions` replace
+	 * the repository, run_code, browser, job and canvas lines of the system
+	 * prompt, and every native Claude tool is off.
+	 */
+	readonly ySquared?: { readonly instructions: string };
 	/**
 	 * With `remote`: the run serves these lean workspace tools on its runner
 	 * box, straight against the chat's VM (claude-box-tools/), instead of
@@ -408,7 +416,14 @@ function systemPrompt(
 	cwd: string,
 	reader: boolean,
 	remote?: ClaudeCodeStepInput["remote"],
+	ySquared?: ClaudeCodeStepInput["ySquared"],
 ) {
+	if (ySquared)
+		return [
+			"You are running inside ytimesy.",
+			ySquared.instructions,
+			`Your tools are ytimesy's, offered as mcp__${CLAUDE_CODE_MCP_SERVER}__*: threads, thread, ask_user, start_thread, message_thread and stop_thread. You have no repository, shell, files or web of your own: your built-in tools are off. When these instructions name a tool, call its mcp__${CLAUDE_CODE_MCP_SERVER}__ form.`,
+		].join("\n");
 	return [
 		remote
 			? "You are running inside ytimesy."
@@ -1149,7 +1164,12 @@ async function launchRun(
 		},
 		{
 			path: `${runDirectory}/system`,
-			contents: systemPrompt(input.cwd, input.reader, input.remote),
+			contents: systemPrompt(
+				input.cwd,
+				input.reader,
+				input.remote,
+				input.ySquared,
+			),
 		},
 		{ path: `${runDirectory}/prompt`, contents: prompt },
 		{
@@ -1157,7 +1177,12 @@ async function launchRun(
 			contents: JSON.stringify({
 				model: input.modelId,
 				effort: input.effort ?? null,
-				disallowedTools: CLAUDE_RUNNER_DISALLOWED_TOOLS,
+				disallowedTools: input.ySquared
+					? CLAUDE_RUNNER_Y_SQUARED_DISALLOWED_TOOLS
+					: CLAUDE_RUNNER_DISALLOWED_TOOLS,
+				// Y²: an empty list switches every built-in tool off, leaving
+				// only the MCP server's.
+				...(input.ySquared ? { builtInTools: [] } : {}),
 				resume: resumeId ?? null,
 				// The runner pushes its lines to the chat's object; authenticated
 				// with the grant in mcp.json.

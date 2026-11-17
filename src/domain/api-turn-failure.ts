@@ -11,6 +11,10 @@ import {
 } from "./project-secret";
 import { redactSecrets } from "./redact-secrets";
 import { VerificationPolicyFailure } from "./task-integration-checks";
+import {
+	Y_SQUARED_CLAUDE_RUNNER_REFUSAL,
+	Y_SQUARED_CLAUDE_RUNNER_UNREACHABLE,
+} from "./y-squared";
 
 export type ClaudeRunnerOperation = "exec" | "write" | "read" | "poll";
 
@@ -499,6 +503,22 @@ export class ClaudeCodeRunFailure extends Error {
 	}
 }
 
+/** Y² on a Claude subscription runs only on a runner box, and this user has none. */
+export class ClaudeRunnerRequired extends Error {
+	constructor() {
+		super(Y_SQUARED_CLAUDE_RUNNER_REFUSAL);
+		this.name = "ClaudeRunnerRequired";
+	}
+}
+
+/** Y²'s Claude runner box could not be reached; not a model provider error. */
+export class YSquaredClaudeRunnerUnreachable extends Error {
+	constructor() {
+		super(Y_SQUARED_CLAUDE_RUNNER_UNREACHABLE);
+		this.name = "YSquaredClaudeRunnerUnreachable";
+	}
+}
+
 export class SafeApiModelFailure extends Error {
 	readonly classification: ApiModelFailureClassification;
 
@@ -902,6 +922,11 @@ export function visibleErrorMessage(item: {
 }
 
 export function apiModelFailureMessage(error: unknown): string {
+	if (
+		error instanceof ClaudeRunnerRequired ||
+		error instanceof YSquaredClaudeRunnerUnreachable
+	)
+		return error.message;
 	const runner = runnerTransportFailure(error);
 	if (runner) return runner.message;
 	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
@@ -1041,6 +1066,11 @@ export function apiTurnFailureMessage(
 	stage: ApiTurnFailureStage,
 	error?: unknown,
 ): string {
+	if (
+		error instanceof ClaudeRunnerRequired ||
+		error instanceof YSquaredClaudeRunnerUnreachable
+	)
+		return error.message;
 	const runner = runnerTransportFailure(error);
 	if (runner) return runner.message;
 	if (error instanceof CoordinationFailure) return error.message;
