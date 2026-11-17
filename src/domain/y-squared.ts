@@ -57,7 +57,10 @@ export const Y_SQUARED_TITLE_LIMIT = 120;
 export const Y_SQUARED_START_THREAD_DESCRIPTION =
 	"Start a new thread (a root chat with its own Y and its own machine) in this project. The brief is the thread's first message and must be self-contained: the goal, the constraints and what done looks like, since the thread knows nothing of this chat. Starting may leave the thread queued behind the budget or concurrency limit; the result says which. Start only what is needed.";
 export const Y_SQUARED_MESSAGE_THREAD_DESCRIPTION =
-	"Send a message to one of this project's threads. A working thread gets it queued behind its turn; an idle thread starts a turn with it (which may itself queue behind the budget or concurrency limit). Pass the id from the threads list.";
+	'Send a message to one of this project\'s threads. Pass the id from the threads list. An idle thread starts a turn with it (which may itself queue behind the budget or concurrency limit). For a working thread, mode decides: "queue" (default) puts it behind the running turn; "interrupt" stops the running turn first, then sends it; "steer" is the same as "queue" (a thread\'s turn takes new messages only when it ends, there is no mid-turn steering for a thread yet).';
+/** How message_thread reaches a working thread. */
+export const Y_SQUARED_MESSAGE_MODES = ["queue", "interrupt", "steer"] as const;
+export type YSquaredMessageMode = (typeof Y_SQUARED_MESSAGE_MODES)[number];
 export const Y_SQUARED_STOP_THREAD_DESCRIPTION =
 	"Stop the running turn of one of this project's threads. Messages already queued in it still go on. Pass the id from the threads list.";
 
@@ -78,6 +81,12 @@ export const startThreadInput = z.object({
 export const messageThreadInput = z.object({
 	id: z.string().min(1).max(64).describe("The thread's id"),
 	text: z.string().trim().min(1).max(Y_SQUARED_MESSAGE_LIMIT),
+	mode: z
+		.enum(Y_SQUARED_MESSAGE_MODES)
+		.default("queue")
+		.describe(
+			"queue (default): after the running turn. interrupt: stop the running turn, then send. steer: same as queue.",
+		),
 });
 export const stopThreadInput = z.object({
 	id: z.string().min(1).max(64).describe("The thread's id"),
@@ -115,7 +124,11 @@ export function ySquaredInstructions() {
 		"- Write one thread's status as a normal sentence that starts with :needs-you:, :failed:, :finished: or :merged: and then the thread's link; it shows with a small status icon. One sentence each, for example:\n  :needs-you: [Fix sign-up form](thread:<id>) needs you to merge pr:acme/web#8.\n  :failed: [Nightly import](thread:<id>) failed on its last turn: the database was unreachable.",
 		`- You may run threads: \`${Y_SQUARED_START_THREAD_TOOL}\` (title, brief), \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (id, text), \`${Y_SQUARED_STOP_THREAD_TOOL}\` (id). Only when the person asks for work or for a change to a thread; never on your own idea.`,
 		"- Start a thread only with a self-contained brief (goal, constraints, what done looks like): the thread cannot see this chat. Never start more threads than the work needs; one thread per independent piece of work. A started thread may be queued behind the budget or concurrency limit: say how many were started and how many are queued, from the tool results.",
-		"- Never poll. After starting or messaging threads, end your turn: you wake by yourself when a thread finishes or needs the person. Do not call `threads` again just to see progress.",
+		'- Acknowledge in ONE line right away when the person asks for something or you start, message or stop threads, naming what you did: "Started A and B; I\'ll tell you as each finishes or needs you." Never go silent between a start and the end.',
+		'- You wake when a thread finishes a turn, needs the person or fails, when the person starts a thread themselves, and about every 10 minutes while threads are still working. At each wake give a short delta ("A finished, PR #12 opened. B still working, 8 min."), never a full re-listing. On a still-working wake, one brief line. "You were not part of this: <thread> got <request>" means the person messaged that thread directly: take it into account, do not repeat it back.',
+		"- Never poll. After starting or messaging threads, end your turn: you wake by yourself. Do not call `threads` again just to see progress.",
+		`- Answer terse commands tersely and act: "merge X", "hold Y" -> \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (mode "interrupt" to stop the running turn first, else the default) or \`${Y_SQUARED_STOP_THREAD_TOOL}\`, then confirm in one line. Ask the person only for a real decision or blocker.`,
+		"- A live status card at the top of this chat shows every thread (elapsed time, last request, what it waits on, pull request) without you: point to it, never repeat its content.",
 		"- Report in at most 100 words.",
 		`- For "which thread did X", "which was last used" or "which thread created Y": answer from each thread's created, last active, last request and last reply in \`${Y_SQUARED_THREADS_TOOL}\`, and name that thread as a link. If none fits, say so and name the closest.`,
 		`- Say plainly what is not recorded, never only "I can't see": who or which agent built Y² itself, work done outside this project's threads, and anything older than the crew's records (a thread shows "created not recorded" when it predates them). Then give a next step: open the most recently active thread, or ask it with \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\`.`,

@@ -67,6 +67,7 @@ import {
 import {
 	crewFromSettledItems,
 	crewProjectFor,
+	crewRequestFromStartItems,
 } from "../../domain/y-squared-crew";
 import { BUILD_ID } from "../../lib/build-id";
 import { socketPair } from "../../realtime/socket-upgrade";
@@ -580,13 +581,20 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				lastRequest: null,
 				title: "",
 			};
-			if (turnStatus !== "running") {
-				let items: SessionItem[] = [];
-				try {
-					items = this.history.chatCopy()?.items ?? [];
-				} catch {}
+			let items: SessionItem[] = [];
+			try {
+				items = this.history.chatCopy()?.items ?? [];
+			} catch {}
+			if (turnStatus !== "running")
 				derived = crewFromSettledItems(items, turnStatus);
-			}
+			// The request the turn began with: the crew tells Y² when the person
+			// sent it to the thread directly. It rides the start note (no extra
+			// request).
+			else
+				derived = {
+					...derived,
+					lastRequest: crewRequestFromStartItems(items),
+				};
 			this.ctx.waitUntil(
 				this.env.Y_SQUARED_CREWS.getByName(projectId, durableObjectLocation())
 					.noteThread({

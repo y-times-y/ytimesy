@@ -351,6 +351,7 @@ import { WorkspaceOverview } from "./workspace-overview";
 import { WorkspacePanes } from "./workspace-panes";
 import { preloadWorkspaceTools } from "./workspace-tools-preload";
 import { YOverview } from "./y-overview";
+import { YSquaredCard } from "./y-squared-card";
 import { YSquaredEmptyState } from "./y-squared-empty-state";
 import { YSquaredMark } from "./y-squared-mark";
 
@@ -4007,6 +4008,13 @@ export function WorkspaceHome({
 											{followUpLayout || !noProjects ? null : (
 												<FirstProjectHeading />
 											)}
+											{ySquaredOpen && selectedProject ? (
+												<YSquaredCard
+													projectId={selectedProject.id}
+													renderedAtMs={renderedAtMs}
+													onOpenThread={openChat}
+												/>
+											) : null}
 											<SessionLauncher
 												onOpenSettings={(section) => {
 													setSettingsSection(section);

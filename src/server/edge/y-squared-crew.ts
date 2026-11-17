@@ -16,10 +16,6 @@ import type { EdgeExecutorEnvironment } from "./environment";
 import { stepFailureCause } from "./step-failure-cause";
 import { SqliteYSquaredCrew } from "./y-squared-crew-store";
 
-/** What Y² reads when a wake starts its turn. Hidden from the chat (a silent wake notice). */
-export const Y_SQUARED_WAKE_BODY =
-	"Something changed in this project's threads. Call `threads`, then tell the person only what needs them.";
-
 /**
  * One Y project's crew (src/domain/y-squared-crew.ts): a row per thread,
  * pushed by each thread's ModelConversation when its turn starts and settles,
@@ -49,6 +45,14 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 		if (alarmAt !== null) await this.ctx.storage.setAlarm(alarmAt);
 	}
 
+	/** Y² is about to send into a thread (null: a new one); its turn start is then not the person's. */
+	async noteY2Sent(sessionId: string | null) {
+		this.store.noteY2Sent(
+			typeof sessionId === "string" ? sessionId.slice(0, 64) : null,
+			Date.now(),
+		);
+	}
+
 	/** The threads, needing-person first; one request for Y²'s `threads` tool. */
 	async list() {
 		return this.store.list();
@@ -65,15 +69,24 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 
 	async alarm() {
 		const decided = this.store.takeWake(Date.now());
-		if (decided.action === "capped" && decided.retryAt !== undefined) {
-			await this.ctx.storage.setAlarm(decided.retryAt);
+		if (decided.action === "capped") {
+			if (decided.retryAt !== undefined)
+				await this.ctx.storage.setAlarm(decided.retryAt);
 			return;
 		}
-		if (decided.action !== "send") return;
+		if (decided.action === "none") {
+			if (decided.rearmAt !== null)
+				await this.ctx.storage.setAlarm(decided.rearmAt);
+			return;
+		}
+		// The next heartbeat, if a thread is still working.
+		if (decided.rearmAt !== null)
+			await this.ctx.storage.setAlarm(decided.rearmAt);
 		const target = this.store.target();
 		if (!target) return;
 		try {
-			await this.enqueueWake(target, decided.next.lastWakeAt);
+			await this.enqueueWake(target, decided.next.lastWakeAt, decided.body);
+			this.store.wakeSent(decided.eventsUpTo);
 		} catch (error) {
 			console.warn("Y² was not woken.", { cause: stepFailureCause(error) });
 			this.store.returnWake();
@@ -84,6 +97,7 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 	private enqueueWake(
 		target: { userId: string; sessionId: string },
 		at: number,
+		body: string,
 	) {
 		return withDatabaseScope(
 			this.env.HYPERDRIVE.connectionString,
@@ -106,7 +120,7 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 							createNew: false,
 						},
 						{
-							text: `${childTaskEventQueueText(`y2:${at}`)}\n${Y_SQUARED_WAKE_BODY}`,
+							text: `${childTaskEventQueueText(`y2:${at}`)}\n${body}`,
 							modelId: chat.listedModelId,
 							idempotencyKey: wakeMessageId(`y2:${target.sessionId}:${at}`),
 						},

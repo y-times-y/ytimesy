@@ -285,3 +285,42 @@ describe("Y² on a Claude runner", () => {
 		expect(() => claudeRunnerSessionWorkdir("../etc")).toThrow();
 	});
 });
+
+describe("Y² stays in the loop (instructions)", () => {
+	const text = ySquaredInstructions();
+
+	it("acknowledges in one line right away and never goes silent", () => {
+		expect(text).toContain("Acknowledge in ONE line right away");
+		expect(text).toContain(
+			"Started A and B; I'll tell you as each finishes or needs you.",
+		);
+		expect(text).toContain("Never go silent between a start and the end");
+	});
+
+	it("tells a short delta at every wake, and a brief line on a heartbeat", () => {
+		expect(text).toContain("At each wake give a short delta");
+		expect(text).toContain(
+			"A finished, PR #12 opened. B still working, 8 min.",
+		);
+		expect(text).toContain("never a full re-listing");
+		expect(text).toContain("On a still-working wake, one brief line");
+		expect(text).toContain("You were not part of this: <thread> got <request>");
+	});
+
+	it("answers terse commands tersely, acts, and asks only for real decisions", () => {
+		expect(text).toContain('"merge X", "hold Y"');
+		expect(text).toContain(`\`${Y_SQUARED_MESSAGE_THREAD_TOOL}\``);
+		expect(text).toContain('mode "interrupt"');
+		expect(text).toContain("confirm in one line");
+		expect(text).toContain(
+			"Ask the person only for a real decision or blocker",
+		);
+	});
+
+	it("points to the live card instead of repeating it, and keeps reports under 100 words", () => {
+		expect(text).toContain("live status card at the top of this chat");
+		expect(text).toContain("never repeat its content");
+		expect(text).toContain("Report in at most 100 words.");
+		expect(text).toContain("Never poll.");
+	});
+});

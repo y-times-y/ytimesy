@@ -5,6 +5,8 @@ export type YSquaredCrewClient = {
 	list(): Promise<{ reconciled: boolean; rows: CrewRow[] }>;
 	thread(sessionId: string): Promise<CrewRow | null>;
 	reconcile(rows: readonly CrewRow[]): Promise<void>;
+	/** Y² is about to send into a thread (null: a new one): its turn start is not the person's. */
+	noteY2Sent?(sessionId: string | null): Promise<void>;
 	/** A thread ended its turn on a card only the person can answer (see noteCrewWaiting). */
 	noteWaiting(hint: CrewWaitingHint): Promise<void>;
 };

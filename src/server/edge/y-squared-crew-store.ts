@@ -1,17 +1,24 @@
 import { Y_SQUARED_THREAD_LIMIT } from "../../domain/y-squared";
 import {
+	CREW_EVENT_LIMIT,
 	CREW_REPLY_LIMIT,
 	CREW_REQUEST_LIMIT,
 	CREW_RETENTION_MS,
+	CREW_STARTED_WAKE_EVERY_MS,
 	CREW_WAITING_HINT_TTL_MS,
+	CREW_Y2_SENT_TTL_MS,
 	type CrewNote,
 	type CrewRow,
 	type CrewState,
 	type CrewWaitingHint,
+	type CrewWakeEvent,
 	crewNoteMatters,
+	crewWakeBody,
+	crewWakeDelayMs,
+	crewWakeDueAt,
 	decideWake,
+	heartbeatDueAt,
 	type WakeState,
-	wakeAlarmAt,
 } from "../../domain/y-squared-crew";
 
 type Binding = string | number | null;
@@ -33,6 +40,8 @@ type WakeRow = {
 	y2_session_id: string | null;
 	reconciled: number;
 	pruned_at: number;
+	pending_due_at: number | null;
+	last_heartbeat_at: number;
 };
 
 const PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -48,7 +57,8 @@ export class SqliteYSquaredCrew {
 			session_id text primary key, title text not null, state text not null,
 			waiting_on text, pr_url text, last_reply text, updated_at integer not null,
 			created_at integer not null default 0, last_request text,
-			last_active_at integer not null default 0)`);
+			last_active_at integer not null default 0, working_since integer,
+			start_wake_at integer not null default 0)`);
 		// A table an earlier deploy made lacks the newer columns: add them,
 		// once each. Old rows keep working: created is "not recorded" (0) and
 		// the last activity is taken from their last note.
@@ -70,6 +80,12 @@ export class SqliteYSquaredCrew {
 			);
 			sql.exec("update crew set last_active_at=updated_at");
 		}
+		if (!columns.has("working_since"))
+			sql.exec("alter table crew add column working_since integer");
+		if (!columns.has("start_wake_at"))
+			sql.exec(
+				"alter table crew add column start_wake_at integer not null default 0",
+			);
 		sql.exec(`create table if not exists wake_state(
 			id integer primary key check(id=1), last_wake_at integer not null default 0,
 			wakes_this_hour integer not null default 0, hour_start integer not null default 0,
@@ -77,6 +93,27 @@ export class SqliteYSquaredCrew {
 			y2_session_id text, reconciled integer not null default 0,
 			pruned_at integer not null default 0)`);
 		sql.exec("insert or ignore into wake_state(id) values(1)");
+		const wakeColumns = new Set(
+			sql
+				.exec<{ name: string }>(
+					"select name from pragma_table_info('wake_state')",
+				)
+				.toArray()
+				.map((column) => column.name),
+		);
+		if (!wakeColumns.has("pending_due_at"))
+			sql.exec("alter table wake_state add column pending_due_at integer");
+		if (!wakeColumns.has("last_heartbeat_at"))
+			sql.exec(
+				"alter table wake_state add column last_heartbeat_at integer not null default 0",
+			);
+		// What changed since Y²'s last wake (told in the next wake's message),
+		// and the sends Y² itself made (so its threads' starts are not "the person's").
+		sql.exec(`create table if not exists wake_events(
+			id integer primary key autoincrement, kind text not null,
+			session_id text not null, title text not null, detail text, at integer not null)`);
+		sql.exec(`create table if not exists y2_sent(
+			id integer primary key autoincrement, session_id text not null, at integer not null)`);
 		// A thread's "waiting on the person" told ahead of its settle note.
 		sql.exec(`create table if not exists waiting_hint(
 			session_id text primary key, waiting_on text not null, at integer not null)`);
@@ -218,8 +255,9 @@ export class SqliteYSquaredCrew {
 				pr_url: string | null;
 				last_reply: string | null;
 				last_request: string | null;
+				start_wake_at: number;
 			}>(
-				"select title,state,waiting_on,pr_url,last_reply,last_request from crew where session_id=?",
+				"select title,state,waiting_on,pr_url,last_reply,last_request,start_wake_at from crew where session_id=?",
 				note.sessionId,
 			)
 			.toArray()[0];
@@ -233,19 +271,22 @@ export class SqliteYSquaredCrew {
 			existing.pr_url === note.prUrl &&
 			// A working note carries no reply: keep the last one shown.
 			(note.state === "working" || existing.last_reply === reply) &&
-			// A start note carries no request: keep the last one.
+			// A start note may carry no request: keep the last one.
 			(!request || existing.last_request === request) &&
 			existing.title === title;
 		if (!unchanged) {
 			this.sql.exec(
 				`insert into crew(session_id,title,state,waiting_on,pr_url,last_reply,updated_at,
-				 created_at,last_request,last_active_at)
-				 values(?,?,?,?,?,?,?,?,?,?)
+				 created_at,last_request,last_active_at,working_since)
+				 values(?,?,?,?,?,?,?,?,?,?,?)
 				 on conflict(session_id) do update set title=excluded.title,state=excluded.state,
 				 waiting_on=excluded.waiting_on,pr_url=excluded.pr_url,
 				 last_reply=coalesce(excluded.last_reply,crew.last_reply),
 				 last_request=coalesce(excluded.last_request,crew.last_request),
-				 updated_at=excluded.updated_at,last_active_at=excluded.last_active_at`,
+				 updated_at=excluded.updated_at,last_active_at=excluded.last_active_at,
+				 working_since=case when excluded.state='working'
+				  then coalesce(case when crew.state='working' then crew.working_since end,excluded.working_since)
+				  else null end`,
 				note.sessionId,
 				title,
 				note.state,
@@ -256,14 +297,53 @@ export class SqliteYSquaredCrew {
 				now,
 				request,
 				now,
+				note.state === "working" ? now : null,
 			);
 		}
 		const wake = this.wakeRow();
 		const stale =
 			wake.user_id !== note.userId ||
 			wake.y2_session_id !== (note.ySquaredId ?? wake.y2_session_id);
-		let alarmAt: number | null = null;
-		const matters = !unchanged && crewNoteMatters(note.state);
+		const hasY2 = Boolean(note.ySquaredId || wake.y2_session_id);
+		// A turn that began with a message Y² did not send is the person's own:
+		// Y² is told at its next wake, and woken for it at most every ten
+		// minutes per thread. Its own sends were marked before they were made.
+		let startedWake = false;
+		if (note.state === "working" && existing?.state !== "working") {
+			const byY2 = this.takeY2Sent(note.sessionId, !existing, now);
+			if (!byY2 && request) {
+				startedWake =
+					now - (existing?.start_wake_at ?? 0) >= CREW_STARTED_WAKE_EVERY_MS;
+				this.addEvent(
+					{ kind: startedWake ? "started" : "direct", title, detail: request },
+					note.sessionId,
+					now,
+				);
+				if (startedWake)
+					this.sql.exec(
+						"update crew set start_wake_at=? where session_id=?",
+						now,
+						note.sessionId,
+					);
+			}
+		}
+		const settled = !unchanged && crewNoteMatters(note.state);
+		if (settled)
+			this.addEvent(
+				{
+					kind: note.state,
+					title,
+					detail:
+						note.state === "waiting"
+							? (note.waitingOn ?? null)
+							: note.prUrl
+								? `pull request ${note.prUrl}`
+								: null,
+				},
+				note.sessionId,
+				now,
+			);
+		const matters = settled || startedWake;
 		if (stale || matters) {
 			this.sql.exec(
 				"update wake_state set user_id=?,y2_session_id=coalesce(?,y2_session_id) where id=1",
@@ -271,13 +351,108 @@ export class SqliteYSquaredCrew {
 				note.ySquaredId,
 			);
 		}
-		if (matters && (note.ySquaredId || wake.y2_session_id)) {
-			const state = { ...this.wakeState(), pending: true };
-			alarmAt = wakeAlarmAt(state, now);
-			this.saveWake({ ...state, alarmAt: alarmAt ?? state.alarmAt });
+		if (matters && hasY2) {
+			const due = crewWakeDueAt(
+				wake.last_wake_at,
+				now,
+				crewWakeDelayMs(settled ? note.state : "started"),
+			);
+			this.sql.exec(
+				"update wake_state set pending=1,pending_due_at=? where id=1",
+				wake.pending === 1 && wake.pending_due_at !== null
+					? Math.min(wake.pending_due_at, due)
+					: due,
+			);
 		}
+		const alarmAt = hasY2 ? this.rearm(now) : null;
 		if (now - wake.pruned_at >= PRUNE_EVERY_MS) this.prune(now);
 		return { alarmAt };
+	}
+
+	/** Remembers a change for the next wake's message (a thread's latest of each kind). */
+	private addEvent(event: CrewWakeEvent, sessionId: string, now: number) {
+		this.sql.exec(
+			"delete from wake_events where session_id=? and kind=?",
+			sessionId,
+			event.kind,
+		);
+		this.sql.exec(
+			"insert into wake_events(kind,session_id,title,detail,at) values(?,?,?,?,?)",
+			event.kind,
+			sessionId,
+			event.title,
+			event.detail,
+			now,
+		);
+		this.sql.exec(
+			"delete from wake_events where id <= (select max(id) from wake_events) - ?",
+			CREW_EVENT_LIMIT,
+		);
+	}
+
+	/**
+	 * Y² is about to send into a thread (an existing one by id, or a new one
+	 * with null), so that thread's turn start is not taken for the person's.
+	 * Made before the send, so it is always there when the start note comes.
+	 */
+	noteY2Sent(sessionId: string | null, now: number) {
+		this.sql.exec(
+			"insert into y2_sent(session_id,at) values(?,?)",
+			sessionId ?? "",
+			now,
+		);
+		this.sql.exec("delete from y2_sent where at<?", now - CREW_Y2_SENT_TTL_MS);
+	}
+
+	private takeY2Sent(sessionId: string, isNew: boolean, now: number) {
+		this.sql.exec("delete from y2_sent where at<?", now - CREW_Y2_SENT_TTL_MS);
+		const find = (id: string) =>
+			this.sql
+				.exec<{ id: number }>(
+					"select id from y2_sent where session_id=? order by id limit 1",
+					id,
+				)
+				.toArray()[0];
+		const mark = find(sessionId) ?? (isNew ? find("") : undefined);
+		if (!mark) return false;
+		this.sql.exec("delete from y2_sent where id=?", mark.id);
+		return true;
+	}
+
+	private workingRows(now: number) {
+		return this.sql
+			.exec<{ title: string; working_since: number }>(
+				"select title,working_since from crew where state='working' and working_since is not null order by working_since",
+			)
+			.toArray()
+			.filter((row) => row.working_since <= now);
+	}
+
+	private heartbeatDue(now: number, wake: WakeRow) {
+		return heartbeatDueAt({
+			workingSince: this.workingRows(now).map((row) => row.working_since),
+			lastWakeAt: wake.last_wake_at,
+			lastHeartbeatAt: wake.last_heartbeat_at,
+			now,
+		});
+	}
+
+	/**
+	 * The one alarm: the pending wake's due time or the next heartbeat,
+	 * whichever is sooner. Returns the time to set it for, null when none is
+	 * needed (nothing pending, nothing working) or one as early is set.
+	 */
+	private rearm(now: number): number | null {
+		const wake = this.wakeRow();
+		const due = [
+			wake.pending === 1 ? wake.pending_due_at : null,
+			this.heartbeatDue(now, wake),
+		].filter((at): at is number => at !== null);
+		if (!due.length) return null;
+		const at = Math.min(...due);
+		if (wake.alarm_at !== null && wake.alarm_at <= at) return null;
+		this.sql.exec("update wake_state set alarm_at=? where id=1", at);
+		return at;
 	}
 
 	/** Drops threads untouched for 30 days. */
@@ -310,6 +485,7 @@ export class SqliteYSquaredCrew {
 				updated_at: number;
 				created_at: number;
 				last_active_at: number;
+				working_since: number | null;
 			}>(
 				`select * from crew order by
 				 case state when 'waiting' then 0 when 'failed' then 0 when 'working' then 1 else 2 end,
@@ -342,8 +518,8 @@ export class SqliteYSquaredCrew {
 		for (const row of rows.slice(0, limit))
 			this.sql.exec(
 				`insert or ignore into crew(session_id,title,state,waiting_on,pr_url,last_reply,updated_at,
-				 created_at,last_request,last_active_at)
-				 values(?,?,?,?,?,?,?,?,?,?)`,
+				 created_at,last_request,last_active_at,working_since)
+				 values(?,?,?,?,?,?,?,?,?,?,?)`,
 				row.sessionId,
 				row.title,
 				row.state,
@@ -354,20 +530,86 @@ export class SqliteYSquaredCrew {
 				row.createdAt,
 				row.lastRequest?.slice(0, CREW_REQUEST_LIMIT) ?? null,
 				row.lastActiveAt || row.updatedAt,
+				row.state === "working" ? (row.workingSince ?? row.updatedAt) : null,
 			);
 		this.sql.exec("update wake_state set reconciled=1 where id=1");
 		return true;
 	}
 
-	/** The alarm fired. */
+	/**
+	 * The alarm fired. Sends one wake when a wake is pending and due, or a
+	 * heartbeat is (a thread working long with no wake since); otherwise only
+	 * re-arms. A send carries the changes since the last wake and who is
+	 * still working: `body` is the message, `eventsUpTo` what to clear with
+	 * `wakeSent` once it was enqueued.
+	 */
 	takeWake(now: number) {
-		const decided = decideWake(this.wakeState(), now);
-		this.saveWake(
-			decided.action === "capped"
-				? { ...decided.next, alarmAt: decided.retryAt ?? null }
-				: decided.next,
+		const state = this.wakeState();
+		const row = this.wakeRow();
+		const beat = this.heartbeatDue(now, row);
+		const pendingDue = state.pending && now >= (row.pending_due_at ?? 0);
+		const heartbeatDue = beat !== null && now >= beat;
+		if (!pendingDue && !heartbeatDue) {
+			// An early or stale alarm: nothing to send; set the next one.
+			this.saveWake({ ...state, alarmAt: null });
+			return {
+				action: "none" as const,
+				next: { ...state, alarmAt: null },
+				rearmAt: this.rearm(now),
+			};
+		}
+		const decided = decideWake({ ...state, pending: true }, now);
+		if (decided.action === "capped") {
+			// A heartbeat held by the cap is not a pending wake.
+			this.saveWake({
+				...decided.next,
+				pending: state.pending,
+				alarmAt: decided.retryAt ?? null,
+			});
+			return {
+				...decided,
+				action: "capped" as const,
+				rearmAt: null as number | null,
+			};
+		}
+		this.saveWake(decided.next);
+		this.sql.exec(
+			"update wake_state set pending_due_at=null,last_heartbeat_at=case when ? then ? else last_heartbeat_at end where id=1",
+			heartbeatDue ? 1 : 0,
+			now,
 		);
-		return decided;
+		const events = this.sql
+			.exec<{
+				id: number;
+				kind: string;
+				title: string;
+				detail: string | null;
+			}>("select id,kind,title,detail from wake_events order by id")
+			.toArray();
+		const body = crewWakeBody({
+			events: events.map((event) => ({
+				kind: event.kind as CrewWakeEvent["kind"],
+				title: event.title,
+				detail: event.detail,
+			})),
+			working: this.workingRows(now).map((thread) => ({
+				title: thread.title,
+				since: thread.working_since,
+			})),
+			now,
+		});
+		return {
+			...decided,
+			action: "send" as const,
+			body,
+			eventsUpTo: events.at(-1)?.id ?? 0,
+			rearmAt: this.rearm(now),
+		};
+	}
+
+	/** The wake was enqueued: its changes are told, forget them. */
+	wakeSent(eventsUpTo: number) {
+		this.sql.exec("delete from wake_events where id<=?", eventsUpTo);
 	}
 
 	/** The wake could not be enqueued: hand it back for the next note to re-arm. */
@@ -393,6 +635,7 @@ function toRow(row: {
 	updated_at: number;
 	created_at: number;
 	last_active_at: number;
+	working_since?: number | null;
 }): CrewRow {
 	return {
 		sessionId: row.session_id,
@@ -405,5 +648,6 @@ function toRow(row: {
 		updatedAt: row.updated_at,
 		createdAt: row.created_at,
 		lastActiveAt: row.last_active_at || row.updated_at,
+		workingSince: row.state === "working" ? (row.working_since ?? null) : null,
 	};
 }

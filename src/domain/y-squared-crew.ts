@@ -21,10 +21,27 @@ export const CREW_REPLY_LIMIT = 300;
 export const CREW_REQUEST_LIMIT = 200;
 /** Rows untouched this long are dropped. */
 export const CREW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-/** A wake never comes sooner than this after the note that asked for it, or the previous wake. */
-export const CREW_WAKE_DELAY_MS = 45_000;
-export const CREW_WAKES_PER_HOUR = 12;
+/**
+ * A wake for a finished turn (or a thread the person started) never comes
+ * sooner than this after the note that asked for it, or the previous wake.
+ */
+export const CREW_WAKE_DELAY_MS = 30_000;
+/** The same for a thread that needs the person or failed: they want it sooner. */
+export const CREW_URGENT_WAKE_DELAY_MS = 15_000;
+export const CREW_WAKES_PER_HOUR = 24;
 export const CREW_HOUR_MS = 60 * 60 * 1000;
+/** A thread working this long with no wake since gets a "still working" heartbeat wake. */
+export const CREW_HEARTBEAT_AFTER_MS = 5 * 60 * 1000;
+/** Heartbeat wakes are at least this far apart, per project. */
+export const CREW_HEARTBEAT_EVERY_MS = 10 * 60 * 1000;
+/** A row working longer than this is taken for a lost settle note: no more heartbeats for it. */
+export const CREW_WORKING_MAX_MS = 6 * 60 * 60 * 1000;
+/** A thread the person started wakes Y² at most this often. */
+export const CREW_STARTED_WAKE_EVERY_MS = 10 * 60 * 1000;
+/** A send Y² made is remembered this long, to tell its threads' starts from the person's. */
+export const CREW_Y2_SENT_TTL_MS = 60 * 60 * 1000;
+/** Most wake events (what changed since the last wake) kept. */
+export const CREW_EVENT_LIMIT = 12;
 
 export type CrewNote = {
 	readonly sessionId: string;
@@ -122,9 +139,95 @@ export function parseCrewWaitingHint(value: unknown): CrewWaitingHint | null {
 	};
 }
 
-/** Finished, needing the person or failed wake Y²; plain progress does not. */
+/** A thread's turn settled (finished, needs the person, failed) wakes Y²; plain progress does not. */
 export function crewNoteMatters(state: CrewState) {
 	return state !== "working";
+}
+
+/** How long a wake for this kind of change waits for more notes to coalesce. */
+export function crewWakeDelayMs(state: CrewState | "started") {
+	return state === "waiting" || state === "failed"
+		? CREW_URGENT_WAKE_DELAY_MS
+		: CREW_WAKE_DELAY_MS;
+}
+
+/** When a wake asked for at `now` is due: after its delay, and its delay after the previous wake. */
+export function crewWakeDueAt(
+	lastWakeAt: number,
+	now: number,
+	delayMs: number,
+) {
+	return Math.max(now + delayMs, lastWakeAt + delayMs);
+}
+
+/**
+ * When the next "still working" heartbeat is due, null when no thread is
+ * working. A thread counts from its start or the last wake, whichever is
+ * later, and a heartbeat follows the previous one by at least ten minutes.
+ * Working rows older than six hours are ignored (a lost settle note).
+ */
+export function heartbeatDueAt(input: {
+	readonly workingSince: readonly number[];
+	readonly lastWakeAt: number;
+	readonly lastHeartbeatAt: number;
+	readonly now: number;
+}): number | null {
+	const live = input.workingSince.filter(
+		(since) => input.now - since < CREW_WORKING_MAX_MS,
+	);
+	if (!live.length) return null;
+	const quietSince = Math.max(Math.min(...live), input.lastWakeAt);
+	return Math.max(
+		quietSince + CREW_HEARTBEAT_AFTER_MS,
+		input.lastHeartbeatAt + CREW_HEARTBEAT_EVERY_MS,
+	);
+}
+
+/** One change since Y²'s last wake, told in the next wake's message. */
+export type CrewWakeEvent = {
+	readonly kind: CrewState | "started" | "direct";
+	readonly title: string;
+	/** The request (started, direct) or the pull request / what it waits on. */
+	readonly detail: string | null;
+};
+
+const minutesText = (ms: number) =>
+	`${Math.max(1, Math.round(ms / 60_000))} min`;
+
+/** What Y² reads when a wake starts its turn: the change, and who is still working. Hidden from the chat. */
+export function crewWakeBody(input: {
+	readonly events: readonly CrewWakeEvent[];
+	readonly working: readonly {
+		readonly title: string;
+		readonly since: number;
+	}[];
+	readonly now: number;
+}) {
+	const lines = input.events.map((event) => {
+		const detail = event.detail ? ` (${event.detail})` : "";
+		switch (event.kind) {
+			case "finished":
+				return `- "${event.title}" finished its turn${detail}.`;
+			case "waiting":
+				return `- "${event.title}" needs the person${detail}.`;
+			case "failed":
+				return `- "${event.title}" failed${detail}.`;
+			case "started":
+				return `- The person started "${event.title}" themselves${detail}.`;
+			default:
+				return `- You were not part of this: "${event.title}" got a message from the person${detail}.`;
+		}
+	});
+	const working = input.working.map(
+		(thread) =>
+			`- "${thread.title}" still working, ${minutesText(input.now - thread.since)}.`,
+	);
+	return [
+		"Something changed in this project's threads.",
+		...(lines.length ? ["Since your last report:", ...lines] : []),
+		...(working.length ? ["Still working:", ...working] : []),
+		"Call `threads`, then give the person a short delta (what changed, who is still working and for how long); do not list everything again.",
+	].join("\n");
 }
 
 /**
@@ -163,6 +266,18 @@ export function crewFromSettledItems(
 	};
 }
 
+/**
+ * What a thread's start note tells the crew: the person's request this turn
+ * began with (never a wake), from the transcript the chat object already
+ * holds. Empty when the copy has no such message yet.
+ */
+export function crewRequestFromStartItems(items: readonly SessionItem[]) {
+	const last = items.at(-1);
+	if (!last || last.kind !== "userMessage" || ("wake" in last && last.wake))
+		return null;
+	return text(last.text, CREW_REQUEST_LIMIT) || null;
+}
+
 export type CrewRow = {
 	readonly sessionId: string;
 	readonly title: string;
@@ -178,6 +293,8 @@ export type CrewRow = {
 	readonly createdAt: number;
 	/** When the person or a wake last used the thread; 0: not recorded. */
 	readonly lastActiveAt: number;
+	/** When the thread's running turn started; null when it is not working. */
+	readonly workingSince: number | null;
 };
 
 /** A crew row as the digest the threads tool prints. */
@@ -192,7 +309,10 @@ export function crewDigest(row: CrewRow, now: number): ThreadDigest {
 		waitingOn: needs && waitingOn ? waitingOnText(waitingOn) : null,
 		workingForMinutes:
 			row.state === "working"
-				? Math.max(0, Math.round((now - row.updatedAt) / 60_000))
+				? Math.max(
+						0,
+						Math.round((now - (row.workingSince ?? row.updatedAt)) / 60_000),
+					)
 				: null,
 		lastRequest: row.lastRequest,
 		lastReply: row.lastReply,
@@ -213,15 +333,6 @@ export type WakeState = {
 	hourStart: number;
 	alarmAt: number | null;
 };
-
-/** When the alarm for a note that matters should fire, null when one is set already. */
-export function wakeAlarmAt(state: WakeState, now: number) {
-	if (!state.pending || state.alarmAt !== null) return null;
-	return Math.max(
-		now + CREW_WAKE_DELAY_MS,
-		state.lastWakeAt + CREW_WAKE_DELAY_MS,
-	);
-}
 
 /**
  * The alarm fired: send exactly one wake, or hold it until the hourly cap's

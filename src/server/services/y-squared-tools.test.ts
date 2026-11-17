@@ -353,7 +353,88 @@ describe("ySquaredTools write tools", () => {
 		await run(f.tools, "message_thread", { id: "t1", text: "x" });
 		await run(f.tools, "stop_thread", { id: "t1" });
 		expect(f.list).not.toHaveBeenCalled();
-		expect(f.crew).not.toHaveBeenCalled();
+		// the crew is only told of Y²'s own sends (start, message), never read
+		expect(f.crew).toHaveBeenCalledTimes(2);
+	});
+
+	it("marks its own sends in the crew before sending, so they are not taken for the person's", async () => {
+		const order: string[] = [];
+		const noteY2Sent = vi.fn(async (id: string | null) => {
+			order.push(`mark:${id}`);
+		});
+		const f = writeFixture({ t1: chat() });
+		const tools = ySquaredTools({
+			userId: "u",
+			projectId: "p",
+			selfId: "y2",
+			machines: {} as never,
+			modelId: "m-y2",
+			harnessId: "api",
+			deps: {
+				metadata: f.metadata as never,
+				send: (async () => {
+					order.push("send");
+					return { turnStatus: "running" };
+				}) as never,
+				crew: (() => ({ noteY2Sent })) as never,
+			},
+		});
+		await run(tools, "start_thread", { title: "A", brief: "B" });
+		await run(tools, "message_thread", { id: "t1", text: "x" });
+		expect(order).toEqual(["mark:null", "send", "mark:t1", "send"]);
+	});
+
+	it("message_thread modes: queue (default) and steer queue behind the running turn, interrupt stops it first", async () => {
+		for (const mode of [undefined, "queue", "steer"]) {
+			const f = writeFixture({ t1: chat({ turnStatus: "running" }) });
+			expect(
+				await run(f.tools, "message_thread", { id: "t1", text: "x", mode }),
+			).toContain("Queued the message");
+			expect(f.stop).not.toHaveBeenCalled();
+			expect(f.send).toHaveBeenCalledTimes(1);
+		}
+		const order: string[] = [];
+		const f = writeFixture({ t1: chat({ turnStatus: "running" }) }, "running");
+		f.stop.mockImplementation(async () => {
+			order.push("stop");
+			return { turnStatus: "idle" };
+		});
+		f.send.mockImplementation((async () => {
+			order.push("send");
+			return { turnStatus: "running" };
+		}) as never);
+		const text = await run(f.tools, "message_thread", {
+			id: "t1",
+			text: "stop that, do this",
+			mode: "interrupt",
+		});
+		expect(order).toEqual(["stop", "send"]);
+		expect(text).toContain("Stopped the running turn");
+		expect(text).toContain("its new turn started");
+		// an idle thread has nothing to interrupt
+		const idle = writeFixture({ t1: chat() }, "running");
+		await run(idle.tools, "message_thread", {
+			id: "t1",
+			text: "go",
+			mode: "interrupt",
+		});
+		expect(idle.stop).not.toHaveBeenCalled();
+	});
+
+	it("the message_thread schema defaults the mode to queue and rejects an unknown one; the description says steer is queue", () => {
+		const f = writeFixture({ t1: chat() });
+		const tool = f.tools.message_thread as {
+			inputSchema: z.ZodType;
+			description: string;
+		};
+		expect(tool.inputSchema.parse({ id: "t1", text: "x" })).toMatchObject({
+			mode: "queue",
+		});
+		expect(
+			tool.inputSchema.safeParse({ id: "t1", text: "x", mode: "now" }).success,
+		).toBe(false);
+		expect(tool.description).toContain('"interrupt"');
+		expect(tool.description).toContain('"steer" is the same as "queue"');
 	});
 });
 
