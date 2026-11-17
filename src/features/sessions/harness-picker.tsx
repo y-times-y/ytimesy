@@ -1,4 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Check, ChevronDown, Search, Star, Zap } from "lucide-react";
 import { contextWindowLabel } from "#/domain/context-window-option";
@@ -59,6 +63,76 @@ import { SubscriptionMark } from "./subscription-mark";
 
 /** The composer's model button; Cmd+Shift+M clicks it. */
 export const MODEL_PICKER_ID = "session-harness-select";
+
+const CODEX_CATALOG_STALE_MS = 5 * 60_000;
+
+/** Shared with the composer's own read of the Codex catalog (session-launcher). */
+export function codexCatalogKey(userId: string | undefined) {
+	return ["agent-model-catalog", userId, "codex"] as const;
+}
+
+/**
+ * Starts the ChatGPT plan's model catalog read before the Codex section is
+ * opened; a fresh cached read is reused, and one in flight is shared.
+ */
+export function prefetchCodexCatalog(
+	client: QueryClient,
+	userId: string | undefined,
+	load: () => Promise<unknown>,
+) {
+	if (!userId) return Promise.resolve();
+	return client.prefetchQuery({
+		queryKey: codexCatalogKey(userId),
+		queryFn: load,
+		staleTime: CODEX_CATALOG_STALE_MS,
+		retry: false,
+	});
+}
+
+/**
+ * The Codex section's own list, whatever harness is active: never the API
+ * models. It loads when the composer mounts, so opening the picker is instant.
+ */
+function useCodexCatalog() {
+	const identity = authClient.useSession();
+	const userId = identity.data?.user.id;
+	const loadCatalog = useServerFn(getAgentModelCatalog);
+	const queryClient = useQueryClient();
+	const catalog = useQuery({
+		queryKey: codexCatalogKey(userId),
+		enabled: Boolean(userId),
+		queryFn: () => loadCatalog({ data: { provider: "codex" } }),
+		staleTime: CODEX_CATALOG_STALE_MS,
+	});
+	return {
+		models: catalog.data ? sessionModelsFromListed(catalog.data) : [],
+		status: (catalog.isError && !catalog.data
+			? "error"
+			: catalog.isPending
+				? "loading"
+				: "ready") as "loading" | "error" | "ready",
+		retry: () => {
+			void catalog.refetch();
+		},
+		prefetch: () =>
+			void prefetchCodexCatalog(queryClient, userId, () =>
+				loadCatalog({ data: { provider: "codex" } }),
+			),
+	};
+}
+
+/** Skeleton rows in the list's own row style while a catalog loads. */
+function ModelListSkeleton() {
+	return (
+		<div className="model-picker-skeleton" aria-hidden="true">
+			{[0, 1, 2].map((row) => (
+				<div className="model-picker-row" key={row}>
+					<span className="model-picker-option" />
+				</div>
+			))}
+		</div>
+	);
+}
 
 /** API maker sections; mounted only while the picker is open. */
 function ApiProviderRail({
@@ -163,10 +237,21 @@ export function HarnessPicker({
 		(connection) => connection.subscription?.provider === "xai",
 	);
 	const grokUsage = useGrokPlanUsageLine(open, Boolean(grokSubscription));
-	const prefetchPlanUsage = usePrefetchPlanUsage(
+	const prefetchUsage = usePrefetchPlanUsage(
 		claudeConnected,
 		Boolean(grokSubscription),
 	);
+	const codexCatalog = useCodexCatalog();
+	const prefetchPlanUsage = () => {
+		prefetchUsage();
+		codexCatalog.prefetch();
+	};
+	// The Codex section reads its own list; the active harness's `models` only
+	// stand in for it when Codex is the active harness.
+	const codexModels = harnessId === "codex" ? models : codexCatalog.models;
+	const codexStatus =
+		harnessId === "codex" ? catalogStatus : codexCatalog.status;
+	const codexRetry = harnessId === "codex" ? onConnect : codexCatalog.retry;
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
 	const [favorites, setFavorites] = useState<readonly string[]>([]);
@@ -176,8 +261,9 @@ export function HarnessPicker({
 		onModelIdChange(id);
 		setOpen(false);
 	}
-	const visibleModels = recentModelGenerations(models).filter((candidate) =>
-		candidate.label.toLowerCase().includes(search.trim().toLowerCase()),
+	const visibleModels = recentModelGenerations(codexModels).filter(
+		(candidate) =>
+			candidate.label.toLowerCase().includes(search.trim().toLowerCase()),
 	);
 	if (!selected) return null;
 
@@ -300,15 +386,13 @@ export function HarnessPicker({
 									type="button"
 									title={`${option.name} · ChatGPT subscription`}
 									aria-label={option.name}
-									aria-pressed={
-										!browse && !favoritesOnly && harnessId === option.id
-									}
+									aria-pressed={!browse && !favoritesOnly && !claudeView}
 									onClick={() => {
 										setFavoritesOnly(false);
 										setBrowse(false);
 										setClaudeView(false);
+										setGrokView(false);
 										setSearch("");
-										if (option.id !== harnessId) onHarnessIdChange(option.id);
 									}}
 								>
 									<SubscriptionMark brand="codex" size={21} />
@@ -376,7 +460,7 @@ export function HarnessPicker({
 										? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
 										: claudeView && claudeData
 											? "Claude Agent"
-											: selected.name
+											: "Codex"
 						}
 					>
 						{searching || favoritesOnly ? (
@@ -404,7 +488,7 @@ export function HarnessPicker({
 									favoriteIds={favoritesOnly ? favorites : undefined}
 									renderFavorite={renderFavorite("codex")}
 									search={search}
-									fallbackModels={harnessId === "codex" ? models : []}
+									fallbackModels={codexModels}
 									onSelect={(id) => {
 										if (harnessId !== "codex") onHarnessIdChange("codex");
 										onModelIdChange(id);
@@ -483,91 +567,143 @@ export function HarnessPicker({
 								}}
 							/>
 						) : (
-							<>
-								<div className="model-section-head">
-									<h3>{selected.name}</h3>
-									{harnessId === "codex" ? (
-										<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
-									) : null}
-								</div>
-								{harnessId === "codex" ? (
-									<p className="model-browser-caption">ChatGPT subscription</p>
-								) : null}
-								<div className="model-picker-list">
-									{connectionContent}
-									{visibleModels.map((candidate) => {
-										return (
-											<div
-												className="model-picker-row"
-												key={candidate.id}
-												data-selected={candidate.id === modelId}
-											>
-												<button
-													type="button"
-													className="model-picker-option"
-													disabled={!modelsEnabled}
-													aria-pressed={candidate.id === modelId}
-													title={candidate.notice ?? candidate.label}
-													onClick={() => {
-														chooseModel(candidate.id);
-													}}
-												>
-													<AgentProviderMark provider={harnessId} size={16} />
-													<span>{candidate.label}</span>
-													{candidate.id === modelId ? (
-														<Check size={14} aria-hidden="true" />
-													) : null}
-												</button>
-												{renderFavorite(harnessId)(
-													candidate.id,
-													candidate.label,
-												)}
-											</div>
-										);
-									})}
-									{visibleModels.length === 0 && models.length > 0 ? (
-										<p className="model-picker-status" role="status">
-											{search.trim()
-												? "No matching models"
-												: "No favorites for this provider yet"}
-										</p>
-									) : null}
-									{models.length === 0 ? (
-										<div aria-busy={catalogStatus === "loading"}>
-											<p className="model-picker-status" role="status">
-												{catalogStatus === "loading"
-													? "Fetching available models…"
-													: catalogStatus === "error"
-														? "Could not load saved models"
-														: providerConnected
-															? "No saved model list yet"
-															: "Connect this provider once to discover its models"}
-											</p>
-											{onConnect && catalogStatus !== "loading" ? (
-												<button
-													type="button"
-													className="model-picker-connect"
-													onClick={() => {
-														onConnect();
-													}}
-												>
-													{catalogStatus === "error"
-														? "Retry"
-														: providerConnected
-															? "Refresh models"
-															: "Connect provider"}
-												</button>
-											) : null}
-										</div>
-									) : null}
-								</div>
-							</>
+							<CodexSection
+								models={codexModels}
+								visibleModels={visibleModels}
+								status={codexStatus}
+								onRetry={codexRetry}
+								search={search}
+								modelId={harnessId === "codex" ? modelId : ""}
+								modelsEnabled={modelsEnabled}
+								providerConnected={providerConnected}
+								connectionContent={
+									harnessId === "codex" ? connectionContent : null
+								}
+								usage={
+									<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
+								}
+								renderFavorite={renderFavorite("codex")}
+								onSelect={(id) => {
+									if (harnessId !== "codex") onHarnessIdChange("codex");
+									chooseModel(id);
+								}}
+							/>
 						)}
 					</section>
 				</div>
 				<ModelPickerUsage windows={usageWindows} />
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+/**
+ * The Codex (ChatGPT plan) section. It is handed the plan's own list, never
+ * an API model list: a loading catalog shows skeleton rows, not other models.
+ */
+export function CodexSection({
+	models,
+	visibleModels,
+	status,
+	onRetry,
+	search,
+	modelId,
+	modelsEnabled,
+	providerConnected,
+	connectionContent,
+	usage,
+	renderFavorite,
+	onSelect,
+}: {
+	models: readonly SessionModel[];
+	visibleModels: readonly SessionModel[];
+	status: "loading" | "error" | "ready";
+	onRetry?: () => void;
+	search: string;
+	modelId: string;
+	modelsEnabled: boolean;
+	providerConnected: boolean;
+	connectionContent?: ReactNode;
+	usage?: ReactNode;
+	renderFavorite?: RenderModelFavorite;
+	onSelect: (id: string) => void;
+}) {
+	return (
+		<>
+			<div className="model-section-head">
+				<h3>Codex</h3>
+				{usage}
+			</div>
+			<p className="model-browser-caption">ChatGPT subscription</p>
+			<div className="model-picker-list">
+				{connectionContent}
+				{models.length === 0 && status === "loading" ? (
+					<ModelListSkeleton />
+				) : null}
+				{visibleModels.map((candidate) => {
+					return (
+						<div
+							className="model-picker-row"
+							key={candidate.id}
+							data-selected={candidate.id === modelId}
+						>
+							<button
+								type="button"
+								className="model-picker-option"
+								disabled={!modelsEnabled}
+								aria-pressed={candidate.id === modelId}
+								title={candidate.notice ?? candidate.label}
+								onClick={() => {
+									onSelect(candidate.id);
+								}}
+							>
+								<AgentProviderMark provider="codex" size={16} />
+								<span>{candidate.label}</span>
+								{candidate.id === modelId ? (
+									<Check size={14} aria-hidden="true" />
+								) : null}
+							</button>
+							{renderFavorite?.(candidate.id, candidate.label)}
+						</div>
+					);
+				})}
+				{visibleModels.length === 0 && models.length > 0 ? (
+					<p className="model-picker-status" role="status">
+						{search.trim()
+							? "No matching models"
+							: "No favorites for this provider yet"}
+					</p>
+				) : null}
+				{models.length === 0 ? (
+					<div aria-busy={status === "loading"}>
+						<p className="model-picker-status" role="status">
+							{status === "loading"
+								? "Fetching available models…"
+								: status === "error"
+									? "Could not load saved models"
+									: providerConnected
+										? "No saved model list yet"
+										: "Connect this provider once to discover its models"}
+						</p>
+						{onRetry && status !== "loading" ? (
+							<button
+								type="button"
+								className="model-picker-connect"
+								onClick={() => {
+									onRetry();
+								}}
+							>
+								{status === "error"
+									? "Retry"
+									: providerConnected
+										? "Refresh models"
+										: "Connect provider"}
+							</button>
+						) : null}
+					</div>
+				) : null}
+			</div>
+		</>
 	);
 }
 

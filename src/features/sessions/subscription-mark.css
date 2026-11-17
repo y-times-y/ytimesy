@@ -12,6 +12,7 @@
 }
 .subscription-mark[data-brand="claude"] {
 	background: #d97757;
+	color: #ffffff;
 }
 .subscription-mark[data-brand="grok"] {
 	background: #f2f2f2;
