@@ -485,3 +485,13 @@ background exit callbacks without the edge; redacting tokens added after
 launch (or the model proxy redacting tool results); measuring call latency
 and the object's awake time on a real box. Nothing here was run against a live
 box or VM: the tests use fakes and a local shell standing in for the VM.
+
+## Y² on a runner box, with no VM (2026-11-17, not run against a real box)
+
+Y² (the project's super agent) has no machine, so the Claude Code route used to be refused for it. With a runner box it works without one:
+
+- **Who.** Only users `claudeRunnerFor` selects (`YTIMESY_CLAUDE_RUNNER_URLS`, `_SIGNING_KEY`/`_SECRET`, `_USERS` containing the user id or `*`, and `_SESSIONS` if set must contain the Y² chat id). `claudeCodeYSquaredAvailable` (`src/server/adapters/y-mode.ts`) is the single decision for the picker flag, the send gates and failover. Without a runner: refused up front, nothing queued.
+- **Turn.** `runClaudeCodeTurnStep` takes `workspace`/`machines` as optional when `runner` and `ySquared` are set: `vm` is null, `shell`/`writeFile`/`readFile` are the box's, no reader preparation, no box tool grants, no VM-replaced check. No runner is `ClaudeRunnerRequired`. `api-turn.ts` passes `ySquared: { instructions: ySquaredInstructions() }`, no workspace, `workspaceTools: []`, no box tools, no thinking pause, and `answerOnly()` stays true (no commit/publish).
+- **Working directory and transcript.** `/var/lib/ytimesy-runner/work/<sessionId>` (`claudeRunnerSessionWorkdir`; created with `mkdir -p` before each launch), because Claude keys its session file by the working directory (`claudeCodeProjectDirectory(cwd)`). Saving and resuming use the same stores as any runner-box run (DB record + R2 upload, the `direct` store for large files; both run their commands on the box, so no VM is involved). Stop uses the box (`stopClaudeCodeTurnRun` with a null VM).
+- **Prompt and tools.** The system prompt is Y²'s instructions plus one line naming the six `mcp__ytimesy__*` tools: none of the repository, `run_code`, browser, job, canvas, `agent` or `request_project_secret` lines. `options.json` carries `builtInTools: []` (the runner script sets the SDK's `tools: []`, switching every native tool off) and `disallowedTools` = the shared list plus WebFetch, WebSearch, TodoWrite, Skill, SlashCommand, ToolSearch, plan-mode and similar. Only the MCP tools remain, and over the bridge those run at the edge (`ySquaredTools` need no machine).
+- **Failure.** A runner transport failure in a Y² turn becomes `YSquaredClaudeRunnerUnreachable` ("The Claude runner is unreachable right now; try again or pick another model for Y².", failover reason `outage`).

@@ -17,14 +17,20 @@ export const Y_SQUARED_TITLE = "Y²";
 
 /**
  * Y² has no machine, and Claude Code (the user's Claude subscription) runs the
- * `claude` CLI on one: a Y² turn is never started on that route. The picker
- * leaves those models out, and the server refuses such a send up front.
+ * `claude` CLI on one, unless the user has a Claude runner box
+ * (claude-runner.ts): there the CLI runs with no machine at all and only
+ * ytimesy's tools. Without a runner a Y² turn is never started on that route:
+ * the picker leaves those models out and the server refuses the send up front.
  */
-export const Y_SQUARED_CLAUDE_CODE_REFUSAL =
-	"Y² can't run on a Claude subscription yet. Pick a Codex, Grok or API-key model for this chat.";
+export const Y_SQUARED_CLAUDE_RUNNER_REFUSAL =
+	"Y² on a Claude subscription needs the Claude runner, which isn't enabled for your account. Pick a Codex, Grok or API-key model for this chat.";
+export const Y_SQUARED_CLAUDE_CODE_REFUSAL = Y_SQUARED_CLAUDE_RUNNER_REFUSAL;
+/** A Y² turn on Claude whose runner box cannot be reached. */
+export const Y_SQUARED_CLAUDE_RUNNER_UNREACHABLE =
+	"The Claude runner is unreachable right now; try again or pick another model for Y².";
 /** Shown in the composer when Y²'s remembered model is a Claude Code one. */
 export const Y_SQUARED_CLAUDE_CODE_NOTE =
-	"Y² runs on Codex, Grok or an API key, not a Claude subscription.";
+	"Y² on a Claude subscription needs the Claude runner, which isn't enabled for your account.";
 
 /** The models Y² may use: everything but the Claude Code routes. */
 export function withoutClaudeCodeModels<T extends { readonly id: string }>(

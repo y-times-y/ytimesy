@@ -216,3 +216,46 @@ describe("Y² model picker", () => {
 		expect(withoutClaudeCodeModels(claudeCodeListedModels())).toEqual([]);
 	});
 });
+
+describe("Y² on a Claude runner", () => {
+	it("words the refusal and the outage for the person, never as a bug", async () => {
+		const {
+			apiTurnFailureMessage,
+			ClaudeRunnerRequired,
+			YSquaredClaudeRunnerUnreachable,
+		} = await import("./api-turn-failure");
+		const { failoverReason } = await import("./model-failover-reason");
+		const { ClaudeRunnerTransportFailure } = await import("./api-turn-failure");
+		expect(new ClaudeRunnerRequired().message).toBe(
+			"Y² on a Claude subscription needs the Claude runner, which isn't enabled for your account. Pick a Codex, Grok or API-key model for this chat.",
+		);
+		const down = new YSquaredClaudeRunnerUnreachable();
+		expect(down.message).toBe(
+			"The Claude runner is unreachable right now; try again or pick another model for Y².",
+		);
+		expect(apiTurnFailureMessage("model", down)).toBe(down.message);
+		expect(
+			apiTurnFailureMessage("model", new ClaudeRunnerRequired()),
+		).toContain("needs the Claude runner");
+		expect(failoverReason(down)).toBe("outage");
+		expect(failoverReason(new ClaudeRunnerRequired())).toBeNull();
+		// A bare transport failure keeps its own (non-Y²) wording.
+		expect(
+			apiTurnFailureMessage(
+				"model",
+				new ClaudeRunnerTransportFailure("exec", "network"),
+			),
+		).toContain("outcome is unknown");
+	});
+
+	it("gives each chat its own runner directory and refuses a path-like id", async () => {
+		const { claudeRunnerSessionWorkdir, CLAUDE_RUNNER_WORKDIR } = await import(
+			"./claude-runner"
+		);
+		const id = "11111111-1111-4111-8111-111111111111";
+		expect(claudeRunnerSessionWorkdir(id)).toBe(
+			`${CLAUDE_RUNNER_WORKDIR}/${id}`,
+		);
+		expect(() => claudeRunnerSessionWorkdir("../etc")).toThrow();
+	});
+});

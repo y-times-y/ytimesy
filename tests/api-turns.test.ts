@@ -1736,7 +1736,7 @@ it("never queues a Claude Code turn for Y², and leaves other routes alone", asy
 			items: [],
 		});
 	await expect(claude(ySquaredId)).rejects.toThrow(
-		"Y² can't run on a Claude subscription yet. Pick a Codex, Grok or API-key model for this chat.",
+		"Y² on a Claude subscription needs the Claude runner, which isn't enabled for your account. Pick a Codex, Grok or API-key model for this chat.",
 	);
 	const turns = async () =>
 		(await query("select count(*)::int as n from api_turn")).rows[0];
@@ -1752,6 +1752,29 @@ it("never queues a Claude Code turn for Y², and leaves other routes alone", asy
 	await submit("alice", ySquaredId);
 	await claude(sessionId);
 	expect(await turns()).toEqual({ n: 2 });
+	// With a Claude runner for this user, Y² may queue a Claude Code turn.
+	await db.exec("delete from api_turn");
+	await db.query("update agent_session set turn_status='idle' where id=$1", [
+		ySquaredId,
+	]);
+	const saved = { ...process.env };
+	process.env.YTIMESY_CLAUDE_RUNNER_URLS = "https://runner.example";
+	process.env.YTIMESY_CLAUDE_RUNNER_SIGNING_KEY = "A".repeat(64);
+	process.env.YTIMESY_CLAUDE_RUNNER_USERS = "alice";
+	delete process.env.YTIMESY_CLAUDE_RUNNER_SESSIONS;
+	try {
+		await claude(ySquaredId);
+		expect(await turns()).toEqual({ n: 1 });
+	} finally {
+		for (const key of [
+			"YTIMESY_CLAUDE_RUNNER_URLS",
+			"YTIMESY_CLAUDE_RUNNER_SIGNING_KEY",
+			"YTIMESY_CLAUDE_RUNNER_USERS",
+		] as const) {
+			if (saved[key] === undefined) delete process.env[key];
+			else process.env[key] = saved[key];
+		}
+	}
 	await db.exec(
 		"update agent_session set project_id=null; delete from project",
 	);

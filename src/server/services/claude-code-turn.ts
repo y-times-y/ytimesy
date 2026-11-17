@@ -1,11 +1,15 @@
 import type { ModelMessage, ToolSet } from "ai";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
-import { ClaudeCodeRunFailure } from "#/domain/api-turn-failure";
+import {
+	ClaudeCodeRunFailure,
+	ClaudeRunnerRequired,
+} from "#/domain/api-turn-failure";
 import type { ClaudeCodePlanStep } from "#/domain/claude-code-stream";
 import {
 	CLAUDE_RUNNER_FULL_SHARE,
 	CLAUDE_RUNNER_WORKDIR,
 	type ClaudeRunnerBox,
+	claudeRunnerSessionWorkdir,
 } from "#/domain/claude-runner";
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
 import type { LeanToolShape } from "#/domain/harness-model-profile";
@@ -92,9 +96,19 @@ export async function runClaudeCodeTurnStep(input: {
 	/** The reasoning effort the user chose; the model's own default when absent. */
 	readonly effort?: string;
 	readonly agentRole: SubagentRole | null | undefined;
-	readonly workspace: () => Promise<AgentToolWorkspace>;
+	/**
+	 * The chat's machine; absent only for Y² (`ySquared`), which has none and
+	 * so runs on a runner box alone.
+	 */
+	readonly workspace?: () => Promise<AgentToolWorkspace>;
 	/** The machines before the session's scoping, to run as the default user. */
-	readonly machines: WorkspaceMachines;
+	readonly machines?: WorkspaceMachines;
+	/**
+	 * Y²: no machine, only ytimesy's tools, this system prompt. Needs `runner`
+	 * (a missing one is ClaudeRunnerRequired); the run's working directory is
+	 * its own on the box.
+	 */
+	readonly ySquared?: { readonly instructions: string };
 	readonly messages: readonly ModelMessage[];
 	readonly tools: ToolSet;
 	readonly deadline: number;
@@ -146,6 +160,11 @@ export async function runClaudeCodeTurnStep(input: {
 		};
 	};
 }): Promise<ClaudeCodeStepResult> {
+	const { workspace, machines, ySquared } = input;
+	// No machine: only a runner box can host the CLI, and only Y² has none.
+	if (!workspace && !input.runner) throw new ClaudeRunnerRequired();
+	if (!workspace && !ySquared)
+		throw new Error("A Claude Code turn without a workspace must be Y².");
 	const edge = gitProxyConfiguration();
 	if (!edge)
 		throw new ClaudeCodeRunFailure(
@@ -159,12 +178,22 @@ export async function runClaudeCodeTurnStep(input: {
 			if (token) input.addRedaction(token);
 		});
 	const [ready, definitions] = await Promise.all([
-		input.workspace(),
+		workspace?.() ?? Promise.resolve(null),
 		mcpToolDefinitions(input.tools),
 		redactingToken,
 	]);
-	const vm = ready.vm;
-	const { machines } = input;
+	const vm = ready?.vm ?? null;
+	// Without a machine the CLI runs in its own directory on the box.
+	const cwd = ready
+		? input.runner
+			? CLAUDE_RUNNER_WORKDIR
+			: ready.cwd
+		: claudeRunnerSessionWorkdir(input.sessionId);
+	const vmHost = () => {
+		if (!ready || !machines)
+			throw new Error("This turn has no workspace machine.");
+		return { ready, machines };
+	};
 	const box = input.runner ? claudeRunnerMachine(input.runner.box) : null;
 	const boxTools = input.runner?.boxTools;
 	// The chat's VM was replaced: the identity names the lost one. Deleting it
@@ -172,6 +201,8 @@ export async function runClaudeCodeTurnStep(input: {
 	// minted for this VM (a later step of the turn) is kept; unknown is deleted.
 	if (
 		boxTools &&
+		ready &&
+		machines &&
 		ready.replacedFrom !== undefined &&
 		boxToolGrantVms.get(input.turnId) !== vm
 	) {
@@ -198,7 +229,12 @@ export async function runClaudeCodeTurnStep(input: {
 			shell:
 				box?.shell ??
 				(async (command, timeoutMs) => {
-					const result = await machines.exec(vm, command, timeoutMs);
+					const host = vmHost();
+					const result = await host.machines.exec(
+						host.ready.vm,
+						command,
+						timeoutMs,
+					);
 					return {
 						exitCode: result.exitCode,
 						stdout: result.stdout,
@@ -207,9 +243,17 @@ export async function runClaudeCodeTurnStep(input: {
 				}),
 			writeFile:
 				box?.writeFile ??
-				((path, contents) => machines.writeTextFile(vm, path, contents)),
-			readFile: box?.readFile ?? ((path) => machines.readTextFile(vm, path)),
-			cwd: input.runner ? CLAUDE_RUNNER_WORKDIR : ready.cwd,
+				((path, contents) => {
+					const host = vmHost();
+					return host.machines.writeTextFile(host.ready.vm, path, contents);
+				}),
+			readFile:
+				box?.readFile ??
+				((path) => {
+					const host = vmHost();
+					return host.machines.readTextFile(host.ready.vm, path);
+				}),
+			cwd,
 			...(input.runner
 				? {
 						beforeLaunch: async () => {
@@ -220,18 +264,30 @@ export async function runClaudeCodeTurnStep(input: {
 								throw new ClaudeCodeRunFailure(
 									"its runner is full (the disk is almost out of space), so it did not start.",
 								);
+							// Its own directory: Claude keys the session file by it.
+							if (!ready) {
+								const made = await (box as NonNullable<typeof box>).shell(
+									`mkdir -p -- '${cwd}'`,
+									30_000,
+								);
+								if (made.exitCode !== 0)
+									throw new ClaudeCodeRunFailure(
+										"its runner could not create the chat's working directory.",
+									);
+							}
 						},
 					}
 				: {}),
 			...(input.runner
 				? {
 						remote: {
-							repository: ready.cwd,
+							repository: ready?.cwd ?? cwd,
 							workspaceTools: input.runner.workspaceTools,
 						},
 					}
 				: {}),
-			...(boxTools
+			...(ySquared ? { ySquared } : {}),
+			...(boxTools && ready && machines
 				? {
 						boxTools: {
 							tools: boxTools.tools,
@@ -241,7 +297,7 @@ export async function runClaudeCodeTurnStep(input: {
 								if (!(await boxTools.eligible())) return null;
 								const grant = await grantClaudeBoxTools({
 									machines,
-									vm,
+									vm: ready.vm,
 									store: boxTools.store,
 									redactOnVm: boxTools.redactOnVm,
 								});
@@ -250,7 +306,7 @@ export async function runClaudeCodeTurnStep(input: {
 									// The box serves the lean tools itself: their helper
 									// commands go on the VM now, as the edge's tools would.
 									await ensureLeanHelpers(
-										{ machines, vm },
+										{ machines, vm: ready.vm },
 										input.sessionId,
 									).catch(() => undefined);
 								}
@@ -270,9 +326,13 @@ export async function runClaudeCodeTurnStep(input: {
 			grantSecret: edge.secret,
 			reader,
 			// The session's reader machines isolate the reader on first use.
-			prepareReader: async () => {
-				await ready.machines.exec(ready.vm, "true", 30_000);
-			},
+			...(ready
+				? {
+						prepareReader: async () => {
+							await ready.machines.exec(ready.vm, "true", 30_000);
+						},
+					}
+				: {}),
 			deadline: input.deadline,
 			signal: input.signal,
 			redact: input.redact,

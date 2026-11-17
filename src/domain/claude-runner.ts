@@ -72,6 +72,39 @@ export const CLAUDE_RUNNER_DISALLOWED_TOOLS = [
 	"ClaudeDesign",
 ] as const;
 
+/**
+ * Y² has no machine: its Claude run may use only ytimesy's MCP tools. The
+ * native tools are switched off entirely (options `tools: []`); this list
+ * repeats that by name, adding the ones the shared list leaves on (web,
+ * todo, skills, plan mode), so a CLI that ignores `tools` still has none.
+ */
+export const CLAUDE_RUNNER_Y_SQUARED_DISALLOWED_TOOLS = [
+	...CLAUDE_RUNNER_DISALLOWED_TOOLS,
+	"WebFetch",
+	"WebSearch",
+	"TodoWrite",
+	"Skill",
+	"SlashCommand",
+	"ToolSearch",
+	"EnterPlanMode",
+	"ExitPlanMode",
+	"NotebookRead",
+	"BashOutput",
+	"Monitor",
+] as const;
+
+/**
+ * The working directory of a machine-less (Y²) run on a runner box: one per
+ * chat, because Claude keeps its session file under a directory named from
+ * the working directory. A shared one would put every Y² chat's session in
+ * one project directory.
+ */
+export function claudeRunnerSessionWorkdir(sessionId: string) {
+	if (!/^[A-Za-z0-9-]{8,64}$/.test(sessionId))
+		throw new Error("Invalid session id for a runner working directory.");
+	return `${CLAUDE_RUNNER_WORKDIR}/${sessionId}`;
+}
+
 function sessionHash(sessionId: string) {
 	let hash = 2166136261;
 	for (const char of sessionId) {
