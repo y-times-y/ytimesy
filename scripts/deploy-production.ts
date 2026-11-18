@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -78,7 +78,11 @@ if (!preflightOnly && !process.argv.includes("--confirm-production"))
 const allowUnverifiedSource = process.argv.includes(
 	"--allow-unverified-source",
 );
-if (!preflightOnly && !allowUnverifiedSource) {
+if (
+	!preflightOnly &&
+	!allowUnverifiedSource &&
+	!process.env.YTIMESY_OVERLAY_APPLIED
+) {
 	const read = (...args: string[]) =>
 		execFileSync("git", args, { encoding: "utf8" });
 	execFileSync("git", ["fetch", "--quiet", "origin", "main"]);
@@ -93,29 +97,37 @@ if (!preflightOnly && !allowUnverifiedSource) {
 // The public repository carries placeholders where the owner's real account,
 // database and project identifiers are. A private patch (never committed;
 // default ~/.ytimesy-private/production-overlay.patch, or the path in
-// YTIMESY_PRODUCTION_OVERLAY) puts them back for this deploy only, after the
-// source checks above, and is reversed when the deploy ends.
-{
-	const overlay =
-		process.env.YTIMESY_PRODUCTION_OVERLAY ||
-		join(
-			process.env.HOME ?? "",
-			".ytimesy-private",
-			"production-overlay.patch",
-		);
-	if (existsSync(overlay)) {
-		execFileSync("git", ["apply", overlay]);
-		console.log("Applied the private production overlay for this deploy.");
-		process.on("exit", () => {
-			try {
-				execFileSync("git", ["apply", "-R", overlay]);
-			} catch {
-				console.error(
-					`Could not reverse the private overlay; run: git apply -R ${overlay}`,
-				);
-			}
-		});
+// YTIMESY_PRODUCTION_OVERLAY) puts them back for this deploy only. It is
+// applied after the source checks above, then this script runs again from the
+// patched files (its constants are read at load) and the patch is reversed
+// when that run ends.
+const overlay =
+	process.env.YTIMESY_PRODUCTION_OVERLAY ||
+	join(process.env.HOME ?? "", ".ytimesy-private", "production-overlay.patch");
+if (!process.env.YTIMESY_OVERLAY_APPLIED && existsSync(overlay)) {
+	execFileSync("git", ["apply", overlay]);
+	console.log("Applied the private production overlay for this deploy.");
+	let status = 1;
+	try {
+		status =
+			spawnSync(
+				process.execPath,
+				[...process.execArgv, ...process.argv.slice(1)],
+				{
+					stdio: "inherit",
+					env: { ...process.env, YTIMESY_OVERLAY_APPLIED: "1" },
+				},
+			).status ?? 1;
+	} finally {
+		try {
+			execFileSync("git", ["apply", "-R", overlay]);
+		} catch {
+			console.error(
+				`Could not reverse the private overlay; run: git apply -R ${overlay}`,
+			);
+		}
 	}
+	process.exit(status);
 }
 
 const required = [
