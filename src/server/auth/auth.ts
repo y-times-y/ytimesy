@@ -206,20 +206,9 @@ export function authOptions() {
 			// is single-use, short-lived and limited to a few attempts. Links
 			// sent before the code flow still work and sign in the same way.
 			autoSignInAfterVerification: true,
-			sendVerificationEmail: async ({
-				user,
-				url,
-			}: {
-				user: { email: string };
-				url: string;
-			}) => {
-				await persistAuthEmail({
-					to: user.email,
-					subject: "Verify your ytimesy email",
-					purpose: "verify-email",
-					actionUrl: url,
-				});
-			},
+			// No sendVerificationEmail here: the email-otp plugin supplies it
+			// (overrideDefaultEmailVerification) and sends the code. Defining
+			// one here wins over the plugin and sends a link again.
 		},
 		socialProviders: {
 			github: {

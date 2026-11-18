@@ -26,4 +26,9 @@ it("signs in from a verification link, never after sign-up, and ends sessions on
 	expect(options.plugins.map((plugin: { id: string }) => plugin.id)).toContain(
 		"email-otp",
 	);
+	// A link sender here would override the plugin's code sender.
+	expect(
+		(options.emailVerification as { sendVerificationEmail?: unknown })
+			.sendVerificationEmail,
+	).toBeUndefined();
 });
