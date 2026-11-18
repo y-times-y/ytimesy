@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowDownToLine, Check, Sparkles } from "lucide-react";
+import { BrainCircuit, Check, SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import type { FirstRunState } from "#/domain/first-run";
@@ -42,8 +42,9 @@ const COPY: Record<
 
 const STEP_ICON: Record<SetupStepId, React.ReactNode> = {
 	github: <GithubMark size={16} />,
-	model: <Sparkles size={16} strokeWidth={1.8} />,
-	sessions: <ArrowDownToLine size={16} strokeWidth={1.8} />,
+	model: <BrainCircuit size={17} strokeWidth={1.7} />,
+	// A local agent's terminal session.
+	sessions: <SquareTerminal size={17} strokeWidth={1.7} />,
 };
 
 /**
