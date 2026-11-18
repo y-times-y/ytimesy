@@ -51,7 +51,7 @@ vi.mock("../auth/client", () => ({
 }));
 
 import { setupProgress } from "#/domain/setup-steps";
-import { SetupChecklistView } from "./setup-checklist";
+import { SetupChecklistBar, SetupChecklistView } from "./setup-checklist";
 
 function render(options: {
 	githubConnected?: boolean;
@@ -93,7 +93,7 @@ function render(options: {
 it("starts with three steps, each with its own icon, and the way to hide it", () => {
 	const html = render({});
 	expect(html).toContain("Get set up");
-	expect(html).toContain("Step 1 of 3");
+	expect(html).toContain("Step 1 of 2");
 	for (const title of [
 		"Connect GitHub",
 		"Choose a model",
@@ -103,7 +103,7 @@ it("starts with three steps, each with its own icon, and the way to hide it", ()
 	expect(html).toContain("Optional");
 	expect(html).toContain(">Hide<");
 	expect(html).toContain('aria-valuenow="0"');
-	expect(html).toContain('aria-valuemax="3"');
+	expect(html).toContain('aria-valuemax="2"');
 	// The first step is the current one; the rest wait.
 	expect(html.match(/data-status="current"/g)).toHaveLength(1);
 	expect(html.match(/data-status="todo"/g)).toHaveLength(2);
@@ -111,21 +111,19 @@ it("starts with three steps, each with its own icon, and the way to hide it", ()
 	expect(html).toContain(">Connect<");
 	expect(html).toContain(">Choose<");
 	expect(html).toContain(">Import<");
+	// The optional import can be skipped without opening it.
+	expect(html).toContain(">Skip<");
 });
 
 it("shows finished steps as checked and counts what is left", () => {
-	const html = render({
-		githubConnected: true,
-		repositoryCount: 2,
-		modelReady: true,
-	});
-	expect(html).toContain('aria-valuenow="2"');
+	const html = render({ githubConnected: true, repositoryCount: 2 });
+	expect(html).toContain('aria-valuenow="1"');
 	expect(html).toContain("1 to go.");
-	expect(html).toContain("Step 3 of 3");
-	expect(html.match(/data-status="done"/g)).toHaveLength(2);
+	expect(html).toContain("Step 2 of 2");
 	expect(html).toContain("Connected");
-	expect(html).toContain("Ready");
+	expect(html.match(/data-status="done"/g)).toHaveLength(1);
 	expect(html).not.toContain(">Connect<");
+	expect(html).toContain(">Choose<");
 	expect(html).toContain(">Import<");
 });
 
@@ -152,7 +150,8 @@ it("keeps a skipped import out of the way", () => {
 		modelReady: true,
 		sessionsSkipped: true,
 	});
-	expect(html).toContain('aria-valuenow="3"');
+	expect(html).toContain('aria-valuenow="2"');
+	expect(html).not.toContain(">Skip<");
 });
 
 it("offers ChatGPT, Claude and Grok subscriptions and an API key when they are on", () => {
@@ -182,4 +181,19 @@ it("leaves Claude and Grok out while their switches are off", () => {
 	expect(html).toContain("ChatGPT subscription");
 	expect(html).not.toContain("Claude subscription");
 	expect(html).not.toContain("Grok subscription");
+});
+
+it("folds into one line that says what is left and can be opened again", () => {
+	const progress = setupProgress({
+		state: { githubConnected: true, modelReady: false },
+		repositoryCount: 1,
+		sessionsSkipped: false,
+	});
+	const html = renderToStaticMarkup(
+		<SetupChecklistBar progress={progress} onShow={() => {}} />,
+	);
+	expect(html).toContain("Finish setup");
+	expect(html).toContain("1 of 2 done");
+	expect(html).toContain('aria-label="Show the setup steps"');
+	expect(html).toContain('aria-valuenow="1"');
 });

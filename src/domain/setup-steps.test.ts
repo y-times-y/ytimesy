@@ -4,7 +4,7 @@ import { setupProgress } from "./setup-steps";
 const none = { githubConnected: false, modelReady: false };
 
 describe("setupProgress", () => {
-	it("starts at GitHub", () => {
+	it("starts at GitHub, with two required steps", () => {
 		const p = setupProgress({
 			state: none,
 			repositoryCount: null,
@@ -12,6 +12,7 @@ describe("setupProgress", () => {
 		});
 		expect(p.current).toBe("github");
 		expect(p.settled).toBe(0);
+		expect(p.total).toBe(2);
 		expect(p.steps.map((s) => s.status)).toEqual(["current", "todo", "todo"]);
 	});
 	it("needs the app on a repository, not just a GitHub sign-in", () => {
@@ -36,25 +37,34 @@ describe("setupProgress", () => {
 			sessionsSkipped: false,
 		});
 		expect(p.steps.map((s) => s.status)).toEqual(["current", "done", "todo"]);
+		expect(p.settled).toBe(1);
 	});
-	it("skipping the optional import completes setup", () => {
-		const p = setupProgress({
-			state: { githubConnected: true, modelReady: true },
-			repositoryCount: 1,
-			sessionsSkipped: true,
-		});
-		expect(p.complete).toBe(true);
-		expect(p.current).toBeNull();
-		expect(p.steps[2]).toMatchObject({ status: "skipped", optional: true });
-		expect(p.settled).toBe(3);
-	});
-	it("is not complete until the import is decided", () => {
+	it("is complete once GitHub and a model are done, without importing or skipping", () => {
 		const p = setupProgress({
 			state: { githubConnected: true, modelReady: true },
 			repositoryCount: 1,
 			sessionsSkipped: false,
 		});
+		expect(p.complete).toBe(true);
+		expect(p.settled).toBe(2);
+		expect(p.total).toBe(2);
+	});
+	it("shows a skipped import as skipped and never counts it", () => {
+		const p = setupProgress({
+			state: { githubConnected: true, modelReady: false },
+			repositoryCount: 1,
+			sessionsSkipped: true,
+		});
+		expect(p.steps[2]).toMatchObject({ status: "skipped", optional: true });
+		expect(p.settled).toBe(1);
 		expect(p.complete).toBe(false);
-		expect(p.current).toBe("sessions");
+	});
+	it("skipping the import never completes setup on its own", () => {
+		const p = setupProgress({
+			state: none,
+			repositoryCount: null,
+			sessionsSkipped: true,
+		});
+		expect(p.complete).toBe(false);
 	});
 });

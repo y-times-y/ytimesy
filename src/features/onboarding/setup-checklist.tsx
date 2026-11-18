@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { BrainCircuit, Check, SquareTerminal } from "lucide-react";
+import { BrainCircuit, Check, ChevronUp, SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import type { FirstRunState } from "#/domain/first-run";
@@ -126,7 +126,7 @@ export function SetupChecklist() {
 	useEffect(() => {
 		if (userId) setPrefs(readSetupPrefs(window.localStorage, userId));
 	}, [userId]);
-	if (!userId || !prefs || !state.data || prefs.hidden) return null;
+	if (!userId || !prefs || !state.data) return null;
 
 	const data: FirstRunState = state.data;
 	const progress = setupProgress({
@@ -142,6 +142,14 @@ export function SetupChecklist() {
 		setPrefs(next);
 		if (userId) writeSetupPrefs(window.localStorage, userId, next);
 	}
+	// Hiding folds the card into one line instead of losing it for good.
+	if (prefs.hidden)
+		return (
+			<SetupChecklistBar
+				progress={progress}
+				onShow={() => update({ ...prefs, hidden: false })}
+			/>
+		);
 	return (
 		<SetupChecklistView
 			progress={progress}
@@ -185,8 +193,8 @@ export function SetupChecklistView({
 	onModelDone: () => void;
 	onSessionsDone: () => void;
 }) {
-	const percent = Math.round((progress.settled / progress.steps.length) * 100);
-	const stepNumber = Math.min(progress.settled + 1, progress.steps.length);
+	const percent = Math.round((progress.settled / progress.total) * 100);
+	const stepNumber = Math.min(progress.settled + 1, progress.total);
 	return (
 		<section
 			aria-labelledby="setup-title"
@@ -195,7 +203,7 @@ export function SetupChecklistView({
 			<div className="flex items-start gap-4 px-6 pt-5 pb-4">
 				<div className="min-w-0">
 					<p className="mb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
-						Step {stepNumber} of {progress.steps.length}
+						Step {stepNumber} of {progress.total}
 					</p>
 					<h2
 						id="setup-title"
@@ -206,7 +214,7 @@ export function SetupChecklistView({
 					<p className="mt-0.5 text-muted-foreground">
 						{progress.settled === 0
 							? "A few quick steps. You can type your request now."
-							: `${progress.steps.length - progress.settled} to go.`}
+							: `${progress.total - progress.settled} to go.`}
 					</p>
 				</div>
 				<Button
@@ -222,7 +230,7 @@ export function SetupChecklistView({
 			<div
 				role="progressbar"
 				aria-valuemin={0}
-				aria-valuemax={progress.steps.length}
+				aria-valuemax={progress.total}
 				aria-valuenow={progress.settled}
 				aria-label="Setup progress"
 				className="mx-6 h-1 overflow-hidden rounded-full bg-foreground/10"
@@ -267,7 +275,29 @@ export function SetupChecklistView({
 									</p>
 									<p className="mt-0.5 text-muted-foreground">{note}</p>
 								</div>
-								{step.status === "current" || step.status === "todo" ? (
+								{step.optional &&
+								(step.status === "current" || step.status === "todo") ? (
+									<div className="flex items-center gap-1.5">
+										<Button
+											type="button"
+											size="lg"
+											variant="ghost"
+											className="text-muted-foreground"
+											onClick={onSessionsDone}
+										>
+											Skip
+										</Button>
+										<Button
+											type="button"
+											size="lg"
+											variant="outline"
+											aria-expanded={expanded}
+											onClick={() => onToggle(step.id)}
+										>
+											{copy.action}
+										</Button>
+									</div>
+								) : step.status === "current" || step.status === "todo" ? (
 									<Button
 										type="button"
 										size="lg"
@@ -306,5 +336,46 @@ export function SetupChecklistView({
 				})}
 			</ol>
 		</section>
+	);
+}
+
+/** The card folded into one line: what is left, and a way to open it again. */
+export function SetupChecklistBar({
+	progress,
+	onShow,
+}: {
+	progress: SetupProgress;
+	onShow: () => void;
+}) {
+	const percent = Math.round((progress.settled / progress.total) * 100);
+	return (
+		<button
+			type="button"
+			onClick={onShow}
+			aria-label="Show the setup steps"
+			className="group mx-auto mb-3 flex w-full max-w-[44rem] items-center gap-3 rounded-xl bg-card px-4 py-2.5 text-left text-[0.8125rem] text-card-foreground shadow-md shadow-black/20 ring-1 ring-foreground/10 transition-colors hover:bg-foreground/[0.04]"
+		>
+			<span className="font-medium">Finish setup</span>
+			<span className="text-muted-foreground">
+				{progress.settled} of {progress.total} done
+			</span>
+			<span
+				role="progressbar"
+				aria-valuemin={0}
+				aria-valuemax={progress.total}
+				aria-valuenow={progress.settled}
+				aria-label="Setup progress"
+				className="ml-auto hidden h-1 w-24 overflow-hidden rounded-full bg-foreground/10 sm:block"
+			>
+				<span
+					className="block h-full rounded-full bg-primary"
+					style={{ width: `${percent}%` }}
+				/>
+			</span>
+			<ChevronUp
+				size={15}
+				className="text-muted-foreground transition-transform group-hover:text-foreground"
+			/>
+		</button>
 	);
 }
