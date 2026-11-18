@@ -31,6 +31,7 @@ import {
 import { Wordmark } from "#/components/brand/wordmark";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { titleWithShortcut } from "#/domain/keyboard-shortcuts";
+import { machineSpecText } from "#/domain/machine-size";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
 import {
@@ -875,6 +876,9 @@ export function ProjectSidebar({
 						status: label,
 						model: chat.listedModelId ?? null,
 						cloud: Boolean(chat.workspaceId),
+						machine: chat.workspaceId
+							? machineSpecText(project.machineSize)
+							: null,
 						pullRequest: chat.pr ?? null,
 					}}
 					onOpenPullRequest={

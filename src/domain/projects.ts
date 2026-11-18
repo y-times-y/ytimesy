@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { MachineSizeId } from "./machine-size";
 export const projectSelection = z.object({
 	installationId: z.number().int().positive().safe(),
 	repositoryId: z.number().int().positive().safe(),
@@ -37,6 +38,8 @@ export interface RepositoryChoice {
 	private?: boolean;
 }
 export interface Project {
+	/** The project's machine size; absent (older rows, tests) means the default. */
+	readonly machineSize?: MachineSizeId | null;
 	id: string;
 	name?: string;
 	repositories?: ProjectRepository[];

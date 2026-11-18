@@ -24,6 +24,8 @@ export type ThreadCardData = {
 	readonly model: string | null;
 	/** Has a cloud workspace; the row holds nothing more about a machine. */
 	readonly cloud: boolean;
+	/** The project's machine in words (size, vCPU, RAM, disk); null when unknown. */
+	readonly machine?: string | null;
 	/** The row's pull request (the sidebar holds its number, state and checks only). */
 	readonly pullRequest: SidebarPullRequest | null;
 };
@@ -96,6 +98,9 @@ export function ThreadHoverCard({
 								<dd>
 									<Cloud size={12} strokeWidth={1.75} aria-hidden="true" />{" "}
 									Cloud
+									{data.machine ? (
+										<span className="thread-card-machine">{data.machine}</span>
+									) : null}
 								</dd>
 							</>
 						) : null}

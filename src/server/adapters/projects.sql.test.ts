@@ -11,7 +11,7 @@ beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create table project(id uuid primary key, user_id text not null,
 	 repository_id bigint not null, installation_id bigint not null, full_name text not null,
-	 branch text not null, name text, repository_set_key text not null default '',
+	 branch text not null, name text, machine_size text, repository_set_key text not null default '',
 	 archived_at timestamptz, created_at timestamptz default now(),
 	 unique(user_id,repository_id,repository_set_key));
 	 create table project_repository(project_id uuid, repository_id bigint, installation_id bigint,
@@ -57,4 +57,12 @@ it("does not touch another user's project with the same repository", async () =>
 	await saveProject("other", repo(10, "web") as never, "main");
 	expect(await listProjects("u")).toEqual([]);
 	void randomUUID;
+});
+
+it("lists each project's machine size for the thread hover card", async () => {
+	const saved = await saveProject("u", repo(10, "web") as never, "main");
+	await db.query("update project set machine_size='small' where id=$1", [
+		saved.id,
+	]);
+	expect((await listProjects("u"))[0]?.machineSize).toBe("small");
 });

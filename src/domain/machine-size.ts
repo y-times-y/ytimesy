@@ -61,3 +61,9 @@ export function effectiveMachineResources(
 		storage: Math.max(current.storage, requested.storage),
 	};
 }
+
+/** "Large · 4 vCPU · 16 GiB RAM · 32 GiB disk": a machine size in words, for a hover card. */
+export function machineSpecText(id?: MachineSizeId | null) {
+	const size = machineSize(id ?? DEFAULT_MACHINE_SIZE);
+	return `${size.name} · ${size.cpu} vCPU · ${size.memory / 1024} GiB RAM · ${size.storage / 1024} GiB disk`;
+}

@@ -5,6 +5,7 @@ import {
 	MACHINE_SIZES,
 	machineSize,
 	machineSizeId,
+	machineSpecText,
 } from "./machine-size";
 
 describe("machine sizes", () => {
@@ -55,4 +56,15 @@ describe("machine sizes", () => {
 			),
 		).toEqual({ cpu: 8, memory: 16384, storage: 65536 });
 	});
+});
+
+it("says a machine size in words, the default when none is set", () => {
+	expect(machineSpecText("small")).toBe(
+		"Small · 2 vCPU · 4 GiB RAM · 16 GiB disk",
+	);
+	expect(machineSpecText("extra-large")).toBe(
+		"Ultra · 8 vCPU · 16 GiB RAM · 64 GiB disk",
+	);
+	expect(machineSpecText()).toBe("Large · 4 vCPU · 16 GiB RAM · 32 GiB disk");
+	expect(machineSpecText(null)).toBe(machineSpecText("large"));
 });

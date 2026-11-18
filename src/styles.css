@@ -6226,6 +6226,12 @@ details.environment-build[open] > summary .session-activity-chevron {
 .thread-card-pr[data-pr="merged"] svg {
 	color: #a371f7;
 }
+.thread-card-machine {
+	display: block;
+	margin-top: 2px;
+	color: var(--list-text-muted);
+	font-size: 11px;
+}
 .thread-card-pr-state {
 	margin-left: auto;
 	color: var(--list-text-muted);
