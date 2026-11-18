@@ -37,10 +37,6 @@ import {
 } from "#/domain/child-task-activity";
 import { isClaudeCodeRoute } from "#/domain/claude-code-route";
 import {
-	type ComposerDelivery,
-	deliveryForSend,
-} from "#/domain/composer-delivery";
-import {
 	composerDraftKey,
 	createDraftSaver,
 	type DraftSaver,
@@ -156,10 +152,6 @@ import {
 } from "./attachment-tile";
 import { chatSideKeys } from "./chat-side-queries";
 import { getClaudeSubscription } from "./claude-subscription.fn";
-import {
-	ComposerDeliveryToggle,
-	useComposerDelivery,
-} from "./composer-delivery";
 import { ContextUsage } from "./context-usage";
 import {
 	ConversationRecovery,
@@ -191,7 +183,7 @@ import { SessionTimeline } from "./session-timeline";
 import { SideChatFrame, useSideChat } from "./side-chat-panel";
 import { SlashCommandPalette } from "./slash-command-palette";
 import { useStableCallback } from "./stable-callbacks";
-import { enterSubmits, TaskInput } from "./task-input";
+import { TaskInput } from "./task-input";
 import {
 	useCodexCatalog,
 	useRecheckCodexCatalogOnUnavailable,
@@ -327,8 +319,6 @@ export function SessionLauncher({
 			readonly attachments?: readonly IncomingAttachment[];
 			/** The branch a new chat starts from, when the person picked one. */
 			readonly baseBranch?: string;
-			/** During a run: "steer" is read at its next step; absent queues. */
-			readonly delivery?: ComposerDelivery;
 		},
 	) => Promise<ComposerSendResult> | undefined;
 	onConnect: () => void;
@@ -776,10 +766,6 @@ export function SessionLauncher({
 	// the commit) instead of Stop.
 	const stoppable =
 		turnStatus === "running" && !turnSavingChanges(items, turnStatus);
-	// While a turn runs the person chooses how a message reaches it (Queue or
-	// Steer); remembered on this device.
-	const [chosenDelivery, chooseDelivery] = useComposerDelivery();
-	const deliveryChoice = !side && stoppable;
 	// No reload onto a new deploy mid-send or while this chat's turn streams.
 	useHoldNewBuildReload("send", busy);
 	useHoldNewBuildReload("turn", turnStatus === "running");
@@ -1191,12 +1177,7 @@ export function SessionLauncher({
 		return () => clearTimeout(timer);
 	}, [autoSendWaiting]);
 
-	function sendText(
-		typed: string,
-		continueOn?: string,
-		messageId?: string,
-		steerNow = false,
-	) {
+	function sendText(typed: string, continueOn?: string, messageId?: string) {
 		const text = sendableDraft(typed);
 		const projectNotice = text
 			? composerProjectNotice({ selectedProjectId: selectedProject?.id })
@@ -1212,11 +1193,6 @@ export function SessionLauncher({
 		}
 		if (!composerCanSend(text, false) || attachmentError) return;
 		const files = attachments;
-		const delivery = deliveryForSend({
-			chosen: chosenDelivery,
-			turnRunning: deliveryChoice,
-			modifier: steerNow,
-		});
 		captureAnalytics("prompt_submitted", {
 			runtime: harnessId,
 			attempts: 1,
@@ -1235,9 +1211,6 @@ export function SessionLauncher({
 				text,
 				// Sent during a run, it waits for the turn to end.
 				...(turnStatus === "running" ? { queued: true as const } : {}),
-				...(turnStatus === "running" && delivery === "steer"
-					? { released: true as const }
-					: {}),
 				...(files.length
 					? {
 							attachments: files.map((file) => {
@@ -1276,7 +1249,6 @@ export function SessionLauncher({
 					alternateContext && Boolean(selectedModel?.contextWindow),
 				...(continueOn ? { continueOn } : {}),
 				userMessageId,
-				...(delivery === "steer" ? { delivery } : {}),
 				...(encoded.length ? { attachments: encoded } : {}),
 				...(startBranch ? { baseBranch: startBranch } : {}),
 			})?.then((result) => {
@@ -1301,7 +1273,7 @@ export function SessionLauncher({
 		});
 	}
 
-	function sendDraft(steerNow = false) {
+	function sendDraft() {
 		const command = slashPicked
 			? (visibleSlashCommands[slashIndex] ?? draftCommand)
 			: draftCommand;
@@ -1309,16 +1281,7 @@ export function SessionLauncher({
 			runSlashCommand(command);
 			return;
 		}
-		sendText(draft.trim(), undefined, undefined, steerNow);
-	}
-
-	/** Ctrl/Cmd+Enter during a run steers, whatever the toggle says. */
-	function handleSteerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-		if (!deliveryChoice || !(event.metaKey || event.ctrlKey)) return false;
-		if (!enterSubmits(event)) return false;
-		event.preventDefault();
-		sendDraft(true);
-		return true;
+		sendText(draft.trim());
 	}
 
 	function runSlashCommand(command: SlashCommand) {
@@ -1710,7 +1673,6 @@ export function SessionLauncher({
 							onKeyDown={(event) =>
 								handleMentionKey(event) ||
 								(!selectedHelper && handleComposerKey(event)) ||
-								(!selectedHelper && handleSteerKey(event)) ||
 								(!selectedHelper && handleStopKey(event))
 							}
 							onPaste={(event) => {
@@ -1836,13 +1798,6 @@ export function SessionLauncher({
 								onAlternateContextChange={setAlternateContext}
 								onAttachFiles={attachFiles}
 							/>
-							{!selectedHelper && !side ? (
-								<ComposerDeliveryToggle
-									value={chosenDelivery}
-									onChange={chooseDelivery}
-									active={deliveryChoice}
-								/>
-							) : null}
 							{stoppable ? (
 								<button
 									type="button"
@@ -1895,9 +1850,7 @@ export function SessionLauncher({
 											? sendBlock.message
 											: turnStatus === "running"
 												? stoppable
-													? chosenDelivery === "steer"
-														? "Steer: the running turn reads it at its next step"
-														: "Queue in this chat"
+													? "Queue in this chat"
 													: "Sends once the changes are saved"
 												: canResumeFollowUp
 													? "Resume and send"
@@ -1918,7 +1871,7 @@ export function SessionLauncher({
 																? `Sign in to ${agentProviderById(harnessId).name} to start a session`
 																: `Connect ${agentProviderById(harnessId).name} to start a session`
 									}
-									onClick={() => sendDraft()}
+									onClick={sendDraft}
 								>
 									<span className="send-face">
 										<ArrowUp className="size-4" />

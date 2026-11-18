@@ -722,16 +722,10 @@ export function itemsKeepingMessageInFlight(
 export function markedQueuedSend(
 	items: readonly SessionItem[],
 	messageId: string,
-	/** Steered: the run reads it at its next step, as after Send on a waiting message. */
-	released = false,
 ): SessionItem[] {
 	return items.map((item) =>
 		item.kind === "userMessage" && item.id === messageId
-			? {
-					...item,
-					queued: true as const,
-					...(released ? { released: true as const } : {}),
-				}
+			? { ...item, queued: true as const }
 			: item,
 	);
 }

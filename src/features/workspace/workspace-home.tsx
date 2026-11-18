@@ -48,7 +48,6 @@ import {
 	pendingLivePreviews,
 	withLivePreviews,
 } from "#/domain/claude-feed-preview";
-import type { ComposerDelivery } from "#/domain/composer-delivery";
 import {
 	NO_SAVED_DEFAULT_BRANCHES,
 	type SavedDefaultBranches,
@@ -402,8 +401,6 @@ type PendingSend = {
 	 * in the chat (persisted) and sends it once the environment is ready.
 	 */
 	readonly heldForSetup?: boolean;
-	/** Sent during a run: "steer" is read at the run's next step, not queued. */
-	readonly delivery?: ComposerDelivery;
 	/** Tells the composer whether the message went out; if not it restores the draft. */
 	readonly settle: (result: ComposerSendResult) => void;
 };
@@ -3315,11 +3312,7 @@ export function WorkspaceHome({
 						// Sent during a run, it waits for the run's next step.
 						items:
 							current.turnStatus === "running"
-								? markedQueuedSend(
-										items,
-										pending.messageId,
-										pending.delivery === "steer",
-									)
+								? markedQueuedSend(items, pending.messageId)
 								: items,
 					};
 				});
@@ -3358,7 +3351,6 @@ export function WorkspaceHome({
 							: {}),
 						...(pending.baseBranch ? { baseBranch: pending.baseBranch } : {}),
 						...(pending.environmentSetup ? { environmentSetup: true } : {}),
-						...(pending.delivery === "steer" ? { delivery: "steer" } : {}),
 					},
 				}),
 				SEND_TIMEOUT_MS,
@@ -4381,9 +4373,6 @@ export function WorkspaceHome({
 																? { environmentSetup: true }
 																: {}),
 															...(heldForSetup ? { heldForSetup: true } : {}),
-															...(options?.delivery === "steer"
-																? { delivery: "steer" as const }
-																: {}),
 															settle,
 														};
 														// A project with no environment record yet: held in this

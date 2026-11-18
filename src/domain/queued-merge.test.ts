@@ -1,14 +1,8 @@
 import { expect, it } from "vitest";
 import { steeringOrigin, steeringTexts } from "./agent-steering";
-import {
-	COMPOSER_DELIVERY_STORAGE_KEY,
-	deliveryForSend,
-	parseComposerDelivery,
-} from "./composer-delivery";
 import { SessionItemId } from "./ids";
 import { mergedQueuedTurn } from "./queued-merge";
 import {
-	markedQueuedSend,
 	type SessionItem,
 	sessionItemsQueuedWithUser,
 	sessionItemsWithMergedUsers,
@@ -68,32 +62,4 @@ it("tells a sender's steering messages apart from the person's and from other se
 	expect(steeringOrigin(text("Lead", "1"))).not.toBe(
 		steeringOrigin(text("Other", "2")),
 	);
-});
-
-it("remembers Queue by default and Steer when chosen; Ctrl/Cmd+Enter steers only during a run", () => {
-	expect(COMPOSER_DELIVERY_STORAGE_KEY).toBe("ytimesy:composer-delivery");
-	expect(parseComposerDelivery(null)).toBe("queue");
-	expect(parseComposerDelivery("garbage")).toBe("queue");
-	expect(parseComposerDelivery("steer")).toBe("steer");
-	expect(deliveryForSend({ chosen: "queue", turnRunning: true })).toBe("queue");
-	expect(
-		deliveryForSend({ chosen: "queue", turnRunning: true, modifier: true }),
-	).toBe("steer");
-	expect(deliveryForSend({ chosen: "steer", turnRunning: true })).toBe("steer");
-	expect(
-		deliveryForSend({ chosen: "steer", turnRunning: false, modifier: true }),
-	).toBeUndefined();
-});
-
-it("marks a steered send released in the browser's copy, leaving others queued", () => {
-	const items = [user("a", "A"), user("b", "B")].map((item) => ({
-		...item,
-		queued: true as const,
-	}));
-	const marked = markedQueuedSend(items, "b", true) as UserMessageItem[];
-	expect(marked[0]?.released).toBeUndefined();
-	expect(marked[1]).toMatchObject({ queued: true, released: true });
-	expect(
-		(markedQueuedSend(items, "b") as UserMessageItem[])[1]?.released,
-	).toBeUndefined();
 });

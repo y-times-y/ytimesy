@@ -594,11 +594,6 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			baseBranch?: string;
 			/** A project setup request: the chat becomes a setup chat. */
 			environmentSetup?: boolean;
-			/**
-			 * While a turn runs: "steer" lets it read the message at its next
-			 * step (no extra turn); anything else queues it after the turn.
-			 */
-			delivery?: string;
 		}) => {
 			const attachments =
 				data.attachments === undefined
@@ -642,7 +637,6 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 					? {}
 					: { baseBranch: baseBranchInput.parse(data.baseBranch) }),
 				// The chip's request sent unedited counts too (an older tab, the API).
-				...(data.delivery === "steer" ? { released: true as const } : {}),
 				...(data.environmentSetup === true || isEnvironmentSetupPrompt(text)
 					? { environmentSetup: true }
 					: {}),
