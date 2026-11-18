@@ -36,13 +36,13 @@ export function YOverview({
 	pullRequests,
 	live,
 	renderedAtMs,
-	labelPrefix,
+	projectName,
 	onOpenThread,
 	onOpenPullRequest,
 }: {
 	projectId: string;
 	/** The project's thread-label prefix (thread-label.ts): rows show each thread's id. */
-	labelPrefix?: string;
+	projectName?: string;
 	/** Opens a pull request in the app (its thread, then the pull request panel); the row falls back to its thread. */
 	onOpenPullRequest?: (row: ThreadPullRequestRow) => void;
 	pullRequests: readonly RepositoryPullRequest[];
@@ -72,7 +72,7 @@ export function YOverview({
 	const overview = yOverview({
 		chats: chats.data ?? [],
 		pullRequests,
-		labelPrefix,
+		projectName,
 	});
 	const empty =
 		!overview.needsYou.length &&

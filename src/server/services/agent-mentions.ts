@@ -2,20 +2,34 @@ import type { ModelMessage } from "ai";
 import {
 	MAIN_MENTION_ID,
 	mentionedAgentNames,
+	mentionedThreads,
 	mentionNote,
 } from "#/domain/agent-mentions";
 import { isUserRequestMessage } from "#/domain/api-conversation";
 import { helperName, MAIN_NAME } from "#/domain/helper-names";
+import { projectDisplayName } from "#/domain/projects";
 import type { SessionItem } from "#/domain/session-item";
 import { type SubagentNode, subagentTree } from "#/domain/subagent-tree";
+import { threadSlug } from "#/domain/thread-label";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
 	descendantAgentSessionMetadata,
 } from "../adapters/agent-sessions";
+import { database } from "../adapters/database";
 
 /** A chat without its transcript: a mention names helpers, it reads no items. */
 type MentionSession = Omit<AgentSessionRecord, "items">;
+
+/** A thread of a project, as a mention reads it. */
+export type MentionedThread = {
+	readonly id: string;
+	readonly title: string;
+	readonly turnStatus: string;
+	readonly archived: boolean;
+	/** The project's display name, which the thread's readable name starts with. */
+	readonly projectName: string;
+};
 
 export type MentionDeps = {
 	readonly session: (
@@ -26,8 +40,48 @@ export type MentionDeps = {
 		userId: string,
 		rootId: string,
 	) => Promise<readonly MentionSession[]>;
+	/** A project's thread by its number; absent in a test that mentions none. */
+	readonly thread?: (
+		userId: string,
+		projectId: string,
+		number: number,
+	) => Promise<MentionedThread | null>;
 	readonly now: () => number;
 };
+
+async function threadByNumber(
+	userId: string,
+	projectId: string,
+	number: number,
+): Promise<MentionedThread | null> {
+	const { rows } = await database().query<{
+		id: string;
+		title: string;
+		turn_status: string | null;
+		archived: boolean;
+		name: string | null;
+		full_name: string;
+	}>(
+		`select s.id,s.title,s.turn_status,s.archived_at is not null as archived,p.name,p.full_name
+		 from agent_session s join project p on p.id=s.project_id
+		 where s.user_id=$1 and s.project_id=$2 and s.thread_number=$3
+		  and s.parent_session_id is null`,
+		[userId, projectId, number],
+	);
+	const row = rows[0];
+	return row
+		? {
+				id: row.id,
+				title: row.title,
+				turnStatus: row.turn_status ?? "idle",
+				archived: row.archived,
+				projectName: projectDisplayName({
+					name: row.name ?? undefined,
+					fullName: row.full_name,
+				}),
+			}
+		: null;
+}
 
 // Read at call time: a message without a helper mention reads nothing.
 const liveDeps: MentionDeps = {
@@ -35,6 +89,7 @@ const liveDeps: MentionDeps = {
 		agentSessionMetadataForOwner(userId, sessionId),
 	descendants: (userId, rootId) =>
 		descendantAgentSessionMetadata(userId, rootId),
+	thread: threadByNumber,
 	now: () => Date.now(),
 };
 
@@ -48,9 +103,10 @@ export function mentionNoteFromTree(
 	text: string,
 	nodes: readonly SubagentNode[],
 	self: string | null,
+	threads: readonly { readonly name: string; readonly is: string }[] = [],
 ): string | null {
-	return mentionNote(
-		mentionedAgentNames(text).flatMap((name) => {
+	return mentionNote([
+		...mentionedAgentNames(text).flatMap((name) => {
 			if (name === MAIN_MENTION_ID)
 				return self ? [{ name: MAIN_NAME, is: "the lead agent" }] : [];
 			const node = nodes.find((entry) => entry.shortName === name);
@@ -63,7 +119,41 @@ export function mentionNoteFromTree(
 					]
 				: [];
 		}),
-	);
+		...threads,
+	]);
+}
+
+/** What a thread mention says about its thread: its id (what the thread tools take), state and title. */
+function threadMentionIs(thread: MentionedThread) {
+	const state = thread.archived
+		? "archived"
+		: thread.turnStatus === "running"
+			? "working"
+			: "idle";
+	return `thread "${helperName(thread.title)}" (id ${thread.id}, ${state})`;
+}
+
+/**
+ * The project's threads a message names ("@ytimesy-12"), read as notes. A
+ * name counts only when its project part is this project's, so "@alice-2"
+ * is just words. Anything unknown is left out.
+ */
+async function threadMentionNotes(
+	userId: string,
+	projectId: string,
+	text: string,
+	skip: ReadonlySet<string>,
+	deps: MentionDeps,
+): Promise<{ name: string; is: string }[]> {
+	if (!deps.thread) return [];
+	const notes: { name: string; is: string }[] = [];
+	for (const ref of mentionedThreads(text)) {
+		if (skip.has(ref.name)) continue;
+		const thread = await deps.thread(userId, projectId, ref.number);
+		if (!thread || threadSlug(thread.projectName) !== ref.slug) continue;
+		notes.push({ name: ref.name, is: threadMentionIs(thread) });
+	}
+	return notes;
 }
 
 /**
@@ -78,23 +168,34 @@ export async function mentionNoteFor(
 	text: string,
 	deps: MentionDeps = liveDeps,
 ): Promise<string | null> {
-	if (!mentionedAgentNames(text).some((name) => name !== MAIN_MENTION_ID))
-		return null;
+	const agentNames = mentionedAgentNames(text).filter(
+		(name) => name !== MAIN_MENTION_ID,
+	);
+	// "@build-1" reads like a thread's name; a message with neither reads nothing.
+	if (!agentNames.length && !mentionedThreads(text).length) return null;
 	const root = await deps.session(userId, rootSessionId);
 	if (!root || root.parentSessionId) return null;
-	const helpers = (await deps.descendants(userId, root.id)).filter(
-		(session) => session.agentRole && session.userId === userId,
-	);
+	const helpers = agentNames.length
+		? (await deps.descendants(userId, root.id)).filter(
+				(session) => session.agentRole && session.userId === userId,
+			)
+		: [];
 	// The note reads each node's name, role, state and title, none of which
 	// come from a transcript (only spend and minutes do): no items are read.
+	const nodes = subagentTree(
+		root.id,
+		[root, ...helpers].map((session) => ({ ...session, items: null })),
+		deps.now(),
+	).nodes;
+	// A name that is one of this chat's agents is that agent, not a thread.
+	const agents = new Set(
+		nodes.flatMap((node) => (node.shortName ? [node.shortName] : [])),
+	);
 	return mentionNoteFromTree(
 		text,
-		subagentTree(
-			root.id,
-			[root, ...helpers].map((session) => ({ ...session, items: null })),
-			deps.now(),
-		).nodes,
+		nodes,
 		null,
+		await threadMentionNotes(userId, root.projectId, text, agents, deps),
 	);
 }
 

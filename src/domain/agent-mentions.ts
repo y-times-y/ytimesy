@@ -17,8 +17,10 @@ import {
  */
 
 export type MentionAgent = {
-	/** The helper's session id; Main's is "main". */
+	/** The helper's session id; Main's is "main"; a thread's is its chat id. */
 	readonly id: string;
+	/** Set for a thread of the project (not an agent of this chat): `name` is its readable name ("ytimesy-12"), `task` its title. */
+	readonly threadId?: string;
 	/** "Main", "build-1". */
 	readonly name: string;
 	readonly task?: string;
@@ -56,6 +58,35 @@ export function mentionAgents(
 		})),
 	];
 	return agents.filter((agent) => agent.id !== self);
+}
+
+/** A thread of the project the user can mention: its readable name and its title. */
+export type MentionThread = {
+	readonly id: string;
+	readonly name: string;
+	readonly title: string;
+};
+
+/**
+ * The project's threads as mention choices, after the chat's agents. They
+ * reach another thread through the lead (Y²) or whichever agent reads the
+ * message: it learns which thread is meant (mentionNote) and can message
+ * it. The thread whose composer this is never appears.
+ */
+export function threadMentionAgents(
+	threads: readonly MentionThread[],
+	self?: string | null,
+): MentionAgent[] {
+	return threads
+		.filter((thread) => thread.id !== self)
+		.map((thread) => ({
+			id: thread.id,
+			threadId: thread.id,
+			name: thread.name,
+			task: thread.title,
+			icon: KIND_ICONS.main,
+			color: agentColor("main"),
+		}));
 }
 
 /** The "@query" being typed at the caret: where its "@" is and what follows. */
@@ -151,6 +182,31 @@ export function mentionedAgentNames(text: string): string[] {
 		segment.kind === "mention" ? [segment.name.toLowerCase()] : [],
 	);
 	return [...new Set(names)];
+}
+
+const THREAD_MENTION = /(^|[\s(])@([a-z0-9][a-z0-9-]*?)-(\d{1,6})(?![\w-])/gi;
+
+/**
+ * The threads a message names ("@ytimesy-12"): the project part and the
+ * number, lowercased, once each, in order. Agent names ("@build-1") read the
+ * same way, so a caller resolves those first.
+ */
+export function mentionedThreads(text: string): {
+	readonly name: string;
+	readonly slug: string;
+	readonly number: number;
+}[] {
+	const seen = new Set<string>();
+	const found: { name: string; slug: string; number: number }[] = [];
+	for (const match of text.matchAll(THREAD_MENTION)) {
+		const slug = (match[2] ?? "").toLowerCase();
+		const number = Number(match[3]);
+		const name = `${slug}-${number}`;
+		if (!number || seen.has(name)) continue;
+		seen.add(name);
+		found.push({ name, slug, number });
+	}
+	return found;
 }
 
 const NOTE_OPEN = "[@mentions in the user's message: ";

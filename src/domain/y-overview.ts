@@ -22,11 +22,13 @@ export type YOverviewThread = {
 	readonly workingSince?: string | null;
 	readonly unused?: boolean;
 	readonly role?: "y2";
+	/** The thread's number in its project (src/domain/thread-label.ts). */
+	readonly threadNumber?: number | null;
 };
 
 export type NeedsYouRow = {
 	readonly threadId: string;
-	/** The thread's short label ("WEB-3F9A"), when the overview was given a prefix. */
+	/** The thread's name ("web-12"), when the overview was given the project's name. */
 	readonly label: string | null;
 	readonly title: string;
 	readonly waitingOn: ChatWaitingOn;
@@ -90,8 +92,8 @@ function threadHead(thread: YOverviewThread) {
 	);
 }
 
-function labelOf(prefix: string | undefined, id: string) {
-	return prefix ? threadLabel(prefix, id) : null;
+function labelOf(projectName: string | undefined, thread: YOverviewThread) {
+	return projectName ? threadLabel(projectName, thread) : null;
 }
 
 /** The repository's name without its owner: "acme/web" reads "web". */
@@ -103,7 +105,7 @@ export function repositoryShortName(fullName: string) {
 function threadPullRequests(
 	threads: readonly YOverviewThread[],
 	pullRequests: readonly RepositoryPullRequest[],
-	labelPrefix: string | undefined,
+	projectName: string | undefined,
 ): ThreadPullRequestRow[] {
 	const open = pullRequests.filter((pr) => pr.state === "open" && !pr.merged);
 	const rows: ThreadPullRequestRow[] = [];
@@ -119,7 +121,7 @@ function threadPullRequests(
 			rows.push({
 				threadId: thread.id,
 				threadTitle: thread.title,
-				threadLabel: labelOf(labelPrefix, thread.id),
+				threadLabel: labelOf(projectName, thread),
 				owner: pr.repositoryFullName.split("/")[0] ?? "",
 				repo: repositoryShortName(pr.repositoryFullName),
 				number: pr.number,
@@ -143,7 +145,7 @@ export function yOverview(input: {
 	readonly chats: readonly YOverviewThread[];
 	readonly pullRequests: readonly RepositoryPullRequest[];
 	/** The project's thread-label prefix (thread-label.ts); no labels without it. */
-	readonly labelPrefix?: string;
+	readonly projectName?: string;
 }): YOverview {
 	const threads = projectThreads(input.chats);
 	const needsYou: NeedsYouRow[] = [];
@@ -153,7 +155,7 @@ export function yOverview(input: {
 		if (thread.waitingOn && !threadIsRunning(thread))
 			needsYou.push({
 				threadId: thread.id,
-				label: labelOf(input.labelPrefix, thread.id),
+				label: labelOf(input.projectName, thread),
 				title: thread.title,
 				waitingOn: thread.waitingOn,
 				detail: needsYouDetail(thread.waitingOn),
@@ -162,7 +164,7 @@ export function yOverview(input: {
 		else if (threadIsRunning(thread))
 			inProgress.push({
 				threadId: thread.id,
-				label: labelOf(input.labelPrefix, thread.id),
+				label: labelOf(input.projectName, thread),
 				title: thread.title,
 				workingSince: thread.workingSince ?? null,
 				updatedAt,
@@ -174,7 +176,7 @@ export function yOverview(input: {
 		pullRequests: threadPullRequests(
 			threads,
 			input.pullRequests,
-			input.labelPrefix,
+			input.projectName,
 		),
 	};
 }

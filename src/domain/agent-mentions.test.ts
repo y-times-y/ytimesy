@@ -7,9 +7,11 @@ import {
 	MAIN_MENTION_ID,
 	mentionAgents,
 	mentionedAgentNames,
+	mentionedThreads,
 	mentionMatches,
 	mentionNote,
 	mentionSegments,
+	threadMentionAgents,
 	withoutMentionNote,
 } from "./agent-mentions";
 import { parseSteering, steeringTexts } from "./agent-steering";
@@ -198,4 +200,56 @@ it("folds a quoted task echoed after an agent's name into its chip", () => {
 		{ kind: "mention", name: "review-2" },
 		{ kind: "text", text: " (done)" },
 	]);
+});
+
+describe("threads in the @ popover", () => {
+	const threads = [
+		{ id: "t1", name: "ytimesy-12", title: "Fix login redirect" },
+		{ id: "t2", name: "ytimesy-13", title: "Speed up search" },
+		{ id: "self", name: "ytimesy-14", title: "This chat" },
+	];
+
+	it("offers the project's threads by name and title, never the open one", () => {
+		const offered = threadMentionAgents(threads, "self");
+		expect(offered.map((agent) => agent.name)).toEqual([
+			"ytimesy-12",
+			"ytimesy-13",
+		]);
+		expect(offered[0]).toMatchObject({
+			id: "t1",
+			threadId: "t1",
+			task: "Fix login redirect",
+		});
+	});
+
+	it("finds a thread by its number or a word of its title, agents first", () => {
+		const list = [
+			...mentionAgents(identities, MAIN_MENTION_ID),
+			...threadMentionAgents(threads),
+		];
+		expect(mentionMatches(list, "ytimesy-1").map((a) => a.name)).toEqual([
+			"ytimesy-12",
+			"ytimesy-13",
+			"ytimesy-14",
+		]);
+		expect(mentionMatches(list, "login").map((a) => a.name)).toEqual([
+			"ytimesy-12",
+		]);
+		const typed = activeMention("see @ytimesy-1", 14);
+		expect(typed?.query).toBe("ytimesy-1");
+		expect(
+			insertMention("see @ytimesy-1", { start: 4 }, 14, "ytimesy-12").text,
+		).toBe("see @ytimesy-12 ");
+	});
+
+	it("reads the threads a message names, once each, in order", () => {
+		expect(
+			mentionedThreads(
+				"a @ytimesy-12, (@web-app-3) @YTIMESY-12 x@ytimesy-5 @ytimesy-0",
+			),
+		).toEqual([
+			{ name: "ytimesy-12", slug: "ytimesy", number: 12 },
+			{ name: "web-app-3", slug: "web-app", number: 3 },
+		]);
+	});
 });

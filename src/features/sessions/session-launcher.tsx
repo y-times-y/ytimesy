@@ -16,8 +16,10 @@ import {
 	insertMention,
 	MAIN_MENTION_ID,
 	type MentionAgent,
+	type MentionThread,
 	mentionAgents,
 	mentionMatches,
+	threadMentionAgents,
 } from "#/domain/agent-mentions";
 import {
 	agentPanelRows,
@@ -207,6 +209,8 @@ const DRAFT_SAVE_DELAY_MS = 300;
  */
 export type ComposerSendResult = "sent" | "unsent" | "unsentElsewhere";
 
+const NO_MENTION_THREADS: readonly MentionThread[] = [];
+
 export function SessionLauncher({
 	session,
 	busy,
@@ -246,7 +250,15 @@ export function SessionLauncher({
 	setupPlaceholder,
 	branchless = false,
 	emptyState,
+	mentionThreads = NO_MENTION_THREADS,
 }: {
+	/**
+	 * The project's other threads, offered after the agents when the person
+	 * types "@" in the lead's composer. A thread is named by its readable
+	 * name ("ytimesy-12"); the agent that reads the message learns which
+	 * thread is meant and can reach it.
+	 */
+	mentionThreads?: readonly MentionThread[];
 	/** A chat without a branch of its own (Y²): no branch pill or picker. */
 	branchless?: boolean;
 	/**
@@ -794,9 +806,22 @@ export function SessionLauncher({
 		: undefined;
 	// The agent whose composer this is never appears: it is the one written to.
 	const mentionSelf = selectedHelper?.id ?? MAIN_MENTION_ID;
+	// A helper's composer reaches no other thread: only the lead's offers them.
+	const mentionSelfThread = selectedHelper ? undefined : session.agentSessionId;
 	const mentionList = useMemo(
-		() => mentionAgents(identities, mentionSelf),
-		[identities, mentionSelf],
+		() => [
+			...mentionAgents(identities, mentionSelf),
+			...(selectedHelper
+				? []
+				: threadMentionAgents(mentionThreads, mentionSelfThread)),
+		],
+		[
+			identities,
+			mentionSelf,
+			selectedHelper,
+			mentionThreads,
+			mentionSelfThread,
+		],
 	);
 	const sendToHelper = useServerFn(sendHelperMessage);
 	/** Messages the user sent a helper that its list does not show yet. */

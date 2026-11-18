@@ -44,6 +44,8 @@ type PublicAgentChat = {
 	readonly waitingOn?: ChatWaitingOn | null;
 	readonly workingSince?: string | null;
 	readonly unused?: boolean;
+	/** The thread's number in its project (src/domain/thread-label.ts); read by the sidebar list. */
+	readonly threadNumber?: number | null;
 	/** The project's Y² chat (src/domain/y-squared.ts), pinned above its threads. */
 	readonly role?: "y2";
 };

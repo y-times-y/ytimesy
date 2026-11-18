@@ -210,6 +210,8 @@ export type AgentSessionRecord = {
 	agentBudget?: SubagentBudget | null;
 	agentFork?: SubagentFork | null;
 	agentSteps?: number;
+	/** The thread's number in its project (src/domain/thread-label.ts); null for a subagent, a Y² chat or a row from before the numbers. */
+	threadNumber?: number | null;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -242,6 +244,7 @@ interface AgentSessionRow {
 	agent_budget?: SubagentBudget | null;
 	agent_fork?: SubagentFork | null;
 	agent_steps?: number | null;
+	thread_number?: number | null;
 	created_at: Date | string;
 	updated_at: Date | string;
 }
@@ -322,7 +325,7 @@ export async function listSidebarAgentSessions(
 	// kept on the row (waiting_on, maintained by a trigger on items and
 	// turn_status; supabase/migrations/20261026110000_agent_session_waiting_on.sql).
 	const result = await database().query(
-		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")},s.waiting_on,
+		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")},s.thread_number,s.waiting_on,
 		  -- Opened but never used (as reusableEmptyChat): the sidebar lists it only while open.
 		  case when s.title='New session' and s.turn_status <> 'running' then
 		    coalesce(jsonb_array_length(s.items),0)=0
@@ -1336,6 +1339,10 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		agentBudget: row.agent_budget ?? null,
 		agentFork: row.agent_fork ?? null,
 		agentSteps: row.agent_steps ?? 0,
+		// Only the sidebar list reads it (listSidebarAgentSessions).
+		...(row.thread_number === undefined
+			? {}
+			: { threadNumber: row.thread_number }),
 		createdAt:
 			row.created_at instanceof Date
 				? row.created_at.toISOString()

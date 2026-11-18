@@ -1,7 +1,8 @@
 import type { MentionAgent } from "#/domain/agent-mentions";
+import { ThreadArt } from "../workspace/thread-art";
 import { AgentIcon } from "./agent-icon";
 
-/** The "@" popover over the composer: the chat's agents, Main first. */
+/** The "@" popover over the composer: the chat's agents, Main first, then the project's threads. */
 export function MentionPopover({
 	agents,
 	activeIndex,
@@ -18,7 +19,7 @@ export function MentionPopover({
 		<div
 			className="slash-palette mention-palette"
 			role="listbox"
-			aria-label="Agents"
+			aria-label="Agents and threads"
 		>
 			{agents.map((agent, index) => (
 				<div key={agent.id} role="presentation">
@@ -33,7 +34,11 @@ export function MentionPopover({
 						onMouseDown={(event) => event.preventDefault()}
 						onClick={() => onSelect(agent)}
 					>
-						<AgentIcon icon={agent.icon} color={agent.color} size={14} />
+						{agent.threadId ? (
+							<ThreadArt id={agent.threadId} size={16} />
+						) : (
+							<AgentIcon icon={agent.icon} color={agent.color} size={14} />
+						)}
 						<span className="mention-palette-name">{agent.name}</span>
 						<span className="mention-palette-task">{agent.task ?? ""}</span>
 					</button>

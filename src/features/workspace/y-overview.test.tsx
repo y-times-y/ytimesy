@@ -53,7 +53,7 @@ const pullRequest: RepositoryPullRequest = {
 function render(
 	listed: readonly YOverviewThread[],
 	prs = [pullRequest],
-	labelPrefix?: string,
+	projectName?: string,
 ) {
 	const client = new QueryClient();
 	client.setQueryData(["agent-sessions", PROJECT], listed);
@@ -64,7 +64,7 @@ function render(
 				pullRequests={prs}
 				live={false}
 				renderedAtMs={NOW}
-				labelPrefix={labelPrefix}
+				projectName={projectName}
 				onOpenThread={() => undefined}
 			/>
 		</QueryClientProvider>,

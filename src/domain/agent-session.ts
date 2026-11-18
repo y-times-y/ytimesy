@@ -130,6 +130,8 @@ export function chatsFromAgentSessions(
 		readonly unused?: boolean;
 		/** Holds a message until the project's environment is ready. */
 		readonly waitsForSetup?: boolean;
+		/** The thread's number in its project (src/domain/thread-label.ts). */
+		readonly threadNumber?: number | null;
 	}[],
 ) {
 	return sessions
@@ -142,6 +144,9 @@ export function chatsFromAgentSessions(
 			harnessId: session.harness ?? null,
 			updatedAt: session.updatedAt ?? null,
 			workspaceId: session.workspaceId ?? null,
+			...(session.threadNumber != null
+				? { threadNumber: session.threadNumber }
+				: {}),
 			...(session.workingSince ? { workingSince: session.workingSince } : {}),
 			...(session.unused ? { unused: true as const } : {}),
 			...(session.waitsForSetup ? { waitsForSetup: true as const } : {}),

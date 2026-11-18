@@ -6,6 +6,7 @@ import { subagentTree } from "#/domain/subagent-tree";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	type MentionDeps,
+	type MentionedThread,
 	mentionNoteFor,
 	mentionNoteFromTree,
 	withMentionNote,
@@ -123,5 +124,80 @@ describe("a message that @mentions helpers", () => {
 		expect(
 			await withMentionNote({ ...input, messages: noted }, deps(chat)),
 		).toBe(noted);
+	});
+});
+
+describe("a message that @mentions threads of the project", () => {
+	const thread = (name: string, extra: Partial<MentionedThread> = {}) => ({
+		id: "7d4e0a10-0000-4000-8000-00000000000c",
+		title: "Fix login redirect",
+		turnStatus: "running",
+		archived: false,
+		projectName: name,
+		...extra,
+	});
+	const withThreads = (
+		lookup: (number: number) => MentionedThread | null,
+		sessions = chat,
+	) => ({
+		...deps(sessions),
+		thread: vi.fn(async (_user: string, _project: string, number: number) =>
+			lookup(number),
+		),
+	});
+
+	it("tells the lead which thread is meant, with the id its tools take", async () => {
+		const fake = withThreads((number) =>
+			number === 12 ? thread("ytimesy") : null,
+		);
+		const note = await mentionNoteFor(
+			"owner",
+			"root",
+			"Look at @ytimesy-12, not @ytimesy-99 or @alice-12.",
+			fake,
+		);
+		expect(note).toBe(
+			`[@mentions in the user's message: @ytimesy-12 = thread "Fix login redirect" (id 7d4e0a10-0000-4000-8000-00000000000c, working)]`,
+		);
+		// Only this project's threads, found by number in this project.
+		expect(fake.thread).toHaveBeenCalledWith("owner", "p", 12);
+	});
+
+	it("names an archived or idle thread's state", async () => {
+		const archived = withThreads(() => thread("ytimesy", { archived: true }));
+		expect(
+			await mentionNoteFor("owner", "root", "see @ytimesy-3", archived),
+		).toContain("archived)");
+		const idle = withThreads(() =>
+			thread("ytimesy", { turnStatus: "completed" }),
+		);
+		expect(
+			await mentionNoteFor("owner", "root", "see @ytimesy-3", idle),
+		).toContain("idle)");
+	});
+
+	it("reads an agent's name as the agent, and a thread's name beside it", async () => {
+		const fake = withThreads((number) =>
+			number === 7 ? thread("ytimesy") : thread("build"),
+		);
+		const note = await mentionNoteFor(
+			"owner",
+			"root",
+			"@build-1 should read @ytimesy-7",
+			fake,
+		);
+		expect(note).toContain("@build-1 = agent 1 (writer, working");
+		expect(note).toContain("@ytimesy-7 = thread");
+		// build-1 is the helper, never a thread named "build" number 1.
+		expect(note?.match(/@build-1/g)).toHaveLength(1);
+	});
+
+	it("is quiet when the message names no thread and no helper", async () => {
+		const fake = withThreads(() => thread("ytimesy"));
+		expect(
+			await mentionNoteFor("owner", "root", "ytimesy-12 alone", fake),
+		).toBeNull();
+		expect(fake.session).not.toHaveBeenCalled();
+		expect(fake.thread).not.toHaveBeenCalled();
 	});
 });

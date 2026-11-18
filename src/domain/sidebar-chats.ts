@@ -34,6 +34,8 @@ export type SidebarChat = {
 	readonly waitsForSetup?: boolean;
 	/** The project's Y² chat (src/domain/y-squared.ts): always listed first. */
 	readonly role?: "y2";
+	/** The thread's number in its project: with the project's name, its readable name (src/domain/thread-label.ts). */
+	readonly threadNumber?: number | null;
 };
 
 /**

@@ -70,7 +70,7 @@ import {
 	y2NeedsYouLabel,
 	y2Rows,
 } from "#/domain/sidebar-tree";
-import { threadLabel, threadLabelPrefix } from "#/domain/thread-label";
+import { threadLabel } from "#/domain/thread-label";
 import {
 	accountDisplayName,
 	accountInitials,
@@ -816,7 +816,7 @@ export function ProjectSidebar({
 					key={chat.id}
 					data={{
 						artId: chat.id,
-						id: threadLabel(threadLabelPrefix(projectName), chat.id),
+						id: threadLabel(projectName, chat),
 						title: chat.title,
 						projectName,
 						projectColor: projectColor(project.id),

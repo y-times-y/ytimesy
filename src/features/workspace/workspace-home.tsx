@@ -180,11 +180,7 @@ import {
 	savedSidebarPrsFromCookies,
 	savedSidebarPrsValue,
 } from "#/domain/sidebar-pr-cookie";
-import {
-	threadDirectory,
-	threadLabel,
-	threadLabelPrefix,
-} from "#/domain/thread-label";
+import { threadDirectory, threadLabel } from "#/domain/thread-label";
 import {
 	progressPage,
 	snapshotLeavesGap,
@@ -3487,18 +3483,18 @@ export function WorkspaceHome({
 					draft: pullRequestHandoff.draft,
 				}
 			: undefined;
-	// Thread ids ("WEB-3F9A"): derived from the chat id, see thread-label.ts.
-	const labelPrefix = threadLabelPrefix(
-		selectedProject ? projectDisplayName(selectedProject) : null,
-	);
+	// Thread names ("web-12"): the project's name and the thread's number, see thread-label.ts.
+	const labelProjectName = selectedProject
+		? projectDisplayName(selectedProject)
+		: null;
 	const activeThreadLabel =
 		activeChat && activeChat.role !== "y2"
-			? threadLabel(labelPrefix, activeChat.id)
+			? threadLabel(labelProjectName, activeChat)
 			: null;
 	const threadsKey = sidebarChats
 		.map(
 			(chat) =>
-				`${chat.role === "y2" ? "y2" : ""}${chat.id}\u0000${chat.title}`,
+				`${chat.role === "y2" ? "y2" : ""}${chat.id}\u0000${chat.title}\u0000${chat.threadNumber ?? ""}`,
 		)
 		.join("\n");
 	const pullRequestUrlsKey = listedPullRequests.map((pr) => pr.url).join("\n");
@@ -3515,11 +3511,29 @@ export function WorkspaceHome({
 				}),
 			),
 			threads: threadDirectory(
-				labelPrefix,
+				labelProjectName,
 				sidebarChats.filter((chat) => chat.role !== "y2"),
 			),
 		}),
-		[selectedProject?.fullName, labelPrefix, threadsKey, pullRequestUrlsKey],
+		[
+			selectedProject?.fullName,
+			labelProjectName,
+			threadsKey,
+			pullRequestUrlsKey,
+		],
+	);
+	// "@" in the lead's composer offers the project's other threads by name.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the strings above, so a render that changes no thread keeps the list
+	const mentionThreads = useMemo(
+		() =>
+			sidebarChats.flatMap((chat) => {
+				const name =
+					chat.role === "y2" || chat.threadNumber == null
+						? null
+						: threadLabel(labelProjectName, chat);
+				return name ? [{ id: chat.id, name, title: chat.title }] : [];
+			}),
+		[labelProjectName, threadsKey],
 	);
 	/**
 	 * A pull request or issue chip was clicked: open it here when it is in
@@ -4157,6 +4171,7 @@ export function WorkspaceHome({
 												}}
 												setupPlaceholder={setupPlaceholder}
 												branchless={ySquaredOpen}
+												mentionThreads={mentionThreads}
 												emptyState={
 													ySquaredOpen
 														? (send) => <YSquaredEmptyState onSend={send} />
@@ -4550,7 +4565,7 @@ export function WorkspaceHome({
 													<YOverview
 														projectId={selectedProject.id}
 														pullRequests={listedPullRequests}
-														labelPrefix={labelPrefix}
+														projectName={labelProjectName ?? undefined}
 														onOpenPullRequest={(row) => {
 															if (row.threadId !== activeSessionId)
 																openChat(row.threadId);
