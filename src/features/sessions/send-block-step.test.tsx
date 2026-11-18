@@ -11,9 +11,9 @@ vi.mock("../auth/client", () => ({
 	authClient: { useSession: () => ({ data: null }) },
 }));
 vi.mock("../onboarding/setup-state.fn", () => ({ getSetupState: vi.fn() }));
-vi.mock("../onboarding/first-run", () => ({
-	GithubStep: () => <div>GITHUB STEP</div>,
-	ModelStep: () => <div>MODEL STEP</div>,
+vi.mock("../onboarding/setup-options", () => ({
+	GithubOptions: () => <div>GITHUB STEP</div>,
+	ModelOptions: () => <div>MODEL STEP</div>,
 }));
 vi.mock("../projects/api", () => ({ requestJson: vi.fn() }));
 

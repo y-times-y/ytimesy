@@ -3,7 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { Check } from "lucide-react";
 import type { ComposerSendBlock } from "#/domain/send-blocked";
 import { authClient } from "../auth/client";
-import { GithubStep, ModelStep } from "../onboarding/first-run";
+import { GithubOptions, ModelOptions } from "../onboarding/setup-options";
 import { getSetupState } from "../onboarding/setup-state.fn";
 import { requestJson } from "../projects/api";
 import { SendBlockNotice } from "./send-block-notice";
@@ -44,7 +44,7 @@ function MissingStep({ kind }: { kind: "no_model" | "github" }) {
 	return (
 		<section
 			aria-label={kind === "github" ? "Connect GitHub" : "Choose a model"}
-			className="mx-auto mb-3 flex w-full flex-col gap-3 rounded-xl bg-card p-4 text-xs text-card-foreground ring-1 ring-foreground/10 [&_.first-run-actions]:mt-1"
+			className="mx-auto mb-3 flex w-full flex-col gap-3 rounded-xl bg-card p-4 text-xs text-card-foreground ring-1 ring-foreground/10"
 		>
 			<div>
 				<h2 className="text-[0.8125rem] font-semibold">
@@ -58,13 +58,13 @@ function MissingStep({ kind }: { kind: "no_model" | "github" }) {
 				</p>
 			</div>
 			{kind === "github" ? (
-				<GithubStep
+				<GithubOptions
 					signedIn={Boolean(state.data?.githubConnected)}
 					checking={state.isPending}
 					installationUrl={repositories.data?.installationUrl}
 				/>
 			) : (
-				<ModelStep
+				<ModelOptions
 					ready={Boolean(state.data?.modelReady)}
 					xaiSubscription={state.data?.xaiSubscription}
 					claudeSubscription={state.data?.claudeSubscription}

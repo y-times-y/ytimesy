@@ -14,7 +14,7 @@ import {
 import { cn } from "#/lib/utils";
 import { authClient } from "../auth/client";
 import { requestJson } from "../projects/api";
-import { GithubStep, ModelStep, SessionsStep } from "./first-run";
+import { GithubOptions, ModelOptions, SessionsOptions } from "./setup-options";
 import { readSetupPrefs, writeSetupPrefs } from "./setup-prefs";
 import { getSetupState } from "./setup-state.fn";
 
@@ -51,7 +51,7 @@ function StepCircle({
 		<span
 			aria-hidden="true"
 			className={cn(
-				"grid size-5 shrink-0 place-items-center rounded-full border-[1.5px] text-[0.625rem] font-semibold",
+				"grid size-[1.375rem] shrink-0 place-items-center rounded-full border-[1.5px] text-[0.6875rem] font-semibold",
 				status === "done" &&
 					"border-primary bg-primary text-primary-foreground",
 				status === "current" && "border-foreground text-foreground",
@@ -169,11 +169,11 @@ export function SetupChecklistView({
 	return (
 		<section
 			aria-labelledby="setup-title"
-			className="mx-auto mb-3 w-full max-w-[44rem] overflow-hidden rounded-xl bg-card text-xs text-card-foreground ring-1 ring-foreground/10"
+			className="mx-auto mb-3 w-full max-w-[44rem] overflow-hidden rounded-2xl bg-card text-xs text-card-foreground shadow-lg shadow-black/25 ring-1 ring-foreground/10"
 		>
-			<div className="flex items-center gap-3 px-4 pt-3.5 pb-3">
+			<div className="flex items-center gap-3 px-5 pt-4 pb-3.5">
 				<div className="min-w-0">
-					<h2 id="setup-title" className="text-[0.8125rem] font-semibold">
+					<h2 id="setup-title" className="text-sm font-semibold tracking-tight">
 						Get set up
 					</h2>
 					<p className="text-muted-foreground">
@@ -222,7 +222,7 @@ export function SetupChecklistView({
 								: copy.blurb;
 					return (
 						<li key={step.id} className="border-t border-foreground/10">
-							<div className="grid grid-cols-[1.25rem_1fr_auto] items-center gap-3 px-4 py-3">
+							<div className="grid grid-cols-[1.375rem_1fr_auto] items-center gap-3.5 px-5 py-3.5">
 								<StepCircle status={step.status} number={index + 1} />
 								<div className="min-w-0">
 									<p className="flex items-center gap-1.5 font-medium">
@@ -248,23 +248,25 @@ export function SetupChecklistView({
 								) : null}
 							</div>
 							{expanded ? (
-								<div className="px-4 pb-4 pl-12 [&_.first-run-actions]:mt-3">
-									{step.id === "github" ? (
-										<GithubStep
-											signedIn={data.githubConnected}
-											checking={data.githubConnected && repositoriesLoading}
-											installationUrl={installationUrl}
-										/>
-									) : step.id === "model" ? (
-										<ModelStep
-											ready={data.modelReady}
-											xaiSubscription={data.xaiSubscription}
-											claudeSubscription={data.claudeSubscription}
-											onDone={onModelDone}
-										/>
-									) : (
-										<SessionsStep onDone={onSessionsDone} />
-									)}
+								<div className="px-5 pb-5 pl-[3.625rem]">
+									<div className="rounded-xl bg-muted/25 p-3 ring-1 ring-foreground/5">
+										{step.id === "github" ? (
+											<GithubOptions
+												signedIn={data.githubConnected}
+												checking={data.githubConnected && repositoriesLoading}
+												installationUrl={installationUrl}
+											/>
+										) : step.id === "model" ? (
+											<ModelOptions
+												ready={data.modelReady}
+												xaiSubscription={data.xaiSubscription}
+												claudeSubscription={data.claudeSubscription}
+												onDone={onModelDone}
+											/>
+										) : (
+											<SessionsOptions onSkip={onSessionsDone} />
+										)}
+									</div>
 								</div>
 							) : null}
 						</li>

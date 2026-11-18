@@ -56,6 +56,8 @@ import { SetupChecklistView } from "./setup-checklist";
 function render(options: {
 	githubConnected?: boolean;
 	modelReady?: boolean;
+	claude?: boolean;
+	grok?: boolean;
 	repositoryCount?: number | null;
 	sessionsSkipped?: boolean;
 	open?: "github" | "model" | "sessions" | null;
@@ -63,6 +65,8 @@ function render(options: {
 	const state = {
 		githubConnected: options.githubConnected ?? false,
 		modelReady: options.modelReady ?? false,
+		...(options.claude ? { claudeSubscription: true } : {}),
+		...(options.grok ? { xaiSubscription: true } : {}),
 	};
 	const progress = setupProgress({
 		state,
@@ -147,4 +151,33 @@ it("keeps a skipped import out of the way", () => {
 		sessionsSkipped: true,
 	});
 	expect(html).toContain('aria-valuenow="3"');
+});
+
+it("offers ChatGPT, Claude and Grok subscriptions and an API key when they are on", () => {
+	const html = render({
+		githubConnected: true,
+		repositoryCount: 1,
+		open: "model",
+		claude: true,
+		grok: true,
+	});
+	for (const name of [
+		"ChatGPT subscription",
+		"Claude subscription",
+		"Grok subscription",
+		"API key",
+	])
+		expect(html).toContain(name);
+	expect(html).toContain("Nothing falls back to paid inference.");
+});
+
+it("leaves Claude and Grok out while their switches are off", () => {
+	const html = render({
+		githubConnected: true,
+		repositoryCount: 1,
+		open: "model",
+	});
+	expect(html).toContain("ChatGPT subscription");
+	expect(html).not.toContain("Claude subscription");
+	expect(html).not.toContain("Grok subscription");
 });
