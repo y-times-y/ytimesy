@@ -17,9 +17,10 @@ vi.mock("../src/server/adapters/database", () => ({ database: () => ({}) }));
 
 import { authOptions } from "../src/server/auth/auth";
 
-it("never signs in from a verification link and ends sessions on a password reset", () => {
+it("signs in from a verification link, never after sign-up, and ends sessions on a password reset", () => {
 	const options = authOptions();
-	expect(options.emailVerification.autoSignInAfterVerification).toBe(false);
+	expect(options.emailVerification.autoSignInAfterVerification).toBe(true);
+	expect(options.emailAndPassword.requireEmailVerification).toBe(true);
 	expect(options.emailAndPassword.revokeSessionsOnPasswordReset).toBe(true);
 	expect(options.emailAndPassword.autoSignIn).toBe(false);
 });
