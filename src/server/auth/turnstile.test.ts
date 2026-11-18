@@ -122,4 +122,5 @@ it("Turnstile also guards resending the verification email", async () => {
 	const { TURNSTILE_ENDPOINTS } = await import("./turnstile");
 	expect(TURNSTILE_ENDPOINTS).toContain("/send-verification-email");
 	expect(TURNSTILE_ENDPOINTS).toContain("/request-password-reset");
+	expect(TURNSTILE_ENDPOINTS).toContain("/email-otp/send-verification-otp");
 });

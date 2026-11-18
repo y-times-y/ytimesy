@@ -23,4 +23,7 @@ it("signs in from a verification link, never after sign-up, and ends sessions on
 	expect(options.emailAndPassword.requireEmailVerification).toBe(true);
 	expect(options.emailAndPassword.revokeSessionsOnPasswordReset).toBe(true);
 	expect(options.emailAndPassword.autoSignIn).toBe(false);
+	expect(options.plugins.map((plugin: { id: string }) => plugin.id)).toContain(
+		"email-otp",
+	);
 });

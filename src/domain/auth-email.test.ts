@@ -1,8 +1,9 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	authEmailContent,
 	authEmailExpired,
 	authEmailRetryDelayMs,
+	isVerificationCode,
 } from "./auth-email";
 
 it("backs off exponentially and caps the delay", () => {
@@ -31,4 +32,28 @@ it("includes the action link in both bodies and escapes it in HTML", () => {
 	expect(authEmailContent("reset-password", url).text).toMatch(
 		/Reset password/,
 	);
+});
+
+describe("verification code email", () => {
+	it("shows a six-digit code, not a link", () => {
+		const { text, html } = authEmailContent("verify-email", "482913");
+		expect(text).toContain("482913");
+		expect(html).toContain("482913");
+		expect(text).not.toContain("http");
+		expect(html).not.toContain("href=");
+		expect(text).toContain("10 minutes");
+	});
+	it("still sends a link when the value is a link", () => {
+		const { text } = authEmailContent(
+			"verify-email",
+			"https://app.example.test/api/auth/verify-email?token=abc",
+		);
+		expect(text).toContain("https://app.example.test/api/auth/verify-email");
+	});
+	it("tells codes from links", () => {
+		expect(isVerificationCode("123456")).toBe(true);
+		expect(isVerificationCode("12345")).toBe(false);
+		expect(isVerificationCode("1234567")).toBe(false);
+		expect(isVerificationCode("https://x.test/1234567")).toBe(false);
+	});
 });

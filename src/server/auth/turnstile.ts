@@ -15,6 +15,7 @@ export const TURNSTILE_ENDPOINTS = [
 	"/sign-in/email",
 	"/request-password-reset",
 	"/send-verification-email",
+	"/email-otp/send-verification-otp",
 ];
 
 export function turnstileSettings(

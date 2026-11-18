@@ -1,5 +1,5 @@
 import { betterAuth } from "better-auth";
-import { captcha } from "better-auth/plugins";
+import { captcha, emailOTP } from "better-auth/plugins";
 import {
 	type FirstTouch,
 	initialAttributionProperties,
@@ -136,7 +136,35 @@ export function authCaptchaPlugins(appUrl: string) {
 export function authOptions() {
 	const config = serverConfig();
 	return {
-		plugins: authCaptchaPlugins(config.APP_URL),
+		plugins: [
+			...authCaptchaPlugins(config.APP_URL),
+			// Email is verified with a six-digit code typed into the app, not a
+			// link: the person never leaves the page and no mail client is opened.
+			emailOTP({
+				otpLength: 6,
+				expiresIn: 10 * 60,
+				allowedAttempts: 5,
+				overrideDefaultEmailVerification: true,
+				async sendVerificationOTP({
+					email,
+					otp,
+					type,
+				}: {
+					email: string;
+					otp: string;
+					type: string;
+				}) {
+					// Only email verification is enabled; other kinds never send.
+					if (type !== "email-verification") return;
+					await persistAuthEmail({
+						to: email,
+						subject: `${otp} is your ytimesy code`,
+						purpose: "verify-email",
+						actionUrl: otp,
+					});
+				},
+			}),
+		],
 		database: database(),
 		baseURL: config.APP_URL,
 		secret: config.BETTER_AUTH_SECRET,
@@ -173,10 +201,10 @@ export function authOptions() {
 		emailVerification: {
 			sendOnSignUp: true,
 			sendOnSignIn: true,
-			// Opening the link proves the address, and an account cannot sign
-			// in before then, so the link signs the person in (the same trust
-			// as a magic link). It is single-use and short-lived. The link
-			// lands on the page that asked, already signed in.
+			// Entering the emailed code proves the address, and an account
+			// cannot sign in before then, so the code signs the person in. It
+			// is single-use, short-lived and limited to a few attempts. Links
+			// sent before the code flow still work and sign in the same way.
 			autoSignInAfterVerification: true,
 			sendVerificationEmail: async ({
 				user,
