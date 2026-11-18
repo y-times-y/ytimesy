@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +88,34 @@ if (!preflightOnly && !allowUnverifiedSource) {
 		trackedChanges: read("status", "--porcelain", "--untracked-files=no"),
 	});
 	if (sourceProblem) throw new Error(sourceProblem);
+}
+
+// The public repository carries placeholders where the owner's real account,
+// database and project identifiers are. A private patch (never committed;
+// default ~/.ytimesy-private/production-overlay.patch, or the path in
+// YTIMESY_PRODUCTION_OVERLAY) puts them back for this deploy only, after the
+// source checks above, and is reversed when the deploy ends.
+{
+	const overlay =
+		process.env.YTIMESY_PRODUCTION_OVERLAY ||
+		join(
+			process.env.HOME ?? "",
+			".ytimesy-private",
+			"production-overlay.patch",
+		);
+	if (existsSync(overlay)) {
+		execFileSync("git", ["apply", overlay]);
+		console.log("Applied the private production overlay for this deploy.");
+		process.on("exit", () => {
+			try {
+				execFileSync("git", ["apply", "-R", overlay]);
+			} catch {
+				console.error(
+					`Could not reverse the private overlay; run: git apply -R ${overlay}`,
+				);
+			}
+		});
+	}
 }
 
 const required = [
