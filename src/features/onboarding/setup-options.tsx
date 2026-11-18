@@ -17,6 +17,9 @@ import { SubscriptionMark } from "../sessions/subscription-mark";
 import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
 import { GithubMark } from "../workspace/github-mark";
 
+/** Every action inside an option: the same height, size and weight as the sign-in buttons. */
+const ACTION = "h-7 px-2.5 text-xs! font-medium!";
+
 /** One thing to do inside a step: a mark, a name, a line, and its control. */
 function Option({
 	mark,
@@ -54,7 +57,7 @@ function Option({
 			<p className="text-[0.6875rem] leading-snug text-muted-foreground">
 				{line}
 			</p>
-			<div className="mt-auto [&_.chatgpt-sign-in-button]:h-7! [&_.chatgpt-sign-in-button]:rounded-md! [&_.chatgpt-sign-in-button]:px-2.5! [&_.chatgpt-sign-in-button]:text-xs! [&_.chatgpt-sign-in-button]:font-medium!">
+			<div className="mt-auto [&_.chatgpt-sign-in-button]:h-7! [&_.chatgpt-sign-in-button]:rounded-md! [&_.chatgpt-sign-in-button]:px-2.5! [&_.chatgpt-sign-in-button]:text-xs! [&_.chatgpt-sign-in-button]:font-medium! [&_.chatgpt-sign-in-hint]:mt-0.5 [&_.chatgpt-sign-in-hint]:text-[0.6875rem]! [&_.chatgpt-sign-in-hint]:leading-snug! [&_.chatgpt-sign-in-hint]:text-muted-foreground! [&_.chatgpt-sign-in-hint_strong]:font-medium! [&_.chatgpt-sign-in-hint_strong]:text-foreground/80!">
 				{children}
 			</div>
 		</div>
@@ -136,6 +139,7 @@ export function ModelOptions({
 							type="button"
 							size="sm"
 							variant="outline"
+							className={ACTION}
 							aria-expanded={addingKey}
 							onClick={() => setAddingKey((open) => !open)}
 						>
@@ -146,11 +150,23 @@ export function ModelOptions({
 			</div>
 			{addingKey ? <ModelConnections startAdding /> : null}
 			<div className="flex items-center gap-2">
-				<Button type="button" size="sm" disabled={!ready} onClick={onDone}>
+				<Button
+					type="button"
+					size="sm"
+					className={ACTION}
+					disabled={!ready}
+					onClick={onDone}
+				>
 					Continue
 				</Button>
 				{ready ? null : (
-					<Button type="button" size="sm" variant="ghost" onClick={onDone}>
+					<Button
+						type="button"
+						size="sm"
+						variant="ghost"
+						className={ACTION}
+						onClick={onDone}
+					>
 						Later
 					</Button>
 				)}
@@ -198,6 +214,7 @@ export function GithubOptions({
 					<Button
 						type="button"
 						size="sm"
+						className={ACTION}
 						disabled={connect.isPending}
 						onClick={() => connect.mutate()}
 					>
@@ -246,6 +263,7 @@ export function SessionsOptions({ onSkip }: { onSkip: () => void }) {
 					type="button"
 					size="sm"
 					variant="ghost"
+					className={ACTION}
 					onClick={onSkip}
 					title="Skip or finish later: import any time from Settings > Import."
 				>
