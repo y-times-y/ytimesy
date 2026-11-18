@@ -12,6 +12,10 @@ export type MergedQueuedTurn = {
 	readonly modelText: string;
 };
 
+/** The line in front of several waiting messages read as one turn. */
+export const MERGED_QUEUE_NOTE = (count: number) =>
+	`The user sent ${count} messages while you were busy. Answer them together in one reply, in order; where they conflict, the later one wins.`;
+
 export function mergedQueuedTurn(
 	parts: readonly {
 		readonly item: UserMessageItem;
@@ -22,11 +26,11 @@ export function mergedQueuedTurn(
 	if (parts.length < 2) return undefined;
 	return {
 		items: parts.slice(0, -1).map((part) => part.item),
-		modelText: parts
+		modelText: `${MERGED_QUEUE_NOTE(parts.length)}\n\n${parts
 			.map(
 				(part, index) =>
 					`Message ${index + 1} of ${parts.length}:\n${part.message}`,
 			)
-			.join("\n\n"),
+			.join("\n\n")}`,
 	};
 }

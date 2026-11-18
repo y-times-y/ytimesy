@@ -4,6 +4,7 @@ import {
 	ENVIRONMENT_SETUP_PROMPT,
 	initialSetupMessageId,
 } from "#/domain/environment-setup";
+import { MERGED_QUEUE_NOTE } from "#/domain/queued-merge";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const mocks = vi.hoisted(() => ({
@@ -497,8 +498,7 @@ it("starts several waiting messages as one turn: the last is the send, the earli
 		idempotencyKey: "c",
 		merged: {
 			items: [a.item, b.item],
-			modelText:
-				"Message 1 of 3:\nFirst\n\nMessage 2 of 3:\nSecond\n\nMessage 3 of 3:\nThird",
+			modelText: `${MERGED_QUEUE_NOTE(3)}\n\nMessage 1 of 3:\nFirst\n\nMessage 2 of 3:\nSecond\n\nMessage 3 of 3:\nThird`,
 		},
 	});
 	expect(task).not.toHaveProperty("runtimeText");

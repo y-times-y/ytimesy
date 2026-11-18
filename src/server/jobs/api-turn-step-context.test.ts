@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
+import { MID_TURN_USER_NOTE } from "#/domain/peer-inbox-injection";
 import type { ApiTurn } from "../adapters/api-turns";
 import { clearTurnMemo } from "../services/turn-memo";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -260,7 +261,7 @@ it("delivers a message queued during the run at the next step, before the model 
 	await steps(1);
 	expect(state.seen.at(-1)?.at(-1)).toEqual({
 		role: "user",
-		content: "Also update the README",
+		content: `${MID_TURN_USER_NOTE}\n\nAlso update the README`,
 	});
 	const saved = vi.mocked(checkpointApiTurn).mock.calls.at(-1)?.[2] ?? [];
 	expect(

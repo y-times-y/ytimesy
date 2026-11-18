@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
+import { MID_TURN_USER_NOTE } from "#/domain/peer-inbox-injection";
 import {
 	queueUserMessageWhileRunning,
 	releaseQueuedUserMessage,
@@ -107,7 +108,9 @@ it("delivers queued user messages by id, even when their words repeat earlier on
 		(id) => id === "b",
 	);
 	// The notice was already in the history; "b" was already in the transcript.
-	expect(history.slice(2)).toEqual([{ role: "user", content: "yes" }]);
+	expect(history.slice(2)).toEqual([
+		{ role: "user", content: `${MID_TURN_USER_NOTE}\n\nyes` },
+	]);
 	expect(checkpoint).toHaveBeenCalledWith(history, [
 		expect.objectContaining({ id: "a" }),
 	]);

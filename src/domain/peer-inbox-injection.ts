@@ -27,6 +27,14 @@ export const QUEUED_MESSAGES_PER_CHAT_LIMIT = 50;
  */
 export const PEER_INBOX_STEP_READ_LIMIT = 16;
 
+/**
+ * What a model reads in front of a message the person sent while its run was
+ * going (Send now): it arrives between two steps, so the model is told what
+ * it is. (A Claude Code run gets its own framing, claude-code-turn.ts.)
+ */
+export const MID_TURN_USER_NOTE =
+	"The user sent this message while you were working. Take it into account before you continue; where it conflicts with your current plan, the user's message wins. Acknowledge it in one line, adjust, and carry on; do not restart.";
+
 const SETUP_CATCH_UP_PREFIX = "setup-catch-up:";
 /** A setup catch-up row: a step's inbox read reports it, never injects it (setup-catch-up.ts). */
 export const isSetupCatchUpInboxRow = (id: string) =>
@@ -78,7 +86,10 @@ export function planPeerInjection(
 		if (item) {
 			if (options.delivered(item.id)) continue;
 			users.push(item);
-			injected.push({ role: "user", content: row.message });
+			injected.push({
+				role: "user",
+				content: `${MID_TURN_USER_NOTE}\n\n${row.message}`,
+			});
 		} else if (
 			!injected.some(
 				(message) => message.role === "user" && message.content === row.message,

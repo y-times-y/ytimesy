@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { steeringOrigin, steeringTexts } from "./agent-steering";
 import { SessionItemId } from "./ids";
-import { mergedQueuedTurn } from "./queued-merge";
+import { MERGED_QUEUE_NOTE, mergedQueuedTurn } from "./queued-merge";
 import {
 	type SessionItem,
 	sessionItemsQueuedWithUser,
@@ -23,7 +23,7 @@ it("numbers the messages in order for the model and leaves the last as the send"
 	const merged = mergedQueuedTurn(parts);
 	expect(merged?.items.map((item) => item.id)).toEqual(["a", "b"]);
 	expect(merged?.modelText).toBe(
-		"Message 1 of 3:\nA (note)\n\nMessage 2 of 3:\nB (note)\n\nMessage 3 of 3:\nC (note)",
+		`${MERGED_QUEUE_NOTE(3)}\n\nMessage 1 of 3:\nA (note)\n\nMessage 2 of 3:\nB (note)\n\nMessage 3 of 3:\nC (note)`,
 	);
 });
 

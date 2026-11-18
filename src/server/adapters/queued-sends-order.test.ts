@@ -3,6 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import {
+	MID_TURN_USER_NOTE,
 	PEER_INBOX_STEP_READ_LIMIT,
 	planPeerInjection,
 	QUEUED_MESSAGES_PER_CHAT_LIMIT,
@@ -139,7 +140,9 @@ it("a released message or steering behind many waiting ones is not starved by th
 	]);
 	expect(plan(rows).delivering).toHaveLength(2);
 	// a Claude Code run's hook takes only the released user message
-	expect(plan(rows, true).injected.map((m) => m.content)).toEqual(["sent"]);
+	expect(plan(rows, true).injected.map((m) => m.content)).toEqual([
+		`${MID_TURN_USER_NOTE}\n\nsent`,
+	]);
 });
 
 it("more deliverable rows than one step reads are taken in order over the next steps", async () => {
