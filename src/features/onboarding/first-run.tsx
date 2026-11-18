@@ -165,7 +165,7 @@ export function FirstRun({
  * Two parts: sign in with GitHub (OAuth through the app), then install the
  * app on the repositories ytimesy may work in. Signing in alone reaches none.
  */
-function GithubStep({
+export function GithubStep({
 	signedIn,
 	checking,
 	installationUrl,

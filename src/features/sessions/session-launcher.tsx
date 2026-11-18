@@ -126,6 +126,7 @@ import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import type { OpenChatSide } from "#/server/services/open-chat-side";
 import type { CanvasFocus } from "../canvas/canvas-open-context";
+import { SetupChecklist } from "../onboarding/setup-checklist";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
 import {
@@ -177,7 +178,7 @@ import {
 	pushApprovalStatusFn,
 	pushApprovedChangeFn,
 } from "./push-approval.fn";
-import { SendBlockNotice } from "./send-block-notice";
+import { SendBlockStep } from "./send-block-step";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
 import { SideChatFrame, useSideChat } from "./side-chat-panel";
@@ -1726,8 +1727,9 @@ export function SessionLauncher({
 								{attachmentError}
 							</p>
 						)}
+						{!side && session.items.length === 0 ? <SetupChecklist /> : null}
 						{shownSendBlock && !(noProject && !selectedProject) ? (
-							<SendBlockNotice
+							<SendBlockStep
 								block={shownSendBlock}
 								onFix={
 									shownSendBlock.action === "model_picker" || onOpenSettings
