@@ -69,7 +69,7 @@ export function LandingHeader({ signedIn = false }: { signedIn?: boolean }) {
 						<span>GitHub</span>
 					</a>
 					<a
-						className="landing-github-link"
+						className="landing-github-link landing-discord-link"
 						href={DISCORD_URL}
 						target="_blank"
 						rel="noreferrer"
