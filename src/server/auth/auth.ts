@@ -173,10 +173,11 @@ export function authOptions() {
 		emailVerification: {
 			sendOnSignUp: true,
 			sendOnSignIn: true,
-			// A verification link is a bearer token sitting in an inbox; it
-			// proves the address, it does not sign anyone in. The link lands on
-			// sign-in, which returns to the page that asked.
-			autoSignInAfterVerification: false,
+			// Opening the link proves the address, and an account cannot sign
+			// in before then, so the link signs the person in (the same trust
+			// as a magic link). It is single-use and short-lived. The link
+			// lands on the page that asked, already signed in.
+			autoSignInAfterVerification: true,
 			sendVerificationEmail: async ({
 				user,
 				url,
