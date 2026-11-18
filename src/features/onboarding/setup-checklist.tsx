@@ -42,7 +42,8 @@ const COPY: Record<
 
 const STEP_ICON: Record<SetupStepId, React.ReactNode> = {
 	github: <GithubMark size={16} />,
-	model: <BrainCircuit size={17} strokeWidth={1.7} />,
+	// Layers: choose between plans and keys.
+	model: <Layers size={17} strokeWidth={1.7} />,
 	// A local agent's terminal session.
 	sessions: <SquareTerminal size={17} strokeWidth={1.7} />,
 };
