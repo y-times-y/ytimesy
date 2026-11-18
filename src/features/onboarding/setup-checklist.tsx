@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Check } from "lucide-react";
+import { ArrowDownToLine, Check, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import type { FirstRunState } from "#/domain/first-run";
@@ -14,6 +14,7 @@ import {
 import { cn } from "#/lib/utils";
 import { authClient } from "../auth/client";
 import { requestJson } from "../projects/api";
+import { GithubMark } from "../workspace/github-mark";
 import { GithubOptions, ModelOptions, SessionsOptions } from "./setup-options";
 import { readSetupPrefs, writeSetupPrefs } from "./setup-prefs";
 import { getSetupState } from "./setup-state.fn";
@@ -39,33 +40,51 @@ const COPY: Record<
 	},
 };
 
-/** A plain numbered circle: a check when done, the number otherwise. */
-function StepCircle({
+const STEP_ICON: Record<SetupStepId, React.ReactNode> = {
+	github: <GithubMark size={16} />,
+	model: <Sparkles size={16} strokeWidth={1.8} />,
+	sessions: <ArrowDownToLine size={16} strokeWidth={1.8} />,
+};
+
+/**
+ * A step's icon in a soft tile. A finished step gets a check badge, the
+ * current one a brighter edge, and a later one is dimmed.
+ */
+function StepIcon({
+	id,
 	status,
-	number,
 }: {
+	id: SetupStepId;
 	status: SetupStepStatus;
-	number: number;
 }) {
 	return (
 		<span
 			aria-hidden="true"
+			data-status={status}
 			className={cn(
-				"grid size-[1.375rem] shrink-0 place-items-center rounded-full border-[1.5px] text-[0.6875rem] font-semibold",
-				status === "done" &&
-					"border-primary bg-primary text-primary-foreground",
-				status === "current" && "border-foreground text-foreground",
-				(status === "todo" || status === "skipped") &&
-					"border-foreground/25 text-muted-foreground",
+				"relative grid size-9 shrink-0 place-items-center rounded-xl bg-foreground/[0.06] text-foreground/80 ring-1 ring-foreground/10 transition-colors",
+				status === "current" &&
+					"bg-foreground/10 text-foreground ring-foreground/30",
+				(status === "todo" || status === "skipped") && "text-muted-foreground",
 			)}
 		>
-			{status === "done" ? (
-				<Check size={11} strokeWidth={3} />
-			) : status === "skipped" ? (
-				"–"
-			) : (
-				number
-			)}
+			{STEP_ICON[id]}
+			{status === "done" || status === "skipped" ? (
+				<span
+					className={cn(
+						"absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full ring-2 ring-card",
+						status === "done"
+							? "bg-primary text-primary-foreground"
+							: "bg-muted text-muted-foreground",
+					)}
+				>
+					{status === "done" ? (
+						<Check size={10} strokeWidth={3.5} />
+					) : (
+						<span className="text-[0.625rem] leading-none">–</span>
+					)}
+				</span>
+			) : null}
 		</span>
 	);
 }
@@ -166,19 +185,26 @@ export function SetupChecklistView({
 	onSessionsDone: () => void;
 }) {
 	const percent = Math.round((progress.settled / progress.steps.length) * 100);
+	const stepNumber = Math.min(progress.settled + 1, progress.steps.length);
 	return (
 		<section
 			aria-labelledby="setup-title"
-			className="mx-auto mb-3 w-full max-w-[44rem] overflow-hidden rounded-2xl bg-card text-xs text-card-foreground shadow-lg shadow-black/25 ring-1 ring-foreground/10"
+			className="mx-auto mb-3 w-full max-w-[44rem] overflow-hidden rounded-2xl bg-gradient-to-b from-card to-card/90 text-[0.8125rem] text-card-foreground shadow-xl shadow-black/30 ring-1 ring-foreground/10"
 		>
-			<div className="flex items-center gap-3 px-5 pt-4 pb-3.5">
+			<div className="flex items-start gap-4 px-6 pt-5 pb-4">
 				<div className="min-w-0">
-					<h2 id="setup-title" className="text-sm font-semibold tracking-tight">
+					<p className="mb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
+						Step {stepNumber} of {progress.steps.length}
+					</p>
+					<h2
+						id="setup-title"
+						className="text-base font-semibold tracking-tight"
+					>
 						Get set up
 					</h2>
-					<p className="text-muted-foreground">
+					<p className="mt-0.5 text-muted-foreground">
 						{progress.settled === 0
-							? "Three quick steps. You can type your request now."
+							? "A few quick steps. You can type your request now."
 							: `${progress.steps.length - progress.settled} to go.`}
 					</p>
 				</div>
@@ -186,7 +212,7 @@ export function SetupChecklistView({
 					type="button"
 					variant="ghost"
 					size="sm"
-					className="ml-auto"
+					className="ml-auto text-muted-foreground"
 					onClick={onHide}
 				>
 					Hide
@@ -198,15 +224,15 @@ export function SetupChecklistView({
 				aria-valuemax={progress.steps.length}
 				aria-valuenow={progress.settled}
 				aria-label="Setup progress"
-				className="h-[3px] bg-muted"
+				className="mx-6 h-1 overflow-hidden rounded-full bg-foreground/10"
 			>
 				<div
-					className="h-full bg-primary transition-[width] duration-500"
+					className="h-full rounded-full bg-primary transition-[width] duration-500"
 					style={{ width: `${percent}%` }}
 				/>
 			</div>
-			<ol>
-				{progress.steps.map((step, index) => {
+			<ol className="mt-3 pb-2">
+				{progress.steps.map((step) => {
 					const copy = COPY[step.id];
 					const expanded =
 						open === step.id &&
@@ -221,24 +247,29 @@ export function SetupChecklistView({
 								? "Skipped. Import any time from Settings."
 								: copy.blurb;
 					return (
-						<li key={step.id} className="border-t border-foreground/10">
-							<div className="grid grid-cols-[1.375rem_1fr_auto] items-center gap-3.5 px-5 py-3.5">
-								<StepCircle status={step.status} number={index + 1} />
+						<li key={step.id}>
+							<div
+								className={cn(
+									"grid grid-cols-[2.25rem_1fr_auto] items-center gap-4 px-6 py-3.5",
+									step.status === "todo" && "opacity-70",
+								)}
+							>
+								<StepIcon id={step.id} status={step.status} />
 								<div className="min-w-0">
-									<p className="flex items-center gap-1.5 font-medium">
+									<p className="flex items-center gap-2 text-sm font-medium">
 										{copy.title}
 										{step.optional ? (
-											<span className="rounded-full border border-foreground/15 px-1.5 text-[0.625rem] font-normal text-muted-foreground">
+											<span className="rounded-full bg-foreground/[0.07] px-2 py-px text-[0.625rem] font-normal text-muted-foreground">
 												Optional
 											</span>
 										) : null}
 									</p>
-									<p className="text-muted-foreground">{note}</p>
+									<p className="mt-0.5 text-muted-foreground">{note}</p>
 								</div>
 								{step.status === "current" || step.status === "todo" ? (
 									<Button
 										type="button"
-										size="sm"
+										size="lg"
 										variant={step.status === "current" ? "default" : "outline"}
 										aria-expanded={expanded}
 										onClick={() => onToggle(step.id)}
@@ -248,8 +279,8 @@ export function SetupChecklistView({
 								) : null}
 							</div>
 							{expanded ? (
-								<div className="px-5 pb-5 pl-[3.625rem]">
-									<div className="rounded-xl bg-muted/25 p-3 ring-1 ring-foreground/5">
+								<div className="px-6 pb-5 pl-[4.75rem]">
+									<div className="rounded-xl bg-foreground/[0.03] p-3.5 ring-1 ring-foreground/[0.06]">
 										{step.id === "github" ? (
 											<GithubOptions
 												signedIn={data.githubConnected}

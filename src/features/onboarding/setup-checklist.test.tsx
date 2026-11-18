@@ -90,9 +90,10 @@ function render(options: {
 	);
 }
 
-it("starts with three plain numbered steps and the way to hide it", () => {
+it("starts with three steps, each with its own icon, and the way to hide it", () => {
 	const html = render({});
 	expect(html).toContain("Get set up");
+	expect(html).toContain("Step 1 of 3");
 	for (const title of [
 		"Connect GitHub",
 		"Choose a model",
@@ -103,10 +104,9 @@ it("starts with three plain numbered steps and the way to hide it", () => {
 	expect(html).toContain(">Hide<");
 	expect(html).toContain('aria-valuenow="0"');
 	expect(html).toContain('aria-valuemax="3"');
-	// Circles carry the step number; nothing says "0 of 3".
-	expect(html).toMatch(/>1<\/span>/);
-	expect(html).toMatch(/>2<\/span>/);
-	expect(html).toMatch(/>3<\/span>/);
+	// The first step is the current one; the rest wait.
+	expect(html.match(/data-status="current"/g)).toHaveLength(1);
+	expect(html.match(/data-status="todo"/g)).toHaveLength(2);
 	expect(html).not.toContain("0 of 3");
 	expect(html).toContain(">Connect<");
 	expect(html).toContain(">Choose<");
@@ -121,6 +121,8 @@ it("shows finished steps as checked and counts what is left", () => {
 	});
 	expect(html).toContain('aria-valuenow="2"');
 	expect(html).toContain("1 to go.");
+	expect(html).toContain("Step 3 of 3");
+	expect(html.match(/data-status="done"/g)).toHaveLength(2);
 	expect(html).toContain("Connected");
 	expect(html).toContain("Ready");
 	expect(html).not.toContain(">Connect<");
