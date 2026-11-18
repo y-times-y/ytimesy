@@ -242,10 +242,6 @@ export function ProjectSidebar({
 		statusOf: chatStatus,
 	});
 	const yProjectIds = new Set(yRows.map(({ project }) => project.id));
-	// The Threads "+" starts a chat in the open Y project, or in the only one.
-	const newThreadProject =
-		yRows.find(({ project }) => project.id === selectedProjectId)?.project ??
-		(yRows.length === 1 ? yRows[0]?.project : undefined);
 	// The Chats header and sort only matter while plain projects exist.
 	const showPlain = projects.length > 0 && yRows.length < projects.length;
 	const orderedProjects = projectsByRecentActivity(projects, groups).filter(
@@ -619,45 +615,17 @@ export function ProjectSidebar({
 	 */
 	function threadsSection(
 		rows: readonly { chat: SidebarChat; project: Project }[],
-		newThreadProject: Project | undefined,
 	) {
 		if (!yRows.length) return null;
 		const { list, settled } = threadSections(rows, chatStatus, selectedChatId);
 		const settledOpen = settledExpanded || !hydrated;
-		const newThreadName = newThreadProject
-			? projectDisplayName(newThreadProject)
-			: "";
 		return (
 			<section
 				className="sidebar-y-section sidebar-threads-section"
 				data-section="threads"
 				aria-labelledby="sidebar-section-threads"
 			>
-				{sectionHeader(
-					"threads",
-					"Threads",
-					newThreadProject ? (
-						<button
-							type="button"
-							className="sidebar-section-add"
-							aria-label={`New chat in ${newThreadName}`}
-							title={titleWithShortcut("New chat", newChatHint)}
-							data-active={
-								newThreadProject.id === selectedProjectId && newChatActive
-									? "true"
-									: undefined
-							}
-							onClick={() => {
-								persistCollapsed(
-									withProjectExpanded(collapsedProjectIds, newThreadProject.id),
-								);
-								onNewChat(newThreadProject.id);
-							}}
-						>
-							<Plus size={14} strokeWidth={1.5} />
-						</button>
-					) : null,
-				)}
+				{sectionHeader("threads", "Threads")}
 				{list.length ? (
 					<ul className="sidebar-chats sidebar-threads">
 						{list.map(({ chat, project }) =>
@@ -1066,7 +1034,7 @@ export function ProjectSidebar({
 					{yRows.length ? (
 						<div className="sidebar-y-sections">
 							{y2Section(yRows)}
-							{threadsSection(recent.y, newThreadProject)}
+							{threadsSection(recent.y)}
 						</div>
 					) : null}
 					{showPlain ? (

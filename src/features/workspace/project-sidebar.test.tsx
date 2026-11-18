@@ -588,12 +588,12 @@ describe("Y projects: the Y² and Threads sections", () => {
 				expect(html).not.toContain("<h3>Y</h3>");
 			});
 
-			it("offers the new-chat + on the Threads header for the open Y project", () => {
+			it("has no + on the Threads header (it started the chat in the Y project, not the open one)", () => {
 				const html = view(sort);
-				const { threads } = sections(html);
-				expect(threads).toContain('aria-label="New chat in Alpha"');
-				// Y² has no sensible action: no + there.
-				expect(sections(html).y2).not.toContain("sidebar-section-add");
+				const { threads, y2 } = sections(html);
+				expect(threads).not.toContain("sidebar-section-add");
+				expect(threads).not.toContain("New chat in");
+				expect(y2).not.toContain("sidebar-section-add");
 			});
 
 			it("leaves the plain project exactly as before", () => {
