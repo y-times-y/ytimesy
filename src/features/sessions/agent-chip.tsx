@@ -5,7 +5,9 @@ import {
 	type MentionSegment,
 	mentionSegments,
 } from "#/domain/agent-mentions";
+import type { ThreadDirectory } from "#/domain/thread-label";
 import { AgentIcon } from "./agent-icon";
+import { ReferenceContext, ThreadChip } from "./agent-reference-chips";
 
 /**
  * The chat's agents a view can name (never the view's own) and how to open
@@ -52,9 +54,12 @@ export function AgentChip({
 export function AgentSegments({
 	segments,
 	open = true,
+	threads,
 }: {
 	segments: readonly MentionSegment[];
 	open?: boolean;
+	/** The project's threads: a mention that names one is a thread chip, with its picture. */
+	threads?: ThreadDirectory;
 }) {
 	const mentions = useContext(AgentMentionContext);
 	const byName = new Map(
@@ -67,6 +72,20 @@ export function AgentSegments({
 					segment.kind === "mention"
 						? byName.get(segment.name.toLowerCase())
 						: undefined;
+				const thread =
+					!agent && segment.kind === "mention"
+						? threads?.get(segment.name.toLowerCase())
+						: undefined;
+				if (thread && segment.kind === "mention")
+					return (
+						<ThreadChip
+							// biome-ignore lint/suspicious/noArrayIndexKey: a text's segments keep their order
+							key={index}
+							id={thread.id}
+							label={segment.name}
+							title={thread.title}
+						/>
+					);
 				return agent ? (
 					<AgentChip
 						// biome-ignore lint/suspicious/noArrayIndexKey: a text's segments keep their order
@@ -85,17 +104,27 @@ export function AgentSegments({
 	);
 }
 
-/** A user message's text, its @mentions of the view's other agents as chips. */
+/** A user message's text, its @mentions of the view's other agents and the project's threads as chips. */
 export function MentionText({ text }: { text: string }) {
 	const mentions = useContext(AgentMentionContext);
-	if (!mentions?.agents.length || !text.includes("@")) return <>{text}</>;
+	const threads = useContext(ReferenceContext)?.threads;
+	if ((!mentions?.agents.length && !threads?.size) || !text.includes("@"))
+		return <>{text}</>;
 	const names = new Set(
-		mentions.agents.map((agent) => agent.name.toLowerCase()),
+		mentions?.agents.map((agent) => agent.name.toLowerCase()),
 	);
 	return (
-		<AgentSegments
-			segments={mentionSegments(text, (name) => names.has(name.toLowerCase()))}
-		/>
+		<span className="mention-text">
+			<AgentSegments
+				segments={mentionSegments(
+					text,
+					(name) =>
+						names.has(name.toLowerCase()) ||
+						Boolean(threads?.has(name.toLowerCase())),
+				)}
+				threads={threads}
+			/>
+		</span>
 	);
 }
 

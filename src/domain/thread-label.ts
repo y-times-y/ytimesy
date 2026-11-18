@@ -103,20 +103,30 @@ export type ThreadLabelSegment =
 const escapeRegExp = (text: string) =>
 	text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const patterns = new WeakMap<ThreadDirectory, RegExp>();
+
+/** The names of a directory as one pattern, built once per directory (a reply is split text node by text node). */
+function labelPattern(directory: ThreadDirectory) {
+	let pattern = patterns.get(directory);
+	if (!pattern) {
+		// Longest first, so "ytimesy-12" wins over a shorter name it starts with.
+		const names = [...directory.keys()]
+			.sort((a, b) => b.length - a.length)
+			.map(escapeRegExp);
+		pattern = new RegExp(`(?<![\\w-])(?:${names.join("|")})(?![\\w-])`, "gi");
+		patterns.set(directory, pattern);
+	}
+	// matchAll copies the pattern, so the shared one keeps no position.
+	return pattern;
+}
+
 /** Prose split around names that belong to a known thread; anything else stays text. */
 export function threadLabelSegments(
 	text: string,
 	directory: ThreadDirectory,
 ): ThreadLabelSegment[] {
 	if (directory.size === 0) return text ? [{ kind: "text", text }] : [];
-	// Longest first, so "ytimesy-12" wins over a shorter name it starts with.
-	const names = [...directory.keys()]
-		.sort((a, b) => b.length - a.length)
-		.map(escapeRegExp);
-	const pattern = new RegExp(
-		`(?<![\\w-])(?:${names.join("|")})(?![\\w-])`,
-		"gi",
-	);
+	const pattern = labelPattern(directory);
 	const out: ThreadLabelSegment[] = [];
 	let last = 0;
 	for (const match of text.matchAll(pattern)) {

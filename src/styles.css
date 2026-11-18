@@ -5790,11 +5790,18 @@ details.environment-build[open] > summary .session-activity-chevron {
 	margin-right: 4px;
 	vertical-align: top;
 }
+.reference-chip .thread-art {
+	display: inline-block;
+	margin-top: 1px;
+	margin-right: 5px;
+	vertical-align: top;
+}
 .session-event-icon {
 	flex-shrink: 0;
 	color: var(--event-icon);
 }
-.session-markdown a.reference-chip {
+.session-markdown a.reference-chip,
+.mention-text a.reference-chip {
 	display: inline-block;
 	max-width: 100%;
 	height: 18px;
@@ -5809,10 +5816,12 @@ details.environment-build[open] > summary .session-activity-chevron {
 	overflow-wrap: normal;
 	vertical-align: baseline;
 }
-.session-markdown a.reference-chip:hover {
+.session-markdown a.reference-chip:hover,
+.mention-text a.reference-chip:hover {
 	background: rgba(154, 194, 255, 0.18);
 }
-.session-markdown a.reference-chip:focus-visible {
+.session-markdown a.reference-chip:focus-visible,
+.mention-text a.reference-chip:focus-visible {
 	outline: 1px solid #9ac2ff;
 	outline-offset: 1px;
 }

@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { threadDirectory } from "#/domain/thread-label";
 import { AgentMarkdown } from "./agent-markdown-renderer";
 import { ReferenceContext } from "./agent-reference-chips";
 
@@ -203,6 +204,31 @@ describe("pull request, issue and thread mentions", () => {
 		);
 		expect(html).toContain('data-ref="acme/web#5"');
 		expect(html).toContain('<span class="reference-chip-label">lib#3</span>');
+	});
+
+	it("draws a thread's readable name in a reply as a chip with its picture", () => {
+		const html = renderToStaticMarkup(
+			createElement(
+				ReferenceContext.Provider,
+				{
+					value: {
+						threads: threadDirectory("ytimesy", [
+							{ id, title: "Fix sign-up form", threadNumber: 12 },
+						]),
+					},
+				},
+				createElement(AgentMarkdown, {
+					text: "I asked ytimesy-12 to take it, not ytimesy-99.",
+					onOpenFile: () => {},
+				}),
+			),
+		);
+		expect(html.match(/data-reference="thread"/g)).toHaveLength(1);
+		expect(html).toContain('class="thread-art"');
+		// The chip shows the readable name, not the thread's old hex label.
+		expect(html).toContain(">ytimesy-12</span>");
+		expect(html).not.toMatch(/yti-[0-9a-f]{4}/i);
+		expect(html).toContain("ytimesy-99");
 	});
 
 	it("draws a thread's label as a chip that opens the thread", () => {

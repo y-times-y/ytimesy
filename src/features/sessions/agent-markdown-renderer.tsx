@@ -176,7 +176,8 @@ type ReferenceOptions = {
 const mayReference = (text: string) =>
 	text.includes("#") ||
 	text.includes("pr:") ||
-	/[A-Z0-9]-[0-9A-F]{4}/.test(text);
+	// A thread's name: "ytimesy-12", or an old label ("WEB-3F9A").
+	/[A-Za-z0-9]-[0-9A-Fa-f]/.test(text);
 
 /**
  * After sanitizing: a paragraph that starts with an event marker
@@ -289,12 +290,12 @@ export function AgentMarkdown({
 		[agentNames, defaultRepository, threads],
 	);
 	const components = useMemo<Components>(() => {
-		const labelById = new Map(
-			[...(threads ?? [])].map(([label, thread]) => [
-				thread.id,
-				{ label, title: thread.title },
-			]),
-		);
+		// A thread has its name and its old label in the directory: the
+		// first, the numbered name, is the one a chip shows.
+		const labelById = new Map<string, { label: string; title: string }>();
+		for (const [label, thread] of threads ?? [])
+			if (!labelById.has(thread.id))
+				labelById.set(thread.id, { label, title: thread.title });
 		const agentByName = new Map<string, MentionAgent>(
 			agents?.map((agent) => [agent.name, agent]) ?? [],
 		);
