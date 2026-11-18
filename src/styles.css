@@ -2871,11 +2871,52 @@ a.session-title-meta:focus-visible {
 }
 
 .onboarding-shell {
+	position: relative;
+	isolation: isolate;
 	min-height: 100dvh;
 	display: grid;
 	place-items: center;
 	padding: 24px;
-	background: #000;
+	/* A soft light from the top over near-black, with a fine dot grid that
+	   fades out behind the card. Static, so first paint never shifts. */
+	background:
+		radial-gradient(
+			700px 420px at 50% 0,
+			rgb(255 255 255 / 0.1),
+			transparent 70%
+		),
+		#050505;
+	overflow: hidden;
+}
+.onboarding-shell::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	background-image: radial-gradient(
+		rgb(255 255 255 / 0.16) 1px,
+		transparent 1.2px
+	);
+	background-size: 22px 22px;
+	mask-image: radial-gradient(600px 460px at 50% 38%, #000 0, transparent 75%);
+}
+.onboarding-shell::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: 50%;
+	z-index: -1;
+	width: min(520px, 70%);
+	height: 1px;
+	transform: translateX(-50%);
+	pointer-events: none;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		rgb(255 255 255 / 0.45),
+		transparent
+	);
 }
 .auth-page {
 	display: flex;
@@ -6195,4 +6236,3 @@ details.environment-build[open] > summary .session-activity-chevron {
 		display: none;
 	}
 }
-
