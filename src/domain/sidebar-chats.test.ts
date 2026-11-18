@@ -11,7 +11,6 @@ import {
 	listedChatModelId,
 	listedChatTurnStatus,
 	newChatIsActive,
-	parseSidebarSort,
 	projectFolderIsExpanded,
 	projectsByRecentActivity,
 	projectsLatestChatsToReadAhead,
@@ -423,13 +422,6 @@ describe("sidebar sort", () => {
 		},
 		{ project: c, chats: [] },
 	];
-
-	it("reads the stored choice, defaulting to projects", () => {
-		expect(parseSidebarSort("recent")).toBe("recent");
-		expect(parseSidebarSort("projects")).toBe("projects");
-		expect(parseSidebarSort(null)).toBe("projects");
-		expect(parseSidebarSort("bogus")).toBe("projects");
-	});
 
 	it("lists every chat newest first with its project, pinned on top", () => {
 		expect(

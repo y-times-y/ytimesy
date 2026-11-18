@@ -18,12 +18,9 @@ import {
 	parsePinnedChatIds,
 	parseSeenChatKeys,
 	parseSeenSince,
-	parseSidebarSort,
 	SIDEBAR_COLLAPSED_PROJECTS_KEY,
 	SIDEBAR_PINNED_CHATS_KEY,
 	SIDEBAR_PINNED_STORAGE_KEY,
-	SIDEBAR_SORT_KEY,
-	type SidebarSort,
 	sidebarIsPinnedInStorage,
 } from "#/domain/sidebar-chats";
 import { fitDraftHeight } from "../sessions/fit-draft-height";
@@ -41,7 +38,6 @@ export type FirstPaintChoices = {
 	readonly compact: boolean;
 	/** The sidebar is pinned open; never on a phone, where it starts closed. */
 	readonly sidebarOpen: boolean;
-	readonly sidebarSort: SidebarSort;
 	readonly collapsedProjectIds: readonly string[];
 	readonly pinnedChatIds: readonly string[];
 };
@@ -63,14 +59,12 @@ export const COMPACT_LAYOUT_QUERY =
 export const SERVER_FIRST_PAINT: FirstPaintChoices = {
 	compact: false,
 	sidebarOpen: false,
-	sidebarSort: "projects",
 	collapsedProjectIds: [],
 	pinnedChatIds: [],
 };
 
 const STORAGE_KEYS = {
 	sidebarPinned: SIDEBAR_PINNED_STORAGE_KEY,
-	sidebarSort: SIDEBAR_SORT_KEY,
 	collapsedProjects: SIDEBAR_COLLAPSED_PROJECTS_KEY,
 	pinnedChats: SIDEBAR_PINNED_CHATS_KEY,
 };
@@ -80,7 +74,6 @@ export function readFirstPaintChoices(
 	keys: typeof STORAGE_KEYS,
 	compactQuery: string,
 	parsePinned: (raw: string | null) => boolean,
-	parseSort: (raw: string | null) => SidebarSort,
 	parseIds: (raw: string | null) => readonly string[],
 ): FirstPaintChoices {
 	function stored(key: string) {
@@ -99,7 +92,6 @@ export function readFirstPaintChoices(
 	return {
 		compact,
 		sidebarOpen: !compact && parsePinned(stored(keys.sidebarPinned)),
-		sidebarSort: parseSort(stored(keys.sidebarSort)),
 		collapsedProjectIds: parseIds(stored(keys.collapsedProjects)),
 		pinnedChatIds: parseIds(stored(keys.pinnedChats)),
 	};
@@ -107,14 +99,13 @@ export function readFirstPaintChoices(
 
 /**
  * Self-contained, like readFirstPaintChoices. The sheet only sets custom
- * properties that styles.css reads (--chat-pinned, --folder-chats,
- * --folder-chevron); React's own attributes replace it after hydration.
+ * properties that styles.css reads (--chat-pinned, --section-body,
+ * --section-chevron); React's own attributes replace it after hydration.
  */
 export function showFirstPaintChoices(choices: FirstPaintChoices) {
 	window.__YT_BOOT__ = choices;
 	const root = document.documentElement;
 	root.dataset.sidebar = choices.sidebarOpen ? "open" : "closed";
-	root.dataset.sidebarSort = choices.sidebarSort;
 	const plain = (id: string) => /^[\w-]+$/.test(id);
 	const rules = choices.pinnedChatIds
 		.filter(plain)
@@ -124,7 +115,7 @@ export function showFirstPaintChoices(choices: FirstPaintChoices) {
 				.filter(plain)
 				.map(
 					(id) =>
-						`.sidebar-project[data-project-id="${id}"]{--folder-chats:none;--folder-chevron:none}`,
+						`.sidebar-plain-section[data-project-id="${id}"]{--section-body:none;--section-chevron:none}`,
 				),
 		);
 	if (!rules.length) return;
@@ -192,17 +183,20 @@ export function markFirstPaintRows(
 			`${chat} .sidebar-chat-title{color:var(--chat-unread-color);font-weight:var(--chat-unread-weight)}`,
 		);
 	}
+	// Each section folds its own finished threads into Settled: the Y
+	// Threads section, and every plain project's section on its own.
+	const foldRows = '.sidebar-chat-row[data-group="done"]';
 	const folds = [
-		// The Threads section folds its finished threads into Settled; Recent's
-		// plain Chats fold their Done group on their own.
-		{
-			scope: ".sidebar-threads-section",
-			rows: '.sidebar-chat-row[data-group="done"]',
-		},
-		{
-			scope: ".sidebar-recent",
-			rows: '[data-group="done"][data-section="plain"] .sidebar-chat-row',
-		},
+		{ scope: ".sidebar-threads-section", rows: foldRows },
+		...Array.from(
+			sidebar.querySelectorAll<HTMLElement>(".sidebar-plain-section"),
+		)
+			.map((section) => section.dataset.projectId ?? "")
+			.filter(plain)
+			.map((id) => ({
+				scope: `.sidebar-plain-section[data-project-id="${id}"]`,
+				rows: foldRows,
+			})),
 	];
 	for (const { scope, rows: rowsSelector } of folds) {
 		const foldable = rows(`${scope} ${rowsSelector}`);
@@ -243,7 +237,7 @@ export function markFirstPaintRows(
 	}
 }
 
-export const FIRST_PAINT_SCRIPT = `(${showFirstPaintChoices})((${readFirstPaintChoices})(${JSON.stringify(STORAGE_KEYS)},${JSON.stringify(COMPACT_LAYOUT_QUERY)},${sidebarIsPinnedInStorage},${parseSidebarSort},${parsePinnedChatIds}))`;
+export const FIRST_PAINT_SCRIPT = `(${showFirstPaintChoices})((${readFirstPaintChoices})(${JSON.stringify(STORAGE_KEYS)},${JSON.stringify(COMPACT_LAYOUT_QUERY)},${sidebarIsPinnedInStorage},${parsePinnedChatIds}))`;
 
 export const FIRST_PAINT_ROWS_SCRIPT = `(${markFirstPaintRows})(${JSON.stringify({ seen: CHAT_SEEN_STORAGE_KEY, seenSince: CHAT_SEEN_SINCE_STORAGE_KEY })},${parseSeenChatKeys},${parseSeenSince},${sidebarChatUnread},${chatsWithPinnedFirst})`;
 
@@ -343,7 +337,6 @@ export function readSavedChoices(): FirstPaintChoices {
 		STORAGE_KEYS,
 		COMPACT_LAYOUT_QUERY,
 		sidebarIsPinnedInStorage,
-		parseSidebarSort,
 		parsePinnedChatIds,
 	);
 }

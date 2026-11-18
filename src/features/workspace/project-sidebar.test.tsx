@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Project } from "#/domain/projects";
 import {
 	CHAT_SEEN_SINCE_STORAGE_KEY,
-	SIDEBAR_SORT_KEY,
+	SIDEBAR_COLLAPSED_PROJECTS_KEY,
 	type SidebarChat,
 } from "#/domain/sidebar-chats";
 import { RenderAsHydrated } from "../app/first-paint";
@@ -38,15 +38,11 @@ const projectChats = [
 ];
 
 function render(
-	stored: string | null,
 	hydrated = true,
 	extra: Partial<ComponentProps<typeof ProjectSidebar>> = {},
 ) {
 	(globalThis as { window?: unknown }).window = {
-		localStorage: {
-			getItem: (key: string) => (key === SIDEBAR_SORT_KEY ? stored : null),
-			setItem: () => undefined,
-		},
+		localStorage: { getItem: () => null, setItem: () => undefined },
 	};
 	return renderToStaticMarkup(
 		<RenderAsHydrated value={hydrated}>
@@ -76,7 +72,7 @@ afterEach(() => {
 describe("left sidebar: Issues and Pull requests", () => {
 	const open = () => undefined;
 	it("lists Issues and Pull requests above Memory", () => {
-		const html = render(null, true, { onOpenWorkItems: open });
+		const html = render(true, { onOpenWorkItems: open });
 		const issues = html.indexOf(">Issues");
 		const pulls = html.indexOf(">Pull requests");
 		const memory = html.indexOf(">Memory</button>");
@@ -85,14 +81,14 @@ describe("left sidebar: Issues and Pull requests", () => {
 		expect(pulls).toBeLessThan(memory);
 	});
 	it("shows no badge until something waits on the user", () => {
-		const html = render(null, true, {
+		const html = render(true, {
 			onOpenWorkItems: open,
 			waitingOnYou: { pullRequests: 0, issues: 0 },
 		});
 		expect(html).not.toContain("sidebar-nav-badge");
 	});
 	it("badges only what waits on the user, and marks the open page", () => {
-		const html = render(null, true, {
+		const html = render(true, {
 			onOpenWorkItems: open,
 			workItemsActive: "pull-requests",
 			waitingOnYou: { pullRequests: 3, issues: 0 },
@@ -104,7 +100,7 @@ describe("left sidebar: Issues and Pull requests", () => {
 		);
 	});
 	it("is absent where the page cannot open", () => {
-		const html = render(null);
+		const html = render();
 		expect(html).not.toContain("Pull requests");
 		expect(html).not.toContain(">Issues");
 	});
@@ -112,7 +108,7 @@ describe("left sidebar: Issues and Pull requests", () => {
 
 describe("left sidebar", () => {
 	it("has a Memory entry in the sidebar", () => {
-		const html = render(null);
+		const html = render();
 		expect(html).toMatch(/class="sidebar-nav-item" aria-current="page"/);
 		expect(html).toContain(">Memory</button>");
 		expect(html.match(/class="sidebar-nav-item"/g)).toHaveLength(1);
@@ -120,7 +116,7 @@ describe("left sidebar", () => {
 	});
 
 	it("has a top-left toggle for the closed sidebar, one in its header for the open one, and no rail", () => {
-		const html = render(null);
+		const html = render();
 		expect(html).toContain("left-sidebar-toggle");
 		// The open sidebar's toggle sits in its header, after the logo.
 		const header = html.slice(html.indexOf('class="sidebar-brand-row"'));
@@ -134,34 +130,67 @@ describe("left sidebar", () => {
 		expect(html.match(/class="wordmark"/g)).toHaveLength(1);
 	});
 
-	it("groups by project by default, the most recently active project first", () => {
-		const html = render(null);
-		// One sort icon button (a menu) instead of a segmented control.
-		expect(html).toContain('aria-label="Sort chats: Projects"');
-		expect(html).not.toContain('sidebar-sort"');
+	it("renders each project as its own section, the most recently active first, with no Chats header or sort", () => {
+		const html = render();
+		expect(html).not.toContain("sidebar-list-header");
+		expect(html).not.toContain(">Chats<");
+		expect(html).not.toContain("Sort chats");
+		expect(html).not.toContain("sidebar-folder");
+		expect(html).not.toContain("sidebar-projects");
+		expect(html).not.toContain("data-sort-view");
+		expect(html.match(/data-section="project"/g)).toHaveLength(2);
 		expect(html.indexOf(">Beta<")).toBeLessThan(html.indexOf(">Alpha<"));
-		expect(html).not.toContain("sidebar-chat-project");
+		// The same section look as Threads: the shared header and its heading.
+		expect(html).toContain(
+			'<h3 class="sidebar-section-title" id="sidebar-section-project-beta">',
+		);
+		expect(html).toContain('aria-labelledby="sidebar-section-project-beta"');
+		expect(html).toContain('class="sidebar-y-section sidebar-plain-section"');
+		expect(html).not.toContain('class="sidebar-section"');
 	});
 
-	it("lists every chat newest first with its project in Recent mode", () => {
-		const html = render("recent");
-		expect(html).toContain('aria-label="Sort chats: Recent"');
-		expect(html.indexOf("Newest chat")).toBeLessThan(
-			html.indexOf("Older chat"),
+	it("lists a plain project's chats as flat thread rows with an id, a hover card and the project dot", () => {
+		const html = render();
+		const beta = html.slice(
+			html.indexOf('data-project-id="beta"'),
+			html.indexOf("</section>", html.indexOf('data-project-id="beta"')),
 		);
-		// The project shows as a colour dot in the row's icon column, its name
-		// in the row's tooltip.
+		expect(beta).toContain('data-variant="thread"');
+		expect(beta).toContain(">Newest chat<");
+		expect(beta).toContain('class="thread-id" data-in="sidebar"');
+		expect(beta).toContain("sidebar-chat-meta-project");
+		expect(beta).toContain("sidebar-project-dot");
+		// ThreadHoverCard's trigger wraps the row.
+		expect(beta).toContain('data-state="closed"');
+		expect(beta).not.toContain("Older chat");
+	});
+
+	it("has a + on each plain project's own header, labelled with that project (never on the Threads header)", () => {
+		// No DOM here: the + is inside its own project's section, named for
+		// it; its handler is onNewChat(project.id) (project-sidebar.tsx).
+		const html = render();
+		const section = (id: string) => {
+			const start = html.indexOf(`data-project-id="${id}"`);
+			return html.slice(start, html.indexOf("</section>", start));
+		};
+		expect(section("beta")).toContain('aria-label="New chat in Beta"');
+		expect(section("beta")).not.toContain('aria-label="New chat in Alpha"');
+		expect(section("alpha")).toContain('aria-label="New chat in Alpha"');
+		expect(html.match(/class="sidebar-section-add"/g)).toHaveLength(2);
+	});
+
+	it("keeps the archive action, the fold and the project name on each plain header", () => {
+		const html = render(true, { onDeleteProject: () => undefined });
+		expect(html).toContain('aria-label="Archive Beta"');
+		expect(html).toContain('title="Archive project"');
+		expect(html).toContain('aria-label="Collapse Beta"');
+		expect(html).toContain('aria-controls="sidebar-project-body-beta"');
+		expect(html).toContain('id="sidebar-project-body-beta"');
+		// The name opens the project; the open one is the current page.
 		expect(html).toMatch(
-			/sidebar-chat-lead" aria-hidden="true"><span class="sidebar-project-dot" style="background:#[0-9a-f]{6}"/,
+			/class="sidebar-project-name" aria-current="page">.*?Alpha/s,
 		);
-		expect(html).toContain('title="Newest chat · Beta"');
-		expect(html).not.toContain("sidebar-chat-project");
-		expect(html).not.toContain("sidebar-folder-row");
-		// Neither waits on the user nor runs: both are Done, with a count.
-		expect(html).toMatch(
-			/<span>Done<\/span><span class="sidebar-status-count">2<\/span>/,
-		);
-		expect(html).not.toContain("Needs you");
+		expect(render()).not.toContain("Archive Beta");
 	});
 
 	it("puts chats waiting on the user first, then running ones, then the rest", () => {
@@ -190,10 +219,7 @@ describe("left sidebar", () => {
 			},
 		];
 		(globalThis as { window?: unknown }).window = {
-			localStorage: {
-				getItem: (key: string) => (key === SIDEBAR_SORT_KEY ? "recent" : null),
-				setItem: () => undefined,
-			},
+			localStorage: { getItem: () => null, setItem: () => undefined },
 		};
 		const html = renderToStaticMarkup(
 			<RenderAsHydrated value>
@@ -211,15 +237,19 @@ describe("left sidebar", () => {
 				/>
 			</RenderAsHydrated>,
 		);
-		const needs = html.indexOf("Needs you");
-		const working = html.indexOf("Working");
-		const done = html.indexOf(">Done<");
+		const needs = html.indexOf(">Asks a question<");
+		const working = html.indexOf(">Busy chat<");
+		const done = html.indexOf(">Done chat");
 		expect(needs).toBeGreaterThan(-1);
 		expect(needs).toBeLessThan(working);
 		expect(working).toBeLessThan(done);
 		expect(html).toContain('data-activity="needs-you"');
 		expect(html).toContain('data-activity="running"');
-		expect(html).toContain("Show 2 more");
+		// Five finished chats show; the other five fold into Settled.
+		expect(html).toContain(
+			'<span>Settled</span><span class="sidebar-status-count">5</span>',
+		);
+		expect(html.match(/data-group="done"/g)).toHaveLength(5);
 	});
 
 	it("shows one status per row on the right, in words for screen readers", () => {
@@ -289,27 +319,32 @@ describe("left sidebar", () => {
 			{ id: "u", title: "Unread", updatedAt: at, turnStatus: "completed" },
 			{ id: "o", title: "Old", updatedAt: at },
 		];
-		const html = renderToStaticMarkup(
-			<RenderAsHydrated value>
-				<ProjectSidebar
-					projects={[alpha]}
-					projectsLoading={false}
-					selectedProjectId="alpha"
-					onSelectProject={() => undefined}
-					expanded
-					onToggle={() => undefined}
-					onAddProject={() => undefined}
-					chats={chats}
-					onNewChat={() => undefined}
-				/>
-			</RenderAsHydrated>,
-		);
+		// A section shows five finished chats and folds the rest into Settled,
+		// so the rows are rendered in two sections' worth.
+		const markup = (list: SidebarChat[]) =>
+			renderToStaticMarkup(
+				<RenderAsHydrated value>
+					<ProjectSidebar
+						projects={[alpha]}
+						projectsLoading={false}
+						selectedProjectId="alpha"
+						onSelectProject={() => undefined}
+						expanded
+						onToggle={() => undefined}
+						onAddProject={() => undefined}
+						chats={list}
+						onNewChat={() => undefined}
+					/>
+				</RenderAsHydrated>,
+			);
+		const html = markup(chats.slice(0, 9)) + markup(chats.slice(9));
 		const row = (title: string) => {
 			const start = html.lastIndexOf("<li", html.indexOf(`>${title}<`));
 			return html.slice(start, html.indexOf("</li>", start));
 		};
 		expect(row("Asks")).toContain('aria-label="Asking you a question"');
-		expect(row("Asks")).toContain("lucide-message-circle-question");
+		// A thread row shows a waiting chat as a dot, not an icon.
+		expect(row("Asks")).toContain("sidebar-chat-needs-you");
 		// Working beats the PR: no PR icon, a still title, and the spinner in
 		// the time's place (the tooltip carries the working time).
 		expect(row("Busy")).toContain('data-status="working"');
@@ -329,7 +364,7 @@ describe("left sidebar", () => {
 			'aria-label="PR #42 open · checks passed"',
 		);
 		expect(row("Passing")).toContain('data-checks="passed"');
-		expect(row("Passing")).toContain(">42<");
+		expect(row("Passing")).toContain("#42");
 		expect(row("Failing")).toContain(
 			'aria-label="PR #41 open · 1 check failed"',
 		);
@@ -347,18 +382,42 @@ describe("left sidebar", () => {
 	});
 
 	it("renders the server's markup while hydrating, whatever this browser saved", () => {
-		const html = render("recent", false);
-		// Both sort views; <html data-sidebar-sort> shows one (first-paint.ts).
-		expect(html).toContain(
-			'class="sidebar-recent sidebar-status-groups" data-sort-view="recent"',
-		);
-		expect(html).toContain(
-			'class="sidebar-projects" data-sort-view="projects"',
-		);
-		expect(html).toContain('aria-label="Sort chats: Projects"');
+		const html = render(false);
+		expect(html).not.toContain("data-sort-view");
+		// Every section renders open; the first-paint script folds the saved ones.
+		expect(html).toContain('data-project-id="alpha"');
+		expect(html).toContain('data-open="true"');
 		// Rows carry the ids the first-paint stylesheet targets.
-		expect(html).toContain('class="sidebar-chat-row" data-chat-id="a1"');
-		expect(html).toContain('class="sidebar-project" data-project-id="alpha"');
+		expect(html).toMatch(/class="sidebar-chat-row"[^>]*data-chat-id="a1"/);
+		// A saved fold or pin only shows once hydrated.
+		(globalThis as { window?: unknown }).window = {
+			localStorage: {
+				getItem: (key: string) =>
+					key === SIDEBAR_COLLAPSED_PROJECTS_KEY
+						? JSON.stringify(["beta"])
+						: null,
+				setItem: () => undefined,
+			},
+		};
+		const folded = renderToStaticMarkup(
+			<RenderAsHydrated value>
+				<ProjectSidebar
+					projects={[alpha, beta]}
+					projectsLoading={false}
+					selectedProjectId="alpha"
+					onSelectProject={() => undefined}
+					expanded
+					onToggle={() => undefined}
+					onAddProject={() => undefined}
+					chats={projectChats[0].chats}
+					onNewChat={() => undefined}
+					projectChats={projectChats}
+				/>
+			</RenderAsHydrated>,
+		);
+		expect(folded).toContain('aria-label="Expand Beta"');
+		expect(folded).not.toContain("Newest chat");
+		expect(folded).toContain("Older chat");
 	});
 
 	it("renders every Done row while hydrating, past the fold hidden, and marks what the rows script needs", () => {
@@ -370,11 +429,7 @@ describe("left sidebar", () => {
 		}));
 		const markup = (hydrated: boolean) => {
 			(globalThis as { window?: unknown }).window = {
-				localStorage: {
-					getItem: (key: string) =>
-						key === SIDEBAR_SORT_KEY ? "recent" : null,
-					setItem: () => undefined,
-				},
+				localStorage: { getItem: () => null, setItem: () => undefined },
 			};
 			return renderToStaticMarkup(
 				<QueryClientProvider client={new QueryClient()}>
@@ -397,19 +452,17 @@ describe("left sidebar", () => {
 				</QueryClientProvider>,
 			);
 		};
-		const recent = (html: string) =>
+		const section = (html: string) =>
 			html.slice(
-				html.indexOf("sidebar-recent"),
-				html.indexOf("sidebar-projects"),
+				html.indexOf('data-section="project"'),
+				html.indexOf("</section>"),
 			);
 		const serverHtml = markup(false);
-		expect(recent(serverHtml).match(/class="sidebar-chat-row"/g)).toHaveLength(
-			10,
-		);
-		expect(recent(serverHtml).match(/data-done-overflow="true"/g)).toHaveLength(
-			2,
-		);
-		expect(serverHtml).toContain("Show 2 more");
+		// Every finished chat renders: five visible, five past the fold hidden.
+		expect(section(serverHtml).match(/data-group="done"/g)).toHaveLength(10);
+		expect(
+			section(serverHtml).match(/data-done-overflow="true"/g),
+		).toHaveLength(5);
 		expect(serverHtml).toContain(
 			'data-seen-key="d9:completed:2026-10-19T00:00:00Z" data-updated-at="2026-10-19T00:00:00Z" data-unread-mark="true"',
 		);
@@ -417,20 +470,17 @@ describe("left sidebar", () => {
 		// The account button renders from the page's user, not after its read.
 		expect(serverHtml).toContain('class="sidebar-account-name">Ada Lovelace<');
 		const hydratedHtml = markup(true);
-		expect(hydratedHtml.match(/class="sidebar-chat-row"/g)).toHaveLength(8);
+		expect(hydratedHtml.match(/data-group="done"/g)).toHaveLength(5);
+		expect(hydratedHtml).not.toContain("data-done-overflow");
 		expect(hydratedHtml).not.toContain("data-seen-key");
 		expect(hydratedHtml).not.toContain("<script>");
 	});
 
-	it("lists a project without Y as a flat list of chats", () => {
-		const html = render(null);
+	it("lists a project without Y as its own section, with no Y² or Threads", () => {
+		const html = render();
 		expect(html).not.toContain("sidebar-y2");
-	});
-
-	it("renders only the saved sort view once hydrated", () => {
-		const html = render("recent");
-		expect(html).not.toContain("data-sort-view");
-		expect(html).not.toContain("sidebar-projects");
+		expect(html).not.toContain('data-section="threads"');
+		expect(html).toContain('data-section="project"');
 	});
 });
 
@@ -469,11 +519,10 @@ describe("Y projects: the Y² and Threads sections", () => {
 		{ id: "b1", title: "Plain chat", updatedAt: "2026-10-19T00:00:00Z" },
 	];
 	const view = (
-		sort: "recent" | "projects" | null,
 		hydrated = true,
 		extra: Partial<ComponentProps<typeof ProjectSidebar>> = {},
 	) =>
-		render(sort, hydrated, {
+		render(hydrated, {
 			chats: alphaChats,
 			projectChats: [
 				{ project: alpha, chats: alphaChats },
@@ -489,149 +538,141 @@ describe("Y projects: the Y² and Threads sections", () => {
 			threads: html.slice(threads, html.indexOf("</section>", threads)),
 		};
 	};
-
-	for (const sort of ["recent", "projects"] as const) {
-		describe(`${sort} view`, () => {
-			it('labels the section "Super agent" once (the mark is already there), never a second label in the row', () => {
-				const html = view(sort);
-				expect(html.match(/Super agent/g)).toHaveLength(1);
-				expect(html).not.toContain("Y²");
-				expect(html).toContain(
-					'<h3 class="sidebar-section-title" id="sidebar-section-y2">Super agent</h3>',
-				);
-				expect(html).toContain('aria-labelledby="sidebar-section-y2"');
-				expect(html).toContain('aria-labelledby="sidebar-section-threads"');
-			});
-
-			it("lists one row per Y project: the mark, the project's name, its age and a thread summary", () => {
-				const { y2 } = sections(view(sort));
-				expect(y2.match(/data-role="y2"/g)).toHaveLength(1);
-				expect(y2).toContain('class="y2-mark"');
-				expect(y2).toContain('data-live="true"');
-				expect(y2).toContain('<span class="sidebar-chat-title">Alpha</span>');
-				expect(y2).toContain(
-					'<span class="sidebar-chat-meta">1 working · 2 needs you</span>',
-				);
-				// A Y² that needs the person shows the needs-you icon, in the age's place.
-				expect(y2).toContain('data-status="asking"');
-				expect(y2).toContain('aria-label="2 threads need you"');
-				// Not the plain project, nor any thread.
-				expect(y2).not.toContain("Beta");
-				expect(y2).not.toContain("Asks");
-			});
-
-			it("lists the Y threads flat: title, then a grey line with project, model, machine and PR", () => {
-				const { threads } = sections(view(sort));
-				expect(threads).toContain('class="sidebar-chats sidebar-threads"');
-				const row = threads.slice(threads.indexOf('data-chat-id="shipped"'));
-				const shipped = row.slice(0, row.indexOf("</li>"));
-				expect(shipped).toContain('data-variant="thread"');
-				expect(shipped).toContain(
-					'<span class="sidebar-chat-title">Shipped</span>',
-				);
-				expect(shipped).toContain(
-					'class="sidebar-chat-meta-project"><span class="sidebar-project-dot"',
-				);
-				expect(shipped).toContain("<span>Alpha</span>");
-				expect(shipped).toContain('data-meta="model"');
-				expect(shipped).toContain('title="gpt-5"');
-				expect(shipped).toContain('data-meta="machine"');
-				// The PR badge sits on the second line, outside the button.
-				expect(shipped).toContain('class="sidebar-chat-meta-end"');
-				expect(shipped).toContain("#105");
-				expect(shipped.indexOf("sidebar-chat-meta-end")).toBeGreaterThan(
-					shipped.indexOf("</button>"),
-				);
-				// The age stays top right.
-				expect(shipped).toContain('class="sidebar-chat-age"');
-				// A thread without a model or workspace shows neither icon.
-				const plainRow = threads.slice(threads.indexOf('data-chat-id="busy"'));
-				expect(plainRow.slice(0, plainRow.indexOf("</li>"))).not.toContain(
-					"data-meta=",
-				);
-			});
-
-			it("orders Needs you, then Working, then Done, and folds the rest into Settled", () => {
-				const { threads } = sections(view(sort));
-				const at = (title: string) => threads.indexOf(`>${title}</span>`);
-				expect(at("Asks")).toBeGreaterThan(-1);
-				expect(at("Needs a key")).toBeGreaterThan(at("Asks") - 1);
-				expect(at("Busy")).toBeGreaterThan(at("Needs a key"));
-				// Done by recency: the newest finished threads, five visible (one is the PR thread).
-				expect(at("Shipped")).toBeGreaterThan(at("Busy"));
-				expect(at("Thread 9")).toBeGreaterThan(at("Shipped"));
-				expect(threads).toContain(">Thread 6<");
-				expect(threads).not.toContain(">Thread 5<");
-				expect(threads).toContain(
-					'aria-expanded="false" aria-controls="sidebar-settled-list"',
-				);
-				expect(threads).toContain(
-					'<span>Settled</span><span class="sidebar-status-count">6</span>',
-				);
-				expect(threads).not.toContain('id="sidebar-settled-list"');
-				expect(threads).not.toContain("Show 6 more");
-			});
-
-			it("keeps the Y² and Threads sections flat: no nesting classes, guide line or in-row fold", () => {
-				const html = view(sort);
-				for (const gone of [
-					"sidebar-y2-branch",
-					"sidebar-y2-threads",
-					"sidebar-y2-label",
-					"sidebar-y2-count",
-					"sidebar-y2-toggle",
-					'class="sidebar-y2"',
-					"sidebar-section-label",
-					"Collapse Y² threads",
-				])
-					expect(html).not.toContain(gone);
-				expect(html).not.toContain("<h3>Y</h3>");
-			});
-
-			it("has no + on the Threads header (it started the chat in the Y project, not the open one)", () => {
-				const html = view(sort);
-				const { threads, y2 } = sections(html);
-				expect(threads).not.toContain("sidebar-section-add");
-				expect(threads).not.toContain("New chat in");
-				expect(y2).not.toContain("sidebar-section-add");
-			});
-
-			it("leaves the plain project exactly as before", () => {
-				const html = view(sort);
-				if (sort === "projects") {
-					expect(html).toContain(
-						'class="sidebar-project" data-project-id="beta"',
-					);
-					expect(html).not.toContain(
-						'class="sidebar-project" data-project-id="alpha"',
-					);
-				} else {
-					expect(html).toContain(">Plain chat<");
-					expect(html).toContain('data-group="done" data-section="plain"');
-					expect(html).not.toContain("sidebar-projects");
-				}
-			});
+	describe("Y sections", () => {
+		it('labels the section "Super agent" once (the mark is already there), never a second label in the row', () => {
+			const html = view();
+			expect(html.match(/Super agent/g)).toHaveLength(1);
+			expect(html).not.toContain("Y²");
+			expect(html).toContain(
+				'<h3 class="sidebar-section-title" id="sidebar-section-y2">Super agent</h3>',
+			);
+			expect(html).toContain('aria-labelledby="sidebar-section-y2"');
+			expect(html).toContain('aria-labelledby="sidebar-section-threads"');
 		});
-	}
 
-	it("shows the same Y² and Threads sections once in each sort view, before hydration too", () => {
-		const server = view(null, false);
+		it("lists one row per Y project: the mark, the project's name, its age and a thread summary", () => {
+			const { y2 } = sections(view());
+			expect(y2.match(/data-role="y2"/g)).toHaveLength(1);
+			expect(y2).toContain('class="y2-mark"');
+			expect(y2).toContain('data-live="true"');
+			expect(y2).toContain('<span class="sidebar-chat-title">Alpha</span>');
+			expect(y2).toContain(
+				'<span class="sidebar-chat-meta">1 working · 2 needs you</span>',
+			);
+			// A Y² that needs the person shows the needs-you icon, in the age's place.
+			expect(y2).toContain('data-status="asking"');
+			expect(y2).toContain('aria-label="2 threads need you"');
+			// Not the plain project, nor any thread.
+			expect(y2).not.toContain("Beta");
+			expect(y2).not.toContain("Asks");
+		});
+
+		it("lists the Y threads flat: title, then a grey line with project, model, machine and PR", () => {
+			const { threads } = sections(view());
+			expect(threads).toContain('class="sidebar-chats sidebar-threads"');
+			const row = threads.slice(threads.indexOf('data-chat-id="shipped"'));
+			const shipped = row.slice(0, row.indexOf("</li>"));
+			expect(shipped).toContain('data-variant="thread"');
+			expect(shipped).toContain(
+				'<span class="sidebar-chat-title">Shipped</span>',
+			);
+			expect(shipped).toContain(
+				'class="sidebar-chat-meta-project"><span class="sidebar-project-dot"',
+			);
+			expect(shipped).toContain("<span>Alpha</span>");
+			expect(shipped).toContain('data-meta="model"');
+			expect(shipped).toContain('title="gpt-5"');
+			expect(shipped).toContain('data-meta="machine"');
+			// The PR badge sits on the second line, outside the button.
+			expect(shipped).toContain('class="sidebar-chat-meta-end"');
+			expect(shipped).toContain("#105");
+			expect(shipped.indexOf("sidebar-chat-meta-end")).toBeGreaterThan(
+				shipped.indexOf("</button>"),
+			);
+			// The age stays top right.
+			expect(shipped).toContain('class="sidebar-chat-age"');
+			// A thread without a model or workspace shows neither icon.
+			const plainRow = threads.slice(threads.indexOf('data-chat-id="busy"'));
+			expect(plainRow.slice(0, plainRow.indexOf("</li>"))).not.toContain(
+				"data-meta=",
+			);
+		});
+
+		it("orders Needs you, then Working, then Done, and folds the rest into Settled", () => {
+			const { threads } = sections(view());
+			const at = (title: string) => threads.indexOf(`>${title}</span>`);
+			expect(at("Asks")).toBeGreaterThan(-1);
+			expect(at("Needs a key")).toBeGreaterThan(at("Asks") - 1);
+			expect(at("Busy")).toBeGreaterThan(at("Needs a key"));
+			// Done by recency: the newest finished threads, five visible (one is the PR thread).
+			expect(at("Shipped")).toBeGreaterThan(at("Busy"));
+			expect(at("Thread 9")).toBeGreaterThan(at("Shipped"));
+			expect(threads).toContain(">Thread 6<");
+			expect(threads).not.toContain(">Thread 5<");
+			expect(threads).toContain(
+				'aria-expanded="false" aria-controls="sidebar-settled-list"',
+			);
+			expect(threads).toContain(
+				'<span>Settled</span><span class="sidebar-status-count">6</span>',
+			);
+			expect(threads).not.toContain('id="sidebar-settled-list"');
+			expect(threads).not.toContain("Show 6 more");
+		});
+
+		it("keeps the Y² and Threads sections flat: no nesting classes, guide line or in-row fold", () => {
+			const html = view();
+			for (const gone of [
+				"sidebar-y2-branch",
+				"sidebar-y2-threads",
+				"sidebar-y2-label",
+				"sidebar-y2-count",
+				"sidebar-y2-toggle",
+				'class="sidebar-y2"',
+				"sidebar-section-label",
+				"Collapse Y² threads",
+			])
+				expect(html).not.toContain(gone);
+			expect(html).not.toContain("<h3>Y</h3>");
+		});
+
+		it("has no + on the Threads header (it started the chat in the Y project, not the open one)", () => {
+			const html = view();
+			const { threads, y2 } = sections(html);
+			expect(threads).not.toContain("sidebar-section-add");
+			expect(threads).not.toContain("New chat in");
+			expect(y2).not.toContain("sidebar-section-add");
+		});
+
+		it("lists the plain project below them as its own modern section", () => {
+			const html = view();
+			expect(html).toContain('data-section="project" data-project-id="beta"');
+			expect(html.match(/data-section="project"/g)).toHaveLength(1);
+			expect(html.indexOf('data-section="threads"')).toBeLessThan(
+				html.indexOf('data-section="project"'),
+			);
+			const beta = html.slice(html.indexOf('data-project-id="beta"'));
+			expect(beta).toContain(">Plain chat<");
+			expect(html).not.toContain(">Chats<");
+		});
+	});
+
+	it("shows the Y² and Threads sections once, before the plain sections, before hydration too", () => {
+		const server = view(false);
 		expect(server.match(/data-section="y2"/g)).toHaveLength(1);
 		expect(server.match(/data-section="threads"/g)).toHaveLength(1);
-		// Both plain views render; the Y sections are not repeated per view.
-		expect(server).toContain('data-sort-view="recent"');
-		expect(server).toContain('data-sort-view="projects"');
-		const y = server.indexOf('data-section="y2"');
-		expect(y).toBeLessThan(server.indexOf('data-sort-view="recent"'));
+		expect(server.match(/data-section="project"/g)).toHaveLength(1);
+		expect(server.indexOf('data-section="y2"')).toBeLessThan(
+			server.indexOf('data-section="project"'),
+		);
 	});
 
 	it("renders every Settled row hidden while hydrating, for the rows script, and none once hydrated", () => {
-		const server = view("projects", false);
+		const server = view(false);
 		const { threads } = sections(server);
 		expect(threads.match(/data-done-overflow="true"/g)).toHaveLength(6);
 		expect(threads.match(/data-group="done"/g)).toHaveLength(11);
 		expect(threads).toContain("data-seen-key=");
-		const hydrated = sections(view("projects", true)).threads;
+		const hydrated = sections(view(true)).threads;
 		expect(hydrated).not.toContain("data-done-overflow");
 		expect(hydrated.match(/data-group="done"/g)).toHaveLength(5);
 	});
@@ -642,7 +683,7 @@ describe("Y projects: the Y² and Threads sections", () => {
 			{ id: "t1", title: "Calm", updatedAt: "2026-10-21T00:00:00Z" },
 		];
 		const { y2 } = sections(
-			view("recent", true, {
+			view(true, {
 				chats: calm,
 				projectChats: [{ project: alpha, chats: calm }],
 				projects: [alpha],
@@ -655,7 +696,7 @@ describe("Y projects: the Y² and Threads sections", () => {
 	});
 
 	it("keeps the open thread out of Settled", () => {
-		const html = view("projects", true, { selectedChatId: "t0" });
+		const html = view(true, { selectedChatId: "t0" });
 		const { threads } = sections(html);
 		expect(threads).toContain(">Thread 0<");
 		expect(threads).toContain(
@@ -701,7 +742,7 @@ describe("Y projects: the Y² and Threads sections", () => {
 			{ id: "y2b", title: "Y²", role: "y2", updatedAt: at },
 			{ id: "bt", title: "Beta thread", updatedAt: at },
 		];
-		const html = view("recent", true, {
+		const html = view(true, {
 			selectedProjectId: undefined,
 			projectChats: [
 				{ project: alpha, chats: alphaChats },
@@ -714,7 +755,7 @@ describe("Y projects: the Y² and Threads sections", () => {
 	});
 
 	it("says there are no threads for a Y project that has none", () => {
-		const html = view("projects", true, {
+		const html = view(true, {
 			chats: [alphaChats[0] as SidebarChat],
 			projectChats: [
 				{ project: alpha, chats: [alphaChats[0] as SidebarChat] },

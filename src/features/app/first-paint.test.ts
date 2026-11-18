@@ -11,7 +11,6 @@ import {
 	SIDEBAR_COLLAPSED_PROJECTS_KEY,
 	SIDEBAR_PINNED_CHATS_KEY,
 	SIDEBAR_PINNED_STORAGE_KEY,
-	SIDEBAR_SORT_KEY,
 } from "#/domain/sidebar-chats";
 import {
 	COMPOSER_DRAFT_SCRIPT,
@@ -75,7 +74,6 @@ afterEach(() => {
 
 const saved = {
 	[SIDEBAR_PINNED_STORAGE_KEY]: "1",
-	[SIDEBAR_SORT_KEY]: "recent",
 	[SIDEBAR_COLLAPSED_PROJECTS_KEY]: JSON.stringify(["project-1"]),
 	[SIDEBAR_PINNED_CHATS_KEY]: JSON.stringify(["chat-1", "chat-2"]),
 };
@@ -92,7 +90,6 @@ describe("first-paint script", () => {
 			{ stored: saved, phone: true },
 			{
 				stored: {
-					[SIDEBAR_SORT_KEY]: "bogus",
 					[SIDEBAR_PINNED_CHATS_KEY]: "{",
 				},
 			},
@@ -109,31 +106,28 @@ describe("first-paint script", () => {
 			expect(page.window.__YT_BOOT__).toEqual(SERVER_FIRST_PAINT);
 			expect(page.document.documentElement.dataset).toEqual({
 				sidebar: "closed",
-				sidebarSort: "projects",
 			});
 			expect(page.document.adoptedStyleSheets).toEqual([]);
 		}
 	});
 
-	it("shows the saved sidebar, sort, pins and folds before React runs", () => {
+	it("shows the saved sidebar, pins and folds before React runs", () => {
 		const page = runScript(browser({ stored: saved }));
 		expect(page.window.__YT_BOOT__).toEqual({
 			compact: false,
 			sidebarOpen: true,
-			sidebarSort: "recent",
 			collapsedProjectIds: ["project-1"],
 			pinnedChatIds: ["chat-1", "chat-2"],
 		});
 		expect(page.document.documentElement.dataset).toEqual({
 			sidebar: "open",
-			sidebarSort: "recent",
 		});
 		const [sheet] = page.document.adoptedStyleSheets;
 		expect(page.window.__YT_BOOT_STYLES__).toEqual([sheet]);
 		expect(sheet?.text).toBe(
 			'.sidebar-chat-row[data-chat-id="chat-1"]{--chat-pinned:1}' +
 				'.sidebar-chat-row[data-chat-id="chat-2"]{--chat-pinned:1}' +
-				'.sidebar-project[data-project-id="project-1"]{--folder-chats:none;--folder-chevron:none}',
+				'.sidebar-plain-section[data-project-id="project-1"]{--section-body:none;--section-chevron:none}',
 		);
 	});
 
@@ -188,8 +182,10 @@ function runRowsScript(input: {
 }
 
 const UNREAD_ROWS = "[data-unread-mark]";
-const DONE_ROWS =
-	'.sidebar-recent [data-group="done"][data-section="plain"] .sidebar-chat-row';
+const PLAIN_SECTIONS = ".sidebar-plain-section";
+const section = (id: string): FakeRow => ({ dataset: { projectId: id } });
+const plainDoneRows = (id: string) =>
+	`.sidebar-plain-section[data-project-id="${id}"] .sidebar-chat-row[data-group="done"]`;
 const THREADS_DONE_ROWS =
 	'.sidebar-threads-section .sidebar-chat-row[data-group="done"]';
 const reply = (id: string, updatedAt: string): FakeRow => ({
@@ -246,17 +242,22 @@ describe("first-paint rows script", () => {
 			).toBe("");
 	});
 
-	it("shows a saved pin past the Done fold in place of the fold's last row", () => {
+	it("shows a saved pin past a plain project's Settled fold, each section on its own", () => {
 		const row = (id: string, overflow = false): FakeRow => ({
 			dataset: { chatId: id, doneOverflow: overflow ? "true" : undefined },
 		});
 		const css = runRowsScript({
 			pinnedChatIds: ["late"],
-			rows: { [DONE_ROWS]: [row("a"), row("b"), row("late", true)] },
+			rows: {
+				[PLAIN_SECTIONS]: [section("one"), section("two")],
+				[plainDoneRows("one")]: [row("a"), row("b"), row("late", true)],
+				[plainDoneRows("two")]: [row("c"), row("d")],
+			},
 		});
+		// The other project's rows are not counted into this fold.
 		expect(css).toBe(
-			'.sidebar-recent [data-chat-id="b"]{display:none}' +
-				'.sidebar-recent [data-chat-id="late"]{display:flex}',
+			'.sidebar-plain-section[data-project-id="one"] [data-chat-id="b"]{display:none}' +
+				'.sidebar-plain-section[data-project-id="one"] [data-chat-id="late"]{display:flex}',
 		);
 	});
 
@@ -268,7 +269,8 @@ describe("first-paint rows script", () => {
 			pinnedChatIds: ["late"],
 			rows: {
 				[THREADS_DONE_ROWS]: [row("a"), row("b"), row("late", true)],
-				[DONE_ROWS]: [row("p1"), row("p2")],
+				[PLAIN_SECTIONS]: [section("one")],
+				[plainDoneRows("one")]: [row("p1"), row("p2")],
 			},
 		});
 		expect(css).toBe(

@@ -303,43 +303,6 @@ button:enabled:active {
 .sidebar-nav-item[aria-current="page"] {
 	--row-icon: var(--list-icon-color-active);
 }
-.sidebar-list-header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-	margin: 6px 0 4px;
-	padding-left: var(--list-row-pad-x);
-	color: var(--list-heading-color);
-	font-size: var(--list-heading-size);
-	font-weight: var(--list-heading-weight);
-	letter-spacing: 0.02em;
-}
-.sidebar-sort-button {
-	display: grid;
-	place-items: center;
-	width: 22px;
-	height: 22px;
-	margin-right: 4px;
-	padding: 0;
-	border: 0;
-	border-radius: 6px;
-	background: transparent;
-	color: #6d6d6d;
-}
-.sidebar-sort-button:hover,
-.sidebar-sort-button[data-state="open"] {
-	background: #ffffff0c;
-	color: #e5e5e5;
-}
-.sidebar-sort-menu {
-	min-width: 160px;
-}
-.sidebar-status-groups {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-}
 .sidebar-status-heading {
 	display: flex;
 	align-items: center;
@@ -351,26 +314,9 @@ button:enabled:active {
 	font-weight: var(--list-heading-weight);
 	letter-spacing: 0.02em;
 }
-.sidebar-status-group:first-child .sidebar-status-heading {
-	margin-top: 0;
-}
 .sidebar-status-count {
 	color: #5c5c5c;
 	font-variant-numeric: tabular-nums;
-}
-.sidebar-show-more {
-	min-height: 28px;
-	padding: var(--list-row-pad);
-	border: 0;
-	border-radius: var(--list-row-radius);
-	background: transparent;
-	color: var(--list-text-muted);
-	font-size: var(--list-meta-size);
-	text-align: left;
-}
-.sidebar-show-more:hover {
-	background: var(--list-hover-bg);
-	color: var(--list-text-strong);
 }
 .sidebar-project-dot {
 	flex: 0 0 6px;
@@ -386,16 +332,11 @@ button:enabled:active {
 	flex: 0 0 var(--list-icon-size);
 	width: var(--list-icon-size);
 }
-.sidebar-chat-lead .sidebar-project-dot,
-.sidebar-folder .sidebar-project-dot {
+.sidebar-chat-lead .sidebar-project-dot {
 	flex-basis: 8px;
 	width: 8px;
 	height: 8px;
 	margin: 0 calc((var(--list-icon-size) - 8px) / 2);
-}
-.sidebar-recent {
-	flex: 1 1 auto;
-	overflow: auto;
 }
 .sidebar-chat-project > span:last-child {
 	overflow: hidden;
@@ -413,7 +354,6 @@ button:enabled:active {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.sidebar-projects,
 .sidebar-chats {
 	list-style: none;
 	margin: 0;
@@ -423,14 +363,6 @@ button:enabled:active {
 	gap: 2px;
 	min-width: 0;
 }
-.sidebar-projects {
-	flex: 1 1 auto;
-	overflow: auto;
-}
-.sidebar-project {
-	min-width: 0;
-}
-.sidebar-folder-row,
 .sidebar-chat-row {
 	position: relative;
 	display: flex;
@@ -440,14 +372,10 @@ button:enabled:active {
 	min-height: var(--list-row-height);
 	border-radius: var(--list-row-radius);
 }
-.sidebar-folder-row:hover,
 .sidebar-chat-row:hover {
 	background: var(--list-hover-bg);
 }
-/* Only the open chat is highlighted; its project just reads brighter. */
-.sidebar-folder-row[data-selected="true"] .sidebar-folder {
-	color: var(--list-text-strong);
-}
+/* Only the open chat is highlighted. */
 .sidebar-chat-row[data-selected="true"] {
 	background: var(--list-selected-bg);
 }
@@ -468,129 +396,6 @@ button:enabled:active {
 .sidebar-chat-row[data-role="y2"] .sidebar-chat-title {
 	color: var(--list-text-strong);
 	font-weight: 600;
-}
-/* Row actions, end side: [archive][fold arrow][+]. The + keeps a fixed
-   spot flush with the row's end; archive and the arrow take no space until
-   the row is hovered, then open to the left of the + so it never moves. */
-.sidebar-folder-toggle {
-	display: grid;
-	place-items: center;
-	width: 0;
-	height: 22px;
-	margin: 0;
-	padding: 0;
-	overflow: hidden;
-	border: 0;
-	border-radius: 6px;
-	background: transparent;
-	color: var(--list-icon-color);
-	opacity: 0;
-	pointer-events: none;
-	transition:
-		opacity 120ms ease,
-		transform 120ms ease;
-}
-.sidebar-folder-row:hover .sidebar-folder-toggle,
-.sidebar-folder-toggle:focus-visible {
-	width: 22px;
-	opacity: 1;
-	overflow: visible;
-	pointer-events: auto;
-}
-.sidebar-folder-toggle:hover {
-	background: #ffffff14;
-	color: #f2f2f2;
-}
-.sidebar-folder-row[data-open="true"] .sidebar-folder-toggle {
-	transform: var(--folder-chevron, rotate(90deg));
-}
-@media (hover: none) {
-	.sidebar-folder-toggle {
-		width: 22px;
-		opacity: 1;
-		pointer-events: auto;
-	}
-}
-.sidebar-folder {
-	display: flex;
-	align-items: center;
-	gap: var(--list-row-gap);
-	flex: 1 1 auto;
-	width: auto;
-	min-width: 0;
-	min-height: var(--list-row-height);
-	padding: 0 76px 0 var(--list-row-pad-x);
-	border: 0;
-	border-radius: var(--list-row-radius);
-	background: transparent;
-	color: var(--list-text-secondary);
-	font-size: var(--list-font-size);
-	line-height: 1;
-	letter-spacing: 0;
-	text-align: left;
-}
-.sidebar-folder span {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.sidebar-folder:hover,
-.sidebar-folder[aria-current="page"] {
-	background: transparent;
-	color: var(--list-text-strong);
-}
-.sidebar-folder-actions {
-	position: absolute;
-	right: 6px;
-	top: 50%;
-	display: flex;
-	align-items: center;
-	gap: 2px;
-	transform: translateY(-50%);
-}
-.sidebar-folder-remove,
-.sidebar-folder-add {
-	display: grid;
-	place-items: center;
-	width: 22px;
-	height: 22px;
-	margin: 0;
-	padding: 0;
-	border: 0;
-	border-radius: 6px;
-	background: transparent;
-	color: var(--list-icon-color);
-	opacity: 0;
-	pointer-events: none;
-}
-.sidebar-folder-remove {
-	width: 0;
-	overflow: hidden;
-}
-.sidebar-folder-row:hover .sidebar-folder-add,
-.sidebar-folder-row[data-selected="true"] .sidebar-folder-add,
-.sidebar-folder-add:focus-visible,
-.sidebar-folder-add[data-active="true"],
-.sidebar-folder-row:hover .sidebar-folder-remove,
-.sidebar-folder-remove:focus-visible {
-	width: 22px;
-	opacity: 1;
-	overflow: visible;
-	pointer-events: auto;
-}
-.sidebar-folder-add:hover,
-.sidebar-folder-add[data-active="true"],
-.sidebar-folder-remove:hover {
-	background: #ffffff14;
-	color: #f2f2f2;
-}
-@media (hover: none) {
-	.sidebar-folder-row[data-selected="true"] .sidebar-folder-remove {
-		width: 22px;
-		opacity: 1;
-		overflow: visible;
-		pointer-events: auto;
-	}
 }
 .sidebar-chats {
 	margin: 1px 0 6px;
@@ -813,26 +618,6 @@ button:enabled:active {
 .panel-toggle[data-active="true"] {
 	color: #f2f2f2;
 }
-.sidebar-status-group .sidebar-chats {
-	margin: 0;
-}
-/* First paint (src/features/app/first-paint.ts): a folded project's chats
-   and pin fills follow the script's properties until React renders them. */
-.sidebar-project > .sidebar-chats {
-	display: var(--folder-chats, flex);
-}
-.sidebar-project > .sidebar-empty {
-	display: var(--folder-chats, block);
-}
-/* Before hydration every Done row renders; the rows script shows saved pins past the fold. */
-.sidebar-recent [data-done-overflow] {
-	display: none;
-}
-/* Before hydration the sidebar renders both sort views; the saved sort picks one. */
-:root:not([data-sidebar-sort="recent"]) [data-sort-view="recent"],
-:root[data-sidebar-sort="recent"] [data-sort-view="projects"] {
-	display: none;
-}
 .sidebar-chat-pin svg {
 	fill: currentColor;
 	fill-opacity: var(--chat-pinned, 0);
@@ -888,6 +673,91 @@ button:enabled:active {
 }
 .sidebar-y-section .sidebar-chats {
 	margin: 0;
+}
+/* Every project that is not a Y project: its own section in the Threads
+   look (header with the project's name, then flat thread rows). The
+   sections scroll together under the Y sections. */
+.sidebar-plain-sections {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+}
+/* First paint (src/features/app/first-paint.ts): a folded project's body
+   and chevron follow the script's properties until React renders them. */
+.sidebar-plain-body {
+	display: var(--section-body, block);
+}
+.sidebar-plain-header {
+	gap: 2px;
+}
+.sidebar-plain-header .sidebar-section-title {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.sidebar-project-name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	min-height: 22px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	letter-spacing: inherit;
+	text-align: left;
+}
+.sidebar-project-name:hover,
+.sidebar-project-name[aria-current="page"] {
+	color: var(--list-text-strong);
+}
+.sidebar-project-name-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidebar-section-action {
+	display: grid;
+	place-items: center;
+	flex: 0 0 22px;
+	width: 22px;
+	height: 22px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--list-icon-color);
+}
+.sidebar-section-action:hover {
+	background: #ffffff14;
+	color: #f2f2f2;
+}
+.sidebar-section-collapse svg {
+	transition: transform 120ms ease;
+}
+.sidebar-plain-section[data-open="true"] .sidebar-section-collapse svg {
+	transform: var(--section-chevron, rotate(90deg));
+}
+/* Archive and fold appear with the pointer or focus on the header; the +
+   stays. Touch screens have no hover, so they always show. */
+@media (hover: hover) {
+	.sidebar-plain-header .sidebar-section-action {
+		opacity: 0;
+	}
+	.sidebar-plain-header:hover .sidebar-section-action,
+	.sidebar-plain-header:focus-within .sidebar-section-action {
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.sidebar-section-collapse svg {
+		transition: none;
+	}
 }
 /* A two-line row: the title over a grey line of metadata. */
 .sidebar-chat-body {
@@ -1340,7 +1210,9 @@ button:enabled:active {
 .add-project-repos button:focus-visible,
 .sidebar-nav-item:focus-visible,
 .sidebar-new-project:focus-visible,
-.sidebar-folder:focus-visible,
+.sidebar-project-name:focus-visible,
+.sidebar-section-action:focus-visible,
+.sidebar-section-add:focus-visible,
 .sidebar-chat:focus-visible {
 	outline: 1px solid #ffffff4d;
 	outline-offset: -1px;

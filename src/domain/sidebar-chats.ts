@@ -465,14 +465,6 @@ export function sessionWithoutOpenChat<
 	};
 }
 
-/** How the left sidebar lists chats: newest first across projects, or under each project. */
-export type SidebarSort = "recent" | "projects";
-export const SIDEBAR_SORT_KEY = "ytimesy-sidebar-sort";
-
-export function parseSidebarSort(raw: string | null): SidebarSort {
-	return raw === "recent" ? "recent" : "projects";
-}
-
 const activityMs = (chat: Pick<SidebarChat, "updatedAt">) => {
 	const ms = chat.updatedAt ? Date.parse(chat.updatedAt) : Number.NaN;
 	return Number.isNaN(ms) ? 0 : ms;
