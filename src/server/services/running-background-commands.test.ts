@@ -45,7 +45,9 @@ it("reads only the background items of all the chats in one query and reports th
 		"chat-a",
 	]);
 	expect(mocks.items).toHaveBeenCalledOnce();
-	expect(mocks.items).toHaveBeenCalledWith("owner", ["chat-a", "chat-b"]);
+	expect(mocks.items).toHaveBeenCalledWith("owner", ["chat-a", "chat-b"], {
+		records: true,
+	});
 	expect(Object.keys(result)).toEqual(["chat-a", "chat-b"]);
 	expect(result["chat-a"]?.map((command) => command.id)).toEqual(["one"]);
 	expect(result["chat-b"]).toEqual([]);

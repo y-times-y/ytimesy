@@ -185,3 +185,48 @@ it("reads descendants' token use from their turns' starts only", async () => {
 	expect(ids(kidUsage?.usageItems)).toEqual(["t0"]);
 	expect(kidUsage).not.toHaveProperty("items");
 });
+
+it("reads background commands as slim records for the agents list, whole items otherwise", async () => {
+	const big = "x".repeat(50_000);
+	const running = {
+		kind: "dynamicToolCall",
+		id: "call-1",
+		tool: "bash",
+		input: big,
+		output: big,
+		status: "completed",
+		background: { id: "one", label: "run one", startedAt: 5 },
+	};
+	const exited = {
+		...running,
+		id: "call-2",
+		background: {
+			id: "two",
+			label: "run two",
+			startedAt: 6,
+			exitCode: 0,
+			endedAt: 9,
+		},
+	};
+	const id = await chat([
+		running,
+		{ kind: "agentMessage", id: "m" as never, text: "hi" },
+		exited,
+	]);
+	const { backgroundCommandItemsForOwner } = await import("./agent-sessions");
+	const slim = await backgroundCommandItemsForOwner("alice", [id], {
+		records: true,
+	});
+	expect(slim.get(id)).toEqual([
+		{
+			kind: "dynamicToolCall",
+			background: { id: "one", label: "run one", startedAt: 5 },
+		},
+		{
+			kind: "dynamicToolCall",
+			background: { id: "two", label: "run two", startedAt: 6, exitCode: 0 },
+		},
+	]);
+	const whole = await backgroundCommandItemsForOwner("alice", [id]);
+	expect(whole.get(id)).toEqual([running, exited]);
+});

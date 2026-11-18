@@ -67,3 +67,62 @@ most 10 s for one.
 - **Person's view.** After the last repeat the composer shows "Couldn't send
   that: the database connection timed out. Your message was kept; try again."
   (`publicFailureMessage`) and takes the typed message back.
+
+## Egress budget
+
+Supabase Pro includes 250 GB/month of egress. Egress here is what query
+results carry from Postgres to the Worker. Goal: 100 active users well inside
+it.
+
+### Measured (production, `pg_stat_statements` since 2026-10-27, one active user, about 3 weeks)
+
+| Read | Calls | Rows | Rows/call |
+| --- | --- | --- | --- |
+| Usage windows (`readWindows`, three statement variants: user usage read, admission check, reserve) | ~11k | 3.4M + 1.1M + 1.06M | 750 / 287 / 424 |
+| Recovery points (`listConversationRecoveryPoints`) | ~14k | ~0.8M | ~58 |
+| Background command items (`backgroundCommandItemsForOwner`) | ~32k | ~0.45M | ~14 |
+
+Row counts are measured. **Bytes are estimated**, not measured:
+`pg_stat_statements` has no byte counts. The usage reads were estimated at
+~0.7 GB for the three weeks (about 125 bytes per row, each repeating the
+policy/window columns).
+
+### What changed
+
+- **Usage reads** now return one row: Postgres sums the week's reservations
+  per window (`usageWindowStateFromSums`, same arithmetic as
+  `usageWindowState`). A differential PGlite test
+  (`infrastructure-usage.differential.test.ts`) runs the old query and JS
+  against the new read on 150 randomized reservation sets (open holds, settled
+  in and out of the window, carried, waived, window resets, boundary
+  timestamps) and asserts identical results. The `usage-admission.ts` reads go
+  through the same function; it has no statement of its own that returns
+  reservation rows.
+- **Background command items** for the agents list (polled every few seconds)
+  are projected in the database to the four fields the list reads (id, label,
+  start, exit), not the whole item with the tool's input and output.
+  Watcher and activity callers still read whole items.
+- **Recovery points** are unchanged: each row is two small values (~50-100
+  bytes), the limit of 100 is what the UI needs to show a recovery row under
+  every message, and no index problem is visible from the code. No migration.
+- **Visibility.** Each isolate logs one `db.egress_summary` line per 10
+  minutes (top 5 query tags by approximate bytes, plus totals), from the
+  running totals the byte accounting already estimates. Use it to replace the
+  estimates below with measurements.
+
+### Per-user estimate and 100-user projection
+
+Estimated, one active user, scaled from 3 weeks to 30 days (x1.43):
+
+| | Before | After |
+| --- | --- | --- |
+| Usage reads | ~1.0 GB/month (from the ~0.7 GB estimate) | ~0.006 GB/month (~11k calls x ~350 bytes, one row) |
+| Background items (agents list) | unmeasured; 14 rows x item size. At 1-10 KB per item (assumption), 0.6-6 GB | ~0.06 GB (14 rows x ~100 bytes x 32k calls) |
+| Recovery points | ~0.07 GB | unchanged |
+
+100 users, if they behave like this one (they may not: this user's call rate
+is the only data): usage reads ~100 GB before, ~0.6 GB after. The background
+items line is the least certain; the egress summary will show it. The other
+reads not listed here (transcript pages, sidebar, polling endpoints) are not
+in these numbers; they need the `db.egress_summary` data to be added. Do not
+read this table as a forecast of the whole bill.

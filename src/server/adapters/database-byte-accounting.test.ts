@@ -71,3 +71,48 @@ it("is off under tests unless asked", () => {
 	).toBe(true);
 	expect(byteAccountingEnabled({})).toBe(true);
 });
+
+it("logs one egress summary per interval with the top tags by bytes, and no per-query lines", async () => {
+	const { EGRESS_SUMMARY_INTERVAL_MS, resetEgressSummary } = await import(
+		"./database-byte-accounting"
+	);
+	resetEgressSummary();
+	vi.useFakeTimers();
+	try {
+		vi.setSystemTime(new Date("2026-11-18T00:00:00Z"));
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const rowsFor = (n: number, size: number) =>
+			Array.from({ length: n }, () => ({ v: "z".repeat(size) }));
+		let next: unknown[] = [];
+		const pool = accountQueryBytes({
+			query: async (..._args: unknown[]) => ({ rows: next }),
+		});
+		const run = (sql: string, rows: unknown[]) => {
+			next = rows;
+			return pool.query(sql, ["secret"]);
+		};
+		for (let tag = 0; tag < 7; tag++)
+			for (let call = 0; call < 3; call++)
+				await run(`select c${tag} from t${tag}`, rowsFor(tag + 1, 100));
+		expect(info).not.toHaveBeenCalled();
+		expect(warn).not.toHaveBeenCalled();
+		vi.setSystemTime(Date.now() + EGRESS_SUMMARY_INTERVAL_MS + 1);
+		await run("select c0 from t0", rowsFor(1, 100));
+		expect(info).toHaveBeenCalledTimes(1);
+		const line = JSON.parse(info.mock.calls[0]?.[0] as string);
+		expect(line.event).toBe("db.egress_summary");
+		expect(line.top).toHaveLength(5);
+		expect(line.top[0].query).toContain("select c6 from t6");
+		expect(line.top[0]).toMatchObject({ rows: 21, calls: 3 });
+		expect(line.totalCalls).toBe(22);
+		expect(line.totalRows).toBe(3 * (1 + 2 + 3 + 4 + 5 + 6 + 7) + 1);
+		expect(JSON.stringify(line)).not.toContain("secret");
+		// Totals restart: a call right after logs nothing.
+		await run("select c0 from t0", rowsFor(1, 100));
+		expect(info).toHaveBeenCalledTimes(1);
+	} finally {
+		vi.useRealTimers();
+		resetEgressSummary();
+	}
+});

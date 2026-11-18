@@ -82,23 +82,43 @@ async function query(sql: string, params: unknown[] = []) {
 			weekly_carried: text(ww?.carried),
 			weekly_waived: text(ww?.waived),
 		};
-		const charges = state.reservations
-			.filter(
-				(r) =>
-					r.userId === params[0] &&
-					(r.consumed === null || (r.settled ?? 0) > since),
-			)
-			.map((r) => ({
-				...policy,
-				amount: String(r.consumed ?? r.reserved),
-				open: r.consumed === null,
-				at: String(r.created),
-				settled: text(r.settled),
-			}));
+		const charges = state.reservations.filter(
+			(r) =>
+				r.userId === params[0] &&
+				(r.consumed === null || (r.settled ?? 0) > since),
+		);
+		const amount = (r: Reservation) => r.consumed ?? r.reserved;
+		const sum = (list: Reservation[]) =>
+			String(list.reduce((total, r) => total + amount(r), 0));
+		const open = (r: Reservation) => r.consumed === null;
+		const sums = (id: string, start: number | undefined) => ({
+			[`${id}_open`]: sum(charges.filter(open)),
+			[`${id}_open_or_since`]: sum(
+				charges.filter(
+					(r) => open(r) || (start !== undefined && r.created >= start),
+				),
+			),
+			[`${id}_since`]: sum(
+				charges.filter((r) => start !== undefined && r.created >= start),
+			),
+			[`${id}_held_before`]: sum(
+				charges.filter(
+					(r) =>
+						start !== undefined &&
+						r.created < start &&
+						(open(r) || (r.settled ?? -1) >= start),
+				),
+			),
+		});
 		return {
-			rows: charges.length
-				? charges
-				: [{ ...policy, amount: null, open: null, at: null, settled: null }],
+			rows: [
+				{
+					...policy,
+					settled_total: sum(charges.filter((r) => !open(r))),
+					...sums("five_hour", w5?.start),
+					...sums("weekly", ww?.start),
+				},
+			],
 		};
 	}
 	if (sql.includes("exists(select 1 from auth_user")) {

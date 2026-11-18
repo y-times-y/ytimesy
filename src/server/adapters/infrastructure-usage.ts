@@ -5,12 +5,11 @@ import {
 	USAGE_WINDOWS,
 	type UsageAutoReset,
 	UsageCeilingReached,
-	type UsageCharge,
 	UsageWindowExhausted,
 	type UsageWindowState,
 	usageWindowCeiling,
 	usageWindowMs,
-	usageWindowState,
+	usageWindowStateFromSums,
 	utcUsageMonth,
 	validUsageAmount,
 } from "#/domain/infrastructure-usage";
@@ -55,75 +54,79 @@ const WEEK_MS = USAGE_WINDOWS[USAGE_WINDOWS.length - 1].ms;
  * `autoResets` lists the windows it restarted that an ordinary user would
  * still be waiting for, for the one-time notice.
  */
-async function readWindows(
+export async function readWindows(
 	client: Pick<PoolClient, "query">,
 	userId: string,
 	limits: BudgetLimits,
 	now = Date.now(),
 ) {
-	const result = await client.query<{
-		amount: string | null;
-		open: boolean | null;
-		at: string | null;
-		settled: string | null;
-		five_hour: string | null;
-		weekly: string | null;
-		auto_reset: boolean | null;
-		five_hour_start: string | null;
-		five_hour_carried: string | null;
-		five_hour_waived: string | null;
-		weekly_start: string | null;
-		weekly_carried: string | null;
-		weekly_waived: string | null;
-	}>(
-		`select coalesce(r.consumed_micro_usd,r.reserved_micro_usd) as amount,
-		 r.consumed_micro_usd is null as open,
-		 (extract(epoch from r.created_at)*1000)::float8 as at,
-		 (extract(epoch from r.settled_at)*1000)::float8 as settled,
-		 p.five_hour_micro_usd as five_hour,p.weekly_micro_usd as weekly,p.auto_reset,
-		 (extract(epoch from w5.started_at)*1000)::float8 as five_hour_start,w5.carried_micro_usd as five_hour_carried,
-		 (extract(epoch from w5.waived_until)*1000)::float8 as five_hour_waived,
-		 (extract(epoch from ww.started_at)*1000)::float8 as weekly_start,ww.carried_micro_usd as weekly_carried,
-		 (extract(epoch from ww.waived_until)*1000)::float8 as weekly_waived
+	// One row: the database sums the week's reservations per window (see
+	// usageWindowStateFromSums) instead of returning each of them.
+	const ms = (column: string) => `(extract(epoch from ${column})*1000)::float8`;
+	const sums = (id: "five_hour" | "weekly", start: string) => `
+		 coalesce(sum(c.amount) filter (where c.open),0)::text as ${id}_open,
+		 coalesce(sum(c.amount) filter (where c.open or c.at >= ${start}),0)::text as ${id}_open_or_since,
+		 coalesce(sum(c.amount) filter (where c.at >= ${start}),0)::text as ${id}_since,
+		 coalesce(sum(c.amount) filter (where c.at < ${start} and (c.open or coalesce(c.settled,-1) >= ${start})),0)::text as ${id}_held_before`;
+	const result = await client.query<Record<string, string | boolean | null>>(
+		`select p.five_hour_micro_usd as five_hour,p.weekly_micro_usd as weekly,p.auto_reset,
+		 ${ms("w5.started_at")} as five_hour_start,w5.carried_micro_usd as five_hour_carried,
+		 ${ms("w5.waived_until")} as five_hour_waived,
+		 ${ms("ww.started_at")} as weekly_start,ww.carried_micro_usd as weekly_carried,
+		 ${ms("ww.waived_until")} as weekly_waived,
+		 a.*
 		 from (select 1) one
 		 left join infrastructure_usage_policy p on p.user_id=$1
 		 left join infrastructure_usage_window w5 on w5.user_id=$1 and w5.window_id='five_hour'
 		 left join infrastructure_usage_window ww on ww.user_id=$1 and ww.window_id='weekly'
-		 left join infrastructure_usage_reservation r on r.user_id=$1
-		  and (r.consumed_micro_usd is null or r.settled_at > to_timestamp($2::float8/1000))`,
+		 cross join lateral (select
+		 coalesce(sum(c.amount) filter (where not c.open),0)::text as settled_total,${sums("five_hour", ms("w5.started_at"))},${sums("weekly", ms("ww.started_at"))}
+		 from (select coalesce(r.consumed_micro_usd,r.reserved_micro_usd) as amount,
+		  r.consumed_micro_usd is null as open,
+		  ${ms("r.created_at")} as at,${ms("r.settled_at")} as settled
+		  from infrastructure_usage_reservation r
+		  where r.user_id=$1 and (r.consumed_micro_usd is null or r.settled_at > to_timestamp($2::float8/1000))) c) a`,
 		[userId, now - WEEK_MS],
 	);
-	const number = (value: string | null | undefined) =>
+	const policy = result.rows[0] ?? {};
+	const number = (value: string | boolean | null | undefined) =>
 		value === null || value === undefined ? null : Number(value);
-	const charges: UsageCharge[] = result.rows
-		.filter((row) => row.amount !== null)
-		.map((row) => ({
-			at: Number(row.at),
-			microUsd: Number(row.amount),
-			open: row.open === true,
-			settledAt: number(row.settled),
-		}));
-	const policy = result.rows[0];
-	const limit = (override: string | null | undefined, fallback: number) =>
+	const limit = (
+		override: string | boolean | null | undefined,
+		fallback: number,
+	) =>
 		override === null || override === undefined ? fallback : Number(override);
+	const sumsFor = (id: "five_hour" | "weekly") => ({
+		open: Number(policy[`${id}_open`] ?? 0),
+		openOrSinceStart: Number(policy[`${id}_open_or_since`] ?? 0),
+		sinceStart: Number(policy[`${id}_since`] ?? 0),
+		heldBeforeStart: Number(policy[`${id}_held_before`] ?? 0),
+	});
 	const rows = [
 		{
 			id: "five_hour" as const,
-			limit: limit(policy?.five_hour, limits.fiveHourMicroUsd),
-			start: number(policy?.five_hour_start),
-			carried: number(policy?.five_hour_carried),
-			waived: number(policy?.five_hour_waived),
+			limit: limit(policy.five_hour, limits.fiveHourMicroUsd),
+			start: number(policy.five_hour_start),
+			carried: number(policy.five_hour_carried),
+			waived: number(policy.five_hour_waived),
 		},
 		{
 			id: "weekly" as const,
-			limit: limit(policy?.weekly, limits.weeklyMicroUsd),
-			start: number(policy?.weekly_start),
-			carried: number(policy?.weekly_carried),
-			waived: number(policy?.weekly_waived),
+			limit: limit(policy.weekly, limits.weeklyMicroUsd),
+			start: number(policy.weekly_start),
+			carried: number(policy.weekly_carried),
+			waived: number(policy.weekly_waived),
 		},
 	];
 	const windows = rows.map((row) =>
-		usageWindowState(row.id, charges, row.limit, row.start, now, row.carried),
+		usageWindowStateFromSums(
+			row.id,
+			sumsFor(row.id),
+			row.limit,
+			row.start,
+			now,
+			row.carried,
+		),
 	);
 	const autoResets: UsageAutoReset[] = rows.flatMap((row, index) =>
 		row.carried !== null &&
@@ -133,16 +136,14 @@ async function readWindows(
 			? [{ id: row.id, resetAt: row.start, normalResetsAt: row.waived }]
 			: [],
 	);
+	const settled = Number(policy.settled_total ?? 0);
 	return {
 		windows,
-		autoReset: policy?.auto_reset === true,
+		autoReset: policy.auto_reset === true,
 		autoResets,
-		consumedMicroUsd: charges
-			.filter((charge) => !charge.open)
-			.reduce((sum, charge) => sum + charge.microUsd, 0),
-		reservedMicroUsd: charges
-			.filter((charge) => charge.open)
-			.reduce((sum, charge) => sum + charge.microUsd, 0),
+		consumedMicroUsd: settled,
+		// Open holds are the same in both windows' sums.
+		reservedMicroUsd: Number(policy.five_hour_open ?? 0),
 	};
 }
 

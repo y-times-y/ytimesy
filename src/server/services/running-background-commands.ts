@@ -18,7 +18,9 @@ export async function runningBackgroundCommandsByChat(
 ): Promise<Record<string, RunningBackgroundCommand[]>> {
 	const now = Date.now();
 	const ids = [...new Set(sessionIds)];
-	const items = await backgroundCommandItemsForOwner(userId, ids);
+	const items = await backgroundCommandItemsForOwner(userId, ids, {
+		records: true,
+	});
 	return Object.fromEntries(
 		ids.map((sessionId) => [
 			sessionId,

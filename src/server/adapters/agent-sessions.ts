@@ -447,9 +447,18 @@ export async function agentSessionPageForOwner(
 export async function backgroundCommandItemsForOwner(
 	userId: string,
 	sessionIds: readonly string[],
+	options: { records?: boolean } = {},
 ): Promise<Map<string, unknown[]>> {
+	// `records`: only what runningBackgroundCommands reads (the item's kind and
+	// its background record's id, label, start and exit), projected in the
+	// database: the full item carries the tool's input and output.
+	const item = options.records
+		? `jsonb_build_object('kind',i.kind,'background',
+		   jsonb_build_object('id',i.item->'background'->'id','label',i.item->'background'->'label','startedAt',i.item->'background'->'startedAt')
+		   || case when jsonb_exists(i.item->'background','exitCode') then jsonb_build_object('exitCode',i.item->'background'->'exitCode') else '{}'::jsonb end)`
+		: "i.item";
 	const result = await database().query<{ session_id: string; item: unknown }>(
-		`select i.session_id, i.item
+		`select i.session_id, ${item} as item
 		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
 		 where i.session_id = any($2::uuid[]) and i.kind='dynamicToolCall' and i.item->'background' is not null
 		 order by i.session_id, i.position`,

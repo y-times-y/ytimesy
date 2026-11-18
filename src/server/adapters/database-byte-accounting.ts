@@ -63,9 +63,83 @@ export function estimateRowsBytes(rows: unknown) {
 	return Math.round((sampled / count) * rows.length);
 }
 
+/**
+ * Running per-query-tag totals for this isolate, logged as one
+ * `db.egress_summary` line per interval (no timer: checked as queries
+ * complete, so an idle isolate logs nothing). Tags are cached by SQL text so
+ * the hash is computed once per distinct statement.
+ */
+export const EGRESS_SUMMARY_INTERVAL_MS = 10 * 60 * 1000;
+const TOP_TAGS = 5;
+type Totals = { bytes: number; rows: number; calls: number };
+const totals = new Map<string, Totals>();
+const tagCache = new Map<string, string>();
+let windowStartedAt = 0;
+
+function cachedTag(sql: string) {
+	let tag = tagCache.get(sql);
+	if (tag === undefined) {
+		tag = queryTag(sql);
+		// Bounded: statements are a fixed set in practice; never grows without limit.
+		if (tagCache.size < 2000) tagCache.set(sql, tag);
+	}
+	return tag;
+}
+
+function recordEgress(sql: string, rows: number, bytes: number, now: number) {
+	if (!windowStartedAt) windowStartedAt = now;
+	const tag = cachedTag(sql);
+	const entry = totals.get(tag);
+	if (entry) {
+		entry.bytes += bytes;
+		entry.rows += rows;
+		entry.calls += 1;
+	} else if (totals.size < 500) totals.set(tag, { bytes, rows, calls: 1 });
+	if (now - windowStartedAt < EGRESS_SUMMARY_INTERVAL_MS) return;
+	flushEgressSummary(now);
+}
+
+/** Logs the running totals as one line and starts a new interval. */
+export function flushEgressSummary(now = Date.now()) {
+	if (totals.size) {
+		let bytes = 0;
+		let rows = 0;
+		let calls = 0;
+		for (const entry of totals.values()) {
+			bytes += entry.bytes;
+			rows += entry.rows;
+			calls += entry.calls;
+		}
+		const top = [...totals.entries()]
+			.sort((a, b) => b[1].bytes - a[1].bytes)
+			.slice(0, TOP_TAGS)
+			.map(([query, entry]) => ({ query, ...entry }));
+		console.info(
+			JSON.stringify({
+				event: "db.egress_summary",
+				windowSeconds: Math.round((now - windowStartedAt) / 1000),
+				totalApproxBytes: bytes,
+				totalRows: rows,
+				totalCalls: calls,
+				top,
+			}),
+		);
+	}
+	totals.clear();
+	windowStartedAt = now;
+}
+
+/** Test hook: forget the running totals. */
+export function resetEgressSummary() {
+	totals.clear();
+	tagCache.clear();
+	windowStartedAt = 0;
+}
+
 function reportLargeResult(sql: string, result: unknown) {
 	const rows = (result as { rows?: unknown } | undefined)?.rows;
 	const bytes = estimateRowsBytes(rows);
+	recordEgress(sql, Array.isArray(rows) ? rows.length : 0, bytes, Date.now());
 	if (bytes < LARGE_RESULT_BYTES) return;
 	console.warn(
 		JSON.stringify({

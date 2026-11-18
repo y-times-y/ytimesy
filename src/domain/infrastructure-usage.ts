@@ -147,6 +147,55 @@ export function usageWindowState(
 }
 
 /**
+ * A user's charges summed by the database, per window, so a read returns one
+ * row instead of every reservation of the week. Each sum is over the same
+ * charge sets usageWindowState filters:
+ * - `open`: open holds (counted whatever the window).
+ * - `openOrSinceStart`: open holds plus charges dated at or after the start.
+ * - `sinceStart`: charges dated at or after the start.
+ * - `heldBeforeStart`: charges dated before the start that were open, or
+ *   settled at or after it.
+ */
+export type UsageWindowSums = {
+	open: number;
+	openOrSinceStart: number;
+	sinceStart: number;
+	heldBeforeStart: number;
+};
+
+/** usageWindowState over precomputed sums: the same arithmetic, same result. */
+export function usageWindowStateFromSums(
+	id: UsageWindowId,
+	sums: UsageWindowSums,
+	limitMicroUsd: number,
+	startedAt: number | null,
+	now = Date.now(),
+	carriedMicroUsd: number | null = null,
+): UsageWindowState {
+	validUsageAmount(limitMicroUsd);
+	const running = !usageWindowExpired(id, startedAt, now);
+	const usedMicroUsd =
+		running && startedAt !== null && carriedMicroUsd !== null
+			? sums.sinceStart +
+				Math.max(0, sums.heldBeforeStart - validUsageAmount(carriedMicroUsd))
+			: running && startedAt !== null
+				? sums.openOrSinceStart
+				: sums.open;
+	return {
+		id,
+		limitMicroUsd,
+		usedMicroUsd,
+		usedPercent:
+			limitMicroUsd > 0
+				? Math.min(100, Math.floor((usedMicroUsd * 100) / limitMicroUsd))
+				: 100,
+		exhausted: usedMicroUsd >= limitMicroUsd,
+		resetsAt:
+			running && startedAt !== null ? startedAt + usageWindowMs(id) : null,
+	};
+}
+
+/**
  * A window an auto-reset policy restarted (instead of refusing work), while
  * an ordinary user would still be waiting for it: `normalResetsAt` is when
  * the exhausted window would have reset (null when it had no reset time).
