@@ -7,7 +7,12 @@ import {
 } from "lucide-react";
 import { HoverCard } from "radix-ui";
 import type { ReactNode } from "react";
+import { modelBaseId, modelDisplayName } from "#/domain/model-display";
 import type { SidebarPullRequest } from "#/domain/sidebar-chat-status";
+import {
+	ModelProviderLogo,
+	modelLogoProvider,
+} from "../sessions/model-provider-logo";
 
 /** Open after the pointer rests this long; Radix also opens it on keyboard focus. */
 export const THREAD_CARD_OPEN_DELAY_MS = 250;
@@ -96,8 +101,10 @@ export function ThreadHoverCard({
 							<>
 								<dt>Machine</dt>
 								<dd>
-									<Cloud size={12} strokeWidth={1.75} aria-hidden="true" />{" "}
-									Cloud
+									<span className="thread-card-cloud">
+										<Cloud size={12} strokeWidth={1.75} aria-hidden="true" />
+										Cloud
+									</span>
 									{data.machine ? (
 										<span className="thread-card-machine">{data.machine}</span>
 									) : null}
@@ -107,7 +114,15 @@ export function ThreadHoverCard({
 						{data.model ? (
 							<>
 								<dt>Model</dt>
-								<dd>{data.model}</dd>
+								<dd>
+									<span className="thread-card-model-logo" aria-hidden="true">
+										<ModelProviderLogo
+											provider={modelLogoProvider(modelBaseId(data.model))}
+											size={14}
+										/>
+									</span>
+									<span title={data.model}>{modelDisplayName(data.model)}</span>
+								</dd>
 							</>
 						) : null}
 					</dl>
