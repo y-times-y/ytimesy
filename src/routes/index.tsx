@@ -9,7 +9,6 @@ import {
 	SITE_TITLE,
 } from "../features/blog/posts";
 import { LandingPage } from "../features/landing/landing-page";
-import { FirstRun } from "../features/onboarding/first-run";
 import {
 	getWorkspaceBootstrap,
 	type OpenChatView,
@@ -90,7 +89,6 @@ function HomePage() {
 		inspector,
 		savedPullRequests,
 		savedDefaultBranches,
-		firstRun,
 	} = Route.useLoaderData();
 	const home = (openChat?: OpenChatView) => (
 		<WorkspaceHome
@@ -108,13 +106,9 @@ function HomePage() {
 			savedDefaultBranches={savedDefaultBranches}
 		/>
 	);
-	// A new account (no project yet) sets up before it sees the workspace.
-	if (firstRun)
-		return (
-			<IdentityGate initialSignedIn={signedIn} signedOut={<LandingPage />}>
-				<FirstRun state={firstRun} userId={userId} />
-			</IdentityGate>
-		);
+	// A new account opens the workspace straight away. GitHub, a model and the
+	// privacy choice are asked for where they are needed: the composer's project
+	// picker, a send that has no model, and the privacy card below.
 	return (
 		<IdentityGate initialSignedIn={signedIn} signedOut={<LandingPage />}>
 			{/* Accounts that never set training consent see its card once. */}
