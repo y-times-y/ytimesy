@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { BrainCircuit, Check, ChevronUp, SquareTerminal } from "lucide-react";
+import { Check, ChevronUp, Layers, SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import type { FirstRunState } from "#/domain/first-run";
