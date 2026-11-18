@@ -13,12 +13,15 @@ import {
 	ModelProviderLogo,
 	modelLogoProvider,
 } from "../sessions/model-provider-logo";
+import { ThreadArt } from "./thread-art";
 
 /** Open after the pointer rests this long; Radix also opens it on keyboard focus. */
 export const THREAD_CARD_OPEN_DELAY_MS = 250;
 const CLOSE_DELAY_MS = 80;
 
 export type ThreadCardData = {
+	/** The chat id, which picks the thread's picture. */
+	readonly artId: string;
 	/** The thread's short id ("WEB-3F9A"). */
 	readonly id: string | null;
 	readonly title: string;
@@ -75,15 +78,7 @@ export function ThreadHoverCard({
 					avoidCollisions
 				>
 					<div className="thread-card-head">
-						<span
-							className="thread-card-avatar"
-							style={
-								data.projectColor
-									? { background: data.projectColor }
-									: undefined
-							}
-							aria-hidden="true"
-						/>
+						<ThreadArt id={data.artId} size={24} />
 						{data.id ? <span className="thread-id">{data.id}</span> : null}
 						{data.status ? (
 							<span className="thread-card-status">{data.status}</span>

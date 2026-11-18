@@ -11,6 +11,7 @@ describe("ThreadHoverCard", () => {
 		const html = renderToStaticMarkup(
 			<ThreadHoverCard
 				data={{
+					artId: "3f9a2b1c-7d4e-4f10-9a55-0c2d8e6b1a77",
 					id: "WEB-3F9A",
 					title: "Fix form",
 					projectName: "Web",

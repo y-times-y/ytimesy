@@ -6,8 +6,6 @@ import {
 	ChevronRight,
 	CircleDot,
 	Clock3,
-	Cloud,
-	Cpu,
 	GitMerge,
 	GitPullRequest,
 	GitPullRequestClosed,
@@ -84,6 +82,7 @@ import {
 } from "../app/first-paint";
 import { useShortcutHint } from "../app/keyboard-shortcuts";
 import { requestJson } from "../projects/api";
+import { ThreadArt } from "./thread-art";
 import { ThreadHoverCard } from "./thread-hover-card";
 import { YSquaredMark } from "./y-squared-mark";
 
@@ -701,7 +700,6 @@ export function ProjectSidebar({
 		const age = compactRelativeAge(chat.updatedAt, nowMs);
 		const pinned = shownPinnedIds.includes(chat.id);
 		const projectName = project ? projectDisplayName(project) : null;
-		const prInMeta = thread && shown.kind === "pr" ? shown.pr : null;
 		const row = (
 			<li
 				key={chat.id}
@@ -742,64 +740,25 @@ export function ProjectSidebar({
 							: onSelectChat?.(chat.id)
 					}
 				>
-					{thread ? (
-						<span className="sidebar-chat-body">
-							<span className="sidebar-chat-title">{chat.title}</span>
-							<span className="sidebar-chat-meta">
-								{project ? (
-									<span className="sidebar-chat-meta-project">
-										<span
-											className="sidebar-project-dot"
-											style={{ background: projectColor(project.id) }}
-											aria-hidden="true"
-										/>
-										<span>{projectName}</span>
-										<span className="thread-id" data-in="sidebar">
-											{threadLabel(threadLabelPrefix(projectName), chat.id)}
-										</span>
-									</span>
-								) : null}
-								{chat.listedModelId ? (
-									<span
-										className="sidebar-chat-meta-icon"
-										data-meta="model"
-										title={chat.listedModelId}
-									>
-										<Cpu size={12} strokeWidth={1.5} aria-hidden="true" />
-										<span className="sr-only">{chat.listedModelId}</span>
-									</span>
-								) : null}
-								{chat.workspaceId ? (
-									<span
-										className="sidebar-chat-meta-icon"
-										data-meta="machine"
-										title="Has a cloud workspace"
-									>
-										<Cloud size={12} strokeWidth={1.5} aria-hidden="true" />
-										<span className="sr-only">Cloud workspace</span>
-									</span>
-								) : null}
-							</span>
-						</span>
-					) : (
-						<>
-							{/* The icon column every sidebar row shares: in Recent, the
-							    chat's project; under a project, empty so titles line up
-							    with the project's name. */}
-							<span className="sidebar-chat-lead" aria-hidden="true">
-								{project ? (
-									<span
-										className="sidebar-project-dot"
-										style={{ background: projectColor(project.id) }}
-									/>
-								) : null}
-							</span>
-							<span className="sidebar-chat-title">{chat.title}</span>
-							{projectName ? (
-								<span className="sr-only">{projectName}</span>
-							) : null}
-						</>
-					)}
+					{/* The thread's picture leads every row. In Recent a small dot on
+					    its corner names the chat's project; under a project it is
+					    left out, so the title lines up with the project's name. The
+					    id, model and machine are in the hover card. */}
+					<span
+						className="sidebar-chat-lead"
+						data-art="true"
+						aria-hidden="true"
+					>
+						<ThreadArt id={chat.id} size={22} />
+						{project ? (
+							<span
+								className="sidebar-project-dot sidebar-chat-art-project"
+								style={{ background: projectColor(project.id) }}
+							/>
+						) : null}
+					</span>
+					<span className="sidebar-chat-title">{chat.title}</span>
+					{projectName ? <span className="sr-only">{projectName}</span> : null}
 					{shown.kind === "working" ? (
 						<span className="sr-only">Working</span>
 					) : null}
@@ -847,23 +806,8 @@ export function ProjectSidebar({
 								: undefined
 						}
 						askingAsDot={thread}
-						prInMeta={thread}
 					/>
 				</div>
-				{prInMeta ? (
-					<div className="sidebar-chat-meta-end">
-						<SidebarChatPr
-							pr={prInMeta}
-							label={label}
-							hashed
-							onOpen={
-								onOpenChatPullRequest
-									? () => onOpenChatPullRequest(project?.id, chat.id)
-									: undefined
-							}
-						/>
-					</div>
-				) : null}
 			</li>
 		);
 		if (thread && project) {
@@ -871,6 +815,7 @@ export function ProjectSidebar({
 				<ThreadHoverCard
 					key={chat.id}
 					data={{
+						artId: chat.id,
 						id: threadLabel(threadLabelPrefix(projectName), chat.id),
 						title: chat.title,
 						projectName,

@@ -1,0 +1,16 @@
+{
+	"name": "thread-art-generator",
+	"private": true,
+	"type": "module",
+	"description": "Makes the thread pictures in public/thread-art. Run once when the palettes change; nothing here ships.",
+	"scripts": {
+		"render": "node render.mjs"
+	},
+	"dependencies": {
+		"@paper-design/shaders-react": "0.0.82",
+		"@vitejs/plugin-react": "^5",
+		"react": "^19",
+		"react-dom": "^19",
+		"vite": "^7"
+	}
+}
