@@ -27,6 +27,7 @@ Iterating:
 Rules:
 - One complete document (<!doctype html>…) with all CSS, JavaScript, fonts and images inline (images as data: URIs or inline SVG). The preview is offline and sandboxed: it cannot load any URL (no CDN scripts or stylesheets, web fonts, remote images, fetch or forms), and has no cookies or storage. Bundle a framework build into one file (for example vite-plugin-singlefile) before showing it.
 - Pass html for a short document; for anything larger, or to show what you built, write the file and pass path (a .html file in the workspace), which keeps the document out of the conversation.
+- Never type or copy base64, binary or other long encoded data into html by hand: one wrong character shows a broken image. Build such a document with a script that reads the real files and writes the .html, check that it renders, then pass path.
 - Design for a dark or light background deliberately, make it responsive, give elements meaningful text and ids (notes point at them), and use realistic content instead of lorem ipsum.
 - The user sees the canvas, not your HTML: do not paste the HTML into your reply; say what to look at and what to decide.
 At most ${CANVAS_HTML_LIMIT.toLocaleString("en-US")} characters.`;
