@@ -250,6 +250,7 @@ async function resolveForkCode(
 				userId,
 				[session.id],
 				["userMessage"],
+				{ only: "ids" },
 			)
 		).get(session.id) ?? [];
 	return forkCode({

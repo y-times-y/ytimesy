@@ -21,6 +21,7 @@ import {
 	sessionTitleFromItems,
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
+import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
 import {
 	type AgentSessionRecord,
 	chatHoldingSend,
@@ -28,7 +29,7 @@ import {
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
 import { startAfterResponse } from "../adapters/after-response";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { agentSessionPageForOwner } from "../adapters/agent-sessions";
 import {
 	enqueueApiTurn,
 	inheritedSubscriptionSettings,
@@ -81,7 +82,10 @@ async function readSubscriptionSessionState(
 				? read
 				: read?.id === scope.sessionId
 					? read
-					: agentSessionForOwner(scope.userId, scope.sessionId)
+					: // The latest page (as the chat opens), never the whole transcript.
+						agentSessionPageForOwner(scope.userId, scope.sessionId, {
+							turns: TRANSCRIPT_PAGE_TURNS,
+						})
 			: null,
 		loadAgentAccountState(scope.userId),
 	]);
@@ -132,6 +136,9 @@ async function readSubscriptionSessionState(
 		turnStatus: session?.turnStatus ?? "idle",
 		canSend: connected && models.length > 0,
 		connection,
+		...((session as { hasOlderItems?: boolean } | null)?.hasOlderItems
+			? { hasOlderItems: true }
+			: {}),
 		...((await githubMissing) ? { sendBlockers: ["github"] as const } : {}),
 	};
 	return { view, sealedDeviceLogin: state.sealedDeviceLogin };

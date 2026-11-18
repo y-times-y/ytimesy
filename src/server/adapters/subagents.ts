@@ -1,3 +1,4 @@
+import { USER_MESSAGE_BULK_KEYS } from "#/domain/session-item-projection";
 import type { SidekickState } from "#/domain/sidekick";
 import type {
 	HelperForkFacts,
@@ -96,6 +97,8 @@ export async function subagentTree(
 		userId,
 		sessions.map((session) => session.id),
 		SUBAGENT_TREE_ITEM_KINDS,
+		// The tree reads each message's text, timing and token use, never its files or recalled memory.
+		{ omit: USER_MESSAGE_BULK_KEYS },
 	);
 	return sessions.map((session) => ({
 		...session,

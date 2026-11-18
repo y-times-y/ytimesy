@@ -17,6 +17,8 @@ import { hubTopic } from "#/domain/user-hub";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionMetadataForOwner,
+	sessionItemForOwner,
 } from "../adapters/agent-sessions";
 import { replaceIdleSessionItems } from "../adapters/background-command-sessions";
 import { database } from "../adapters/database";
@@ -61,10 +63,20 @@ export type PushApprovalDependencies = {
 		| "claimUnnoticed"
 		| "releaseNotice"
 	>;
+	/** The chat with its whole transcript: only when notices are written back (rare). */
 	session(
 		userId: string,
 		sessionId: string,
 	): Promise<AgentSessionRecord | null>;
+	/**
+	 * The chat's row without its transcript, and one of its push cards by id:
+	 * answering a card reads these instead of the transcript. Absent: `session`.
+	 */
+	metadata?(
+		userId: string,
+		sessionId: string,
+	): Promise<AgentSessionRecord | null>;
+	card?(userId: string, sessionId: string, itemId: string): Promise<unknown>;
 	/** The project repository's installation; null when it left the project. */
 	installation(
 		userId: string,
@@ -115,9 +127,15 @@ function stateOf(request: PushRequestRecord): PushCardState {
 }
 
 async function cardRequest(input: CardInput, deps: PushApprovalDependencies) {
-	const session = await deps.session(input.userId, input.sessionId);
+	const session = await (deps.metadata ?? deps.session)(
+		input.userId,
+		input.sessionId,
+	);
 	if (!session) throw new Error(PUSH_APPROVAL_UNAVAILABLE);
-	const card = sessionItemsFromUnknown(session.items).find(
+	const held = deps.card
+		? [await deps.card(input.userId, input.sessionId, input.itemId)]
+		: session.items;
+	const card = sessionItemsFromUnknown(held).find(
 		(item): item is PushApprovalItem =>
 			item.id === input.itemId && item.kind === "pushApproval",
 	);
@@ -447,6 +465,13 @@ export async function withPushResultNotices(
 export const pushApprovalDependencies: PushApprovalDependencies = {
 	requests: gitPushRequests,
 	session: (userId, sessionId) => agentSessionForOwner(userId, sessionId),
+	metadata: async (userId, sessionId) =>
+		(await agentSessionMetadataForOwner(
+			userId,
+			sessionId,
+		)) as AgentSessionRecord | null,
+	card: (userId, sessionId, itemId) =>
+		sessionItemForOwner(userId, sessionId, itemId, "pushApproval"),
 	async installation(userId, request) {
 		const result = await database().query<{ installationId: number }>(
 			`select r.installation_id::float8 as "installationId"

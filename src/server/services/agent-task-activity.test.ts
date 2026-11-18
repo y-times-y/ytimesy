@@ -95,7 +95,9 @@ it("reads Main's background items only and the transcripts of the shown subagent
 	// The last page of each, never the whole transcript.
 	expect(mocks.transcripts).toHaveBeenCalledWith("u", ["kid"], HELPER_PAGE);
 	// Background commands from their own rows: a page can leave one out.
-	expect(mocks.background).toHaveBeenCalledWith("u", ["root", "kid"]);
+	expect(mocks.background).toHaveBeenCalledWith("u", ["root", "kid"], {
+		records: true,
+	});
 	expect(tasks.map((task) => task.id)).toEqual(["kid"]);
 	expect(tasks[0]?.items).toHaveLength(1);
 });
@@ -252,6 +254,7 @@ describe("a helper still working", () => {
 			"u",
 			["kid"],
 			["userMessage", "notice"],
+			{ omit: ["attachments", "memory", "contextUsage"] },
 		);
 		expect(tasks[0]?.subagent?.spend.tokens).toBe(120);
 		expect(tasks[0]?.itemPositions).toBeUndefined();
@@ -288,6 +291,7 @@ describe("a helper still working", () => {
 			"u",
 			["kid"],
 			["userMessage", "notice"],
+			{ omit: ["attachments", "memory", "contextUsage"] },
 		);
 		await whole({}, { deltas: true });
 		// More rows than a delta is worth, or none to compare against.

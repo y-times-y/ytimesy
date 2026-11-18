@@ -3,7 +3,9 @@ import {
 	accountQueryBytes,
 	byteAccountingEnabled,
 	estimateRowsBytes,
+	queryLabel,
 	queryTag,
+	withQueryLabel,
 } from "./database-byte-accounting";
 
 afterEach(() => vi.restoreAllMocks());
@@ -115,4 +117,19 @@ it("logs one egress summary per interval with the top tags by bytes, and no per-
 		vi.useRealTimers();
 		resetEgressSummary();
 	}
+});
+
+it("names a labelled statement's caller in its tag, and leaves other tags as they were", () => {
+	const labelled = withQueryLabel("agentSessionForOwner", "select 1");
+	expect(labelled).toBe("/* agentSessionForOwner */ select 1");
+	expect(queryLabel(labelled)).toBe("agentSessionForOwner");
+	expect(queryTag(labelled)).toMatch(
+		/^agentSessionForOwner [0-9a-f]{8} select 1$/,
+	);
+	expect(queryLabel("select 1")).toBeNull();
+	expect(queryTag("select 1")).toMatch(/^[0-9a-f]{8} select 1$/);
+	// A label cannot smuggle SQL into the comment.
+	expect(withQueryLabel("a */ drop table x; /*", "select 1")).not.toContain(
+		"*/ drop",
+	);
 });

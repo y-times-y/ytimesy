@@ -14,10 +14,9 @@ import {
 	repositoriesForProject,
 } from "#/domain/projects";
 import { sessionCloneBranch } from "#/domain/session-branch";
-import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
-	agentSessionItemsOfKindsForOwner,
 	agentSessionMetadataForOwner,
+	sessionHoldsUserMessage,
 } from "#/server/adapters/agent-sessions";
 import {
 	PROJECT_CWD_PATH,
@@ -216,16 +215,8 @@ export function loadTenantProjectCheckout(scope: {
 		const legacyConversation =
 			session !== null &&
 			!session.workingBranch &&
-			// Only its user messages are read, not the whole transcript.
-			sessionItemsFromUnknown(
-				(
-					await agentSessionItemsOfKindsForOwner(
-						scope.userId,
-						[session.id],
-						["userMessage"],
-					)
-				).get(session.id),
-			).some((item) => item.kind === "userMessage");
+			// Whether it holds a user message, answered in the database.
+			(await sessionHoldsUserMessage(scope.userId, session.id));
 		const additionalRepositories = [];
 		for (const repository of repositoriesForProject(project).slice(1)) {
 			const additional = await checkoutForProject(scope.userId, {

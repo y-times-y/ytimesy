@@ -4,6 +4,7 @@ import {
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
 } from "#/domain/session-item";
+import { USER_MESSAGE_BULK_KEYS } from "#/domain/session-item-projection";
 import {
 	SIDE_CHAT_PARENT_ITEM_KINDS,
 	sideChatBudget,
@@ -63,6 +64,8 @@ export async function sendSideChatMessage(
 				input.userId,
 				[parent.id],
 				SIDE_CHAT_PARENT_ITEM_KINDS,
+				// parentContextLine reads each item's text, command, status and paths: no tool input or output.
+				{ omit: [...USER_MESSAGE_BULK_KEYS, "apiUsage", "input", "output"] },
 			)
 		).get(parent.id) ?? [];
 	const side = await ensureSideChat(parent, input.harnessId, input.modelId);

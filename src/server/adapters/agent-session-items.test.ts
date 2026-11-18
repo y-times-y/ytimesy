@@ -186,7 +186,7 @@ it("reads descendants' token use from their turns' starts only", async () => {
 	expect(kidUsage).not.toHaveProperty("items");
 });
 
-it("reads background commands as slim records for the agents list, whole items otherwise", async () => {
+it("reads background commands as slim records for the agents list, items without their output otherwise", async () => {
 	const big = "x".repeat(50_000);
 	const running = {
 		kind: "dynamicToolCall",
@@ -228,5 +228,7 @@ it("reads background commands as slim records for the agents list, whole items o
 		},
 	]);
 	const whole = await backgroundCommandItemsForOwner("alice", [id]);
-	expect(whole.get(id)).toEqual([running, exited]);
+	const { output: _a, ...runningWithoutOutput } = running;
+	const { output: _b, ...exitedWithoutOutput } = exited;
+	expect(whole.get(id)).toEqual([runningWithoutOutput, exitedWithoutOutput]);
 });

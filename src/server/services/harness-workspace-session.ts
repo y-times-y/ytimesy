@@ -12,6 +12,7 @@ import { startStageError } from "#/domain/subagent-start";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 	claimChatForSend,
 	releaseChatClaim,
 	releasingChatClaimOnFailure,
@@ -169,8 +170,15 @@ export function sendHarnessWorkspaceTask(
 				known?.id === scope.sessionId
 					? known
 					: yield* Effect.tryPromise(() =>
-							timed("send:chat", () =>
-								agentSessionForOwner(scope.userId, scope.sessionId as string),
+							// The row only: its `items` is null (the send holds no
+							// transcript), as commitChatBranchForSubmission expects.
+							timed(
+								"send:chat",
+								() =>
+									agentSessionMetadataForOwner(
+										scope.userId,
+										scope.sessionId as string,
+									) as Promise<AgentSessionRecord | null>,
 							),
 						);
 			const switching = previous && previous.harness !== scope.harnessId;
@@ -201,9 +209,17 @@ export function sendHarnessWorkspaceTask(
 				);
 			// The envelope repeats the transcript; the send uses it only when the
 			// last turn left no structured history to continue from.
+			// Read only when the runtime switches (rare): an ordinary send never
+			// reads the transcript, and the one the caller holds is used as is.
+			const handoffItems =
+				switching && !Array.isArray(previous.items)
+					? (yield* Effect.tryPromise(() =>
+							agentSessionForOwner(scope.userId, previous.id),
+						))?.items
+					: previous?.items;
 			const runtimeHandoff = switching
 				? runtimeHandoffPrompt(
-						sessionItemsFromUnknown(previous.items),
+						sessionItemsFromUnknown(handoffItems),
 						input.text,
 					)
 				: undefined;

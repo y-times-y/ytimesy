@@ -126,3 +126,106 @@ items line is the least certain; the egress summary will show it. The other
 reads not listed here (transcript pages, sidebar, polling endpoints) are not
 in these numbers; they need the `db.egress_summary` data to be added. Do not
 read this table as a forecast of the whole bill.
+
+### Round 2: transcripts (`agent_session.items` and item rows)
+
+Target (owner decision): 100 power users (about 300 turns/day, long chats)
+under Supabase Pro's 250 GB/month with margin, so **<= 1 GB per power user per
+month (~30 MB/day)** from query results.
+
+**Measured** on production (`pg_stat_statements` since 2026-10-27, one power
+user, ~3 weeks; bytes from `pg_column_size`):
+
+- `agent_session.items` averages 278 KB per chat, up to 4.5 MB; 157 chats.
+- `dynamicToolCall` items average 2.1 KB; `canvas` items 24 KB (the `html`).
+
+| Shape | Calls (3 wk) | Rows/call | Carries |
+| --- | --- | --- | --- |
+| A. `select <SESSION_COLUMNS with items> from agent_session where ...` | 18,872 | 1 | the whole transcript |
+| A'. `update agent_session ... returning <SESSION_COLUMNS>` | not in the measured list | 1 | the whole transcript (found in code) |
+| B1. `agent_session_item` rows with `item->'background'` | 32.8k | 14.5 | full tool items (input and output) |
+| B2. `agentSessionItemsOfKindsForOwner` (kind of every open chat) | 836 | 151 | whole items of that kind |
+| C. `with recursive descendants` | 14k | 3.5 (~756 B/row) | metadata only (confirmed: width matches a row without `items`; code selects `SESSION_COLUMNS` minus `items`) |
+| D. `with s as (...)` page reads | 15k | 1 (+ page) | metadata + one page of item rows (last 30 turns, `jsonb_agg`), never the `items` column |
+
+The `$3 as items` / `null as items` variants (62k + 5k calls) were already fine.
+
+#### Callers fixed
+
+| Caller (where) | Per | Before | After |
+| --- | --- | --- | --- |
+| `harness-workspace-session.ts` send for Codex/Claude Code (`agentSessionForOwner` at `send:chat`) | send | whole transcript | row only; transcript read only when the runtime switches (handoff) |
+| `readApiWorkspaceSession`, `readSubscriptionSessionState` fallbacks (replayed send, connect, no read passed) | view | whole transcript | the latest page (30 turns), same as the chat opens with; `hasOlderItems` is set |
+| `push-approval.ts` `cardRequest` (answer/preview/push a card) | card action | whole transcript | row + the one card by `item_id` (`sessionItemForOwner`) |
+| `pasted-text.fn.ts` (open a pasted-text chip) | click | whole transcript | row + attachments of user messages (`userMessageAttachmentsForOwner`) |
+| `side-chat.ts` `sideChatForParent` (every side-chat read/send, twice per send) | read | whole transcript of the side chat | row only |
+| `agentSessionById` | - | whole transcript | row only (no caller read `items`) |
+| `update ... returning` of `saveSessionWorkingBranch`, `saveAgentWorkingBranch`, `selectAgentSessionHarness`, `saveAgentSessionProviderRef`, `saveAgentTaskState`, `saveSessionBranchSelection` | write | whole transcript back | row with `items` null (callers already treat null as "not held": `heldTranscript`, `sessionHoldsUserMessage`); `reusableEmptyChat` returns `[]` (it is empty by its WHERE) |
+| `project-workspace.ts` legacy-conversation check | project open | all user messages | `sessionHoldsUserMessage` (one boolean) |
+| `descendantTokenUsageItemsForOwner` (a subagent's budget check, every model step) | step | every descendant's user messages | `kind, id, apiUsage` only |
+| `conversation-recovery.ts` fork code | fork | user messages | `kind, id` only |
+| `agent-peer-messaging.ts`, `subagentTree` (adapter), `agent-task-activity.ts` spend items, `subagent-tools` `itemsOfKinds` | steer / step / panel poll | user messages with attachments and recalled memory | text, timing, usage kept; `attachments`, `memory`, `contextUsage` dropped in SQL |
+| `side-chat.ts` parent snapshot | send | items with tool input/output | no `input`/`output`/bulk keys |
+| `backgroundCommandItemsForOwner` default (watcher) and `agent-task-activity.ts` panel poll | tick / poll | full item with `output` | no `output`; panel poll uses the 4-field `records` projection |
+
+Per request, the transcript is read at most once on a send: the send used to
+read it at `send:chat` and again through `commitChatBranchForSubmission`'s
+`returning`, and passed that copy along. Now neither reads it.
+
+#### Left as they are (not hot paths)
+
+- `wholeTranscript` in `api-workspace-session.ts`: plan approval (`approvesPlan`),
+  and a send with no stored previous-turn history (first turn after a model or
+  connection change). Rare; logs `session.full_read` with the caller when it
+  happens on a long chat.
+- `postPushResultNotices` (`push-approval.ts`): writes notices back with a
+  compare-and-swap on the whole transcript; only when an answered push card
+  has an unannounced result.
+- `claimInitialSetupChat` existing-row select, `insertAgentSession`
+  (new, empty chats), `saveAgentSessionItems` (local import).
+- `descendantAgentSessions` and `agentSessionForOwner` from `scripts/` and
+  `benchmarks/` (offline evaluation and export).
+
+**Whole-transcript reads left on hot paths: zero.** The regression test
+(`agent-session-egress.test.ts`) fails if any metadata/hot function selects the
+bare `SESSION_COLUMNS`, or if a hot read returns a non-null `items` column in
+PGlite.
+
+#### Visibility
+
+Statements in `agent-sessions.ts` start with `/* functionName */`; the byte
+accounting's tag (`db.large_result`, `db.egress_summary` top 5) is now
+`functionName hash first-words`. pg_stat_statements ignores comments in its
+query id, so statistics do not split. `withQueryLabel(label, sql)` does the
+same for any other statement.
+
+Measure with `scripts/measure-egress-shapes.ts` (read-only: calls and rows from
+`pg_stat_statements`, `pg_column_size` per table and per item kind, estimated
+bytes = calls x rows x sampled size). The owner runs it.
+
+#### Before/after, one power user per month (ESTIMATED unless noted)
+
+Scaled x1.43 from 3 weeks to 30 days. `pg_column_size` is the stored,
+possibly compressed size; text sent to the Worker is usually larger, so
+"before" is a lower bound.
+
+| Shape | Before | After |
+| --- | --- | --- |
+| A (18,872 calls x 278 KB, measured inputs) | ~7.5 GB | ~0.03 GB (metadata ~1 KB/row) |
+| B1 (476k rows x 2.1 KB measured average item; ~1.4 GB) | ~1.4 GB | agents list ~0.07 GB; watcher without `output` (unmeasured, smaller) |
+| B2 (126k rows; size per row unmeasured: 2.1 KB if tool-sized ~0.4 GB, up to ~3 GB if canvas-heavy) | 0.4-3 GB | text + usage only, ~0.1 GB (user message without files/memory; unmeasured) |
+| C | ~0.04 GB (14k x 3.5 x 756 B, measured width) | unchanged |
+| **Subtotal** | **~9-12 GB** | **~0.3 GB** |
+
+**100 power users:** before ~900-1,200 GB/month, 4-5x the 250 GB budget; after
+this round ~30 GB for these shapes (estimate).
+
+**Not yet in these numbers (unmeasured, possibly the next biggest):** the page
+reads (D: 15k calls/3 wk, each up to 30 turns of items). If a page averages
+50 KB, that is ~1 GB/month per power user by itself, i.e. the whole per-user
+target. Likewise usage windows, polling endpoints, and `agent_session_item`
+reads outside the list above. Treat "~30 GB" as the cost of the shapes listed,
+not as a forecast of the bill; confirm with `db.egress_summary` (now naming
+callers) and the measurement script before relying on it. Natural next
+step if D is large: serve polls from `itemRowsSinceForOwner` deltas (as the
+helper panel does) instead of re-reading the page.

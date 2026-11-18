@@ -18,6 +18,7 @@ import {
 	type SessionItem,
 	sessionItemsFromUnknown,
 } from "#/domain/session-item";
+import { USER_MESSAGE_BULK_KEYS } from "#/domain/session-item-projection";
 import { isSideChat } from "#/domain/side-chat";
 import { subagentTaskViews } from "#/domain/subagent-tree";
 import { transcriptPagesForOwner } from "#/server/adapters/agent-session-items";
@@ -157,8 +158,13 @@ export async function projectAgentTasksAndBackground(
 		transcriptPagesForOwner(userId, paged, HELPER_PAGE),
 		// Background commands from the rows that record them only: a page can
 		// leave out an older command that still runs.
-		backgroundCommandItemsForOwner(userId, [root.id, ...shownIds]),
-		agentSessionItemsOfKindsForOwner(userId, open, SPEND_ITEM_KINDS),
+		// Only what runningBackgroundCommands reads of each card.
+		backgroundCommandItemsForOwner(userId, [root.id, ...shownIds], {
+			records: true,
+		}),
+		agentSessionItemsOfKindsForOwner(userId, open, SPEND_ITEM_KINDS, {
+			omit: USER_MESSAGE_BULK_KEYS,
+		}),
 	]);
 	const descendants = shown.map((session) => ({
 		...session,

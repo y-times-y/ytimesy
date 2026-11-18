@@ -22,10 +22,32 @@ export function byteAccountingEnabled(
 	return !environment.VITEST;
 }
 
+/**
+ * A statement names its caller with a leading SQL comment, `/* fn *\/ select
+ * ...` (withQueryLabel). The comment travels to the database but is not part
+ * of pg_stat_statements' normalised query, so it splits no statistics.
+ */
+const LABEL_COMMENT = /^\s*\/\*\s*([\w.:-]{1,60})\s*\*\/\s*/;
+
+export function withQueryLabel(label: string, sql: string) {
+	return `/* ${label.replace(/[^\w.:-]/g, "_").slice(0, 60)} */ ${sql}`;
+}
+
+/** The caller label of a statement, when it has one. */
+export function queryLabel(sql: string) {
+	return LABEL_COMMENT.exec(sql)?.[1] ?? null;
+}
+
+/**
+ * `label hash first words` for a labelled statement (the summary's top
+ * entries then name functions), `hash first words` otherwise.
+ */
 export function queryTag(sql: string) {
-	const words = sql.trim().replace(/\s+/g, " ").slice(0, 60);
+	const match = LABEL_COMMENT.exec(sql);
+	const body = match ? sql.slice(match[0].length) : sql;
+	const words = body.trim().replace(/\s+/g, " ").slice(0, 60);
 	const hash = createHash("sha1").update(sql).digest("hex").slice(0, 8);
-	return `${hash} ${words}`;
+	return match ? `${match[1]} ${hash} ${words}` : `${hash} ${words}`;
 }
 
 function valueBytes(value: unknown, budget: { nodes: number }): number {

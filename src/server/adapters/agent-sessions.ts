@@ -38,6 +38,13 @@ import { noteUserHub } from "./user-hub-notes";
 const SESSION_COLUMNS =
 	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
 
+/**
+ * The same row without its transcript (`items` is null). The transcript is
+ * most of database egress: a statement that does not need it, including one
+ * that only `returning`s the updated row, takes these columns.
+ */
+const METADATA_COLUMNS = SESSION_COLUMNS.replace(",items,", ",null as items,");
+
 export async function selectAgentSessionHarness(
 	userId: string,
 	projectId: string,
@@ -45,9 +52,9 @@ export async function selectAgentSessionHarness(
 	harness: AgentProviderId,
 ): Promise<AgentSessionRecord> {
 	const result = await database().query(
-		`update agent_session set harness=$4,listed_model_id=null,updated_at=now()
+		`/* selectAgentSessionHarness */ update agent_session set harness=$4,listed_model_id=null,updated_at=now()
 		 where user_id=$1 and project_id=$2 and id=$3 and turn_status <> 'running'
-		 returning ${SESSION_COLUMNS}`,
+		 returning ${METADATA_COLUMNS}`,
 		[userId, projectId, sessionId, harness],
 	);
 	if (!result.rows[0])
@@ -71,7 +78,7 @@ export async function reusableEmptyChat(
 	claimTitle?: string,
 ): Promise<AgentSessionRecord | null> {
 	const result = await database().query(
-		`update agent_session set harness=$3,title=coalesce($4,title),updated_at=now()
+		`/* reusableEmptyChat */ update agent_session set harness=$3,title=coalesce($4,title),updated_at=now()
 		 where title='New session' and turn_status <> 'running'
 			and coalesce(jsonb_array_length(items),0)=0 and id=(
 			select s.id from agent_session s
@@ -85,7 +92,7 @@ export async function reusableEmptyChat(
 					and not q.accepted and q.queued_send is not null)
 			order by s.updated_at desc limit 1
 		 )
-		 returning ${SESSION_COLUMNS}`,
+		 returning ${SESSION_COLUMNS.replace(",items,", ",'[]'::jsonb as items,")}`,
 		[userId, projectId, harness, claimTitle ?? null],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
@@ -102,7 +109,7 @@ export async function chatHoldingSend(
 	messageId: string,
 ): Promise<string | null> {
 	const result = await database().query(
-		`select s.id from agent_session s
+		`/* chatHoldingSend */ select s.id from agent_session s
 		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
 			and exists (select 1 from api_turn t where t.session_id=s.id and t.idempotency_key=$3)
 		 order by s.updated_at desc limit 1`,
@@ -139,7 +146,7 @@ export async function releaseChatClaim(
 	text: string,
 ) {
 	await database().query(
-		`update agent_session s set title='New session', environment_setup=false
+		`/* releaseChatClaim */ update agent_session s set title='New session', environment_setup=false
 		 where s.user_id=$1 and s.id=$2 and (s.title=$3 or (s.environment_setup and s.title=$4))
 		 and s.turn_status <> 'running' and coalesce(jsonb_array_length(s.items),0)=0
 		 and not exists (select 1 from api_turn t where t.session_id=s.id)
@@ -172,7 +179,7 @@ export async function titleUntitledAgentSession(
 ) {
 	if (!title || title === "New session") return false;
 	const result = await database().query(
-		"update agent_session set title=$3 where user_id=$1 and id=$2 and title='New session'",
+		"/* titleUntitledAgentSession */ update agent_session set title=$3 where user_id=$1 and id=$2 and title='New session'",
 		[userId, sessionId, title],
 	);
 	return (result.rowCount ?? 0) > 0;
@@ -254,7 +261,7 @@ export async function listProjectProviderRefs(
 	projectId: string,
 ): Promise<string[]> {
 	const result = await database().query(
-		`select provider_ref
+		`/* listProjectProviderRefs */ select provider_ref
 		 from agent_session
 		 where user_id=$1 and project_id=$2 and provider_ref is not null`,
 		[userId, projectId],
@@ -272,7 +279,7 @@ export async function listAgentSessions(
 	projectId: string,
 ): Promise<Omit<AgentSessionRecord, "items">[]> {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")}
+		`/* listAgentSessions */ select ${SESSION_COLUMNS.replace(",items,", ",null as items,")}
 		 from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id is null
 		   and archived_at is null
@@ -296,7 +303,7 @@ export async function listedModelBlockItemsForOwner(
 	const bySession = new Map<string, unknown[]>();
 	if (!sessionIds.length) return bySession;
 	const result = await database().query<{ session_id: string; item: unknown }>(
-		`select i.session_id, i.item
+		`/* listedModelBlockItemsForOwner */ select i.session_id, i.item
 		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
 		 where i.session_id = any($2::uuid[]) and i.kind in ('error','agentMessage')
 		  and i.position >= coalesce((select max(j.position) from agent_session_item j
@@ -325,7 +332,7 @@ export async function listSidebarAgentSessions(
 	// kept on the row (waiting_on, maintained by a trigger on items and
 	// turn_status; supabase/migrations/20261026110000_agent_session_waiting_on.sql).
 	const result = await database().query(
-		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")},s.thread_number,s.waiting_on,
+		`/* listSidebarAgentSessions */ select ${SESSION_COLUMNS.replace(",items,", ",null as items,")},s.thread_number,s.waiting_on,
 		  -- Opened but never used (as reusableEmptyChat): the sidebar lists it only while open.
 		  case when s.title='New session' and s.turn_status <> 'running' then
 		    coalesce(jsonb_array_length(s.items),0)=0
@@ -379,7 +386,7 @@ export async function agentSessionMetadataForOwner(
 	sessionId: string,
 ): Promise<Omit<AgentSessionRecord, "items"> | null> {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session where id=$1 and user_id=$2`,
+		`/* agentSessionMetadataForOwner */ select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session where id=$1 and user_id=$2`,
 		[sessionId, userId],
 	);
 	if (!result.rows[0]) return null;
@@ -408,7 +415,7 @@ export async function agentSessionPageForOwner(
 	// Reads agent_session_item (transcript-page-sql.ts): the cursor and the
 	// turn starts by index, then only the page's rows.
 	const result = await database().query(
-		`with s as (select ${SESSION_COLUMNS.replace(",items,", ",")} from agent_session where id=$1 and user_id=$2),
+		`/* agentSessionPageForOwner */ with s as (select ${SESSION_COLUMNS.replace(",items,", ",")} from agent_session where id=$1 and user_id=$2),
 		 st as (select case when $3::text is null
 		   then (select coalesce(max(i.position)+1,0) from agent_session_item i where i.session_id=$1)
 		   else (select min(i.position) from agent_session_item i where i.session_id=$1 and i.item_id=$3::text) end as stop),
@@ -459,9 +466,10 @@ export async function backgroundCommandItemsForOwner(
 		? `jsonb_build_object('kind',i.kind,'background',
 		   jsonb_build_object('id',i.item->'background'->'id','label',i.item->'background'->'label','startedAt',i.item->'background'->'startedAt')
 		   || case when jsonb_exists(i.item->'background','exitCode') then jsonb_build_object('exitCode',i.item->'background'->'exitCode') else '{}'::jsonb end)`
-		: "i.item";
+		: // The card's tool output (a command's captured lines) is read by no caller.
+			"i.item - 'output'";
 	const result = await database().query<{ session_id: string; item: unknown }>(
-		`select i.session_id, ${item} as item
+		`/* backgroundCommandItemsForOwner */ select i.session_id, ${item} as item
 		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
 		 where i.session_id = any($2::uuid[]) and i.kind='dynamicToolCall' and i.item->'background' is not null
 		 order by i.session_id, i.position`,
@@ -477,23 +485,49 @@ export async function backgroundCommandItemsForOwner(
 }
 
 /**
+ * How much of each item `agentSessionItemsOfKindsForOwner` returns. Items
+ * are the transcript's bytes: a canvas carries its html (24 KB on average), a
+ * tool call its input and output (2 KB), a message its attachments and the
+ * memory it recalled. A caller names what it does not read.
+ */
+export type ItemProjection = {
+	/** Top-level keys dropped from every item, in the database. */
+	readonly omit?: readonly string[];
+	/** Only these: `ids` the kind and id, `usage` also the turn's recorded token use. */
+	readonly only?: "ids" | "usage";
+};
+
+function projectedItemSql(projection: ItemProjection | undefined) {
+	if (projection?.only === "ids")
+		return "jsonb_build_object('kind',i.kind,'id',i.item->'id','text','')";
+	if (projection?.only === "usage")
+		return "jsonb_build_object('kind',i.kind,'id',i.item->'id','text','','apiUsage',i.item->'apiUsage')";
+	return projection?.omit?.length ? "i.item - $4::text[]" : "i.item";
+}
+
+/**
  * Only the transcript items of the given kinds, of the user's chats, by chat
  * id and in transcript order (agent_session_item mirrors agent_session.items
  * row by row), for a caller that reads a few kinds of a long transcript.
+ * `projection` leaves out what the caller does not read.
  */
 export async function agentSessionItemsOfKindsForOwner(
 	userId: string,
 	sessionIds: readonly string[],
 	kinds: readonly string[],
+	projection?: ItemProjection,
 ): Promise<Map<string, unknown[]>> {
 	const bySession = new Map<string, unknown[]>();
 	if (!sessionIds.length || !kinds.length) return bySession;
+	const omit = projection?.only ? [] : [...(projection?.omit ?? [])];
 	const result = await database().query<{ session_id: string; item: unknown }>(
-		`select i.session_id, i.item
+		`/* agentSessionItemsOfKindsForOwner */ select i.session_id, ${projectedItemSql(projection)} as item
 		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
 		 where i.session_id = any($2::uuid[]) and i.kind = any($3::text[])
 		 order by i.session_id, i.position`,
-		[userId, [...sessionIds], [...kinds]],
+		omit.length
+			? [userId, [...sessionIds], [...kinds], omit]
+			: [userId, [...sessionIds], [...kinds]],
 	);
 	for (const row of result.rows) {
 		const items = bySession.get(row.session_id);
@@ -501,6 +535,41 @@ export async function agentSessionItemsOfKindsForOwner(
 		else bySession.set(row.session_id, [row.item]);
 	}
 	return bySession;
+}
+
+/**
+ * The one item of `kind` with this id in the user's chat (null when there is
+ * none), read from its row instead of the chat's transcript.
+ */
+export async function sessionItemForOwner(
+	userId: string,
+	sessionId: string,
+	itemId: string,
+	kind: string,
+): Promise<unknown | null> {
+	const result = await database().query<{ item: unknown }>(
+		`/* sessionItemForOwner */ select i.item from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		 where i.session_id=$2 and i.item_id=$3 and i.kind=$4 limit 1`,
+		[userId, sessionId, itemId, kind],
+	);
+	return result.rows[0]?.item ?? null;
+}
+
+/** Every file attached to the user's messages in a chat, in order: the messages' text stays in the database. */
+export async function userMessageAttachmentsForOwner(
+	userId: string,
+	sessionId: string,
+): Promise<unknown[]> {
+	const result = await database().query<{ attachments: unknown }>(
+		`/* userMessageAttachmentsForOwner */ select i.item->'attachments' as attachments
+		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		 where i.session_id=$2 and i.kind='userMessage' and jsonb_typeof(i.item->'attachments')='array'
+		 order by i.position`,
+		[userId, sessionId],
+	);
+	return result.rows.flatMap((row) =>
+		Array.isArray(row.attachments) ? row.attachments : [],
+	);
 }
 
 /** An item that records a background command which has not exited (`it` is a jsonb item). */
@@ -533,7 +602,7 @@ export async function applyBackgroundCommandExits(
 		...(exit.announced ? { message: backgroundCommandNoticeLine(exit) } : {}),
 	}));
 	const result = await database().query<{ changed: boolean; open: boolean }>(
-		`with exits as (select x from jsonb_array_elements($3::jsonb) x),
+		`/* applyBackgroundCommandExits */ with exits as (select x from jsonb_array_elements($3::jsonb) x),
 		 updated as (
 		  update agent_session s set items = (
 		    select jsonb_agg(case when m.x is null then e.it
@@ -579,7 +648,7 @@ export async function agentSessionAncestorMetadata(
 ): Promise<Omit<AgentSessionRecord, "items">[]> {
 	const columns = SESSION_COLUMNS.replace(",items,", ",");
 	const result = await database().query(
-		`with recursive chain as (
+		`/* agentSessionAncestorMetadata */ with recursive chain as (
 			select ${columns}, 0 as depth
 			from agent_session
 			where id=$2 and user_id=$1
@@ -636,7 +705,7 @@ function noteFullSessionRead(reader: string, row: { items?: unknown }) {
 
 export async function agentSessionForOwner(userId: string, sessionId: string) {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2`,
+		`/* agentSessionForOwner */ select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2`,
 		[sessionId, userId],
 	);
 	if (result.rows[0])
@@ -653,7 +722,7 @@ export async function agentSessionItemsFingerprint(
 	sessionId: string,
 ) {
 	const result = await database().query<{ fingerprint: string }>(
-		"select md5(items::text) as fingerprint from agent_session where id=$1 and user_id=$2",
+		"/* agentSessionItemsFingerprint */ select md5(items::text) as fingerprint from agent_session where id=$1 and user_id=$2",
 		[sessionId, userId],
 	);
 	return result.rows[0]?.fingerprint ?? null;
@@ -665,7 +734,7 @@ export async function agentSessionItemsFingerprint(
  */
 export async function agentSessionHasItems(userId: string, sessionId: string) {
 	const result = await database().query<{ has_items: boolean }>(
-		`select jsonb_typeof(items)='array' and jsonb_array_length(items) > 0 as has_items
+		`/* agentSessionHasItems */ select jsonb_typeof(items)='array' and jsonb_array_length(items) > 0 as has_items
 		 from agent_session where id=$1 and user_id=$2`,
 		[sessionId, userId],
 	);
@@ -678,7 +747,7 @@ export async function latestAgentSessionMetadata(
 	projectId: string,
 ): Promise<Omit<AgentSessionRecord, "items"> | null> {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session
+		`/* latestAgentSessionMetadata */ select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id is null
 		   and archived_at is null
 		 order by updated_at desc limit 1`,
@@ -697,7 +766,7 @@ export async function latestListedModelForUser(
 		harness: AgentProviderId;
 		listed_model_id: string;
 	}>(
-		`select harness,listed_model_id from agent_session
+		`/* latestListedModelForUser */ select harness,listed_model_id from agent_session
 		 where user_id=$1 and parent_session_id is null
 		   and coalesce(listed_model_id,'')<>''
 		 order by updated_at desc limit 1`,
@@ -721,7 +790,7 @@ export async function chatToOpenMetadata(
 		const [linked, archived] = await Promise.all([
 			agentSessionMetadataForOwner(userId, linkedChatId),
 			database().query(
-				"select 1 from agent_session where id=$1 and user_id=$2 and archived_at is not null",
+				"/* chatToOpenMetadata */ select 1 from agent_session where id=$1 and user_id=$2 and archived_at is not null",
 				[linkedChatId, userId],
 			),
 		]);
@@ -736,7 +805,7 @@ export async function chatToOpenMetadata(
 	// Never the project's setup chat: it runs in the background and opens
 	// only when picked (chatOpenedWithProject).
 	const result = await database().query(
-		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session
+		`/* chatToOpenMetadata */ select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id is null
 		   and archived_at is null and not environment_setup
 		   and not (title = any($3::text[]))
@@ -755,10 +824,10 @@ export async function saveSessionBranchSelection(
 	branch: string,
 ) {
 	const result = await database().query(
-		`with selected as (
+		`/* saveSessionBranchSelection */ with selected as (
 		 update agent_session set selected_branch=$3, updated_at=now()
 		 where user_id=$1 and id=$2 and parent_session_id is null and turn_status <> 'running'
-		 returning ${SESSION_COLUMNS}
+		 returning ${METADATA_COLUMNS}
 		), retired as (
 		 delete from agent_task_command_receipt receipt using selected
 		 where receipt.parent_session_id=selected.id
@@ -780,8 +849,8 @@ export async function saveSessionWorkingBranch(
 	baseBranch?: string,
 ) {
 	const result = await database().query(
-		`update agent_session set selected_branch=$3, working_branch=$3, base_branch=coalesce($4,base_branch), updated_at=now()
-		 where user_id=$1 and id=$2 and turn_status <> 'running' returning ${SESSION_COLUMNS}`,
+		`/* saveSessionWorkingBranch */ update agent_session set selected_branch=$3, working_branch=$3, base_branch=coalesce($4,base_branch), updated_at=now()
+		 where user_id=$1 and id=$2 and turn_status <> 'running' returning ${METADATA_COLUMNS}`,
 		[userId, sessionId, branch, baseBranch ?? null],
 	);
 	if (!result.rows[0])
@@ -803,7 +872,7 @@ export async function adoptChatPublicationBranch(
 ): Promise<Omit<AgentSessionRecord, "items">> {
 	// Its branches are what the publication reads: the transcript is not returned.
 	const result = await database().query(
-		`update agent_session set selected_branch=$3, working_branch=$3, base_branch=coalesce(base_branch,$4), updated_at=now()
+		`/* adoptChatPublicationBranch */ update agent_session set selected_branch=$3, working_branch=$3, base_branch=coalesce(base_branch,$4), updated_at=now()
 		 where user_id=$1 and id=$2 and parent_session_id is null and working_branch is null
 		 returning ${SESSION_COLUMNS.replace(",items,", ",null as items,")}`,
 		[userId, sessionId, branch, baseBranch],
@@ -828,9 +897,9 @@ export async function saveAgentWorkingBranch(
 	branch: string,
 ) {
 	const result = await database().query(
-		`update agent_session set selected_branch=$3, working_branch=$3, updated_at=now()
+		`/* saveAgentWorkingBranch */ update agent_session set selected_branch=$3, working_branch=$3, updated_at=now()
 		 where user_id=$1 and id=$2 and parent_session_id is null and working_branch is not null
-		 returning ${SESSION_COLUMNS}`,
+		 returning ${METADATA_COLUMNS}`,
 		[userId, sessionId, branch],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
@@ -844,20 +913,20 @@ export async function projectBranchHeldByOtherSession(
 	branch: string,
 ) {
 	const result = await database().query(
-		`select 1 from agent_session where user_id=$1 and project_id=$2 and id<>$3
+		`/* projectBranchHeldByOtherSession */ select 1 from agent_session where user_id=$1 and project_id=$2 and id<>$3
 		 and (working_branch=$4 or task_branch=$4) limit 1`,
 		[userId, projectId, sessionId, branch],
 	);
 	return Boolean(result.rows[0]);
 }
 
+/** A chat by id, without its transcript (no caller reads a whole transcript by id alone). */
 export async function agentSessionById(sessionId: string) {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS} from agent_session where id=$1`,
+		`/* agentSessionById */ select ${METADATA_COLUMNS} from agent_session where id=$1`,
 		[sessionId],
 	);
-	if (result.rows[0]) noteFullSessionRead("agentSessionById", result.rows[0]);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
+	return result.rows[0] ? withoutItems(toSession(result.rows[0])) : null;
 }
 
 /** The parent's oldest child, without its transcript (every child's was read before). */
@@ -866,7 +935,7 @@ export async function childAgentSession(
 	parentSessionId: string,
 ): Promise<Omit<AgentSessionRecord, "items"> | null> {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")}
+		`/* childAgentSession */ select ${SESSION_COLUMNS.replace(",items,", ",null as items,")}
 		 from agent_session
 		 where user_id=$1 and parent_session_id=$2
 		 order by created_at asc limit 1`,
@@ -881,13 +950,13 @@ export async function sideChatForParent(
 	parentSessionId: string,
 ) {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS} from agent_session
+		`/* sideChatForParent */ select ${METADATA_COLUMNS} from agent_session
 		 where user_id=$1 and parent_session_id=$2
 		 and agent_budget->>'sideChat' = 'true'
 		 order by created_at asc limit 1`,
 		[userId, parentSessionId],
 	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
+	return result.rows[0] ? withoutItems(toSession(result.rows[0])) : null;
 }
 
 /** Full transcripts for offline evaluation/export callers; live review uses projected evidence. */
@@ -896,7 +965,7 @@ export async function descendantAgentSessions(
 	parentSessionId: string,
 ) {
 	const result = await database().query(
-		`with recursive descendants as (
+		`/* descendantAgentSessions */ with recursive descendants as (
 			select ${SESSION_COLUMNS}
 			from agent_session
 			where user_id=$1 and parent_session_id=$2
@@ -924,7 +993,7 @@ export async function descendantAgentSessionMetadata(
 ): Promise<Omit<AgentSessionRecord, "items">[]> {
 	const columns = SESSION_COLUMNS.replace(",items,", ",");
 	const result = await database().query(
-		`with recursive descendants as (
+		`/* descendantAgentSessionMetadata */ with recursive descendants as (
 			select ${columns}
 			from agent_session
 			where user_id=$1 and parent_session_id=$2
@@ -958,7 +1027,7 @@ export async function reviewWorkerEvidenceForOwner(
 ) {
 	if (!sessionIds.length) return new Map<string, unknown[]>();
 	const result = await database().query<{ session_id: string; item: unknown }>(
-		`select i.session_id, case when i.kind='userMessage' then
+		`/* reviewWorkerEvidenceForOwner */ select i.session_id, case when i.kind='userMessage' then
 		 jsonb_build_object('kind',i.kind,'id',i.item->'id','text','','apiUsage',i.item->'apiUsage')
 		 when i.kind='commandExecution' then
 		 jsonb_build_object('kind',i.kind,'id',i.item->'id','command',i.item->'command')
@@ -1003,6 +1072,7 @@ export async function descendantTokenUsageItemsForOwner(
 		userId,
 		descendants.map((session) => session.id),
 		["userMessage"],
+		{ only: "usage" },
 	);
 	return descendants.map((session) => ({
 		id: session.id,
@@ -1039,7 +1109,7 @@ export async function itemRowsSinceForOwner(
 		count: number;
 		rows: { position: number; item: unknown }[];
 	}>(
-		`select s.id, s.items_rev::text as items_rev,
+		`/* itemRowsSinceForOwner */ select s.id, s.items_rev::text as items_rev,
 		  (select coalesce(max(i.position)+1,0)::int from agent_session_item i where i.session_id=s.id) as count,
 		  (select coalesce(jsonb_agg(jsonb_build_object('position',i.position,'item',i.item) order by i.position),'[]'::jsonb)
 		   from agent_session_item i where i.session_id=s.id and i.rev > w.rev) as rows
@@ -1066,7 +1136,7 @@ export async function sessionHoldsUserMessage(
 	messageId?: string,
 ): Promise<boolean> {
 	const result = await database().query<{ held: boolean }>(
-		`select exists(select 1 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		`/* sessionHoldsUserMessage */ select exists(select 1 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
 		 where i.session_id=$2 and i.kind='userMessage' and ($3::text is null or i.item_id=$3::text)) as held`,
 		[userId, sessionId, messageId ?? null],
 	);
@@ -1080,7 +1150,7 @@ export async function itemsRevisionsForOwner(
 ): Promise<Map<string, string>> {
 	if (!sessionIds.length) return new Map();
 	const result = await database().query<{ id: string; items_rev: string }>(
-		"select id, items_rev::text as items_rev from agent_session where user_id=$1 and id = any($2::uuid[])",
+		"/* itemsRevisionsForOwner */ select id, items_rev::text as items_rev from agent_session where user_id=$1 and id = any($2::uuid[])",
 		[userId, [...sessionIds]],
 	);
 	return new Map(result.rows.map((row) => [row.id, row.items_rev]));
@@ -1092,7 +1162,7 @@ export async function providerRefsHeldOutside(
 	sessionIds: readonly string[],
 ) {
 	const result = await database().query<{ provider_ref: string }>(
-		`select distinct provider_ref from agent_session
+		`/* providerRefsHeldOutside */ select distinct provider_ref from agent_session
 		where user_id=$1 and provider_ref is not null and not (id::text = any($2::text[]))`,
 		[userId, sessionIds],
 	);
@@ -1104,7 +1174,7 @@ export async function deleteAgentSessionForOwner(
 	sessionId: string,
 ) {
 	await database().query(
-		`delete from agent_session where id=$1 and user_id=$2`,
+		`/* deleteAgentSessionForOwner */ delete from agent_session where id=$1 and user_id=$2`,
 		[sessionId, userId],
 	);
 }
@@ -1126,7 +1196,7 @@ export async function insertAgentSession(input: {
 }) {
 	const id = randomUUID();
 	const result = await database().query(
-		`insert into agent_session(
+		`/* insertAgentSession */ insert into agent_session(
 			id,user_id,project_id,workspace_id,harness,provider_ref,
 			parent_session_id,title,listed_model_id,status,
 			task_prompt,task_state,task_placement,task_access
@@ -1195,7 +1265,7 @@ export async function claimInitialSetupChat(input: {
 }): Promise<{ session: AgentSessionRecord; created: boolean } | null> {
 	const id = initialSetupChatId(input.projectId);
 	const inserted = await database().query(
-		`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,status)
+		`/* claimInitialSetupChat */ insert into agent_session(id,user_id,project_id,workspace_id,harness,title,status)
 		 values($1,$2,$3,$4,$5,$6,'starting')
 		 on conflict (id) do nothing
 		 returning ${SESSION_COLUMNS}`,
@@ -1219,7 +1289,7 @@ export async function claimInitialSetupChat(input: {
 		return { session, created: true };
 	}
 	const existing = await database().query(
-		`select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2 and project_id=$3`,
+		`/* claimInitialSetupChat */ select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2 and project_id=$3`,
 		[id, input.userId, input.projectId],
 	);
 	return existing.rows[0]
@@ -1240,10 +1310,10 @@ export async function saveAgentTaskState(
 					? "failed"
 					: "idle";
 	const result = await database().query(
-		`update agent_session
+		`/* saveAgentTaskState */ update agent_session
 		 set task_state=$2, turn_status=$3, updated_at=now()
 		 where id=$1 and parent_session_id is not null
-		 returning ${SESSION_COLUMNS}`,
+		 returning ${METADATA_COLUMNS}`,
 		[sessionId, taskState, turnStatus],
 	);
 	const session = result.rows[0] ? toSession(result.rows[0]) : null;
@@ -1257,9 +1327,9 @@ export async function saveAgentSessionProviderRef(
 	providerRef: string,
 ) {
 	const result = await database().query(
-		`update agent_session set provider_ref=$2, status='ready', updated_at=now()
+		`/* saveAgentSessionProviderRef */ update agent_session set provider_ref=$2, status='ready', updated_at=now()
 		 where id=$1
-		 returning ${SESSION_COLUMNS}`,
+		 returning ${METADATA_COLUMNS}`,
 		[sessionId, providerRef],
 	);
 	return toSession(result.rows[0]);
@@ -1274,7 +1344,7 @@ export async function saveAgentSessionItems(
 	expectedRunningItems?: unknown,
 ) {
 	const result = await database().query(
-		`update agent_session
+		`/* saveAgentSessionItems */ update agent_session
 		 set items=$2::jsonb,
 		     title=coalesce($3, title),
 		     listed_model_id=coalesce($4, listed_model_id),
@@ -1361,7 +1431,7 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
  */
 export async function failAbandonedHelperDrafts() {
 	const result = await database().query(
-		`update agent_session s set task_state='failed', updated_at=now()
+		`/* failAbandonedHelperDrafts */ update agent_session s set task_state='failed', updated_at=now()
 		 where s.agent_role is not null and s.task_state='draft'
 		 and s.turn_status is distinct from 'running'
 		 and s.updated_at < now() - interval '15 minutes'

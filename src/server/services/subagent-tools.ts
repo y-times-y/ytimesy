@@ -31,6 +31,7 @@ import {
 	roleModelFor,
 } from "#/domain/role-models";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
+import { USER_MESSAGE_BULK_KEYS } from "#/domain/session-item-projection";
 import {
 	beginSidekickRound,
 	currentSidekickRound,
@@ -203,9 +204,11 @@ const defaultDeps: SubagentToolDeps = {
 	ancestors: (...args) => subagentAncestors(...args),
 	tree: (...args) => loadSubagentTree(...args),
 	itemsOfKinds: async (userId, sessionId, kinds) =>
-		(await agentSessionItemsOfKindsForOwner(userId, [sessionId], kinds)).get(
-			sessionId,
-		) ?? [],
+		(
+			await agentSessionItemsOfKindsForOwner(userId, [sessionId], kinds, {
+				omit: USER_MESSAGE_BULK_KEYS,
+			})
+		).get(sessionId) ?? [],
 	openTask: (...args) => openAgentTask(...args),
 	saveSpec: (...args) => saveSubagentSpec(...args),
 	fork: (...args) => forkWriterWorkspace(...args),

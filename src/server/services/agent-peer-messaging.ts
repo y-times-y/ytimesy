@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { steeringTexts } from "#/domain/agent-steering";
 import { SessionItemId } from "#/domain/ids";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
+import { USER_MESSAGE_BULK_KEYS } from "#/domain/session-item-projection";
 import { sidekickState } from "#/domain/sidekick";
 import {
 	type AgentSessionRecord,
@@ -117,6 +118,7 @@ export async function deliverAgentPeerMessage(
 				recipient.userId,
 				[recipient.id],
 				["userMessage"],
+				{ omit: USER_MESSAGE_BULK_KEYS },
 			)
 		).get(recipient.id) ?? [];
 	if (

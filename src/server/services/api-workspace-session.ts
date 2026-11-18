@@ -131,7 +131,10 @@ export async function readApiWorkspaceSession(
 			? await read
 			: read?.id === scope.sessionId
 				? read
-				: await agentSessionForOwner(scope.userId, scope.sessionId)
+				: // The latest page (as the chat opens), never the whole transcript.
+					await agentSessionPageForOwner(scope.userId, scope.sessionId, {
+						turns: TRANSCRIPT_PAGE_TURNS,
+					})
 		: null;
 	if (session && session.projectId !== scope.projectId)
 		throw new Error("Session is not in this project.");
@@ -146,6 +149,9 @@ export async function readApiWorkspaceSession(
 	];
 	return {
 		...apiWorkspaceView(session, access.models),
+		...((session as { hasOlderItems?: boolean } | null)?.hasOlderItems
+			? { hasOlderItems: true }
+			: {}),
 		...(sendBlockers.length ? { sendBlockers } : {}),
 	};
 }
