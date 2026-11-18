@@ -9,13 +9,8 @@ import {
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions, pinnedYSquared } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
-import { claudeSubscriptionEnabled } from "#/domain/claude-code-route";
 import { savedDefaultBranchesFromCookies } from "#/domain/default-branch-cookie";
 import { isEnvironmentSetupPrompt } from "#/domain/environment-setup";
-import {
-	type FirstRunState,
-	firstRunDoneFromCookies,
-} from "#/domain/first-run";
 import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
 import { openChatFromCookies } from "#/domain/open-chat-cookie";
@@ -29,7 +24,6 @@ import {
 	type TranscriptPage,
 } from "#/domain/transcript-page";
 import { userHubEnabledFor } from "#/domain/user-hub";
-import { xaiSubscriptionEnabled } from "#/domain/xai-subscription";
 import {
 	agentSessionMetadataForOwner,
 	agentSessionPageForOwner,
@@ -37,24 +31,17 @@ import {
 	chatToOpenMetadata,
 	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
-import { claudeSubscriptionStatus } from "#/server/adapters/claude-subscription";
-import {
-	firstRunFinished,
-	markFirstRunFinished,
-} from "#/server/adapters/first-run";
+import { markFirstRunFinished } from "#/server/adapters/first-run";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
-import { listModelConnections } from "#/server/adapters/model-connections";
 import { listProjects } from "#/server/adapters/projects";
 import { consumeUserAction } from "#/server/adapters/user-action-rate";
 import { ySquaredChatsByProject } from "#/server/adapters/y-mode";
-import { loadAgentAccount } from "#/server/auth/agent-account";
 import { requireUser } from "#/server/auth/auth";
 import {
 	advanceCodexDeviceLogin,
 	startCodexDeviceLogin,
 } from "#/server/auth/codex-device-login";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
-import { githubConnectionExists } from "#/server/auth/github-connection";
 import { requireSameOrigin } from "#/server/http";
 import { readableServerError } from "#/server/public-error";
 import { agentModelCatalog } from "#/server/services/agent-model-catalog";
@@ -466,29 +453,12 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				};
 			})
 			.catch(() => undefined);
-		// A new account (no project yet) opens the first-run steps at the right
-		// one, until it leaves them: then the composer's picker adds a project.
-		const setupDone = firstRunDoneFromCookies(
-			getRequest().headers.get("cookie"),
-			user.id,
-		);
-		// The cookie answers at once on this browser; the account's record
-		// covers every other browser.
-		const firstRun = listed.then(async (projects) =>
-			projects &&
-			projects.length === 0 &&
-			!setupDone &&
-			!(await firstRunFinished(user.id).catch(() => false))
-				? firstRunState(user.id).catch(() => undefined)
-				: undefined,
-		);
-		const [snapshotAvailable, projects, chats, projectChats, firstRunAt] =
+		const [snapshotAvailable, projects, chats, projectChats] =
 			await Promise.all([
 				hasManagedCodexAuth(user.id),
 				listed,
 				firstChats,
 				otherChats.catch(() => []),
-				firstRun,
 			]);
 		// Landed in time, the view comes as a value: the browser hydrates it
 		// without waiting on a promise.
@@ -519,7 +489,6 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			),
 			// The sidebar's account button renders from this.
 			account: { name: user.name, email: user.email, image: user.image },
-			firstRun: firstRunAt,
 			// The right panel as this browser left it.
 			inspector: savedInspectorFromCookies(getRequest().headers.get("cookie")),
 			// A new chat's "from <branch>" as this browser last read it from GitHub.
@@ -552,29 +521,6 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			},
 		};
 	});
-
-/** Where a new account stands: GitHub connected, and a model to run chats on. */
-async function firstRunState(userId: string): Promise<FirstRunState> {
-	const claudeSubscription = claudeSubscriptionEnabled();
-	const [githubConnected, account, connections, claude] = await Promise.all([
-		githubConnectionExists(userId),
-		loadAgentAccount(userId),
-		listModelConnections(userId),
-		claudeSubscription
-			? claudeSubscriptionStatus(userId).catch(() => null)
-			: null,
-	]);
-	return {
-		githubConnected,
-		modelReady:
-			account.status === "connected" ||
-			connections.length > 0 ||
-			claude?.status === "connected" ||
-			claude?.status === "limited",
-		...(xaiSubscriptionEnabled() ? { xaiSubscription: true } : {}),
-		...(claudeSubscription ? { claudeSubscription: true } : {}),
-	};
-}
 
 /** Starts ChatGPT sign-in for the account, outside any chat (first run, settings). */
 export const startChatgptSignIn = createServerFn({ method: "POST" })
