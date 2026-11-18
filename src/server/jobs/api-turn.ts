@@ -2249,9 +2249,11 @@ async function runApiTurnAttempt(
 			}
 		}
 		const runModel = subscription
-			? step
-				? runCodexSubscriptionAgentStep
-				: runCodexSubscriptionAgent
+			? (input: Parameters<typeof runCodexSubscriptionAgent>[0]) =>
+					(step ? runCodexSubscriptionAgentStep : runCodexSubscriptionAgent)({
+						...input,
+						...(ports.modelAccess ? { modelAccess: ports.modelAccess } : {}),
+					})
 			: (input: Parameters<typeof runCodexSubscriptionAgent>[0]) =>
 					(step ? runApiAgentStep : runApiAgent)({
 						...input,
@@ -3610,7 +3612,15 @@ async function runApiTurnAttempt(
 		if (!abort.signal.aborted) await stopClaudeCodeRun?.();
 		let paused: ModelSwitchItem | undefined;
 		let exhausted = "";
-		if (reason && failoverScope && !abort.signal.aborted) {
+		// Failover to another connection plans from the database and is not
+		// served on a turn runner box (docs/turn-runner-boxes.md): a box turn
+		// whose route fails ends with the failure's own message.
+		if (
+			reason &&
+			failoverScope &&
+			!abort.signal.aborted &&
+			!ports.modelAccess
+		) {
 			const scope = failoverScope;
 			try {
 				const plan = await planModelFailover({

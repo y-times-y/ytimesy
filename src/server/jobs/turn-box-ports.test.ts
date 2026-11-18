@@ -195,6 +195,7 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 				{ messageId: "m1", cwd: "/work/x" },
 				null,
 			],
+			["codexAuth", () => ports.hasManagedCodexAuth(USER), {}, true],
 			[
 				"commitTurn",
 				() => ports.commitSessionTurn({} as never, []),
@@ -231,6 +232,8 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 				(op) =>
 					!covered.has(op) &&
 					![
+						// Asked with the turn's model settings: box-subscription-turn-e2e.test.ts.
+						"codexSelection",
 						"analytics",
 						"userHubNote",
 						"crewWaiting",

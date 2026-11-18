@@ -1,6 +1,6 @@
 # Turn runner boxes
 
-Decision (2026-11-15): API-connection turns (and later Codex's) run their
+Decision (2026-11-15): API-connection turns (and, since stage 3, Codex and Grok subscription turns) run their
 model loop on AWS "turn runner boxes", not inside the chat's Durable Object.
 The chat object stays the coordinator and the live viewers' hub.
 
@@ -22,9 +22,9 @@ a runner box and the chat object sleeps between short steps.
   `boxTurnPorts`: stage 2a below), and registers through the edge every 10 s.
 - A turn is routed to the boxes when it is queued (`chooseTurnExecutor`): the
   deployment runs turns in Durable Objects, the user is in
-  `YTIMESY_BOX_TURN_USERS` (ids, or `*`), the turn is an API connection's (not
-  a Codex or Claude subscription's), and a box with room registered in the last
-  45 s. Otherwise the turn runs in its chat's object exactly as before, so a
+  `YTIMESY_BOX_TURN_USERS` (ids, or `*`), the turn is not a Claude Code turn
+  (API keys and, since stage 3, the Codex and Grok plans qualify), and a box with
+  room registered in the last 45 s. Otherwise the turn runs in its chat's object exactly as before, so a
   down fleet never strands a turn.
 - The box keeps the turn's history in process, saves progress to Postgres after
   every model call and tool result (checkpoints; writes cost no egress), and a
@@ -126,10 +126,11 @@ heartbeat fresh`, so a box whose lease moved between the two is still fenced.
 | `GET /box/v1/socket` (upgrade) | grant | forwarded to the chat's Durable Object |
 
 **Model proxy** (`src/domain/turn-box-model-proxy.ts`): API-key connections
-only. The edge reads the turn's own `connection_id` (never the box's),
+(stage 1; the Codex and Grok subscription routes were added in stage 3, see
+"Subscription routes"). The edge reads the turn's own `connection_id` (never the box's),
 decrypts it, and streams to the provider's official origin (OpenAI, Anthropic,
-Google, OpenRouter; `compatible`/custom hosts, subscriptions (xAI, Codex,
-Claude) and any other origin are refused before any upstream call). Bodies are
+Google, OpenRouter; `compatible`/custom hosts and any other origin are refused before any
+upstream call; the subscription routes have their own fixed origins). Bodies are
 streamed both ways, never buffered; redirects are refused; only an allowlist of
 headers and a plain path (no `..`, no `//`, only an `alt` query) pass. It also
 reserves the request's tokens from its Content-Length (bytes/3 + 24k, as the
@@ -177,7 +178,8 @@ Measured in `turn-box-client.test.ts` against the real routes (fake database):
 - (Done in stage 2b: workspace tool calls go through `boxWorkspaceMachines`,
   plugged into `box-runner.ts`; see "Whole turn on a box".)
 - Failover to another connection mid-turn: the proxy serves the turn's primary
-  connection only.
+  connection only; since stage 3 the loop does not plan one on a box either (see
+  "Subscription routes"): a failing route ends the turn with its own message.
 - `inbox` in the renew response is always false (renewApiTurn does not return
   it); the inbox read now has an endpoint (`peerInboxRead`) and the box reads
   it every step instead.
@@ -288,7 +290,7 @@ CURRENT grant (renewals replace it) in `authorization`, `x-api-key` and
 `x-goog-api-key`, refuses any URL outside the proxy path (so the grant never
 reaches another host) and refuses redirects. The provider's real `baseUrl` still
 decides provider-specific behaviour; only transport uses the proxy
-(`transportBaseUrl`). Subscription connections throw on a box.
+(`transportBaseUrl`). Subscription connections use the same proxy since stage 3.
 
 ### Every dependency of `runApiTurn`, and how a box gets it
 
@@ -327,7 +329,9 @@ post-step, not served; the Durable Object keeps doing it.
 | `connectableMcpServers`, `turnOAuthProvider` | MCP servers carry headers and sealed OAuth | (c) missing: a box runs with no MCP servers (silently; no notice yet) |
 | `gitPushRequests` (push approval) | | missing: methods throw when the tool is used; `withPushResultNotices` is a port now (no-op on a box) |
 | `evaluationRunForTask`, `assertEvaluationActive`, `recordEvaluationUsage`, `reserveEvaluationRequest` | | (c) evaluation turns stay in Durable Objects: throw on a box |
-| `pinnedClaudeRunner`, `claudeSubscriptionStatus`, `warmCodexSubscriptionCatalog`, `hasManagedCodexAuth`, `turnBoxToolIdentity` and its two writers | | (c) subscription routes never run on a box: throw |
+| `hasManagedCodexAuth` | op `codexAuth`, asked once per turn | (b) stage 3 |
+| `warmCodexSubscriptionCatalog` | no-op on a box (the edge reads the catalog when it chooses the model) | (b) stage 3 |
+| `pinnedClaudeRunner`, `claudeSubscriptionStatus`, `turnBoxToolIdentity` and its two writers | | (c) Claude Code never runs through a box turn: throw |
 | tools (Freestyle) | `boxWorkspaceMachines` over `vm/*`, built per turn by `box-runner.ts` | (a) done (stage 2b) |
 
 **Not a port, still reached by name inside the loop.** Superseded by "Whole
@@ -408,8 +412,9 @@ not be lease-checked).
 the secret-request tool (`saveAccountWideSecret`, `saveVisibleProjectSecret`:
 the value would pass through the box), push approval cards
 (`gitPushRequests`), MCP servers (a box runs with none, silently), harness
-evaluation, subscription routes, cross-chat memory, helper chats, failover to
-another connection mid-turn. The edge's `finalize` post-work is not retried.
+evaluation, Claude Code, cross-chat memory, helper chats, failover to
+another connection mid-turn. (Codex and Grok subscription routes run on a box
+since stage 3.) The edge's `finalize` post-work is not retried.
 
 **Database imports in the box bundle** (`turn-box-bundle-imports.test.ts`,
 entry `box-runner.ts`, static value imports): 49 modules outside
@@ -460,13 +465,143 @@ and progress writes; with the socket, renewals and progress are socket
 messages, 1/20 of a request), and checkpoints a real tool-heavy step would
 add (the fake tool returns at once).
 
+## Subscription routes: Codex and Grok on a box (stage 3, 2026-11-18)
+
+Still behind `YTIMESY_BOX_TURN_USERS` (empty: nothing is routed). Nothing here ran
+against a real Worker, ChatGPT, xAI or box; the tests use the fake edge, the
+real Codex transport over a fake upstream, and the real `runApiTurn`.
+
+**Decision: the edge holds the tokens and sends the request.** A box never
+receives an OAuth token, a refresh token or the ChatGPT account id. It sends the
+model request to the model proxy like an API-key turn, and the proxy sends it
+upstream exactly as the Durable Object's transport does, because it calls the
+same code: `subscriptionFetch` (Codex: token read and rotation from the vault,
+one forced refresh and resend on 401, the VPC egress and relays and their
+failover, `codex.response_headers` logging, the pinned
+`PINNED_CODEX_CLI_VERSION` for `codex.catalog`) and `xaiSubscriptionFetch`
+(Grok: bearer injection, one refresh on 401, status records). Reachability
+(chatgpt.com answers a JSON 401, not a bot challenge, from an AWS IP) would
+allow direct egress from a box; it is not used, because that would put a token
+on the box. The stream passes through the Worker (below), so nothing blocked
+the proxy design.
+
+**What the box sends** (the request the Durable Object's SDK builds):
+`POST <edge>/box/v1/model/codex/responses` (Codex) or `.../chat/completions` /
+`.../responses` (Grok), the JSON body, `content-type`, `accept`, the grant as
+bearer, and for cache routing `session-id` (Codex; a SHA-256 the edge computed)
+or `x-grok-conv-id`. For a Codex turn it first asks two port ops, once each per
+turn: `codexAuth` (is there a sign-in) and `codexSelection` (the catalog row of
+the chosen model, the effort, the cache key). The edge reads the catalog and
+makes the plan checks (model offered, fast mode, larger window, effort) with
+`selectCodexModel` (domain, shared with the Durable Object) and returns that
+row; the box builds the same runtime (`codexSubscriptionRuntime`: request
+settings, `store: false`, `parallelToolCalls`, native compaction, `streamOnly`).
+The box's transport insists on the exact destination
+(`<edge>/box/v1/model/codex/responses`), as the Durable Object's does for
+chatgpt.com, and applies the same response checks (`guardCodexInference`). A
+Grok turn loads its connection through `modelConnection` (credential removed,
+`subscription` kept) and builds its runtime like any API turn.
+
+**What the edge adds:** `Authorization: Bearer <access token>`,
+`ChatGPT-Account-ID`, `User-Agent: ytimesy/1.0` (Codex). Whatever the box sent in
+those slots is dropped: only `accept`, `content-type`, `openai-beta`,
+`anthropic-*`, `session-id`, `x-grok-conv-id` and `x-session-id` are forwarded.
+The upstream URL is fixed (`https://chatgpt.com/backend-api/codex/responses`
+only; for Grok the connection's `api.x.ai` base, checked with
+`isXaiDirectEndpoint`), and redirects are refused.
+
+**Request and response at the Worker.** The request body is read to a string
+(up to 8 MiB, the relay's cap) because a 401 must be resent after the refresh
+and the Codex egress fails over between paths only for a body that can be sent
+again; this is the one place the proxy buffers, and the Durable Object holds
+the same body as a string. The response is handed through as a stream
+(`new Response(upstream.body)`, no transform, no read): the proxy test checks
+the first chunk arrives while the upstream is still open. The client's abort
+reaches the upstream (`request.signal`): Stop mid-stream aborts the edge's
+upstream request (tested). Worker work is the grant check, the `api_turn`
+connection read, the body read and the token read. **Two Worker requests per
+step** (model + checkpoint), measured as exactly 2.0 marginal in
+`box-subscription-turn-e2e.test.ts`; `codexAuth` and `codexSelection` add 2 per
+turn. A subscription is a prepaid plan: the proxy takes no API token
+reservation (the Durable Object skips the budget for them too) and needs no
+Content-Length.
+
+**Failure handling.** The same typed errors reach the loop, so the user-facing
+text is unchanged:
+
+| At the edge | Crosses as | The box throws | User sees |
+|---|---|---|---|
+| 401 | refresh once, resend (invisible to the box) | | |
+| refresh rejected (`CodexReconnectRequired`) | `403` + `x-ytimesy-subscription-error: codex-reconnect` (or in the `codexSelection` answer when found there) | `CodexReconnectRequired` | "Codex login refresh failed; reconnect Codex in Settings → Agents..." (tested, exact text) |
+| every egress path blocked | `503` + `codex-egress` + path ids and reasons | `CodexEgressUnavailable` | as today |
+| Grok `XaiSubscriptionUnavailable(reason)` (reconnect, not-eligible, usage-limit, unavailable) | `403` + `xai-<reason>` | same class and reason | "Your Grok sign-in expired..." etc. (tested) |
+| spent plan allowance (429 with a reset time), empty 200 body | passed through | `guardCodexInference` (shared with the Durable Object) | "...usage is used up. It resets in 2 h..." (tested); an empty 200 is resent by the SDK |
+| no sign-in at turn start | `codexAuth` false | the loop's own check | as today |
+| any other upstream failure | `502` | an SDK API error | as an API-key turn |
+
+No token, account id or upstream error body crosses in these codes.
+
+**Rate-limit and usage headers.** The proxy passes `x-codex-*`, `x-models-*`,
+`x-oai-*`, `openai-*`, `x-ratelimit-*`, `ratelimit*`, `x-xai-*`, `x-reasoning*`,
+`retry-after`, request ids and `content-type` (never `set-cookie` or `cf-*`).
+The loop reads none of them today; the names are logged by the edge's
+transport (`codex.response_headers`, hourly per isolate), as in the Durable Object.
+
+**Failover: not served on a box (decided).** Failing over to another connection
+plans from the database (`planModelFailover`), which a box cannot reach. A box
+turn whose route fails (a Grok plan that cannot serve, a Codex usage limit...)
+is not planned a failover: the loop skips it when `ports.modelAccess` is set
+(only on a box) and ends the turn with the failure's own message, as a box API
+turn already did (the planning call failed on the box and was swallowed).
+Same-route retry of a transient failure still runs. The turn is not moved to the
+Durable Object; a user who relies on failover for Codex or Grok stays off the
+flag.
+
+**Routing.** Codex turns were kept in the Durable Object by `eligibleForBox` in
+`adapters/api-turns.ts` (`subscriptionTurnSettings`), not by `boxTurnBlock`; that
+test is removed, so Codex and Grok turns are eligible, and the blocks of
+`boxTurnBlock` (helper chats, evaluation runs, runtime secrets) apply to them
+as to any turn. Claude Code stays out (`isClaudeCodeRevision`). (A Grok turn had
+been routed to a box and refused by the proxy; it now runs.)
+
+**What stays in the Durable Object:** Claude Code turns, helper chats,
+evaluation runs, projects with runtime secrets (unless
+`YTIMESY_CLAUDE_BOX_TOOLS_SECRETS=1`), every turn when no box is alive or the
+user is not in the flag, and the model catalog, usage and connection endpoints
+used by the app (they are not turns).
+
+**Risks.** (1) The Worker's `CODEX_EGRESS` binding is used from the box routes
+through `withCodexSubscriptionEgress` (`turn-box-worker.ts`); untested against
+the real binding. (2) The account id is not pinned for the turn on a box (the
+Durable Object passes it to detect a reconnect to another ChatGPT account
+mid-turn): the edge uses the account at each request; at worst a cache miss.
+(3) `send` runs in its own database scope after the authorize read: a
+connection held for the time to response headers. (4) `codexSelection` uses the
+isolate-local catalog cache; a cold isolate reads the catalog from ChatGPT.
+(5) Native compaction (`/codex/responses/compact`) is not served, as in the
+Durable Object. (6) `authorizeTurnBoxModel` (which route a turn is) is tested over a mocked
+database (`turn-box-edge.test.ts`), the e2e test builds the same `send` by hand.
+
+**Tests:** `box-subscription-turn-e2e.test.ts` (real `runApiTurn`, fake edge and
+upstream, database mocked to throw): Codex and Grok turns complete with zero
+database reads; none of the tokens or the account id appears in anything the box
+sends or receives (every request and response but the model stream) and no secret
+environment variable is read; the edge sets bearer, account, `session-id` and
+`User-Agent`; 401 refreshes once (one model request from the box); a rejected
+refresh gives the reconnect message; a spent allowance the usage-limit message;
+Grok's refusal its own message with no database call; Stop mid-stream cancels
+the turn and aborts the upstream request; 2.0 Worker requests per step.
+`turn-box-model-proxy.test.ts` covers paths, the header allowlist, pass-through
+streaming and the codes.
+
 ## Not yet done
 
 - Everything under "What the box still cannot do" above and "Still
   unavailable on a box" in stage 2b. Required before enabling any user.
 - The box's bootstrap (systemd unit, its identity) with no secrets in it.
 - AWS: launching the boxes (the current key cannot create or list resources).
-- Codex subscription turns (they reach ChatGPT through a Cloudflare egress path).
+- Subscription routes (stage 3) were never run against a real Worker, ChatGPT, xAI
+  or an AWS box; see its risks.
 - Measure per-turn memory on a real box to set `YTIMESY_TURN_BOX_CAPACITY`.
 
 ## Sizing

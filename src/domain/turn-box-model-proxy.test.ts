@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+	CodexEgressUnavailable,
+	CodexReconnectRequired,
+	XaiSubscriptionUnavailable,
+} from "./api-turn-failure";
 import { generateTurnBoxKeyPair, issueTurnBoxGrant } from "./turn-box-grant";
 import {
 	proxyTurnBoxModel,
@@ -6,6 +11,11 @@ import {
 	type TurnBoxModelAuthorization,
 	turnBoxModelPath,
 } from "./turn-box-model-proxy";
+import {
+	SUBSCRIPTION_ERROR_HEADER,
+	subscriptionErrorOf,
+	subscriptionRefusalOf,
+} from "./turn-box-subscription";
 
 const scope = {
 	userId: "user-1",
@@ -189,5 +199,162 @@ describe("turn box model proxy", () => {
 			turnBoxModelPath(new URL("https://edge.test/box/v1/model/m?key=abc")),
 		).toBeNull();
 		expect(upstream).not.toHaveBeenCalled();
+	});
+});
+
+describe("turn box model proxy, subscription routes", () => {
+	const codex = (send: (url: string, init: RequestInit) => Promise<Response>) =>
+		({
+			kind: "ok",
+			connectionKind: "subscription",
+			subscription: "codex",
+			baseUrl: "https://chatgpt.com/backend-api/codex",
+			send,
+		}) as TurnBoxModelAuthorization;
+	const call = async (
+		authorization: TurnBoxModelAuthorization,
+		path: string,
+		headers: Record<string, string> = {},
+	) => {
+		const keys = await generateTurnBoxKeyPair();
+		const grant = await issueTurnBoxGrant(keys.privateKey, scope);
+		return proxyTurnBoxModel(
+			new Request(`https://edge.test/box/v1/model/${path}`, {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${grant}`,
+					"content-type": "application/json",
+					"chatgpt-account-id": "from-the-box",
+					...headers,
+				},
+				body: JSON.stringify({ model: "m" }),
+			}),
+			{
+				publicKey: keys.publicKey,
+				authorize: async () => authorization,
+				// A subscription is not an API key: no token reservation is asked.
+				reserve: async () => {
+					throw new Error("a subscription turn reserves no API tokens");
+				},
+				log: () => undefined,
+			},
+		);
+	};
+
+	it("hands the edge the request body whole and never the box's authorization or account header", async () => {
+		const send = vi.fn(
+			async (_url: string, _init: RequestInit) => new Response("ok"),
+		);
+		const response = await call(codex(send), "codex/responses", {
+			"session-id": "a".repeat(64),
+		});
+		expect(response.status).toBe(200);
+		const [url, init] = send.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe("https://chatgpt.com/backend-api/codex/responses");
+		expect(init.body).toBe(JSON.stringify({ model: "m" }));
+		expect(init.redirect).toBe("manual");
+		const headers = new Headers(init.headers);
+		expect(headers.get("session-id")).toBe("a".repeat(64));
+		expect(headers.get("authorization")).toBeNull();
+		expect(headers.get("chatgpt-account-id")).toBeNull();
+		expect(headers.get("cookie")).toBeNull();
+	});
+
+	it("serves only the Codex responses path and the account's own origins", async () => {
+		const send = vi.fn(async () => new Response("ok"));
+		for (const path of [
+			"codex/models",
+			"codex/responses/compact",
+			"wham/usage",
+		])
+			expect((await call(codex(send), path)).status).toBe(403);
+		const elsewhere = {
+			...codex(send),
+			baseUrl: "https://evil.example/backend-api/codex",
+		} as TurnBoxModelAuthorization;
+		expect((await call(elsewhere, "codex/responses")).status).toBe(403);
+		expect(send).not.toHaveBeenCalled();
+	});
+
+	it("streams the answer through without waiting for it to end, passing the plan's usage headers", async () => {
+		let finish!: () => void;
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode("data: one\n\n"));
+				finish = () => controller.close();
+			},
+		});
+		const response = await call(
+			codex(
+				async () =>
+					new Response(stream, {
+						headers: {
+							"content-type": "text/event-stream",
+							"x-codex-primary-used-percent": "42",
+							"set-cookie": "cf=1",
+							"x-internal": "no",
+						},
+					}),
+			),
+			"codex/responses",
+		);
+		// The first chunk is readable while the upstream is still open.
+		const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+		expect(new TextDecoder().decode((await reader.read()).value)).toBe(
+			"data: one\n\n",
+		);
+		finish();
+		expect((await reader.read()).done).toBe(true);
+		expect(response.headers.get("x-codex-primary-used-percent")).toBe("42");
+		expect(response.headers.get("set-cookie")).toBeNull();
+		expect(response.headers.get("x-internal")).toBeNull();
+	});
+
+	it("tells the box a sign-in problem by code, with no upstream detail", async () => {
+		const response = await call(
+			codex(async () => {
+				throw new CodexReconnectRequired();
+			}),
+			"codex/responses",
+		);
+		expect(response.status).toBe(403);
+		expect(response.headers.get(SUBSCRIPTION_ERROR_HEADER)).toBe(
+			"codex-reconnect",
+		);
+		expect(subscriptionErrorOf("codex-reconnect", {})).toBeInstanceOf(
+			CodexReconnectRequired,
+		);
+		const grok = await call(
+			{
+				...codex(async () => {
+					throw new XaiSubscriptionUnavailable("not-eligible");
+				}),
+				subscription: "xai",
+				baseUrl: "https://api.x.ai/v1",
+			} as TurnBoxModelAuthorization,
+			"chat/completions",
+		);
+		expect(grok.headers.get(SUBSCRIPTION_ERROR_HEADER)).toBe(
+			"xai-not-eligible",
+		);
+		expect(subscriptionErrorOf("xai-not-eligible", null)).toMatchObject({
+			reason: "not-eligible",
+		});
+		const egress = subscriptionRefusalOf(
+			new CodexEgressUnavailable([{ path: "vpc", reason: "blocked" }]),
+		);
+		expect(egress).toMatchObject({ code: "codex-egress", status: 503 });
+		expect(subscriptionErrorOf("codex-egress", egress?.body)).toBeInstanceOf(
+			CodexEgressUnavailable,
+		);
+		// Anything else is an ordinary failure, not a sign-in problem.
+		const other = await call(
+			codex(async () => {
+				throw new Error("boom");
+			}),
+			"codex/responses",
+		);
+		expect(other.status).toBe(502);
+		expect(other.headers.get(SUBSCRIPTION_ERROR_HEADER)).toBeNull();
 	});
 });

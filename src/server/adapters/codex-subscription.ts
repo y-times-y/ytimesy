@@ -1,19 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { APICallError } from "ai";
 import { z } from "zod";
 import {
 	CodexEgressUnavailable,
 	CodexReconnectRequired,
 	SubscriptionMetadataFailure,
-	SubscriptionUsageLimitReached,
-	usageLimitReset,
 } from "#/domain/api-turn-failure";
 import { readBoundedRequestBody } from "#/domain/bounded-request-body";
-import type { CodexUsage } from "#/domain/codex-usage";
 import {
-	type ListedContextWindow,
-	listedContextWindow,
-} from "#/domain/context-window-option";
+	type Catalog,
+	catalogSchema,
+	codexContextWindowOption,
+	codexTurnContext,
+	selectCodexModel,
+	supportsFast,
+} from "#/domain/codex-catalog";
+import type { CodexUsage } from "#/domain/codex-usage";
 import { PINNED_CODEX_CLI_VERSION } from "#/domain/guest-cli-pin";
 import {
 	type ListedModel,
@@ -26,8 +27,13 @@ import {
 	stepTimingEnabled,
 	timed,
 } from "../services/step-timing";
-import { connectedLanguageModel } from "./api-model";
 import { promptCacheScopeKey } from "./api-prompt-cache";
+import {
+	CODEX_BACKEND,
+	type CodexSelection,
+	codexSubscriptionRuntime,
+	guardCodexInference,
+} from "./codex-subscription-runtime";
 import {
 	subscriptionConnection,
 	subscriptionFetch,
@@ -37,7 +43,6 @@ import {
 	invocationSharedRead,
 	usableInThisInvocation,
 } from "./database-scope";
-import { nativeModelCompactor } from "./model-compaction";
 
 /** Diagnostics only: records request start to the first streamed body byte. */
 function timedFirstByte(response: Response, startedAt: number) {
@@ -61,7 +66,10 @@ function timedFirstByte(response: Response, startedAt: number) {
 	return new Response(body, response);
 }
 
-const backend = "https://chatgpt.com/backend-api";
+const backend = CODEX_BACKEND;
+
+export { codexContextWindowOption, codexTurnContext };
+
 const windowSchema = z.object({
 	used_percent: z.number().min(0).max(100),
 	limit_window_seconds: z.number().positive(),
@@ -184,87 +192,6 @@ export async function readCodexSubscriptionUsage(
 	return subscriptionLimits(await subscriptionRequest(userId, "wham/usage"));
 }
 
-const catalogSchema = z.object({
-	models: z.array(
-		z.object({
-			slug: z.string(),
-			display_name: z.string().optional(),
-			visibility: z.string().optional(),
-			// Only logged (codex.catalog): which models the account is offered at
-			// the pinned client version, and any minimum version they carry.
-			minimal_client_version: z.string().optional(),
-			supported_reasoning_levels: z
-				.array(z.object({ effort: z.string() }))
-				.optional(),
-			default_reasoning_level: z.string().optional(),
-			priority: z.number().optional(),
-			context_window: z.number().positive().optional(),
-			// "Maximum context window allowed for config overrides" (Codex's
-			// openai_models.rs): Codex's `model_context_window` may raise the
-			// window up to it. Only local compaction limits change; nothing about
-			// the window is sent with a request.
-			max_context_window: z.number().positive().nullish(),
-			auto_compact_token_limit: z.number().positive().nullish(),
-			// Fast mode, as Codex reads it: a "priority" service tier, or the
-			// older "fast" speed tier.
-			service_tiers: z.array(z.object({ id: z.string() })).optional(),
-			additional_speed_tiers: z.array(z.string()).optional(),
-		}),
-	),
-});
-type CatalogRow = z.infer<typeof catalogSchema>["models"][number];
-const FAST_SERVICE_TIER = "priority";
-
-function supportsFast(row: CatalogRow) {
-	return (
-		row.service_tiers?.some((tier) => tier.id === FAST_SERVICE_TIER) === true ||
-		row.additional_speed_tiers?.includes("fast") === true
-	);
-}
-
-/**
- * The larger window a plan model allows, as Codex applies
- * `model_context_window`: offered only when `max_context_window` exceeds the
- * standard `context_window`.
- */
-export function codexContextWindowOption(
-	row: Pick<CatalogRow, "context_window" | "max_context_window">,
-): ListedContextWindow | undefined {
-	return listedContextWindow({
-		standard: row.context_window,
-		alternate:
-			row.max_context_window &&
-			row.context_window &&
-			row.max_context_window > row.context_window
-				? row.max_context_window
-				: undefined,
-		note: CODEX_LARGE_CONTEXT_NOTE,
-	});
-}
-/** Longer prompts use more of the plan's limits (developers.openai.com/codex/pricing). */
-const CODEX_LARGE_CONTEXT_NOTE = "Longer chats use your plan's limits faster";
-
-/**
- * The window and compaction limit a turn runs with. The larger window drops
- * the catalog's auto-compact limit, which was set for the standard window;
- * the budget then derives from the larger window, as Codex derives 90% of
- * an overridden window.
- */
-export function codexTurnContext(
-	row: Pick<
-		CatalogRow,
-		"context_window" | "max_context_window" | "auto_compact_token_limit"
-	>,
-	alternateContext: boolean,
-): { contextWindow?: number; autoCompactTokenLimit?: number } {
-	const option = alternateContext ? codexContextWindowOption(row) : undefined;
-	if (option) return { contextWindow: option.alternate };
-	return {
-		contextWindow: row.context_window,
-		autoCompactTokenLimit: row.auto_compact_token_limit ?? undefined,
-	};
-}
-type Catalog = z.infer<typeof catalogSchema>;
 /**
  * Fresh for 15 minutes; past that, served (up to 6 hours) while a refresh
  * runs. A plan's models change rarely: the browsers decide when to ask again
@@ -451,14 +378,16 @@ export async function codexSubscriptionCatalog(
 		}));
 }
 
-export async function codexSubscriptionModel(
-	userId: string,
-	modelId: string,
-	reasoning?: string,
-	fast = false,
-	cacheScopeId: string = randomUUID(),
-	alternateContext = false,
-) {
+type TurnSelectionInput = {
+	readonly modelId: string;
+	readonly reasoning?: string;
+	readonly fast: boolean;
+	readonly alternateContext: boolean;
+	readonly cacheScopeId: string;
+};
+
+/** The catalog row, effort and cache key a turn runs with, and the token read the step reuses. */
+async function selectForTurn(userId: string, input: TurnSelectionInput) {
 	// The catalog and the account's token are independent reads; a catalog
 	// failure is still reported first.
 	const shared = sharedSubscriptionConnection(userId);
@@ -467,48 +396,56 @@ export async function codexSubscriptionModel(
 		shared.promise,
 	]);
 	if (listed.status === "rejected") throw listed.reason;
-	const catalog = listed.value;
-	const selected = catalog.models.find((row) => row.slug === modelId);
-	// Plans change which models a ChatGPT account may use; the catalog is per account.
-	if (!selected)
-		throw new Error(
-			"The selected model is no longer available on your current Codex plan. Choose another model.",
-		);
-	if (fast && !supportsFast(selected))
-		throw new Error(
-			"Fast mode is not available for this model on your ChatGPT plan.",
-		);
-	if (alternateContext && !codexContextWindowOption(selected))
-		throw new Error(
-			"A larger context window is not available for this model on your ChatGPT plan.",
-		);
-	const effort = reasoning ?? selected.default_reasoning_level ?? "low";
-	if (
-		selected.supported_reasoning_levels?.length &&
-		!selected.supported_reasoning_levels.some(
-			(level) => level.effort === effort,
-		)
-	)
-		throw new Error("Selected reasoning level is unavailable for this model.");
+	const { selected, effort } = selectCodexModel(listed.value, input);
 	if (connected.status === "rejected") throw connected.reason;
 	const tokens = connected.value;
+	const cacheKey = promptCacheScopeKey({
+		userId,
+		connectionId: `codex-subscription:${tokens.chatgptAccountId}`,
+		scopeId: input.cacheScopeId,
+	});
+	return { selection: { selected, effort, cacheKey }, tokens, at: shared.at };
+}
+
+/**
+ * What a turn runner box needs to build the model WITHOUT the account's token:
+ * the selected catalog row, the effort and the cache key. Runs at the edge
+ * (the box asks for it once per turn); the token never leaves it.
+ */
+export async function codexSubscriptionSelection(
+	userId: string,
+	input: TurnSelectionInput,
+): Promise<CodexSelection> {
+	return (await selectForTurn(userId, input)).selection;
+}
+
+export async function codexSubscriptionModel(
+	userId: string,
+	modelId: string,
+	reasoning?: string,
+	fast = false,
+	cacheScopeId: string = randomUUID(),
+	alternateContext = false,
+) {
+	const { selection, tokens, at } = await selectForTurn(userId, {
+		modelId,
+		reasoning,
+		fast,
+		alternateContext,
+		cacheScopeId,
+	});
 	// The step's first request reuses the token just read (fresh for at least
 	// five more minutes); later requests and a 401 retry read it again.
 	let loaded: { tokens: typeof tokens; at: number } | undefined = {
 		tokens,
-		at: shared.at,
+		at,
 	};
-	const cacheKey = promptCacheScopeKey({
-		userId,
-		connectionId: `codex-subscription:${tokens.chatgptAccountId}`,
-		scopeId: cacheScopeId,
-	});
 	const transport: typeof fetch = async (url, init) => {
 		if (String(url) !== `${backend}/codex/responses`)
 			throw new Error("Unexpected subscription inference destination.");
 		const headers = new Headers(init?.headers);
 		// The pinned native ChatGPT transport derives cache affinity from this header.
-		headers.set("session-id", cacheKey);
+		headers.set("session-id", selection.cacheKey);
 		// Long reasoning steps leave unrelated pooled HTTP/1 sockets idle. Do not
 		// retain them across steps; this does not retry or replay a returned stream.
 		headers.set("Connection", "close");
@@ -525,63 +462,15 @@ export async function codexSubscriptionModel(
 				reused,
 			),
 		);
-		// A spent plan allowance answers 429 like a rate limit, but retrying cannot help.
-		if (response.status === 429) {
-			const limit = usageLimitReset(await response.clone().text());
-			if (limit !== undefined) {
-				await response.body?.cancel();
-				throw new SubscriptionUsageLimitReached(limit);
-			}
-		}
-		// rl-tests-sol: a 200 with no body ("Failed to process successful
-		// response", the SDK's EmptyResponseBodyError) failed the turn. Nothing
-		// was streamed or executed, so this is a request-start failure the
-		// SDK's bounded retry may resend; any stream that started is never
-		// replayed.
-		if (response.ok && !response.body)
-			throw new APICallError({
-				message: "The provider accepted the request but sent no response body.",
-				url: String(url),
-				requestBodyValues: {},
-				statusCode: response.status,
-				isRetryable: true,
-			});
-		return timedFirstByte(response, startedAt);
+		return timedFirstByte(await guardCodexInference(url, response), startedAt);
 	};
-	const model = connectedLanguageModel(
-		{
-			provider: "openai",
-			baseUrl: `${backend}/codex`,
-			modelId,
-			apiKey: tokens.accessToken,
-		},
+	return codexSubscriptionRuntime({
+		modelId,
+		selection,
+		fast,
+		alternateContext,
+		baseUrl: `${backend}/codex`,
+		apiKey: tokens.accessToken,
 		transport,
-	);
-	const requestSettings = (instructions: string) => ({
-		providerOptions: {
-			openai: {
-				instructions,
-				store: false,
-				promptCacheKey: cacheKey,
-				reasoningEffort: effort,
-				reasoningSummary: "auto",
-				...(fast ? { serviceTier: FAST_SERVICE_TIER } : {}),
-				// Independent tool calls may share a response. Authorization and
-				// write/lease fencing remain enforced by each tool's executor.
-				parallelToolCalls: true,
-			},
-		},
 	});
-	return {
-		model,
-		...codexTurnContext(selected, alternateContext),
-		// Initial reads use a stable preflight prefix; complete current bodies and
-		// hashed read receipts prevent a second mandatory-guidance fetch.
-		prefetchInitialReads: true,
-		// The backend refuses unstreamed requests; the harness's own summary
-		// (its fallback when it declines a native compaction) streams.
-		streamOnly: true,
-		requestSettings,
-		compact: nativeModelCompactor(model, "openai", requestSettings),
-	};
 }

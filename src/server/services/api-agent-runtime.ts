@@ -25,6 +25,7 @@ import {
 	apiReasoningEffort,
 	withReasoningEffort,
 } from "../adapters/api-reasoning-effort";
+import type { CodexSelection } from "../adapters/codex-subscription-runtime";
 import {
 	type ModelAgentInput,
 	type ModelAgentRuntime,
@@ -73,6 +74,18 @@ export type ApiModelAccess = {
 	readonly baseUrl: string;
 	readonly apiKey: string;
 	readonly fetch: typeof globalThis.fetch;
+	/**
+	 * A Codex subscription turn's model choice, made at the edge with the
+	 * account's token (which the box never holds); see
+	 * services/codex-subscription-agent.ts.
+	 */
+	codexSelection?(input: {
+		readonly modelId: string;
+		readonly reasoning?: string;
+		readonly fast: boolean;
+		readonly alternateContext: boolean;
+		readonly cacheScopeId: string;
+	}): Promise<CodexSelection>;
 };
 
 /** What preparing an API connection's model reads from a run's input. */
@@ -133,10 +146,6 @@ async function prepareApiModel<T>(
 			"The selected model is no longer available on this connection.",
 		);
 	onStage("transport");
-	if (boxAccess && connection.subscription)
-		throw new Error(
-			"Subscription connections do not run on a turn runner box.",
-		);
 	// A box has no transport of its own: its requests go to the edge's proxy.
 	const transport = boxAccess
 		? null

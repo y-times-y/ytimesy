@@ -1,6 +1,8 @@
 import { WorkspaceId } from "#/domain/ids";
 import type { BoxPortArgs, BoxPortOp } from "#/domain/turn-box-protocol";
 import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
+import { subscriptionRefusalOf } from "#/domain/turn-box-subscription";
+import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
@@ -17,6 +19,7 @@ import {
 } from "./agent-task-events";
 import { captureServerAnalytics } from "./analytics";
 import { type ApiTurn, otherRunningTurnOnMachine } from "./api-turns";
+import { codexSubscriptionSelection } from "./codex-subscription";
 import { archiveModelContext } from "./context-archives";
 import { conversationPointCodeRef } from "./conversation-recovery";
 import { coordinateConversationTurn } from "./conversation-turn-control";
@@ -127,6 +130,19 @@ async function handle(
 			const { sealedCredential: _sealed, ...visible } = connection;
 			return visible;
 		}
+		case "codexSelection":
+			// A sign-in the provider rejected is the same typed failure the
+			// Durable Object's own read would throw: it crosses as a code.
+			return codexSubscriptionSelection(user, call.args).then(
+				(selection) => ({ selection }),
+				(error) => {
+					const refused = subscriptionRefusalOf(error);
+					if (!refused) throw error;
+					return { refusal: { code: refused.code, body: refused.body } };
+				},
+			);
+		case "codexAuth":
+			return hasManagedCodexAuth(user);
 		case "lifecycleContinuations":
 			return completedLifecycleContinuations(session, turn.id);
 		case "conversationPointCodeRef":

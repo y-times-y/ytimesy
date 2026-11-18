@@ -1,3 +1,4 @@
+import { readBoundedRequestBody } from "./bounded-request-body";
 import { MODEL_PROVIDERS, type ModelProvider } from "./model-connection";
 import {
 	presentedTurnBoxToken,
@@ -5,9 +6,15 @@ import {
 	verifyTurnBoxGrant,
 } from "./turn-box-grant";
 import { TURN_BOX_PATHS } from "./turn-box-protocol";
+import {
+	SUBSCRIPTION_ERROR_HEADER,
+	subscriptionRefusalOf,
+} from "./turn-box-subscription";
 
 /**
- * The edge's model proxy for turn runner boxes: API-KEY connections only.
+ * The edge's model proxy for turn runner boxes: API-KEY connections and, since
+ * stage 3, the two subscription routes (Codex, Grok; see below). For an
+ * API key:
  * The box sends the provider request (the SDK's own request, with a base URL
  * of `<edge>/box/v1/model` and the turn's grant as its API key); the edge
  * checks the grant's turn and lease, decrypts the turn's own connection,
@@ -28,7 +35,30 @@ export const TURN_BOX_MODEL_ORIGINS: ReadonlySet<string> = new Set(
 		.map((url) => new URL(url).origin),
 );
 
+/** The only origin each subscription route may reach (the edge adds the OAuth bearer). */
+export const SUBSCRIPTION_ORIGINS = {
+	codex: "https://chatgpt.com",
+	xai: "https://api.x.ai",
+} as const;
+/** A subscription request body is held (not streamed) so a 401 can be resent once after a refresh and egress can fail over. */
+const MAX_SUBSCRIPTION_BODY_BYTES = 8 * 1024 * 1024;
+/** Only these paths of the Codex backend are served (native compaction is not run through the subscription transport). */
+const CODEX_PATHS = new Set(["/codex/responses"]);
+
 export type TurnBoxModelAuthorization =
+	/**
+	 * A subscription route: the edge, which holds the OAuth tokens, sends the
+	 * request itself through `send` (token read and rotation, one refresh and
+	 * resend on 401, egress paths, response-header logging: the same code the
+	 * Durable Object's transport runs). The box never sees a credential.
+	 */
+	| {
+			readonly kind: "ok";
+			readonly connectionKind: "subscription";
+			readonly subscription: keyof typeof SUBSCRIPTION_ORIGINS;
+			readonly baseUrl: string;
+			readonly send: (url: string, init: RequestInit) => Promise<Response>;
+	  }
 	| {
 			readonly kind: "ok";
 			/** "key" is the only kind served; anything else is refused here too. */
@@ -47,6 +77,22 @@ const FORWARDED_REQUEST_HEADERS = new Set([
 	"content-type",
 	"openai-beta",
 ]);
+/** Extra request headers a subscription route's SDK sets (cache affinity); never an authorization. */
+const SUBSCRIPTION_REQUEST_HEADERS = new Set([
+	"session-id",
+	"x-grok-conv-id",
+	"x-session-id",
+]);
+/** Rate-limit and usage headers of the plans pass through (x-codex-primary-used-percent and the like). */
+const SUBSCRIPTION_RESPONSE_PREFIXES = [
+	"x-codex-",
+	"x-models-",
+	"x-oai-",
+	"openai-",
+	"x-reasoning",
+	"x-xai-",
+	"ratelimit",
+];
 const FORWARDED_RESPONSE_HEADERS = new Set([
 	"content-type",
 	"request-id",
@@ -156,6 +202,13 @@ export async function proxyTurnBoxModel(
 		await drop();
 		return refusal(authorization.status, "This turn's access ended.");
 	}
+	if ("send" in authorization)
+		return proxySubscription(request, {
+			authorization,
+			path,
+			log,
+			drop,
+		});
 	if (authorization.connectionKind !== "key") {
 		await drop();
 		return refusal(403, "Only API-key connections run on a turn box.");
@@ -231,6 +284,117 @@ export async function proxyTurnBoxModel(
 		)
 			forwarded.set(name, value);
 	}
+	return new Response(response.body, {
+		status: response.status,
+		headers: forwarded,
+	});
+}
+
+async function proxySubscription(
+	request: Request,
+	input: {
+		readonly authorization: Extract<
+			TurnBoxModelAuthorization,
+			{ send: unknown }
+		>;
+		readonly path: string;
+		readonly log: (message: string, detail: Record<string, unknown>) => void;
+		readonly drop: () => Promise<unknown> | undefined;
+	},
+): Promise<Response> {
+	const { authorization, path, log } = input;
+	const allowedOrigin = SUBSCRIPTION_ORIGINS[authorization.subscription];
+	let base: URL;
+	try {
+		base = new URL(authorization.baseUrl);
+	} catch {
+		await input.drop();
+		return refusal(403, "That model endpoint is not allowed.");
+	}
+	if (
+		base.origin !== allowedOrigin ||
+		base.username ||
+		base.password ||
+		(authorization.subscription === "codex" &&
+			!CODEX_PATHS.has(path.split("?")[0] as string))
+	) {
+		log("Turn box model proxy refused a subscription destination.", {
+			subscription: authorization.subscription,
+		});
+		await input.drop();
+		return refusal(403, "That model endpoint is not allowed.");
+	}
+	let body: string;
+	try {
+		body = await readBoundedRequestBody(request, MAX_SUBSCRIPTION_BODY_BYTES);
+	} catch {
+		return new Response(null, { status: 413 });
+	}
+	const headers = new Headers();
+	for (const [name, value] of request.headers) {
+		const lower = name.toLowerCase();
+		if (
+			FORWARDED_REQUEST_HEADERS.has(lower) ||
+			SUBSCRIPTION_REQUEST_HEADERS.has(lower)
+		)
+			headers.set(name, value);
+	}
+	const target =
+		authorization.subscription === "codex"
+			? `${base.origin}/backend-api${path}`
+			: `${authorization.baseUrl.replace(/\/+$/, "")}${path}`;
+	let response: Response;
+	try {
+		response = await authorization.send(target, {
+			method: "POST",
+			headers,
+			body,
+			redirect: "manual",
+			signal: request.signal,
+		});
+	} catch (error) {
+		const refused = subscriptionRefusalOf(error);
+		if (refused) {
+			log("Turn box model proxy: a subscription could not serve.", {
+				subscription: authorization.subscription,
+				code: refused.code,
+			});
+			return Response.json(
+				{
+					error: {
+						type: "subscription_unavailable",
+						...(refused.body as object),
+					},
+				},
+				{
+					status: refused.status,
+					headers: {
+						[SUBSCRIPTION_ERROR_HEADER]: refused.code,
+						"cache-control": "no-store",
+						"x-should-retry": "false",
+					},
+				},
+			);
+		}
+		log("Turn box model proxy upstream failed.", { stage: "transport" });
+		return new Response(null, { status: 502 });
+	}
+	if (response.status >= 300 && response.status < 400) {
+		await response.body?.cancel().catch(() => undefined);
+		log("Turn box model proxy refused an upstream redirect.", {});
+		return new Response(null, { status: 502 });
+	}
+	const forwarded = new Headers({ "cache-control": "no-store" });
+	for (const [name, value] of response.headers) {
+		const lower = name.toLowerCase();
+		if (
+			FORWARDED_RESPONSE_HEADERS.has(lower) ||
+			lower.startsWith("x-ratelimit-") ||
+			SUBSCRIPTION_RESPONSE_PREFIXES.some((prefix) => lower.startsWith(prefix))
+		)
+			forwarded.set(name, value);
+	}
+	// The stream is handed through untouched: no buffering, no transform.
 	return new Response(response.body, {
 		status: response.status,
 		headers: forwarded,

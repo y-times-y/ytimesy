@@ -17,6 +17,10 @@ import {
 	TurnBoxPortForbidden,
 	type TurnBoxTurnIdentity,
 } from "#/domain/turn-box-protocol";
+import {
+	SUBSCRIPTION_ERROR_HEADER,
+	subscriptionErrorOf,
+} from "#/domain/turn-box-subscription";
 import { TurnPortUnavailable } from "./turn-ports";
 
 /**
@@ -69,6 +73,27 @@ export function grantRotatingFetch(options: {
 			...init,
 			headers,
 			redirect: "manual",
+		});
+	}) as typeof fetch;
+}
+
+/**
+ * A subscription route the edge could not serve answers with a typed code
+ * (turn-box-subscription.ts); this throws the same error the Durable Object's
+ * own transport would, so the turn's failure wording and failover reason do
+ * not depend on where it ran. Any other response passes through unread.
+ */
+export function subscriptionErrorFetch(request: typeof fetch): typeof fetch {
+	return (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const response = await request(input, init);
+		const code = response.headers.get(SUBSCRIPTION_ERROR_HEADER);
+		if (!code) return response;
+		const body = await response.json().catch(() => null);
+		const error = subscriptionErrorOf(code, body);
+		if (error) throw error;
+		return new Response(JSON.stringify(body), {
+			status: response.status,
+			headers: response.headers,
 		});
 	}) as typeof fetch;
 }
@@ -238,11 +263,13 @@ export class TurnBoxTurnSession {
 		return {
 			baseUrl,
 			apiKey: "turn-box-grant",
-			fetch: grantRotatingFetch({
-				grant: () => this.grantToken,
-				baseUrl,
-				fetch: this.options.fetch,
-			}),
+			fetch: subscriptionErrorFetch(
+				grantRotatingFetch({
+					grant: () => this.grantToken,
+					baseUrl,
+					fetch: this.options.fetch,
+				}),
+			),
 		};
 	}
 	/** The proxy base URL and API key to give the model SDK (API-key connections only). */

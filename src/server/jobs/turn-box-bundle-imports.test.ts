@@ -68,7 +68,6 @@ const BASELINE: Record<string, "routed-off" | "debt"> = {
 	"server/services/agent-task-event-delivery.ts": "routed-off",
 	"server/services/fresh-machine-setup.ts": "debt",
 	"server/services/project-environment-setup.ts": "debt",
-	"server/services/codex-subscription-agent.ts": "routed-off",
 	"server/services/code-mode-tool.ts": "debt",
 	"server/services/claude-code-turn.ts": "routed-off",
 	"server/services/workspace-desktop.ts": "debt",

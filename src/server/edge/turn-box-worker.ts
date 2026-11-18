@@ -6,6 +6,7 @@ import {
 	verifyTurnBoxGrant,
 } from "../../domain/turn-box-grant";
 import { TURN_BOX_PATHS } from "../../domain/turn-box-protocol";
+import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
 import { withDatabaseScope } from "../adapters/database-scope";
 import { createTurnBoxEdgeOps } from "../adapters/turn-box-edge";
 import { createTurnBoxVmOps } from "../adapters/turn-box-vm-edge";
@@ -33,6 +34,21 @@ export function routeTurnBoxWorker(
 	const scope = <T>(run: () => Promise<T>) =>
 		withDatabaseScope(env.HYPERDRIVE.connectionString, run, null);
 	const vm = createTurnBoxVmOps(scope, env);
+	// A subscription turn's model request leaves from here (the edge holds
+	// the OAuth tokens): over the same Codex egress the Durable Object uses.
+	return withCodexSubscriptionEgress(
+		(input, options) => env.CODEX_EGRESS.fetch(input, options),
+		() => routeTurnBox(request, env, config, scope, vm),
+	);
+}
+
+function routeTurnBox(
+	request: Request,
+	env: EdgeExecutorEnvironment,
+	config: Extract<ReturnType<typeof turnBoxEdgeConfig>, { status: 200 }>,
+	scope: <T>(run: () => Promise<T>) => Promise<T>,
+	vm: ReturnType<typeof createTurnBoxVmOps>,
+) {
 	return routeTurnBoxEdge(request, {
 		publicKey: config.publicKey,
 		privateKey: config.privateKey,

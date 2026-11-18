@@ -194,6 +194,19 @@ export const boxPortArgs = {
 	projectYMode: z.object({ projectId: portText }),
 	/** The connection WITHOUT its sealed credential. */
 	modelConnection: z.object({ id: portKey }),
+	/**
+	 * A Codex subscription turn: the catalog row, effort and cache key the
+	 * edge chose with the account's token (which never leaves the edge).
+	 */
+	codexSelection: z.object({
+		modelId: portText,
+		reasoning: portText.optional(),
+		fast: z.boolean(),
+		alternateContext: z.boolean(),
+		cacheScopeId: portKey,
+	}),
+	/** Whether the account has a Codex sign-in the turn can use. */
+	codexAuth: z.object({}),
 	lifecycleContinuations: z.object({}),
 	conversationPointCodeRef: z.object({ messageId: portKey }),
 	verificationBaseline: z.object({ directory: z.string().max(4096) }),

@@ -236,9 +236,10 @@ export async function enqueueApiTurn(input: {
 		process.env.YTIMESY_MODEL_EXECUTION_TARGET,
 	);
 	const boxUsers = boxTurnUsers(process.env.YTIMESY_BOX_TURN_USERS);
-	let eligibleForBox =
-		!subscriptionTurnSettings(input.revision) &&
-		!isClaudeCodeRevision(input.revision);
+	// Codex and Grok subscription turns run on a box too (the edge holds
+	// their tokens, docs/turn-runner-boxes.md "Subscription routes"); Claude
+	// Code has its own runner path.
+	let eligibleForBox = !isClaudeCodeRevision(input.revision);
 	// Only read when the user may use boxes at all (flag off: no extra query,
 	// the Durable Object path is exactly as before). A routing read that fails
 	// keeps the turn in its object.

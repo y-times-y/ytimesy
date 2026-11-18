@@ -5,6 +5,8 @@ import {
 import { agentSecretsEnvFile } from "#/domain/project-secret";
 import type { BoxPortArgs, BoxPortOp } from "#/domain/turn-box-protocol";
 import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
+import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
+import type { CodexSelection } from "../adapters/codex-subscription-runtime";
 import type { TurnBoxTurnSession } from "./turn-box-client";
 import { type TurnPorts, TurnPortUnavailable } from "./turn-ports";
 
@@ -21,14 +23,12 @@ export const BOX_PORTS_UNAVAILABLE = [
 	// Post-step GitHub publish/PR handoff and the VM: need the edge's Freestyle/GitHub credentials.
 	"saveAccountWideSecret",
 	"saveVisibleProjectSecret",
-	// Claude Code box tool grants and subscription routes are never run on a box.
+	// Claude Code box tool grants and its subscription are never run on a box (Codex and Grok are: stage 3).
 	"turnBoxToolIdentity",
 	"recordTurnBoxToolIdentity",
 	"clearTurnBoxToolIdentity",
 	"pinnedClaudeRunner",
 	"claudeSubscriptionStatus",
-	"warmCodexSubscriptionCatalog",
-	"hasManagedCodexAuth",
 	// Harness evaluation runs stay in Durable Objects.
 	"evaluationRunForTask",
 	"assertEvaluationActive",
@@ -338,6 +338,21 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 					call("modelConnection", { id: connectionId }),
 				)) as never;
 			},
+			// Fixed for a turn: asked once per (model, effort, speed, window).
+			codexSelection: (input) =>
+				once(`codex-selection:${JSON.stringify(input)}`, async () => {
+					const answer = await call<{
+						selection?: CodexSelection;
+						refusal?: { code: string; body: unknown };
+					}>("codexSelection", input);
+					if (answer.selection) return answer.selection;
+					throw (
+						subscriptionErrorOf(
+							answer.refusal?.code ?? null,
+							answer.refusal?.body,
+						) ?? new Error("Codex is unavailable.")
+					);
+				}),
 			...sdk,
 		},
 
@@ -397,8 +412,15 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		clearTurnBoxToolIdentity: unavailable("clearTurnBoxToolIdentity"),
 		pinnedClaudeRunner: unavailable("pinnedClaudeRunner"),
 		claudeSubscriptionStatus: unavailable("claudeSubscriptionStatus"),
-		warmCodexSubscriptionCatalog: unavailable("warmCodexSubscriptionCatalog"),
-		hasManagedCodexAuth: unavailable("hasManagedCodexAuth"),
+		// Codex subscription turns run on a box (the edge holds the tokens):
+		// the sign-in check is asked once per turn, and there is no catalog
+		// to warm here (the edge reads it when the model is chosen).
+		hasManagedCodexAuth: (async () =>
+			once("codex-auth", () =>
+				call<boolean>("codexAuth", {}),
+			)) as unknown as TurnPorts["hasManagedCodexAuth"],
+		warmCodexSubscriptionCatalog: (() =>
+			undefined) as unknown as TurnPorts["warmCodexSubscriptionCatalog"],
 		evaluationRunForTask: unavailable("evaluationRunForTask"),
 		assertEvaluationActive: unavailable("assertEvaluationActive"),
 		recordEvaluationUsage: unavailable("recordEvaluationUsage"),

@@ -1,6 +1,9 @@
+import { isXaiDirectEndpoint } from "#/domain/model-connection";
+import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import type { TurnBoxGrant } from "#/domain/turn-box-grant";
 import type { TurnBoxModelAuthorization } from "#/domain/turn-box-model-proxy";
 import type { BoxPortArgs } from "#/domain/turn-box-protocol";
+import { xaiSubscriptionFetch } from "../auth/xai-subscription";
 import type { TurnBoxEdgeOps } from "../edge/turn-box-routes";
 import { connectionApiKey } from "../services/model-connections";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -17,6 +20,8 @@ import {
 	renewApiTurn,
 } from "./api-turns";
 import { reserveApiTokens } from "./api-usage-budget";
+import { CODEX_BACKEND } from "./codex-subscription-runtime";
+import { subscriptionFetch } from "./codex-subscription-transport";
 import { database } from "./database";
 import { loadModelConnection } from "./model-connections";
 import { afterBoxTurnSettled } from "./turn-box-edge-work";
@@ -115,7 +120,7 @@ export function createTurnBoxEdgeOps(
 					};
 				}
 			}),
-		authorizeModel: (grant) => scope(() => authorizeTurnBoxModel(grant)),
+		authorizeModel: (grant) => scope(() => authorizeTurnBoxModel(grant, scope)),
 		port: (turn, op, args) =>
 			scope(() =>
 				turnBoxPort(turn, op, args as BoxPortArgs<typeof op>, {
@@ -126,26 +131,68 @@ export function createTurnBoxEdgeOps(
 }
 
 /**
- * The turn's own API-key connection and its decrypted key, while the turn is
- * running under the grant's lease. Turns with no connection (Codex and
- * Claude subscriptions) and subscription-kind connections are refused: the
- * proxy serves API keys only.
+ * The turn's own connection while the turn is running under the grant's
+ * lease: an API key (decrypted here), a Codex subscription (a turn with no
+ * connection and the subscription revision) or a Grok subscription
+ * connection. The subscription kinds get a `send` that carries the OAuth
+ * tokens, which stay in this process (docs/turn-runner-boxes.md,
+ * "Subscription routes"). Claude Code turns never reach the proxy. `scope`
+ * opens the database scope again for `send`, which runs after this
+ * request's own scope has closed.
  */
 export async function authorizeTurnBoxModel(
 	grant: TurnBoxGrant,
+	scope: <T>(run: () => Promise<T>) => Promise<T> = (run) => run(),
 ): Promise<TurnBoxModelAuthorization> {
 	const row = (
-		await database().query<{ connection_id: string | null }>(
-			`select connection_id from api_turn where id=$1 and lease_id=$2 and user_id=$3 and session_id=$4
+		await database().query<{
+			connection_id: string | null;
+			connection_revision: string;
+		}>(
+			`select connection_id, connection_revision from api_turn where id=$1 and lease_id=$2 and user_id=$3 and session_id=$4
 			 and state='running' and not cancel_requested and ${apiTurnLeaseFreshSql()}`,
 			[grant.turnId, grant.leaseId, grant.userId, grant.sessionId],
 		)
 	).rows[0];
 	if (!row) return { kind: "refused", status: 401 };
-	if (!row.connection_id) return { kind: "refused", status: 403 };
+	if (!row.connection_id) {
+		// The ChatGPT Codex plan: no connection row, a revision that says so.
+		if (!subscriptionTurnSettings(row.connection_revision))
+			return { kind: "refused", status: 403 };
+		return {
+			kind: "ok",
+			connectionKind: "subscription",
+			subscription: "codex",
+			baseUrl: `${CODEX_BACKEND}/codex`,
+			send: (url, init) =>
+				scope(() =>
+					subscriptionFetch(
+						grant.userId,
+						url.slice(CODEX_BACKEND.length + 1),
+						init,
+					),
+				),
+		};
+	}
 	const connection = await loadModelConnection(grant.userId, row.connection_id);
-	if (!connection || connection.subscription)
-		return { kind: "refused", status: 403 };
+	if (!connection) return { kind: "refused", status: 403 };
+	if (connection.subscription) {
+		// SuperGrok: the OAuth bearer replaces the placeholder key, refreshed
+		// once on a 401, exactly as the Durable Object's fetch does.
+		if (
+			connection.subscription.provider !== "xai" ||
+			!isXaiDirectEndpoint(connection.baseUrl)
+		)
+			return { kind: "refused", status: 403 };
+		const send = xaiSubscriptionFetch(grant.userId, connection.id, fetch);
+		return {
+			kind: "ok",
+			connectionKind: "subscription",
+			subscription: "xai",
+			baseUrl: connection.baseUrl,
+			send: (url, init) => scope(() => send(url, init)),
+		};
+	}
 	return {
 		kind: "ok",
 		connectionKind: "key",
