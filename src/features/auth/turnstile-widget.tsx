@@ -7,6 +7,7 @@ type Turnstile = {
 		options: {
 			sitekey: string;
 			theme?: "dark" | "light" | "auto";
+			appearance?: "always" | "execute" | "interaction-only";
 			callback(token: string): void;
 			"expired-callback"(): void;
 			"error-callback"(): void;
@@ -64,6 +65,9 @@ export function TurnstileWidget({
 				widgetId = loaded.render(container.current, {
 					sitekey: siteKey,
 					theme: "dark",
+					// Shown only when Cloudflare needs the person to do something; the
+					// check otherwise runs unseen, so the forms carry no widget.
+					appearance: "interaction-only",
 					callback: setToken,
 					"expired-callback": clearToken,
 					"error-callback": clearToken,
