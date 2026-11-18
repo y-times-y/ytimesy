@@ -21,6 +21,7 @@ import {
 	canvasFeedbackMessage,
 } from "#/domain/canvas-annotation";
 import type { CanvasItem } from "#/domain/session-item";
+import { useWholeItem } from "../sessions/whole-item";
 import { CanvasNotesPanel, NoteComposer } from "./canvas-notes";
 import { useCanvasNotes } from "./canvas-notes-store";
 import type { CanvasFocus } from "./canvas-open-context";
@@ -93,6 +94,14 @@ export function CanvasInspector({
 	const [compare, setCompare] = useState<CanvasFocus | null>(null);
 	const thread =
 		canvases.find((entry) => entry.title === focus?.title) ?? canvases.at(-1);
+	// A page read leaves a canvas's html out; the shown revision's is read here.
+	const requested = thread
+		? shownRevision(
+				thread,
+				focus?.title === thread.title ? focus.revision : undefined,
+			)
+		: null;
+	const whole = useWholeItem(requested);
 	if (!thread)
 		return (
 			<section className="inspector-empty" data-kind="canvas">
@@ -103,10 +112,9 @@ export function CanvasInspector({
 				</p>
 			</section>
 		);
-	const shown = shownRevision(
-		thread,
-		focus?.title === thread.title ? focus.revision : undefined,
-	);
+	const shown = requested as CanvasItem;
+	const html = whole?.html ?? null;
+	const loading = whole?.htmlOmitted === true;
 	const latest = thread.revisions.at(-1) as CanvasItem;
 	const pick = (title: string, revision?: number) => {
 		const target = canvases.find((entry) => entry.title === title);
@@ -151,7 +159,7 @@ export function CanvasInspector({
 						type="button"
 						className="canvas-mode-button"
 						aria-pressed={annotating}
-						disabled={comparing || shown.html === null}
+						disabled={comparing || html === null}
 						title="Annotate: click elements to pin notes for the agent"
 						onClick={() => setAnnotating((on) => !on)}
 					>
@@ -194,10 +202,8 @@ export function CanvasInspector({
 					className="canvas-icon-button"
 					aria-label="Open in new tab"
 					title="Open in new tab"
-					disabled={shown.html === null}
-					onClick={() =>
-						shown.html !== null && openStandalone(thread.title, shown.html)
-					}
+					disabled={html === null}
+					onClick={() => html !== null && openStandalone(thread.title, html)}
 				>
 					<ExternalLink size={14} strokeWidth={1.75} />
 				</button>
@@ -226,13 +232,15 @@ export function CanvasInspector({
 						onPrompt={prompt}
 					/>
 				</div>
-			) : shown.html === null ? (
+			) : loading ? (
+				<CanvasLoading />
+			) : html === null ? (
 				<NotKept />
 			) : (
 				<AnnotatedCanvas
 					key={shown.id}
 					canvas={shown}
-					html={shown.html}
+					html={html}
 					isLatest={shown === latest}
 					deviceWidth={preview.width}
 					annotating={annotating}
@@ -240,6 +248,14 @@ export function CanvasInspector({
 					onCompose={onCompose}
 				/>
 			)}
+		</section>
+	);
+}
+
+function CanvasLoading() {
+	return (
+		<section className="inspector-empty" data-kind="canvas" aria-busy="true">
+			<p>Loading the canvas…</p>
 		</section>
 	);
 }
@@ -449,6 +465,7 @@ function ComparePane({
 	onPick: (title: string, revision?: number) => void;
 	onPrompt?: (text: string) => void;
 }) {
+	const whole = useWholeItem(shown);
 	return (
 		<div className="canvas-compare-pane">
 			<div className="canvas-compare-bar">
@@ -464,12 +481,14 @@ function ComparePane({
 					onStep={(revision) => onPick(thread.title, revision)}
 				/>
 			</div>
-			{shown.html === null ? (
+			{whole.htmlOmitted === true ? (
+				<CanvasLoading />
+			) : whole.html === null ? (
 				<NotKept />
 			) : (
 				<CanvasStage
 					key={shown.id}
-					html={shown.html}
+					html={whole.html}
 					title={`${thread.title}, revision ${shown.revision}`}
 					deviceWidth={deviceWidth}
 					annotating={false}

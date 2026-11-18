@@ -32,6 +32,7 @@ import { heldForSetupSql } from "./queued-user-messages";
 import {
 	boundedPageStartSql,
 	LATEST_CONTEXT_USAGE_SQL,
+	pageItemSql,
 } from "./transcript-page-sql";
 import { noteUserHub } from "./user-hub-notes";
 
@@ -426,7 +427,7 @@ export async function agentSessionPageForOwner(
 		 b as (select stop,case when stop is null then 0 else ${boundedPageStartSql("$1", "turn_bounds.first", "turn_bounds.stop")} end as first from turn_bounds)
 		 select s.*, ${LATEST_CONTEXT_USAGE_SQL} as context_usage,
 		  case when b.stop is null or b.stop <= b.first then '[]'::jsonb
-		  else (select jsonb_agg(i.item order by i.position) from agent_session_item i
+		  else (select jsonb_agg(${pageItemSql("i")} order by i.position) from agent_session_item i
 		   where i.session_id=$1 and i.position >= b.first and i.position < b.stop) end as items,
 		  b.first > 0 as has_older_items, b.stop is not null as page_found
 		 from s, b`,
@@ -440,6 +441,14 @@ export async function agentSessionPageForOwner(
 		  })
 		| undefined;
 	if (!row) return null;
+	// One field per page read (bytes of the page's items as they left the
+	// database), beside db.egress_summary's per-statement totals.
+	console.info("session.page_read", {
+		label: "agentSessionPageForOwner",
+		items: Array.isArray(row.items) ? row.items.length : 0,
+		bytes: JSON.stringify(row.items ?? []).length,
+		older: page.beforeId !== undefined,
+	});
 	return {
 		...toSession(row),
 		hasOlderItems: row.has_older_items,
@@ -1124,6 +1133,24 @@ export async function itemRowsSinceForOwner(
 			{ itemsRev: row.items_rev, count: row.count, rows: row.rows },
 		]),
 	);
+}
+
+/**
+ * One item of a chat, whole, by id: what a page read cut from it (a tool
+ * call's full input and output, a canvas's html). Null when the user's chat
+ * does not hold it.
+ */
+export async function sessionItemDetailForOwner(
+	userId: string,
+	sessionId: string,
+	itemId: string,
+): Promise<unknown | null> {
+	const result = await database().query<{ item: unknown }>(
+		`/* sessionItemDetailForOwner */ select i.item from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		 where i.session_id=$2 and i.item_id=$3 and i.kind in ('dynamicToolCall','canvas') limit 1`,
+		[userId, sessionId, itemId],
+	);
+	return result.rows[0]?.item ?? null;
 }
 
 /**

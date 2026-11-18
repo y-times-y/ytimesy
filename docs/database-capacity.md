@@ -220,10 +220,52 @@ possibly compressed size; text sent to the Worker is usually larger, so
 **100 power users:** before ~900-1,200 GB/month, 4-5x the 250 GB budget; after
 this round ~30 GB for these shapes (estimate).
 
-**Not yet in these numbers (unmeasured, possibly the next biggest):** the page
-reads (D: 15k calls/3 wk, each up to 30 turns of items). If a page averages
-50 KB, that is ~1 GB/month per power user by itself, i.e. the whole per-user
-target. Likewise usage windows, polling endpoints, and `agent_session_item`
+### Page reads (chat open / refresh / send / snapshot)
+
+**Measured** (production, one power user, ~3 weeks, `pg_stat_statements` +
+`pg_column_size`): `agentSessionPageForOwner`, 1 row per call, the row carries
+the page's items. 15,043 calls averaging 117 KB (6 turns; median 102 KB, max
+509 KB) and 7,288 calls averaging 189 KB (30 turns; median 127 KB, max 1.87 MB):
+~3.1 GB per 3 weeks, **~4.5 GB/month per power user, ~450 GB/month at 100 power
+users (1.8x the 250 GB budget)**. Item sizes (avg bytes): dynamicToolCall
+2,110 (20k rows), canvas 23,872, userMessage 882, agentMessage 830, reasoning
+568, notice 262.
+
+**Changed (this round):**
+
+- **Payload diet in SQL** (`pageItemSql`, `transcript-page-sql.ts`), used by
+  `agentSessionPageForOwner` and the live snapshot/delta reads
+  (`LATEST_PAGE_ITEMS_SQL`, `latestPageRowsSinceSql`), so the bytes never
+  leave Postgres: a canvas's `html` is not sent (`htmlOmitted`); a tool call's
+  plain-text `output`, or the `output` text of a JSON result record, keeps head
+  and tail (2 KB total, exit line kept) and its other long input texts are
+  cut the same way, with `truncated: true` and `detailSession`. Kept whole:
+  messages, reasoning, `run_code`/`agent`/`agent_send` calls (cards parse their
+  JSON), and the `content`/`new_string`/`old_string`/`command`/`code`/`diff`
+  input fields (the collapsed card counts their lines).
+- **Lazy detail:** `sessionItemDetailForOwner` / `getSessionItemDetail` read
+  one tool call or canvas whole by id. The tool card's body (rendered only
+  when opened, `LazyDetails`) and the Canvas panel call `useWholeItem`
+  (`whole-item.ts`), which shares one read per item and state.
+- **Smaller first page:** chats open, refresh and answer sends on the last
+  `OPEN_PAGE_TURNS` = 10 turns (was 30); older turns load on scroll as before
+  (30 per scroll page).
+- **Instrumentation:** statement label `agentSessionPageForOwner`,
+  `sessionItemDetailForOwner`; one `session.page_read` log line per page read
+  with `bytes` (JSON size of the page's items), `items`, `older`.
+
+**Estimated after** (not measured; the share of page bytes that is cut tool
+text/canvas is unknown until `session.page_read` runs in production; assumed
+35-50% of a page): 6-turn reads ~70 KB, open reads ~60-70 KB (30 -> 10 turns,
+then the diet) => ~1.5 GB per 3 weeks, **~2.2 GB/month per power user, ~220 GB
+at 100 power users** (inside 250 GB, but with little margin and above the
+1 GB/user target). Together with the ~30 GB of the shapes above that is ~250 GB:
+**not yet comfortable**. To reach 1 GB/user: fewer full page reads
+(serve refocus/reconcile from `itemRowsSinceForOwner` deltas, which exist;
+`SNAPSHOT_TURNS` 6 -> 3) once `session.page_read` shows which callers
+dominate.
+
+**Not yet in these numbers:** usage windows, polling endpoints, and `agent_session_item`
 reads outside the list above. Treat "~30 GB" as the cost of the shapes listed,
 not as a forecast of the bill; confirm with `db.egress_summary` (now naming
 callers) and the measurement script before relying on it. Natural next

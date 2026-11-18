@@ -34,7 +34,7 @@ import {
 	sessionItemsWithMergedUsers,
 	sessionTitleFromItems,
 } from "#/domain/session-item";
-import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
+import { OPEN_PAGE_TURNS } from "#/domain/transcript-page";
 import {
 	chatHoldingSend,
 	releasingChatClaimOnFailure,
@@ -133,7 +133,7 @@ export async function readApiWorkspaceSession(
 				? read
 				: // The latest page (as the chat opens), never the whole transcript.
 					await agentSessionPageForOwner(scope.userId, scope.sessionId, {
-						turns: TRANSCRIPT_PAGE_TURNS,
+						turns: OPEN_PAGE_TURNS,
 					})
 		: null;
 	if (session && session.projectId !== scope.projectId)
@@ -688,7 +688,7 @@ async function sentView(
 ): Promise<PublicCodexSession> {
 	const page = sent.appended
 		? await agentSessionPageForOwner(scope.userId, session.id, {
-				turns: TRANSCRIPT_PAGE_TURNS,
+				turns: OPEN_PAGE_TURNS,
 			})
 		: null;
 	const view = apiWorkspaceView(

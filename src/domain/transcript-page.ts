@@ -9,6 +9,13 @@ import type { SessionItem } from "./session-item";
  */
 export const TRANSCRIPT_PAGE_TURNS = 30;
 /**
+ * A chat opens (and a send or a refresh reads it) on its last OPEN_PAGE_TURNS
+ * turns, a third of a scroll-back page: the browser reads older pages as the
+ * reader scrolls up (TRANSCRIPT_PAGE_TURNS each), so a long chat's open no
+ * longer moves thirty turns (189 KB on average in production) out of Postgres.
+ */
+export const OPEN_PAGE_TURNS = 10;
+/**
  * The live snapshot carries only the chat's last SNAPSHOT_TURNS turns. The
  * browser already shows the older ones (it merges a snapshot onto them; see
  * withEarlierPages) and reads more by paging, so re-sending thirty turns on

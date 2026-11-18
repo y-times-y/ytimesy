@@ -30,6 +30,7 @@ import {
 	chatHoldingSend,
 	chatToOpenMetadata,
 	listSidebarAgentSessions,
+	sessionItemDetailForOwner,
 } from "#/server/adapters/agent-sessions";
 import { markFirstRunFinished } from "#/server/adapters/first-run";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
@@ -260,6 +261,28 @@ export const getOlderSessionItems = createServerFn({ method: "GET" })
 			hasOlderItems: page.hasOlderItems,
 			found: page.pageFound,
 		};
+	});
+
+/**
+ * One tool call or canvas of the user's chat whole: a page read keeps only
+ * the head and tail of a long tool output and leaves a canvas's html out
+ * (pageItemSql); the card reads the rest when it opens.
+ */
+export const getSessionItemDetail = createServerFn({ method: "GET" })
+	.validator((data: unknown) =>
+		z
+			.object({ sessionId: z.uuid(), itemId: z.string().min(1).max(500) })
+			.parse(data),
+	)
+	.handler(async ({ data }): Promise<string | null> => {
+		const user = await requireUser(getRequest().headers);
+		const item = await sessionItemDetailForOwner(
+			user.id,
+			data.sessionId,
+			data.itemId,
+		);
+		// As JSON text: the item's shape is the stored one, not a typed record.
+		return item === null ? null : JSON.stringify(item);
 	});
 
 /**

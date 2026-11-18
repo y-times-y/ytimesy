@@ -21,7 +21,7 @@ import {
 	sessionTitleFromItems,
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
-import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
+import { OPEN_PAGE_TURNS } from "#/domain/transcript-page";
 import {
 	type AgentSessionRecord,
 	chatHoldingSend,
@@ -84,7 +84,7 @@ async function readSubscriptionSessionState(
 					? read
 					: // The latest page (as the chat opens), never the whole transcript.
 						agentSessionPageForOwner(scope.userId, scope.sessionId, {
-							turns: TRANSCRIPT_PAGE_TURNS,
+							turns: OPEN_PAGE_TURNS,
 						})
 			: null,
 		loadAgentAccountState(scope.userId),

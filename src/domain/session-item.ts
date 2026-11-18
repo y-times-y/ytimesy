@@ -133,6 +133,9 @@ export type CanvasItem = {
 	readonly title: string;
 	readonly revision: number;
 	readonly html: string | null;
+	/** A page read left `html` out; read the item whole by id (sessionItemDetailForOwner). */
+	readonly htmlOmitted?: boolean;
+	readonly detailSession?: string;
 	/** The workspace file it was read from, when the agent passed a path. */
 	readonly path?: string;
 };
@@ -183,6 +186,10 @@ export type DynamicToolCallItem = {
 	readonly tool: string;
 	readonly input?: string;
 	readonly output?: string;
+	/** A page read cut `input`/`output` (head and tail kept); read the item whole by id when its card opens. */
+	readonly truncated?: boolean;
+	/** The chat that holds the whole item (set with `truncated`). */
+	readonly detailSession?: string;
 	readonly status: Exclude<ToolActivityStatus, "declined">;
 	/** Set when the call started a background command (background-command.ts). */
 	readonly background?: BackgroundCommandRecord;

@@ -24,9 +24,17 @@ import { McpServerIcon } from "./mcp-server-icon";
 import { ShellCommandCode } from "./shell-command-code";
 import { ToolInputFields } from "./tool-cards";
 import { looksLong, ShowMore, ToolFields, ToolValue } from "./tool-value";
+import { useWholeItem } from "./whole-item";
 
 /** An opened tool card: one panel that shows the call as it happened. */
-export function ToolDetailBody({ item }: { item: DynamicToolCallItem }) {
+export function ToolDetailBody({
+	item: pageItem,
+}: {
+	item: DynamicToolCallItem;
+}) {
+	// A long call's page copy keeps its head and tail; the whole is read here,
+	// as the card opens (this body renders only then).
+	const item = useWholeItem(pageItem);
 	const view = toolDetailView(item);
 	const failed = item.status === "failed";
 	switch (view.kind) {

@@ -25,7 +25,7 @@ import {
 } from "#/domain/session-item";
 import {
 	latestTranscriptPage,
-	TRANSCRIPT_PAGE_TURNS,
+	OPEN_PAGE_TURNS,
 } from "#/domain/transcript-page";
 import { startAfterResponse } from "../adapters/after-response";
 import {
@@ -782,7 +782,7 @@ export async function publicSessionView(
 	queued?.catch(() => {});
 	const reading = scope.sessionId
 		? agentSessionPageForOwner(scope.userId, scope.sessionId, {
-				turns: TRANSCRIPT_PAGE_TURNS,
+				turns: OPEN_PAGE_TURNS,
 			})
 		: undefined;
 	const view = await Effect.runPromise(
