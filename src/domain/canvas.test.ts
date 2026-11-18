@@ -136,6 +136,22 @@ describe("revisions", () => {
 		expect(threads.map((thread) => thread.title)).toEqual(["Chart", "Mockup"]);
 		expect(threads[1].revisions.map((entry) => entry.revision)).toEqual([1, 2]);
 	});
+
+	it("renumbers a canvas whose turns each restarted at revision 1, newest last", () => {
+		const items: SessionItem[] = [
+			canvas("a", "Sidebar", 1),
+			canvas("b", "Sidebar", 2),
+			canvas("c", "Sidebar", 1),
+		];
+		const [thread] = chatCanvases(items);
+		expect(thread.revisions.map((entry) => [entry.id, entry.revision])).toEqual(
+			[
+				["a", 1],
+				["b", 2],
+				["c", 3],
+			],
+		);
+	});
 });
 
 describe("withBoundedCanvasHistory", () => {

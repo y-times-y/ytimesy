@@ -140,6 +140,7 @@ import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
 import { lastUserMessageIndex } from "#/server/adapters/turn-items-storage";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import type { ApiTurn } from "../adapters/api-turns";
+import { savedCanvasRevision } from "../adapters/canvas-revisions";
 import { devEvalUsersEnabled } from "../adapters/dev-eval-users";
 import type { EvaluationRun } from "../adapters/harness-evaluation";
 import type { ImportedSessionRow } from "../adapters/local-imports";
@@ -1927,7 +1928,14 @@ async function runApiTurnAttempt(
 			projectSecrets,
 			redact,
 			// Display only: a person in a root chat sees the canvas.
-			canvas: rootChat ? canvasTools({ items: () => items, workspace }) : {},
+			canvas: rootChat
+				? canvasTools({
+						items: () => items,
+						workspace,
+						savedRevision: (title) =>
+							savedCanvasRevision(turn.session_id, title),
+					})
+				: {},
 			environmentSetup:
 				rootChat && owner.projectId
 					? environmentSetupTools({

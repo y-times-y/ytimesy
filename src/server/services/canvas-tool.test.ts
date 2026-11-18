@@ -15,7 +15,11 @@ const options = {
 	context: {},
 };
 
-function setup(items: SessionItem[] = [], files: Record<string, string> = {}) {
+function setup(
+	items: SessionItem[] = [],
+	files: Record<string, string> = {},
+	savedRevision?: (title: string) => Promise<number>,
+) {
 	const readTextFile = vi.fn(
 		async (_vm: unknown, path: string) => files[path] ?? null,
 	);
@@ -27,6 +31,7 @@ function setup(items: SessionItem[] = [], files: Record<string, string> = {}) {
 	const tools = canvasTools({
 		items: () => items,
 		workspace: async () => workspace,
+		...(savedRevision ? { savedRevision } : {}),
 	});
 	const run = (tool: ToolSet[string], input: object) =>
 		(tool.execute as NonNullable<typeof tool.execute>)(input, options);
@@ -38,6 +43,17 @@ function setup(items: SessionItem[] = [], files: Record<string, string> = {}) {
 }
 
 describe("canvas tool", () => {
+	it("numbers from the chat's saved revisions, not only this turn's items", async () => {
+		// A modern turn holds only its own items; earlier turns' canvases are saved.
+		const { run } = setup([], {}, async (title) =>
+			title === "Pricing page" ? 2 : 0,
+		);
+		const next = await run({ title: "Pricing page", html: "<h1>3</h1>" });
+		expect(next).toMatchObject({ title: "Pricing page", revision: 3 });
+		const fresh = await run({ title: "Other", html: "<h1>1</h1>" });
+		expect(fresh).toMatchObject({ title: "Other", revision: 1 });
+	});
+
 	it("shows an html document as revision 1 and tells the model only that", async () => {
 		const { tools, run } = setup();
 		const output = await run({ title: "Pricing page", html: "<h1>Plans</h1>" });

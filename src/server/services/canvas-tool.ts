@@ -40,6 +40,11 @@ export function canvasTools(input: {
 	readonly items: () => readonly SessionItem[];
 	/** The workspace a `path` is read from. */
 	readonly workspace: () => Promise<AgentToolWorkspace>;
+	/**
+	 * The highest revision of a title saved in the chat. `items` holds only
+	 * the active turn, so without this each new turn would number from 1.
+	 */
+	readonly savedRevision?: (title: string) => Promise<number>;
 }): ToolSet {
 	// Revisions issued in this turn and not yet in the items (parallel calls).
 	const issued = new Map<string, number>();
@@ -79,10 +84,14 @@ export function canvasTools(input: {
 					throw new Error(
 						`The document has ${source.html.length.toLocaleString("en-US")} characters; a canvas holds at most ${CANVAS_HTML_LIMIT.toLocaleString("en-US")}. Inline less (smaller images, minified code) or split it into several canvases.`,
 					);
+				// Read the saved number first: nothing awaits between taking the
+				// next revision and recording it, so parallel calls get distinct ones.
+				const saved = (await input.savedRevision?.(name)) ?? 0;
 				const revision =
 					Math.max(
 						latestCanvasRevision(input.items(), name),
 						issued.get(name) ?? 0,
+						saved,
 					) + 1;
 				issued.set(name, revision);
 				return {

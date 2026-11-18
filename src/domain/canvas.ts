@@ -219,8 +219,24 @@ export function chatCanvases(items: readonly SessionItem[]): CanvasThread[] {
 	}
 	return [...byTitle].map(([title, revisions]) => ({
 		title,
-		revisions: [...revisions].sort((a, b) => a.revision - b.revision),
+		revisions: inOrder(revisions),
 	}));
+}
+
+/**
+ * Revisions oldest first, in the order the chat saved them. Numbers that
+ * repeat or run backwards (a chat from when each turn restarted at
+ * revision 1) are renumbered 1, 2, 3, so the newest is always the last and
+ * every number is unique for the stepper and for notes.
+ */
+function inOrder(revisions: readonly CanvasItem[]): CanvasItem[] {
+	const ordered = revisions.every(
+		(entry, index) =>
+			index === 0 || entry.revision > revisions[index - 1].revision,
+	);
+	return ordered
+		? [...revisions]
+		: revisions.map((entry, index) => ({ ...entry, revision: index + 1 }));
 }
 
 /** The few lines of system guidance; the tool's description has the rules. */
