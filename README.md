@@ -9,8 +9,6 @@
 
 ### AI Software Engineer in the Cloud
 
-The place to build software with AI engineers. Describe what you want and agents get to work in parallel, each on its own machine, testing in a real browser, while you stay in control of what ships.
-
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/8rhTdsrtGw)
 [![Website](https://img.shields.io/badge/ytimesy.com-try%20it-black)](https://ytimesy.com)
