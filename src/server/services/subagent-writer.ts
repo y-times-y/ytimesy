@@ -185,6 +185,43 @@ export function parentImportScript(input: {
 	].join("\n");
 }
 
+const FORK_PATH_ATTEMPTS = 4;
+const FORK_PATH_WAIT_MS = 1_500;
+
+/**
+ * The repository path of a fresh fork. A fork is a copy of the parent, so its
+ * path is the parent's: the note file is read from the fork a few times (a VM
+ * that has just booted may not show its files yet), then from the parent. A
+ * parent that was rebuilt and has no note yet (its preparation has not
+ * finished) is a retryable condition, said in plain words.
+ */
+export async function forkRepositoryPath(
+	machines: Pick<WorkspaceMachines, "readTextFile">,
+	forkVm: WorkspaceId,
+	parentVm: WorkspaceId,
+	wait: (ms: number) => Promise<unknown> = (ms) =>
+		new Promise((resolve) => setTimeout(resolve, ms)),
+) {
+	const valid = (value: string | null | undefined) => {
+		const path = value?.trim();
+		return path?.startsWith("/") ? path : null;
+	};
+	for (let attempt = 0; attempt < FORK_PATH_ATTEMPTS; attempt++) {
+		const fromFork = valid(
+			await machines.readTextFile(forkVm, PROJECT_CWD_PATH),
+		);
+		if (fromFork) return fromFork;
+		if (attempt + 1 < FORK_PATH_ATTEMPTS) await wait(FORK_PATH_WAIT_MS);
+	}
+	const fromParent = valid(
+		await machines.readTextFile(parentVm, PROJECT_CWD_PATH),
+	);
+	if (fromParent) return fromParent;
+	throw new Error(
+		"The machine this agent would copy is not fully prepared yet (its repository path is missing). Try again in a minute.",
+	);
+}
+
 /** Forks the parent's VM for a new writer and records its fork-base. */
 export async function forkWriterWorkspace(input: {
 	readonly machines: WorkspaceMachines;
@@ -197,11 +234,11 @@ export async function forkWriterWorkspace(input: {
 			"This workspace provider cannot fork a running VM, so writer agents are unavailable. Do this work yourself.",
 		);
 	const forked = await fork(input.parentVm, input.slug);
-	const cwd = (
-		await input.machines.readTextFile(forked.vm, PROJECT_CWD_PATH)
-	)?.trim();
-	if (!cwd?.startsWith("/"))
-		throw new Error("The fork has no prepared repository path.");
+	const cwd = await forkRepositoryPath(
+		input.machines,
+		forked.vm,
+		input.parentVm,
+	);
 	const result = await input.machines.exec(
 		forked.vm,
 		forkBaseScript(cwd),

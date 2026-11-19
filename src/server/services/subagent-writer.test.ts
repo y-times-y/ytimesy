@@ -14,6 +14,7 @@ import { overlappingWriters } from "#/domain/subagent";
 import { WRITER_PATCH_APPLY } from "#/domain/writer-integration";
 import { localVms } from "./local-vms.testing";
 import {
+	forkRepositoryPath,
 	forkWriterWorkspace,
 	parseNumstat,
 	transferWriterPatch,
@@ -335,5 +336,72 @@ describe("writer subagent git round trip", () => {
 			added: 3,
 			removed: 1,
 		});
+	});
+});
+
+describe("forkRepositoryPath", () => {
+	const noWait = async () => undefined;
+	const machinesWith = (files: Record<string, (string | null)[]>) => {
+		const calls: string[] = [];
+		return {
+			calls,
+			machines: {
+				readTextFile: async (vm: string) => {
+					calls.push(vm);
+					const queue = files[vm] ?? [];
+					return queue.length > 1 ? queue.shift() : (queue[0] ?? null);
+				},
+			},
+		};
+	};
+	it("waits for a fork that has just booted to show its note", async () => {
+		const { machines, calls } = machinesWith({
+			fork: [null, null, "/work/repo"],
+		});
+		expect(
+			await forkRepositoryPath(
+				machines as never,
+				WorkspaceId("fork"),
+				WorkspaceId("parent"),
+				noWait,
+			),
+		).toBe("/work/repo");
+		expect(calls).toEqual(["fork", "fork", "fork"]);
+	});
+	it("uses the parent's path when the fork never shows one", async () => {
+		const { machines } = machinesWith({
+			fork: [null],
+			parent: ["/work/repo\n"],
+		});
+		expect(
+			await forkRepositoryPath(
+				machines as never,
+				WorkspaceId("fork"),
+				WorkspaceId("parent"),
+				noWait,
+			),
+		).toBe("/work/repo");
+	});
+	it("says a parent without a prepared path is retryable, in plain words", async () => {
+		const { machines } = machinesWith({ fork: [null], parent: [""] });
+		await expect(
+			forkRepositoryPath(
+				machines as never,
+				WorkspaceId("fork"),
+				WorkspaceId("parent"),
+				noWait,
+			),
+		).rejects.toThrow(/not fully prepared yet.*Try again in a minute/);
+	});
+	it("does not take a relative note for a path", async () => {
+		const { machines } = machinesWith({ fork: ["repo"], parent: ["/ok"] });
+		expect(
+			await forkRepositoryPath(
+				machines as never,
+				WorkspaceId("fork"),
+				WorkspaceId("parent"),
+				noWait,
+			),
+		).toBe("/ok");
 	});
 });
