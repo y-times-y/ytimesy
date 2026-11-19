@@ -12,7 +12,6 @@ import type { AgentTask, AgentTaskStatus } from "#/domain/agent-task";
 import { foldFinished } from "#/domain/folded-list";
 import { helperName, KIND_ICONS } from "#/domain/helper-names";
 import type { SubagentTaskView } from "#/domain/subagent-tree";
-import { formatSpend, totalSpend } from "#/domain/subagent-usage";
 import { AgentIcon } from "./agent-icon";
 
 const statusLabels: Record<AgentTaskStatus, string> = {
@@ -29,27 +28,6 @@ type PanelTask = AgentTask & { readonly subagent?: SubagentTaskView };
 /** Finished helpers that stay in view; older ones fold behind "Show N more". */
 const FINISHED_HELPERS_SHOWN = 3;
 
-/** An unknown cost ("$?") is left out of the panel; VM minutes are not shown at all. */
-const knownDollars = (dollars: string) => (dollars === "$?" ? "" : dollars);
-
-/** `writer · fork · 41/150 steps · 6/30 min · 380k tok · $0.76` */
-export function subagentUsageLine(view: SubagentTaskView) {
-	const spend = formatSpend(view.subtree);
-	const minutes = Math.round(view.minutes);
-	return [
-		view.role,
-		view.vm,
-		view.budget
-			? `${view.steps}/${view.budget.steps} steps`
-			: `${view.steps} steps`,
-		view.budget ? `${minutes}/${view.budget.minutes} min` : `${minutes} min`,
-		`${spend.tokens} tok`,
-		knownDollars(spend.dollars),
-	]
-		.filter(Boolean)
-		.join(" · ");
-}
-
 export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 	// Short names and colours as the agents list gives them.
 	const identities = useMemo(() => helperIdentities(tasks), [tasks]);
@@ -61,12 +39,6 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 		FINISHED_HELPERS_SHOWN,
 	);
 	const shown = showAll ? tasks : folded.shown;
-	const subagents = tasks.flatMap((task) =>
-		task.subagent ? [task.subagent.spend] : [],
-	);
-	const treeSpend = subagents.length
-		? formatSpend(totalSpend(subagents))
-		: null;
 	return (
 		<section className="task-panel" aria-label="Subagents">
 			<header className="task-panel-header">
@@ -142,11 +114,6 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 										<span aria-hidden="true"> · </span>
 										{statusLabels[task.status]}
 									</small>
-									{task.subagent ? (
-										<small className="task-usage">
-											{subagentUsageLine(task.subagent)}
-										</small>
-									) : null}
 								</div>
 							</li>
 						);
@@ -161,14 +128,6 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 				>
 					{showAll ? "Show less" : `Show ${folded.hidden} more done`}
 				</button>
-			) : null}
-			{treeSpend ? (
-				<p className="task-usage task-usage-total">
-					Subagents {subagents.length} ·{" "}
-					{[`${treeSpend.tokens} tok`, knownDollars(treeSpend.dollars)]
-						.filter(Boolean)
-						.join(" · ")}
-				</p>
 			) : null}
 		</section>
 	);
