@@ -1622,6 +1622,8 @@ export function SessionLauncher({
 							{Y_SQUARED_CLAUDE_CODE_NOTE}
 						</p>
 					) : null}
+					{/* Above the composer, not in it: the composer is a grid of named areas and an unplaced card lands in one cell. */}
+					{!side && session.items.length === 0 ? <SetupChecklist /> : null}
 					<div className="session-composer">
 						{visibleMentions.length > 0 ? (
 							<MentionPopover
@@ -1752,7 +1754,6 @@ export function SessionLauncher({
 								{attachmentError}
 							</p>
 						)}
-						{!side && session.items.length === 0 ? <SetupChecklist /> : null}
 						{shownSendBlock && !(noProject && !selectedProject) ? (
 							<SendBlockStep
 								block={shownSendBlock}
