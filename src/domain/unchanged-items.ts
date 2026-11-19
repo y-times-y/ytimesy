@@ -72,6 +72,7 @@ function sameTimelineRow(a: TimelineRow, b: TimelineRow): boolean {
 	if (b.kind === "item" || a.id !== b.id || !sameItemList(a.items, b.items))
 		return false;
 	if (a.kind === "work") return b.kind === "work" && a.label === b.label;
+	if (a.kind === "commands") return b.kind === "commands";
 	return b.kind === "exploration" && sameJsonValue(a.counts, b.counts);
 }
 

@@ -29,11 +29,93 @@ export type TimelineRow =
 			readonly id: SessionItem["id"];
 			readonly counts: ExplorationCounts;
 			readonly items: readonly SessionItem[];
+	  }
+	| {
+			/** Two or more commands in a row that only ran something (not read or searched). */
+			readonly kind: "commands";
+			readonly id: SessionItem["id"];
+			readonly items: readonly SessionItem[];
 	  };
+
+const FILE_COMMANDS = new Set([
+	"cat",
+	"head",
+	"tail",
+	"sed",
+	"nl",
+	"wc",
+	"bat",
+	"less",
+	"stat",
+	"file",
+]);
+const SEARCH_COMMANDS = new Set([
+	"grep",
+	"rg",
+	"ag",
+	"ack",
+	"find",
+	"fd",
+	"ls",
+	"tree",
+]);
+const GIT_READ = new Set([
+	"log",
+	"show",
+	"diff",
+	"status",
+	"blame",
+	"ls-files",
+]);
+/** Segments that read nothing and change nothing: they never decide the kind. */
+const NEUTRAL_COMMANDS = new Set(["cd", "echo", "true", "sleep", "pwd", "set"]);
+
+/**
+ * Whether a shell command only looks (reads files or searches) and which:
+ * "read" (cat, sed -n, head...) or "search" (grep, rg, find, ls...). Anything
+ * that writes (a redirect, sed -i, an unknown program) is null.
+ */
+export function readOnlyCommandKind(command: string): "read" | "search" | null {
+	// 2>&1 and 2>/dev/null write nothing; any other redirect, heredoc or
+	// substitution might.
+	const plain = command.replace(/\d?>&\d|\d?>\s*\/dev\/null/g, "");
+	if (/>|<<|`|\$\(/.test(plain)) return null;
+	let kind: "read" | "search" | null = null;
+	for (const segment of command.split(/&&|\|\||;|\||\n/)) {
+		const words = segment.trim().split(/\s+/).filter(Boolean);
+		while (words[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
+		const name = words[0]?.split("/").pop();
+		if (!name) continue;
+		if (NEUTRAL_COMMANDS.has(name)) continue;
+		if (name === "git") {
+			const sub = words.find(
+				(word, index) => index > 0 && !word.startsWith("-"),
+			);
+			if (sub === "grep") kind = "search";
+			else if (sub && GIT_READ.has(sub)) kind ??= "read";
+			else return null;
+			continue;
+		}
+		if (name === "sed") {
+			if (
+				words.some(
+					(word) => /^-[A-Za-z]*i/.test(word) || word.startsWith("--in-place"),
+				)
+			)
+				return null;
+			kind ??= "read";
+		} else if (SEARCH_COMMANDS.has(name)) kind = "search";
+		else if (FILE_COMMANDS.has(name)) kind ??= "read";
+		else return null;
+	}
+	return kind;
+}
 
 export function isExplorationItem(item: SessionItem): boolean {
 	if (item.kind === "fileChange") return false;
 	if (item.kind === "webSearch") return true;
+	if (item.kind === "commandExecution")
+		return readOnlyCommandKind(item.command) !== null;
 	if (item.kind === "dynamicToolCall") {
 		return isExplorationGlyph(activityGlyphForToolName(item.tool));
 	}
@@ -49,6 +131,11 @@ function explorationCounts(items: readonly SessionItem[]): ExplorationCounts {
 	for (const item of items) {
 		if (item.kind === "webSearch") {
 			searches += 1;
+			continue;
+		}
+		if (item.kind === "commandExecution") {
+			if (readOnlyCommandKind(item.command) === "read") files += 1;
+			else searches += 1;
 			continue;
 		}
 		const name =
@@ -77,6 +164,16 @@ export function explorationLabel(counts: ExplorationCounts): string {
 	}
 	if (parts.length === 0) return "Explored";
 	return `Explored ${parts.join(" ")}`;
+}
+
+export function commandsLabel(items: readonly SessionItem[]): string {
+	const failed = items.filter(
+		(item) =>
+			item.kind === "commandExecution" &&
+			item.exitCode !== null &&
+			item.exitCode !== 0,
+	).length;
+	return `Ran ${items.length} commands${failed ? ` · ${failed} failed` : ""}`;
 }
 
 export function explorationGroupIsLive(items: readonly SessionItem[]): boolean {
@@ -233,6 +330,33 @@ export function groupTimelineRows(
 export function groupExplorationRows(
 	items: readonly SessionItem[],
 ): TimelineRow[] {
+	return groupCommandRuns(groupLooking(items));
+}
+
+/** Runs of two or more commands in a row fold into one "Ran N commands" row. */
+function groupCommandRuns(rows: readonly TimelineRow[]): TimelineRow[] {
+	const out: TimelineRow[] = [];
+	let run: SessionItem[] = [];
+	const flushRun = () => {
+		const first = run[0];
+		if (first && run.length >= 2)
+			out.push({ kind: "commands", id: first.id, items: run });
+		else for (const item of run) out.push({ kind: "item", item });
+		run = [];
+	};
+	for (const row of rows) {
+		if (row.kind === "item" && row.item.kind === "commandExecution") {
+			run.push(row.item);
+			continue;
+		}
+		flushRun();
+		out.push(row);
+	}
+	flushRun();
+	return out;
+}
+
+function groupLooking(items: readonly SessionItem[]): TimelineRow[] {
 	const rows: TimelineRow[] = [];
 	let index = 0;
 	while (index < items.length) {

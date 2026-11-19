@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 import {
+	commandsLabel,
 	explorationGroupIsLive,
 	explorationLabel,
+	groupExplorationRows,
 	groupTimelineRows,
 	isExplorationItem,
+	readOnlyCommandKind,
 } from "./timeline-activity";
 
 function fileChange(id: string, path: string): SessionItem {
@@ -243,7 +246,7 @@ describe("timeline activity grouping", () => {
 		});
 		expect(rows[1]).toMatchObject({ kind: "item", item: { text: "Update" } });
 	});
-	it("treats file reads and searches as exploration, not shell pills", () => {
+	it("treats file reads, searches and looking-only shell commands as exploration, not shell pills", () => {
 		const read: SessionItem = {
 			kind: "dynamicToolCall",
 			id: SessionItemId("read-1"),
@@ -258,7 +261,7 @@ describe("timeline activity grouping", () => {
 		const shell: SessionItem = {
 			kind: "commandExecution",
 			id: SessionItemId("cmd-1"),
-			command: "ls",
+			command: "pnpm test",
 			cwd: "/tmp",
 			status: "completed",
 			output: null,
@@ -266,6 +269,7 @@ describe("timeline activity grouping", () => {
 		};
 		expect(isExplorationItem(read)).toBe(true);
 		expect(isExplorationItem(search)).toBe(true);
+		expect(isExplorationItem({ ...shell, command: "ls src" })).toBe(true);
 		expect(isExplorationItem(shell)).toBe(false);
 	});
 
@@ -459,4 +463,52 @@ it("shows a continued chat's handoff as its own card before the first turn", () 
 	expect(groupTimelineRows([handoff], "idle")).toEqual([
 		{ kind: "item", item: handoff },
 	]);
+});
+
+describe("commands in a running turn fold into quiet rows", () => {
+	const cmd = (id: string, command: string, exitCode: number | null = 0) =>
+		({
+			kind: "commandExecution",
+			id: SessionItemId(id),
+			command,
+			cwd: "/tmp",
+			status: "completed",
+			output: null,
+			exitCode,
+		}) as SessionItem;
+
+	it("tells looking from changing", () => {
+		expect(readOnlyCommandKind('grep -n "x" src/a.ts | head -5')).toBe(
+			"search",
+		);
+		expect(readOnlyCommandKind("sed -n 1,20p src/a.ts")).toBe("read");
+		expect(readOnlyCommandKind("cd /repo && git diff --stat 2>&1")).toBe(
+			"read",
+		);
+		expect(readOnlyCommandKind("sed -i s/a/b/ src/a.ts")).toBeNull();
+		expect(readOnlyCommandKind("cat a > b")).toBeNull();
+		expect(readOnlyCommandKind("pnpm test")).toBeNull();
+		expect(readOnlyCommandKind("python3 script.py")).toBeNull();
+		expect(readOnlyCommandKind("git push")).toBeNull();
+	});
+
+	it("folds looking commands into Explored, other runs into Ran N commands", () => {
+		const rows = groupExplorationRows([
+			cmd("a", 'grep -rn "harnessId" src'),
+			cmd("b", "sed -n 1,20p src/a.ts"),
+			cmd("c", "pnpm exec biome check src"),
+			cmd("d", "pnpm exec vitest run", 1),
+			cmd("e", "python3 fix.py"),
+		]);
+		expect(rows.map((row) => row.kind)).toEqual(["exploration", "commands"]);
+		expect(rows[0]).toMatchObject({ counts: { files: 1, searches: 1 } });
+		const group = rows[1];
+		if (group?.kind !== "commands") throw new Error("expected commands");
+		expect(commandsLabel(group.items)).toBe("Ran 3 commands · 1 failed");
+	});
+
+	it("keeps a lone command as its own row", () => {
+		const rows = groupExplorationRows([cmd("a", "pnpm test")]);
+		expect(rows.map((row) => row.kind)).toEqual(["item"]);
+	});
 });

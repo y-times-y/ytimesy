@@ -79,6 +79,7 @@ import {
 } from "#/domain/session-item";
 import { thoughtLabel } from "#/domain/thought-label";
 import {
+	commandsLabel,
 	explorationGroupIsLive,
 	explorationLabel,
 	groupExplorationRows,
@@ -1063,7 +1064,7 @@ const TimelineRowView = memo(function TimelineRowView({
 			</LazyDetails>
 		);
 	}
-	if (row.kind === "exploration") {
+	if (row.kind === "exploration" || row.kind === "commands") {
 		const live = turnRunning && explorationGroupIsLive(row.items);
 		return (
 			<LiveCollapsible
@@ -1079,7 +1080,9 @@ const TimelineRowView = memo(function TimelineRowView({
 								: "session-activity-title"
 						}
 					>
-						{explorationLabel(row.counts)}
+						{row.kind === "commands"
+							? commandsLabel(row.items)
+							: explorationLabel(row.counts)}
 					</span>
 					<ChevronRight
 						size={14}
