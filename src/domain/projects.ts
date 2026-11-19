@@ -46,6 +46,8 @@ export interface Project {
 	 * never waits for the project's chat list to say so.
 	 */
 	readonly yEnabled?: boolean;
+	/** A Y project's Super agent chat, when it has one: the open chat is the Super agent's when its id is this, before any chat list says so. */
+	readonly ySquaredId?: string | null;
 	id: string;
 	name?: string;
 	repositories?: ProjectRepository[];

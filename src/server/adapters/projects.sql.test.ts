@@ -15,7 +15,8 @@ beforeEach(async () => {
 	 archived_at timestamptz, created_at timestamptz default now(),
 	 unique(user_id,repository_id,repository_set_key));
 	 create table project_repository(project_id uuid, repository_id bigint, installation_id bigint,
-	 full_name text, branch text, position integer);`);
+	 full_name text, branch text, position integer);
+	 create table agent_session(id text primary key, user_id text, project_id uuid, chat_role text, archived_at timestamptz);`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
 		const result = await db.query(sql, values);
 		return { ...result, rowCount: result.affectedRows || result.rows.length };
@@ -77,4 +78,25 @@ it("lists whether each project is a Y project, with the project", async () => {
 	expect(
 		Object.fromEntries(listed.map((p) => [p.fullName, p.yEnabled])),
 	).toEqual({ "me/plain": false, "me/yproject": true });
+});
+
+it("lists a Y project's Super agent chat id with the project, and none for others", async () => {
+	const plain = await saveProject("u", repo(1, "plain") as never, "main");
+	const y = await saveProject("u", repo(2, "yproject") as never, "main");
+	await db.query("update project set y_enabled=true where id=$1", [y.id]);
+	await db.query(
+		`insert into agent_session(id,user_id,project_id,chat_role) values
+		 ('super-1','u',$1,'y2'),('thread-1','u',$1,null),('old-super','u',$1,'y2'),('other-1','u',$2,'y2')`,
+		[y.id, plain.id],
+	);
+	await db.query(
+		"update agent_session set archived_at=now() where id='old-super'",
+	);
+	const byName = Object.fromEntries(
+		(await listProjects("u")).map((p) => [p.fullName, p.ySquaredId]),
+	);
+	// The live Super agent chat of the Y project; not an archived one, not a thread.
+	expect(byName["me/yproject"]).toBe("super-1");
+	// A plain project has none, even if a stray y2 row exists for it.
+	expect(byName["me/plain"] ?? null).toBeNull();
 });

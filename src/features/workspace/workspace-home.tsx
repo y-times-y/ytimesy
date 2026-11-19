@@ -197,6 +197,7 @@ import {
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
 import type { SettingsSection } from "#/domain/workspace-settings";
+import { openChatIsSuperAgent } from "#/domain/y-squared";
 import { captureAnalytics } from "#/features/analytics/client";
 import {
 	finishInteraction,
@@ -258,6 +259,7 @@ import {
 import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import { chatCacheFor, clearChatCache } from "../sessions/chat-cache";
+import { chatListRetry } from "../sessions/chat-list-retry";
 import { ChatRefreshingContext } from "../sessions/chat-refreshing";
 import { chatSideKeys } from "../sessions/chat-side-queries";
 import {
@@ -661,6 +663,7 @@ export function WorkspaceHome({
 		// The sidebar reads every project's list (below); switching to a
 		// project does not read its list again within that window.
 		staleTime: 30_000,
+		...chatListRetry,
 	});
 	// Every project's chats, for the sidebar's Recent list and project order;
 	// the open project's list shares its cache entry with the query above.
@@ -670,6 +673,7 @@ export function WorkspaceHome({
 			queryFn: () =>
 				listProjectAgentSessions({ data: { projectId: project.id } }),
 			staleTime: 30_000,
+			...chatListRetry,
 		})),
 	});
 	const projectChats = (projects.data ?? []).map((project, index) => ({
@@ -3437,7 +3441,11 @@ export function WorkspaceHome({
 	}
 
 	const activeChat = sidebarChats.find((chat) => chat.id === activeSessionId);
-	const ySquaredOpen = activeChat?.role === "y2";
+	const ySquaredOpen = openChatIsSuperAgent({
+		activeChat,
+		activeSessionId,
+		project: selectedProject,
+	});
 	const splitRatio = inspectorSplitRatio({
 		custom: customSplit,
 		pane: inspectorPaneWidth({
@@ -4562,7 +4570,7 @@ export function WorkspaceHome({
 											}
 											overview={
 												// Y² works on nothing itself: its overview is the project's threads.
-												activeChat?.role === "y2" && selectedProject ? (
+												ySquaredOpen && selectedProject ? (
 													<YOverview
 														projectId={selectedProject.id}
 														pullRequests={listedPullRequests}

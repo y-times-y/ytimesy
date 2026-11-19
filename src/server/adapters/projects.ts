@@ -11,7 +11,12 @@ const projectColumns = `p.id,p.name,p.repository_id::float8 as "repositoryId",p.
    from project_repository r where r.project_id=p.id) as repositories`;
 export async function listProjects(userId: string): Promise<Project[]> {
 	const result = await database().query(
-		`select ${projectColumns} from project p where p.user_id=$1 and p.archived_at is null order by p.created_at`,
+		// The Super agent chat's id comes with the list (not with projectForOwner,
+		// which turns and workspaces read), so the page knows it before any chat list.
+		`select ${projectColumns},
+		  case when p.y_enabled then (select s.id from agent_session s
+		   where s.user_id=p.user_id and s.project_id=p.id and s.chat_role='y2' and s.archived_at is null limit 1) end as "ySquaredId"
+		 from project p where p.user_id=$1 and p.archived_at is null order by p.created_at`,
 		[userId],
 	);
 	return result.rows.map(projectFromRow);

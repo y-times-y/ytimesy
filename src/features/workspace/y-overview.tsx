@@ -25,6 +25,7 @@ import {
 	yOverview,
 } from "#/domain/y-overview";
 import { listProjectAgentSessions } from "../sessions/agent-session.fn";
+import { chatListRetry } from "../sessions/chat-list-retry";
 
 /** How often the open overview reads the project's threads again. */
 const LIVE_THREADS_POLL_MS = 15_000;
@@ -37,6 +38,19 @@ type GroupId = "needs-you" | "in-progress" | "pull-requests";
  * and the open pull requests across the project's threads. It shares the
  * sidebar's chat list (same query key) and reads it again while shown.
  */
+/**
+ * What an empty overview says. Reading says so, and so does a failed read
+ * (it is read again); only a successful, empty read says nothing is going on.
+ */
+export function emptyOverviewText(state: {
+	readonly isPending: boolean;
+	readonly isError: boolean;
+}) {
+	if (state.isPending) return "Reading threads…";
+	if (state.isError) return "Couldn't read the threads. Trying again…";
+	return "Nothing needs you. No threads running.";
+}
+
 export function YOverview({
 	projectId,
 	pullRequests,
@@ -64,6 +78,7 @@ export function YOverview({
 		staleTime: 30_000,
 		refetchInterval: live ? LIVE_THREADS_POLL_MS : false,
 		refetchIntervalInBackground: false,
+		...chatListRetry,
 	});
 	const nowMs = useNowMs(renderedAtMs);
 	const [collapsed, setCollapsed] = useState<ReadonlySet<GroupId>>(
@@ -88,11 +103,7 @@ export function YOverview({
 	return (
 		<section className="y-overview" aria-label="Project overview">
 			{empty ? (
-				<p className="y-overview-empty">
-					{chats.isPending
-						? "Reading threads…"
-						: "Nothing needs you. No threads running."}
-				</p>
+				<p className="y-overview-empty">{emptyOverviewText(chats)}</p>
 			) : null}
 			<YOverviewGroup
 				id="needs-you"

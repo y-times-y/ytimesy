@@ -441,15 +441,43 @@ export function ProjectSidebar({
 				data-pending="true"
 				aria-busy="true"
 			>
-				<div className="sidebar-chat" title={name}>
-					<span className="sidebar-chat-lead" aria-hidden="true">
-						<YSquaredMark size={16} />
-					</span>
-					<span className="sidebar-chat-body">
-						<span className="sidebar-chat-title">{name}</span>
-						<span className="sidebar-chat-meta">Loading…</span>
-					</span>
-				</div>
+				{/* The Super agent's id comes with the project: the row opens it
+				    before the chat list has arrived. */}
+				{project.ySquaredId ? (
+					<button
+						type="button"
+						className="sidebar-chat"
+						title={name}
+						aria-current={
+							project.ySquaredId === selectedChatId ? "page" : undefined
+						}
+						onClick={() => {
+							const id = project.ySquaredId;
+							if (!id) return;
+							if (project.id !== selectedProjectId && onSelectChatInProject)
+								onSelectChatInProject(project.id, id);
+							else onSelectChat?.(id);
+						}}
+					>
+						<span className="sidebar-chat-lead" aria-hidden="true">
+							<YSquaredMark size={16} />
+						</span>
+						<span className="sidebar-chat-body">
+							<span className="sidebar-chat-title">{name}</span>
+							<span className="sidebar-chat-meta">Loading…</span>
+						</span>
+					</button>
+				) : (
+					<div className="sidebar-chat" title={name}>
+						<span className="sidebar-chat-lead" aria-hidden="true">
+							<YSquaredMark size={16} />
+						</span>
+						<span className="sidebar-chat-body">
+							<span className="sidebar-chat-title">{name}</span>
+							<span className="sidebar-chat-meta">Loading…</span>
+						</span>
+					</div>
+				)}
 			</li>
 		);
 	}

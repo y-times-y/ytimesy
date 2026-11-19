@@ -33,6 +33,24 @@ export const Y_SQUARED_TITLE = "Y²";
 export const SUPER_AGENT_NAME = "Super agent";
 
 /**
+ * Whether the open chat is the project's Super agent. The chat list decides
+ * when it has the chat; until it arrives, the project does (it carries its
+ * Super agent chat's id), so the Super agent screen never shows as an ordinary
+ * chat while the list loads.
+ */
+export function openChatIsSuperAgent(input: {
+	readonly activeChat?: { readonly role?: string } | undefined;
+	readonly activeSessionId?: string | null | undefined;
+	readonly project?: { readonly ySquaredId?: string | null } | undefined;
+}): boolean {
+	if (input.activeChat) return input.activeChat.role === "y2";
+	return Boolean(
+		input.activeSessionId &&
+			input.project?.ySquaredId === input.activeSessionId,
+	);
+}
+
+/**
  * Y² has no machine, and Claude Code (the user's Claude subscription) runs the
  * `claude` CLI on one, unless the user has a Claude runner box
  * (claude-runner.ts): there the CLI runs with no machine at all and only

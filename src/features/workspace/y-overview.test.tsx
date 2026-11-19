@@ -8,7 +8,7 @@ vi.mock("../sessions/agent-session.fn", () => ({
 	listProjectAgentSessions: async () => [],
 }));
 
-const { YOverview } = await import("./y-overview");
+const { YOverview, emptyOverviewText } = await import("./y-overview");
 
 const PROJECT = "project-1";
 const NOW = Date.parse("2026-11-12T12:00:00.000Z");
@@ -121,5 +121,48 @@ describe("YOverview", () => {
 		expect(html).not.toContain("via Fix flaky login test");
 		// Without a prefix the rows are as before.
 		expect(render(hexChats)).not.toContain("y-overview-id");
+	});
+});
+
+describe("YOverview while the thread list is not readable", () => {
+	const renderState = (state: Record<string, unknown>) => {
+		const client = new QueryClient();
+		client
+			.getQueryCache()
+			.build(client, { queryKey: ["agent-sessions", PROJECT] })
+			.setState(state);
+		return renderToStaticMarkup(
+			<QueryClientProvider client={client}>
+				<YOverview
+					projectId={PROJECT}
+					pullRequests={[]}
+					live={false}
+					renderedAtMs={NOW}
+					onOpenThread={() => undefined}
+				/>
+			</QueryClientProvider>,
+		);
+	};
+	it("says it could not read the threads, never that nothing is happening", () => {
+		expect(emptyOverviewText({ isPending: false, isError: true })).toBe(
+			"Couldn't read the threads. Trying again…",
+		);
+		expect(emptyOverviewText({ isPending: true, isError: false })).toBe(
+			"Reading threads…",
+		);
+		expect(emptyOverviewText({ isPending: false, isError: false })).toBe(
+			"Nothing needs you. No threads running.",
+		);
+	});
+	it("keeps the threads it had when a later read fails", () => {
+		const html = renderState({
+			status: "error",
+			fetchStatus: "idle",
+			data: chats,
+			error: new Error("database unavailable"),
+			dataUpdatedAt: Date.now(),
+		});
+		expect(html).toContain("Fix flaky login test");
+		expect(html).not.toContain("Couldn&#x27;t read the threads");
 	});
 });

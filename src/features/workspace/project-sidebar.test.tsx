@@ -965,4 +965,17 @@ describe("a Y project is a Y project before its chats load", () => {
 		expect(html).not.toContain('data-section="y2"');
 		expect(html.match(/data-section="project"/g)).toHaveLength(2);
 	});
+
+	it("opens the Super agent from the loading row once the project carries its id", () => {
+		const withId: Project = { ...alphaY, ySquaredId: "super-1" };
+		const html = loading([withId, beta]);
+		expect(html).toContain('data-pending="true"');
+		// A button, as the real row is; without the id it is not clickable.
+		expect(html).toMatch(
+			/data-pending="true"[^>]*>\s*<button[^>]*class="sidebar-chat"/,
+		);
+		expect(loading([alphaY, beta])).not.toMatch(
+			/data-pending="true"[^>]*>\s*<button/,
+		);
+	});
 });

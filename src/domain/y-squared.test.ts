@@ -5,6 +5,7 @@ import type { SessionItem } from "./session-item";
 import { chatsWithPinnedFirst } from "./sidebar-chats";
 import { turnMayHaveChangedWorkspace } from "./turn-saving";
 import {
+	openChatIsSuperAgent,
 	relativeTime,
 	threadDigest,
 	threadHistoryFacts,
@@ -381,5 +382,44 @@ describe("Y² acts on its own (instructions)", () => {
 		expect(text).toContain("exactly NOTHING_TO_REPORT and nothing else");
 		expect(text).toContain("a concrete ask");
 		expect(text).toContain('Never post "all quiet"');
+	});
+});
+
+describe("openChatIsSuperAgent", () => {
+	const project = { ySquaredId: "super-1" };
+	it("follows the chat list when it has the open chat", () => {
+		expect(
+			openChatIsSuperAgent({
+				activeChat: { role: "y2" },
+				activeSessionId: "super-1",
+				project,
+			}),
+		).toBe(true);
+		expect(
+			openChatIsSuperAgent({
+				activeChat: {},
+				activeSessionId: "thread-1",
+				project,
+			}),
+		).toBe(false);
+	});
+	it("knows the Super agent from the project while the list has not arrived", () => {
+		expect(openChatIsSuperAgent({ activeSessionId: "super-1", project })).toBe(
+			true,
+		);
+	});
+	it("never takes another chat, or a project without one, for the Super agent", () => {
+		expect(openChatIsSuperAgent({ activeSessionId: "thread-1", project })).toBe(
+			false,
+		);
+		expect(
+			openChatIsSuperAgent({
+				activeSessionId: "super-1",
+				project: { ySquaredId: null },
+			}),
+		).toBe(false);
+		expect(openChatIsSuperAgent({ activeSessionId: undefined, project })).toBe(
+			false,
+		);
 	});
 });
