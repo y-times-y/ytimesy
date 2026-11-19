@@ -6,10 +6,11 @@ import {
 } from "./new-build-reload";
 import { NewVersionCard, NewVersionNotice } from "./new-version-notice";
 
-it("offers one click to update, bottom right", () => {
+it("offers one click to reload, bottom right", () => {
 	const html = renderToStaticMarkup(<NewVersionCard onUpdate={() => {}} />);
-	expect(html).toContain("A new version is available.");
-	expect(html).toContain("Update");
+	expect(html).toContain("ytimesy just updated");
+	expect(html).toContain("Your draft is kept.");
+	expect(html).toContain("Reload");
 	expect(html).toContain("right-4 bottom-4");
 	expect(html).toContain('role="status"');
 });
