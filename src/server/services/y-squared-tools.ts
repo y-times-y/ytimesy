@@ -3,10 +3,26 @@ import { type ToolSet, tool } from "ai";
 import { Effect } from "effect";
 import { z } from "zod";
 import type { AgentProviderId } from "#/domain/agent-provider";
+import {
+	CANVAS_HTML_LIMIT,
+	type CanvasToolResult,
+	canvasConfirmation,
+	canvasTitle,
+	SHOW_CANVAS_TOOL,
+} from "#/domain/canvas";
+import {
+	canvasHasImages,
+	canvasOutline,
+	canvasOutlinePage,
+	canvasSizeKb,
+} from "#/domain/canvas-text";
 import { wakeMessageId } from "#/domain/pull-request-wake";
+import type { SessionItem } from "#/domain/session-item";
 import { threadOutcomeLines } from "#/domain/thread-outcome";
 import {
 	messageThreadInput,
+	readCanvasInput,
+	showCanvasInput,
 	startThreadInput,
 	stopThreadInput,
 	threadsOverview,
@@ -14,6 +30,9 @@ import {
 	Y_SQUARED_MAX_STARTS_PER_TURN,
 	Y_SQUARED_MESSAGE_THREAD_DESCRIPTION,
 	Y_SQUARED_MESSAGE_THREAD_TOOL,
+	Y_SQUARED_READ_CANVAS_DESCRIPTION,
+	Y_SQUARED_READ_CANVAS_TOOL,
+	Y_SQUARED_SHOW_CANVAS_DESCRIPTION,
 	Y_SQUARED_START_THREAD_DESCRIPTION,
 	Y_SQUARED_START_THREAD_TOOL,
 	Y_SQUARED_STOP_THREAD_DESCRIPTION,
@@ -40,6 +59,7 @@ import {
 	agentSessionMetadataForOwner,
 	listSidebarAgentSessions,
 } from "../adapters/agent-sessions";
+import { latestCanvasForOwner } from "../adapters/canvas-read";
 import { threadOutcomeForOwner } from "../adapters/thread-outcome";
 import {
 	type YSquaredCrewClient,
@@ -60,6 +80,8 @@ type Deps = {
 	readonly metadata: typeof agentSessionMetadataForOwner;
 	/** What a thread's final turn produced (its reply, questions, plan, canvases): two small reads, only when Y² asks. */
 	readonly outcome: typeof threadOutcomeForOwner;
+	/** One canvas of a thread, latest revision, read whole (one item by id): only when Y² reads or shows it. */
+	readonly canvas: typeof latestCanvasForOwner;
 	/** The person's own send path: queues behind a running turn, else starts a turn (admission applies). */
 	readonly send: (
 		machines: WorkspaceMachines,
@@ -89,6 +111,7 @@ const defaultDeps: Deps = {
 	now: () => Date.now(),
 	metadata: (...args) => agentSessionMetadataForOwner(...args),
 	outcome: (...args) => threadOutcomeForOwner(...args),
+	canvas: (...args) => latestCanvasForOwner(...args),
 	send: async (machines, scope, input) => {
 		const view = await Effect.runPromise(
 			sendComposerMessage(machines, scope, input),
@@ -153,6 +176,8 @@ export function ySquaredTools(input: {
 	readonly harnessId?: AgentProviderId;
 	/** The turn's id: keys the sends so a replayed step does not send twice. */
 	readonly turnId?: string;
+	/** Y²'s own items now (this turn's), to see which canvas revisions it already shows. */
+	readonly items?: () => readonly SessionItem[];
 	readonly deps?: Partial<Deps>;
 }): ToolSet {
 	const deps = { ...defaultDeps, ...input.deps };
@@ -186,6 +211,12 @@ export function ySquaredTools(input: {
 	};
 	const noThread = "No such thread in this project.";
 	const noMachines = "Threads cannot be run here.";
+	const noCanvas = (thread: string, title: string) =>
+		`"${thread}" has no canvas titled "${title}" (or its document is no longer stored). Call \`thread\` to see its canvases.`;
+	const staleNote = (found: { revision: number; latestRevision: number }) =>
+		found.latestRevision > found.revision
+			? `(The thread's newest revision ${found.latestRevision} no longer has its document stored; this is revision ${found.revision}, the latest that does.)`
+			: "";
 	/** Metadata of the project's threads: the cold start and where no crew exists. */
 	const fromSidebar = async () =>
 		(await deps.list(input.userId, input.projectId))
@@ -255,6 +286,71 @@ export function ySquaredTools(input: {
 				]
 					.filter(Boolean)
 					.join("\n");
+			},
+		}),
+		[Y_SQUARED_READ_CANVAS_TOOL]: tool({
+			description: Y_SQUARED_READ_CANVAS_DESCRIPTION,
+			inputSchema: readCanvasInput,
+			execute: async ({ id, title, part }) => {
+				const chat = await ownThread(id);
+				if (!chat) return noThread;
+				const name = canvasTitle(title);
+				const found = await deps.canvas(input.userId, chat.id, name);
+				if (!found) return noCanvas(chat.title, name);
+				// Never more than a canvas may hold; only text leaves this function.
+				const html = found.html.slice(0, CANVAS_HTML_LIMIT);
+				const page = canvasOutlinePage(canvasOutline(html), part ?? 1);
+				return [
+					`Canvas "${found.title}" of "${chat.title}": revision ${found.revision}, ${canvasSizeKb(found.html.length)} KB${canvasHasImages(html) ? ", has images" : ""}; part ${page.part} of ${page.parts}.`,
+					staleNote(found),
+					page.text || "(no visible text)",
+					page.part < page.parts
+						? `[More: call ${Y_SQUARED_READ_CANVAS_TOOL} with part ${page.part + 1}.]`
+						: "",
+				]
+					.filter(Boolean)
+					.join("\n");
+			},
+		}),
+		[SHOW_CANVAS_TOOL]: tool({
+			description: Y_SQUARED_SHOW_CANVAS_DESCRIPTION,
+			inputSchema: showCanvasInput,
+			execute: async ({ id, title }): Promise<CanvasToolResult | string> => {
+				const chat = await ownThread(id);
+				if (!chat) return noThread;
+				const name = canvasTitle(title);
+				const found = await deps.canvas(input.userId, chat.id, name);
+				if (!found) return noCanvas(chat.title, name);
+				if (found.html.length > CANVAS_HTML_LIMIT)
+					return `Not shown: "${found.title}" has ${found.html.length.toLocaleString("en-US")} characters; a canvas holds at most ${CANVAS_HTML_LIMIT.toLocaleString("en-US")}. Ask the thread to make it smaller.`;
+				const shownHere = (input.items?.() ?? []).some(
+					(item) =>
+						item.kind === "canvas" &&
+						item.title === found.title &&
+						item.revision === found.revision &&
+						item.ownerThreadId === chat.id,
+				);
+				if (shownHere)
+					return `Revision ${found.revision} of "${found.title}" is already shown in this chat.${staleNote(found) ? ` ${staleNote(found)}` : ""}`;
+				// The chat's item is made from this result (applyApiProgress); the
+				// model reads only the confirmation (toModelOutput).
+				return {
+					shown: true,
+					title: found.title,
+					revision: found.revision,
+					html: found.html,
+					...(found.path ? { path: found.path } : {}),
+					ownerThreadId: chat.id,
+					ownerItemId: found.itemId,
+				};
+			},
+			toModelOutput: ({ output }) => {
+				if (typeof output === "string") return { type: "text", value: output };
+				const shown = output as CanvasToolResult;
+				return {
+					type: "text",
+					value: `${canvasConfirmation(shown.title, shown.revision)} It is thread ${shown.ownerThreadId}'s canvas: the person can preview it and pin notes here; feedback on it goes back to that thread.`,
+				};
 			},
 		}),
 		[Y_SQUARED_START_THREAD_TOOL]: tool({

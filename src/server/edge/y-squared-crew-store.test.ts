@@ -792,3 +792,89 @@ describe("a thread that ran queued turns wakes Y²", () => {
 		expect(crew.target()).toEqual({ userId: "u", sessionId: "y2" });
 	});
 });
+
+describe("a canvas the turn showed", () => {
+	const canvas = (title: string, revision: number, html = "<p>BIGHTML</p>") =>
+		({
+			kind: "canvas",
+			id: `c-${title}-${revision}`,
+			title,
+			revision,
+			html,
+		}) as never;
+	const user = (id: string, text: string) =>
+		({ kind: "userMessage", id, text }) as never;
+
+	it("crewFromSettledItems names the canvases of the last turn only, by title and revision, never html", () => {
+		const items = [
+			user("u1", "make art"),
+			canvas("Old", 1),
+			user("u2", "revise"),
+			canvas("Thread art", 1),
+			canvas("Thread art", 2),
+			{ kind: "agentMessage", id: "a1", text: "Done." } as never,
+		];
+		const derived = crewFromSettledItems(items, "completed");
+		expect(derived.canvas).toBe('showed canvas "Thread art" (revision 2)');
+		expect(derived.canvas).not.toContain("BIGHTML");
+		expect(
+			crewFromSettledItems([user("u1", "hi")], "completed").canvas,
+		).toBeNull();
+		expect(
+			crewFromSettledItems(
+				[user("u", "x"), canvas("A", 1), canvas("B", 3)],
+				"completed",
+			).canvas,
+		).toBe('showed canvas "A" (revision 1), canvas "B" (revision 3)');
+	});
+
+	it("rides the finished event into the wake body in one line, not into the crew rows", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		const { alarmAt } = crew.noteThread(
+			note({
+				state: "finished",
+				lastReply: "Revised.",
+				canvas: 'showed canvas "Thread art" (revision 2)',
+			}),
+			T0,
+		);
+		const fired = crew.takeWake(alarmAt as number);
+		if (fired.action !== "send") throw new Error("expected a wake");
+		expect(fired.body).toContain(
+			'- "Fix sign-up" finished its turn (showed canvas "Thread art" (revision 2)).',
+		);
+		expect(fired.body).toContain("call `show_canvas` again");
+		expect(JSON.stringify(crew.list())).not.toContain("Thread art");
+		expect(fired.body.length).toBeLessThan(1_500);
+	});
+
+	it("a turn with a new revision is news even when its reply did not change", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		const first = crew.noteThread(
+			note({ state: "finished", lastReply: "Same." }),
+			T0,
+		);
+		crew.takeWake(first.alarmAt as number);
+		const again = crew.noteThread(
+			note({
+				state: "finished",
+				lastReply: "Same.",
+				canvas: 'showed canvas "A" (revision 2)',
+			}),
+			T0 + 60_000,
+		);
+		expect(again.alarmAt).not.toBeNull();
+	});
+
+	it("parseCrewNote keeps a short canvas line and drops an overlong one", () => {
+		const raw = {
+			sessionId: "t1",
+			userId: "u",
+			projectId: "p",
+			state: "finished",
+			canvas: "x".repeat(900),
+		};
+		expect(parseCrewNote(raw)?.canvas).toHaveLength(200);
+		expect(parseCrewNote({ ...raw, canvas: undefined })?.canvas).toBeNull();
+	});
+});

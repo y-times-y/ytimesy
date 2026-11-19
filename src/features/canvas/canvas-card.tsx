@@ -30,6 +30,7 @@ export function CanvasCard({
 		<article
 			className="canvas-card"
 			data-kept={item.html === null ? "false" : undefined}
+			data-owner-thread={item.ownerThreadId}
 			aria-label={`Canvas ${item.title}`}
 		>
 			<div className="canvas-card-thumb">
@@ -66,7 +67,9 @@ export function CanvasCard({
 						? "This older revision is no longer kept."
 						: item.path
 							? item.path
-							: "HTML preview"}
+							: item.ownerThreadId
+								? "From a thread · HTML preview"
+								: "HTML preview"}
 				</span>
 			</div>
 			{show ? (

@@ -37,8 +37,24 @@ export type ThreadOutcomeItem =
 
 export type ThreadCanvas = {
 	readonly title: string;
+	/** The latest revision of this title (the highest number). */
 	readonly revision: number;
+	/** The document's size in KB; absent when not read. */
+	readonly sizeKb?: number;
+	readonly hasImages?: boolean;
+	/** A short description of what it shows (about 300 characters), from its HTML. */
+	readonly description?: string;
 };
+
+/** One canvas as a line of a thread's outcome: never its HTML. */
+export function threadCanvasText(canvas: ThreadCanvas): string {
+	const facts = [
+		`revision ${canvas.revision}`,
+		...(canvas.sizeKb === undefined ? [] : [`${canvas.sizeKb} KB`]),
+		...(canvas.hasImages ? ["has images"] : []),
+	].join(", ");
+	return `- "${canvas.title}" (${facts})${canvas.description ? `: ${canvas.description}` : ""}`;
+}
 
 /** The last `n` characters' worth kept with a marker for what was cut. */
 export function readableReply(text: string) {
@@ -123,9 +139,9 @@ export function threadOutcomeLines(input: {
 	}
 	if (input.canvases.length)
 		lines.push(
-			`Canvases it showed: ${input.canvases
-				.map((canvas) => `"${canvas.title}" (revision ${canvas.revision})`)
-				.join(", ")}`,
+			`Canvases it showed (latest revision of each; read one with read_canvas, show it to the person with show_canvas):\n${input.canvases
+				.map(threadCanvasText)
+				.join("\n")}`,
 		);
 	return lines;
 }

@@ -13,6 +13,16 @@ import type { CanvasItem, SessionItem } from "./session-item";
  */
 export const CANVAS_TOOL = "canvas";
 
+/**
+ * Y²'s tool that places a canvas one of its threads showed into Y²'s own
+ * chat (the Super agent chat), so the person sees and annotates it there.
+ */
+export const SHOW_CANVAS_TOOL = "show_canvas";
+
+/** The tools whose result becomes a canvas card in the chat. */
+export const isCanvasDisplayTool = (name: string) =>
+	name === CANVAS_TOOL || name === SHOW_CANVAS_TOOL;
+
 export const CANVAS_TITLE_LIMIT = 60;
 
 /** The most characters one canvas document may have (about 500 KB). */
@@ -118,6 +128,9 @@ export type CanvasToolResult = {
 	readonly html: string;
 	/** The workspace file it was read from, when the agent passed a path. */
 	readonly path?: string;
+	/** Y²'s show_canvas: the thread that owns the canvas, and its item there. */
+	readonly ownerThreadId?: string;
+	readonly ownerItemId?: string;
 };
 
 /** The canvas a tool result shows, or null for a failed or malformed one. */
@@ -143,6 +156,12 @@ export function shownCanvas(
 		revision: output.revision,
 		html: output.html.slice(0, CANVAS_HTML_LIMIT),
 		...(typeof output.path === "string" ? { path: output.path } : {}),
+		...(typeof output.ownerThreadId === "string" && output.ownerThreadId
+			? { ownerThreadId: output.ownerThreadId.slice(0, 64) }
+			: {}),
+		...(typeof output.ownerItemId === "string" && output.ownerItemId
+			? { ownerItemId: output.ownerItemId.slice(0, 128) }
+			: {}),
 	};
 }
 
@@ -158,6 +177,8 @@ export function canvasItem(
 		revision: shown.revision,
 		html: shown.html,
 		...(shown.path ? { path: shown.path } : {}),
+		...(shown.ownerThreadId ? { ownerThreadId: shown.ownerThreadId } : {}),
+		...(shown.ownerItemId ? { ownerItemId: shown.ownerItemId } : {}),
 	};
 }
 

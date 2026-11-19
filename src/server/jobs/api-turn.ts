@@ -2058,6 +2058,8 @@ async function runApiTurnAttempt(
 						modelId: owner.listedModelId,
 						harnessId: owner.harness,
 						turnId: turn.id,
+						// To see which canvas revisions Y² already shows (show_canvas).
+						items: () => items,
 					}),
 				}
 			: yAgent

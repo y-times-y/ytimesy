@@ -138,6 +138,12 @@ export type CanvasItem = {
 	readonly detailSession?: string;
 	/** The workspace file it was read from, when the agent passed a path. */
 	readonly path?: string;
+	/**
+	 * In Y²'s chat (show_canvas): the thread that owns this canvas, and the
+	 * item's id there. Feedback on it goes to that thread (canvasFeedbackMessage).
+	 */
+	readonly ownerThreadId?: string;
+	readonly ownerItemId?: string;
 };
 
 /** Memory lines this turn added: by the agent's own commits or the save hook after it. */

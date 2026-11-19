@@ -109,12 +109,26 @@ describe("Y² surface", () => {
 		expect([...Y_SQUARED_TOOLS].sort()).toEqual([
 			"ask_user",
 			"message_thread",
+			"read_canvas",
 			"schedule",
+			"show_canvas",
 			"start_thread",
 			"stop_thread",
 			"thread",
 			"threads",
 		]);
+	});
+
+	it("routes canvas feedback to the owning thread and re-shows the new revision", () => {
+		const text = ySquaredInstructions();
+		expect(text).toContain("[thread:<id>]");
+		expect(text).toContain("send it to THAT thread");
+		expect(text).toContain('mode "steer" if the thread is working');
+		expect(text).toContain("verbatim with their element selectors");
+		expect(text).toContain("SAME canvas title");
+		expect(text).toContain("call `show_canvas` again with the same title");
+		expect(text).toContain("`read_canvas`");
+		expect(text).toContain("never its HTML");
 	});
 
 	it("tells Y² to read the threads before answering and never to work", () => {

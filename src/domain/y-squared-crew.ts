@@ -20,6 +20,10 @@ export type CrewState = "working" | "waiting" | "finished" | "failed";
 export const CREW_REPLY_LIMIT = 300;
 /** Longest last request kept per thread. */
 export const CREW_REQUEST_LIMIT = 200;
+/** Longest canvas line a note carries. */
+export const CREW_CANVAS_LIMIT = 200;
+/** Most canvases one wake line names. */
+const CREW_CANVAS_NAMED = 3;
 /** Rows untouched this long are dropped. */
 export const CREW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /**
@@ -58,6 +62,11 @@ export type CrewNote = {
 	readonly lastReply: string | null;
 	/** What the person last asked the thread; absent on a start note and on older notes. */
 	readonly lastRequest?: string | null;
+	/**
+	 * The canvases the settled turn showed or revised, as one line (title and
+	 * revision only, never html). Told once in the wake; not kept in the rows.
+	 */
+	readonly canvas?: string | null;
 	/** Who to wake, and Y²'s own chat (never woken by its own notes). */
 	readonly userId: string;
 	readonly projectId: string;
@@ -112,6 +121,7 @@ export function parseCrewNote(value: unknown): CrewNote | null {
 		prUrl: text(note.prUrl ?? note.pullRequest, 300) || null,
 		lastReply: text(note.lastReply ?? note.reply, CREW_REPLY_LIMIT) || null,
 		lastRequest: text(note.lastRequest, CREW_REQUEST_LIMIT) || null,
+		canvas: text(note.canvas, CREW_CANVAS_LIMIT) || null,
 		ySquaredId: text(note.ySquaredId, 64) || null,
 	};
 }
@@ -238,6 +248,11 @@ export function crewWakeBody(input: {
 		...(lines.length ? ["Since your last report:", ...lines] : []),
 		...(working.length ? ["Still working:", ...working] : []),
 		...proactive,
+		...(input.events.some((event) => event.detail?.includes("showed canvas"))
+			? [
+					"A thread showed a canvas: if it is a new revision of one you displayed here, call `show_canvas` again with the same title so the person sees it in this chat, and say what changed in one or two lines.",
+				]
+			: []),
 		"Call `threads`, then call `thread` for each one that finished or needs the person and give the person a short delta with the substance: what it found or built, the decision they need to make, who is still working and for how long. Never just say it finished; do not list everything again.",
 		`If nothing here needs the person and nothing needs an action from you, reply with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else: it shows no message.`,
 	].join("\n");
@@ -253,7 +268,13 @@ export function crewFromSettledItems(
 	turnStatus: SessionTurnStatus,
 ): Pick<
 	CrewNote,
-	"state" | "waitingOn" | "prUrl" | "lastReply" | "lastRequest" | "title"
+	| "state"
+	| "waitingOn"
+	| "prUrl"
+	| "lastReply"
+	| "lastRequest"
+	| "title"
+	| "canvas"
 > {
 	const waiting = chatWaitingOn(items, turnStatus);
 	const facts = threadHistoryFacts(items);
@@ -276,7 +297,42 @@ export function crewFromSettledItems(
 			: null,
 		title:
 			firstRequest && "text" in firstRequest ? text(firstRequest.text, 80) : "",
+		canvas: crewCanvasLine(items),
 	};
+}
+
+/**
+ * The canvases the thread's last turn showed or revised, in one line:
+ * `showed canvas "Thread art" (revision 2)`. From the items the chat
+ * object already holds: titles and revision numbers, never html. Null when
+ * the turn showed none.
+ */
+export function crewCanvasLine(items: readonly SessionItem[]): string | null {
+	let start = 0;
+	for (let index = items.length - 1; index >= 0; index--)
+		if (items[index]?.kind === "userMessage") {
+			start = index + 1;
+			break;
+		}
+	const latest = new Map<string, number>();
+	for (const item of items.slice(start))
+		if (item.kind === "canvas")
+			latest.set(
+				item.title,
+				Math.max(latest.get(item.title) ?? 0, item.revision),
+			);
+	if (!latest.size) return null;
+	const named = [...latest]
+		.slice(-CREW_CANVAS_NAMED)
+		.map(
+			([title, revision]) =>
+				`canvas "${text(title, 60)}" (revision ${revision})`,
+		);
+	const more = latest.size - named.length;
+	return text(
+		`showed ${named.join(", ")}${more > 0 ? ` and ${more} more` : ""}`,
+		CREW_CANVAS_LIMIT,
+	);
 }
 
 /**

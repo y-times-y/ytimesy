@@ -370,6 +370,7 @@ function AnnotatedCanvas({
 						title: canvas.title,
 						revision: canvas.revision,
 						notes,
+						ownerThreadId: canvas.ownerThreadId,
 					}),
 					"append",
 				);

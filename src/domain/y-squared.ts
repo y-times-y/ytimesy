@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SHOW_CANVAS_TOOL } from "./canvas";
 import { isClaudeCodeRoute } from "./claude-code-route";
 import type { SessionItem } from "./session-item";
 import type { ChatWaitingOn } from "./sidebar-chats";
@@ -48,6 +49,8 @@ export const Y_SQUARED_THREAD_TOOL = "thread";
 export const Y_SQUARED_START_THREAD_TOOL = "start_thread";
 export const Y_SQUARED_MESSAGE_THREAD_TOOL = "message_thread";
 export const Y_SQUARED_STOP_THREAD_TOOL = "stop_thread";
+export const Y_SQUARED_READ_CANVAS_TOOL = "read_canvas";
+export const Y_SQUARED_SHOW_CANVAS_TOOL = SHOW_CANVAS_TOOL;
 
 /**
  * Most `start_thread` calls one Y² turn may make. A bound against a runaway
@@ -61,6 +64,25 @@ export const Y_SQUARED_TITLE_LIMIT = 120;
 
 export const Y_SQUARED_THREAD_DESCRIPTION =
 	"One thread's details and what it produced: its status, times, last request, pull request, and its FULL final reply (a very long one shows its start and end), any questions it asked the person, a plan it proposed, and the canvases it showed. Read this when a thread finished or needs the person, then tell the person the substance. Pass the id from the threads list.";
+export const Y_SQUARED_READ_CANVAS_DESCRIPTION =
+	"Read what one canvas of a thread says, as text: its headings, paragraphs, lists and tables, with [image: alt] and [svg: title] where pictures are, for the latest revision (the result names the revision and the document's size). At most 12,000 characters per call; a longer canvas has more parts: pass part 2, 3, … for the rest. Never returns the HTML or image data. Pass the thread's id and the canvas's title from the thread tool.";
+export const Y_SQUARED_SHOW_CANVAS_DESCRIPTION =
+	"Show the latest revision of one canvas of a thread in THIS chat, so the person sees it, steps between revisions and pins notes on it here instead of opening the thread. Pass the thread's id and the canvas's title from the thread tool. You read only a short confirmation, never the document. Call it again after the thread publishes a new revision of the same title.";
+export const readCanvasInput = z.object({
+	id: z.string().min(1).max(64).describe("The thread's id"),
+	title: z.string().min(1).max(120).describe("The canvas's title"),
+	part: z
+		.number()
+		.int()
+		.min(1)
+		.max(100)
+		.optional()
+		.describe("Which part of a long canvas (from 1); default 1"),
+});
+export const showCanvasInput = z.object({
+	id: z.string().min(1).max(64).describe("The thread's id"),
+	title: z.string().min(1).max(120).describe("The canvas's title"),
+});
 export const Y_SQUARED_START_THREAD_DESCRIPTION =
 	"Start a new thread (a root chat with its own Y and its own machine) in this project. The brief is the thread's first message and must be self-contained: the goal, the constraints and what done looks like, since the thread knows nothing of this chat. Starting may leave the thread queued behind the budget or concurrency limit; the result says which. Start only what is needed.";
 export const Y_SQUARED_MESSAGE_THREAD_DESCRIPTION =
@@ -106,6 +128,8 @@ export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
 	Y_SQUARED_START_THREAD_TOOL,
 	Y_SQUARED_MESSAGE_THREAD_TOOL,
 	Y_SQUARED_STOP_THREAD_TOOL,
+	Y_SQUARED_READ_CANVAS_TOOL,
+	Y_SQUARED_SHOW_CANVAS_TOOL,
 	Y_SQUARED_SCHEDULE_TOOL,
 	ASK_USER_TOOL,
 ]);
@@ -139,6 +163,8 @@ export function ySquaredInstructions() {
 		`- Answer terse commands tersely and act: "merge X", "hold Y" -> \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (mode "interrupt" to stop the running turn first, else the default) or \`${Y_SQUARED_STOP_THREAD_TOOL}\`, then confirm in one line. Ask the person only for a real decision or blocker.`,
 		"- The Overview beside this chat lists every thread (needs you, in progress, pull requests) without you: point to it, never repeat its content.",
 		`- The person should never have to open a thread to learn what it did. When a thread finished or needs the person, call \`${Y_SQUARED_THREAD_TOOL}\` for it (the wake only names it) and report the SUBSTANCE: the outcome in a sentence or two (what it found or built, the key numbers, the pull request link, any canvas it showed), then the decision the person must make, if there is one, as a question they can answer in a word. Never say only "finished" or "open the thread to read it": you can read its full final reply. A very long reply shows its start and end: summarise its most important findings first and offer to go deeper on a part; if you need a detail you cannot see, ask the thread with \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` and report when it answers. Link the thread only as a pointer for the full text.`,
+		`- Canvases: \`${Y_SQUARED_THREAD_TOOL}\` lists each canvas a thread showed (title, latest revision, size, a short description). To know what one says, call \`${Y_SQUARED_READ_CANVAS_TOOL}\` (id, title; pass part for a long one): you get its text, never its HTML. To let the person see it, call \`${Y_SQUARED_SHOW_CANVAS_TOOL}\` (id, title): it appears in THIS chat with the thread's revision number, and the person previews, compares and pins notes on it here. Do it when the person asks to see it or when a thread's canvas is the thing to look at; never paste or describe the HTML.`,
+		`- Feedback on a canvas: a message starting 'Canvas feedback on "<title>" (revision N) [thread:<id>]' is the person's notes on a canvas that thread <id> owns. Do not apply it yourself and do not summarise it away: send it to THAT thread with \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (mode "steer" if the thread is working, else the default, which starts an idle thread), forwarding the person's notes verbatim with their element selectors, the title and the revision, and asking the thread to publish the next revision with the SAME canvas title. Say in one line that you sent it, then end your turn: you wake when the thread settles. On that wake, if the thread showed a new revision of a canvas you displayed, call \`${Y_SQUARED_SHOW_CANVAS_TOOL}\` again with the same title so the new revision appears here, and tell the person what changed in one or two lines. A feedback message without a [thread:<id>] marker names no owner: ask which thread it belongs to only if the \`${Y_SQUARED_THREADS_TOOL}\` titles do not make it clear.`,
 		"- Report in at most 100 words (about 100 for each thread you report on), substance first.",
 		`- For "which thread did X", "which was last used" or "which thread created Y": answer from each thread's created, last active, last request and last reply in \`${Y_SQUARED_THREADS_TOOL}\`, and name that thread as a link. If none fits, say so and name the closest.`,
 		`- Say plainly what is not recorded, never only "I can't see": who or which agent built Y² itself, work done outside this project's threads, and anything older than the crew's records (a thread shows "created not recorded" when it predates them). Then give a next step: open the most recently active thread, or ask it with \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\`.`,

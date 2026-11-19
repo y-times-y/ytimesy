@@ -50,13 +50,23 @@ describe("a finished thread's outcome", () => {
 				{ kind: "planProposal", text: "1. Rotate keys\n2. Publish" },
 				{ kind: "error", message: "rate limited" },
 			],
-			canvases: [{ title: "Board", revision: 1 }],
+			canvases: [
+				{
+					title: "Board",
+					revision: 3,
+					sizeKb: 14.2,
+					hasImages: true,
+					description: "Board · Option A",
+				},
+			],
 		}).join("\n");
+		expect(lines).toContain(
+			'- "Board" (revision 3, 14.2 KB, has images): Board · Option A',
+		);
 		expect(lines).toContain("Final reply:\nDone, see questions.");
 		expect(lines).toContain("- Ship it? [Yes / No]");
 		expect(lines).toContain("1. Rotate keys");
 		expect(lines).toContain("Error: rate limited");
-		expect(lines).toContain('"Board" (revision 1)');
 	});
 	it("says so when there is no reply", () => {
 		expect(threadOutcomeLines({ items: [], canvases: [] })).toEqual([

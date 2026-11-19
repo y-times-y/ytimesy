@@ -82,9 +82,15 @@ it("reads the final turn's full reply, its question and the canvases, not an ear
 	expect(outcome?.items.some((item) => item.kind === "userQuestion")).toBe(
 		true,
 	);
+	// The latest revision of each title, with its size, images flag and description.
 	expect(outcome?.canvases).toEqual([
-		{ title: "Board", revision: 1 },
-		{ title: "Board", revision: 2 },
+		{
+			title: "Board",
+			revision: 2,
+			sizeKb: 0,
+			hasImages: false,
+			description: "big",
+		},
 	]);
 });
 

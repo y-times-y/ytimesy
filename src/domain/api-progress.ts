@@ -5,6 +5,7 @@ import { backgroundCommandLabel } from "./background-command";
 import {
 	CANVAS_TOOL,
 	canvasItem,
+	isCanvasDisplayTool,
 	shownCanvas,
 	withBoundedCanvasHistory,
 } from "./canvas";
@@ -150,7 +151,7 @@ export function applyApiProgress(
 		return [...items];
 	else if (
 		event.type === "tool-result" &&
-		event.name === CANVAS_TOOL &&
+		isCanvasDisplayTool(event.name) &&
 		shownCanvas(event.output, event.failed)
 	) {
 		// A shown canvas is its own card; the HTML the call carried is not repeated.

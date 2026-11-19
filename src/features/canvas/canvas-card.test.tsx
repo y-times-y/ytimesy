@@ -86,3 +86,13 @@ it("explains the empty Canvas view", () => {
 	);
 	expect(html).toContain("No canvas yet.");
 });
+
+it("marks a thread's canvas in Y²'s chat with its owner", () => {
+	const owned = { ...item(2), ownerThreadId: "thread-9" } satisfies CanvasItem;
+	const html = renderToStaticMarkup(<CanvasCard item={owned} latest />);
+	expect(html).toContain('data-owner-thread="thread-9"');
+	expect(html).toContain("From a thread");
+	const own = renderToStaticMarkup(<CanvasCard item={item(2)} latest />);
+	expect(own).not.toContain("data-owner-thread");
+	expect(own).not.toContain("From a thread");
+});

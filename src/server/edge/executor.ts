@@ -571,6 +571,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				prUrl: null,
 				lastReply: null,
 				lastRequest: null,
+				canvas: null,
 				title: "",
 			};
 			let items: SessionItem[] = [];

@@ -8,6 +8,7 @@ import {
 	type CanvasNote,
 	canvasElementLabel,
 	canvasFeedbackMessage,
+	canvasFeedbackOwner,
 	canvasFrameMessage,
 	canvasMessageFromFrame,
 	cleanCanvasText,
@@ -332,5 +333,42 @@ describe("CANVAS_BRIDGE_SCRIPT", () => {
 			type: "rects",
 			rects: [{ x: 10, y: 20, width: 120, height: 36 }],
 		});
+	});
+});
+
+describe("canvasFeedbackMessage in Y²'s chat", () => {
+	const note: CanvasNote = {
+		id: "1",
+		pick: { selector: "#hero", tag: "h1", text: "Art", rect },
+		note: "Bigger",
+	};
+
+	it("marks the owner thread on the header and round-trips it", () => {
+		const message = canvasFeedbackMessage({
+			title: "Thread art",
+			revision: 2,
+			notes: [note],
+			ownerThreadId: "7f3c-thread",
+		});
+		expect(message.split("\n")[0]).toBe(
+			'Canvas feedback on "Thread art" (revision 2) [thread:7f3c-thread], 1 note:',
+		);
+		expect(message).toContain("`#hero`");
+		expect(canvasFeedbackOwner(message)).toBe("7f3c-thread");
+	});
+
+	it("is unchanged without an owner, and has no owner to read", () => {
+		const message = canvasFeedbackMessage({
+			title: "Thread art",
+			revision: 2,
+			notes: [note],
+		});
+		expect(message).not.toContain("[thread:");
+		expect(canvasFeedbackOwner(message)).toBeNull();
+		expect(
+			canvasFeedbackOwner(
+				'Canvas feedback on "a [thread:x]" (revision 1), 1 note:',
+			),
+		).toBeNull();
 	});
 });

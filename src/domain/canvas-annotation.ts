@@ -282,6 +282,19 @@ export function canvasElementLabel(
 	return `${name} "${text}"`;
 }
 
+/** How a canvas's owner thread is named in a feedback message. */
+export const canvasOwnerMarker = (threadId: string) => `[thread:${threadId}]`;
+
+/** The owner thread a feedback message names, if it has the marker. */
+export function canvasFeedbackOwner(message: string): string | null {
+	const header = message.split("\n", 1)[0] ?? "";
+	return (
+		/^Canvas feedback on .*\(revision \d+\) \[thread:([^\]\s]+)\]/.exec(
+			header,
+		)?.[1] ?? null
+	);
+}
+
 /** One pinned note on a canvas revision. */
 export type CanvasNote = {
 	readonly id: string;
@@ -298,6 +311,8 @@ export function canvasFeedbackMessage(input: {
 	readonly title: string;
 	readonly revision: number;
 	readonly notes: readonly CanvasNote[];
+	/** A canvas shown in Y²'s chat: the thread that owns it (marked `[thread:<id>]`). */
+	readonly ownerThreadId?: string;
 }): string {
 	const notes = input.notes.filter((entry) => cleanCanvasText(entry.note));
 	const count = notes.length === 1 ? "1 note" : `${notes.length} notes`;
@@ -308,7 +323,7 @@ export function canvasFeedbackMessage(input: {
 		return `${index + 1}. ${note}\n   on ${element}`;
 	});
 	return [
-		`Canvas feedback on "${input.title}" (revision ${input.revision}), ${count}:`,
+		`Canvas feedback on "${input.title}" (revision ${input.revision})${input.ownerThreadId ? ` ${canvasOwnerMarker(input.ownerThreadId)}` : ""}, ${count}:`,
 		"",
 		...lines,
 		"",

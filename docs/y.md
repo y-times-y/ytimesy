@@ -84,8 +84,33 @@ Y² decides: steer or stop the stuck thread, answer a routine waiting one itself
 
 Cost: no new alarms or timers. A schedule adds 0 requests until due; a due one adds the usual wake (1 alarm invocation, 1 `threads` read, one Y² turn). The proactive daily cap bounds the extra Y² turns to 48/day/project on top of the ≤24/h event wakes; turn `schedule` calls add 1 crew request each.
 
+## Canvases in the Super agent chat
+
+The person talks to Y² only, so a thread's canvas (the `canvas` tool: items of kind `canvas`, `{title, revision, html|null, path?}`) must be readable, visible and iterable there.
+
+**Before:** the `thread` tool listed `"Thread art" (revision 1)` (titles and revision numbers; `threadOutcomeForOwner` read canvases without html). Y² could not say what a canvas contained, and the person had to open the thread to see or annotate it.
+
+**After**
+
+- `thread` lists, per canvas title, the LATEST revision (highest number, the rule of `savedCanvasRevision`), its size in KB, whether it has images and a description of at most 300 characters (`canvasDescription`: title, headings, visible text; scripts, styles and data: URIs removed; image alt text counted). One query by chat id: size and the images flag are computed over the whole document in SQL, the description from the first 24,000 characters after base64 `data:` URIs are cut out in SQL (`CANVAS_DESCRIBE_CHARS`); at most 6 canvases.
+- `read_canvas {id, title, part?}`: the latest revision as a text outline (`canvasOutline`: `#` headings, paragraphs, `- ` items, table rows as `a | b`, `[image: alt]`, `[svg: title]`), at most 12,000 characters per call, `part` pages through a longer one; names the revision, size and part count. Never html or base64. One item read (`latestCanvasForOwner`, same `agent_session_item` row shape as the lazy whole-item read), only when called.
+- `show_canvas {id, title}`: reads the same one item and returns a `shown` result with `ownerThreadId` and `ownerItemId`; `applyApiProgress` turns it into a canvas card in Y²'s own transcript like the `canvas` tool's (`isCanvasDisplayTool`), keeping the thread's revision number and title, so the stepper, side-by-side compare, pins and the budget (`withBoundedCanvasHistory`, `CANVAS_CHAT_BUDGET`) work in the Y² chat. The model reads only a one-line confirmation (`toModelOutput`). Over `CANVAS_HTML_LIMIT`, an unknown thread (other project, Y² itself, subagents) or canvas gives a clear message; if the newest revision lost its html to the thread's budget, the newest revision that still has html is used and the result says so. A revision already shown from that thread in this turn is not added twice.
+- All three tools are in `Y_SQUARED_TOOLS` and `turn-saving`'s read-only set, and ride `ySquaredTools` on every route (API/Codex/Grok directly; Claude Code through the runner box bridge, which serves every tool of the set and honours `toModelOutput`).
+
+**Loop** (feedback in the Y² chat → thread → new revision in the Y² chat)
+
+1. The person pins notes on the canvas card in the Y² chat; the inspector composes `Canvas feedback on "<title>" (revision N) [thread:<id>], k notes:` (`canvasFeedbackMessage` with `ownerThreadId`; `canvasFeedbackOwner` reads the marker back).
+2. Y² (instructions) sends it to THAT thread with `message_thread`: `steer` if the thread is working, else the default (an idle thread starts). It forwards the notes verbatim with selectors, the title and revision, and asks for the next revision with the SAME title; it says so in one line and ends its turn.
+3. The thread revises and shows the canvas again (next revision number, same title).
+4. The thread's settle note carries `showed canvas "Thread art" (revision 2)` (`crewCanvasLine`, from the items the chat object holds: titles and revisions, no database read, no html). It rides the wake event's detail; it is not stored in the crew rows. A turn that showed a canvas is news even if its reply text did not change.
+5. Y² wakes, calls `show_canvas` again: revision 2 appears in the Y² chat next to revision 1 (compare works), and it tells the person the change in one or two lines.
+
+**Egress** (Supabase): wake body: titles and revision only, about 45 bytes per canvas (≤ 200 bytes per thread, ≤ 3 canvases named). `thread`: ≤ 6 canvases × (≤ 24,000 characters read from the database for the description, ≤ 300 sent to the model, plus a line of facts) → ≤ ~144 KB read in the worst case and ~2 KB to the model; typical canvases (a few KB of visible markup) read far less. `read_canvas`: one item (≤ 500,000 characters read), ≤ 12,000 characters returned per call. `show_canvas`: one item read (≤ 500,000 characters) and written once into Y²'s transcript (Y²'s page reads omit html and read it lazily when the card is opened, as for any canvas); the model reads about 200 characters. `threads` carries no canvas information.
+
+Not done: two threads that show canvases with the same title collide in Y²'s chat (a canvas is identified by title); a note on an older revision in the Y² chat is still sent as feedback on that revision and the thread decides.
+
 ## Checks
 
-- Unit tests: `src/domain/y-agent.test.ts`, `src/domain/y-squared.test.ts`, `src/server/services/y-tools.test.ts`, `src/server/services/y-squared-tools.test.ts`, `src/server/edge/y-squared-crew-store.test.ts`, `src/server/edge/crew-proactive.test.ts` (schedules, alarm minimum, caps, time zones, stall signals on a real store), `src/domain/y-squared-proactive.test.ts`, `src/server/services/y-squared-schedule-tool.test.ts`, `src/features/workspace/y-mode-settings.test.tsx`, `src/domain/y-squared-card.test.ts`, `src/features/workspace/y-squared-card.test.tsx`, `src/server/services/subagent-writer-apply.test.ts` (real git), and Y / Y² turns in `src/server/jobs/api-turn.test.ts`.
+- Unit tests: `src/domain/canvas-text.test.ts`, `src/server/services/y-squared-canvas-tools.test.ts`, `src/server/adapters/canvas-read.sql.test.ts` (PGlite), `src/domain/y-agent.test.ts`, `src/domain/y-squared.test.ts`, `src/server/services/y-tools.test.ts`, `src/server/services/y-squared-tools.test.ts`, `src/server/edge/y-squared-crew-store.test.ts`, `src/server/edge/crew-proactive.test.ts` (schedules, alarm minimum, caps, time zones, stall signals on a real store), `src/domain/y-squared-proactive.test.ts`, `src/server/services/y-squared-schedule-tool.test.ts`, `src/features/workspace/y-mode-settings.test.tsx`, `src/domain/y-squared-card.test.ts`, `src/features/workspace/y-squared-card.test.tsx`, `src/server/services/subagent-writer-apply.test.ts` (real git), and Y / Y² turns in `src/server/jobs/api-turn.test.ts`.
 - SQL: the migration and `y-mode.ts` queries were run on the development database inside a rolled-back transaction.
 - Live behaviour (Opus 5.5, tools simulated): `scripts/y-behaviour-check.ts` (Y, 20/20 checks after one prompt change) and `scripts/y-squared-behaviour-check.ts` (Y², 44/45; the miss was the check's wording).
