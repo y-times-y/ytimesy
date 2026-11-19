@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import {
 	ensureDraftPullRequest,
+	isNothingAheadToOpen,
 	listOpenPullRequests,
 	listSessionPullRequests,
 	mergePullRequest,
@@ -198,6 +199,34 @@ it("shows GitHub's real reason for any other refusal", async () => {
 		"GitHub refused to open the pull request: Validation Failed base: invalid branch",
 	);
 	expect(api.create).toHaveBeenCalledTimes(2);
+});
+it("says a branch with no shared history cannot have a pull request, and treats it as nothing to open", async () => {
+	api.create.mockRejectedValueOnce({
+		status: 422,
+		response: {
+			data: {
+				message: "Validation Failed",
+				errors: [
+					{
+						message: "The ytimesy/x branch has no history in common with main",
+					},
+				],
+			},
+		},
+	});
+	const refused = await ensureDraftPullRequest(
+		"token",
+		"owner/repo",
+		draft,
+	).catch((error: Response) => error);
+	expect(refused).toMatchObject({ status: 422 });
+	expect(await (refused as Response).clone().text()).toMatch(
+		/no history in common/,
+	);
+	expect(await isNothingAheadToOpen(refused)).toBe(true);
+	expect(
+		await isNothingAheadToOpen(new Response("other", { status: 422 })),
+	).toBe(false);
 });
 it("lists both current and legacy task prefixes", async () => {
 	api.paginate.mockResolvedValue([

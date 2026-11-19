@@ -539,6 +539,8 @@ async function createDraftPullRequest(
 			});
 		if (/no commits between/i.test(text))
 			throw new Response(NO_COMMITS_AHEAD, { status: 422 });
+		if (/no history in common/i.test(text))
+			throw new Response(NO_SHARED_HISTORY, { status: 422 });
 		throw new Response(
 			`GitHub refused to open the pull request${text ? `: ${text}` : "."}`,
 			{ status: 422 },
@@ -549,15 +551,29 @@ async function createDraftPullRequest(
 const NO_COMMITS_AHEAD =
 	"This branch has no commits ahead of the base branch, so there is nothing to open a pull request for.";
 
-/** GitHub refused to open a pull request because the branch adds nothing to its base. */
-export async function isNothingAheadToOpen(error: unknown) {
+const NO_SHARED_HISTORY =
+	"This branch has no history in common with the base branch (it was started from a different history), so GitHub cannot open a pull request for it. The branch itself is pushed.";
+
+async function refusedWith(error: unknown, text: string) {
 	return (
 		error instanceof Response &&
 		error.status === 422 &&
 		(await error
 			.clone()
 			.text()
-			.catch(() => "")) === NO_COMMITS_AHEAD
+			.catch(() => "")) === text
+	);
+}
+
+/**
+ * GitHub refused to open a pull request because there is nothing to open one
+ * for: the branch adds nothing to its base, or shares no history with it
+ * (a pull request cannot exist either way). The branch push itself is fine.
+ */
+export async function isNothingAheadToOpen(error: unknown) {
+	return (
+		(await refusedWith(error, NO_COMMITS_AHEAD)) ||
+		(await refusedWith(error, NO_SHARED_HISTORY))
 	);
 }
 
