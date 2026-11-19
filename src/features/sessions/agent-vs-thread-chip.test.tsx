@@ -25,7 +25,11 @@ const agents = mentionAgents(identities, "main-self");
 const THREAD_ID = "3f9a2b1c-7d4e-4f10-9a55-0c2d8e6b1a77";
 const threads = threadDirectory("build", [
 	{ id: THREAD_ID, title: "Speed up search", threadNumber: 1 },
-	{ id: "7b1e44c2-0a6d-4c3f-8e21-5d9f3a6c0b12", title: "Add dark mode", threadNumber: 2 },
+	{
+		id: "7b1e44c2-0a6d-4c3f-8e21-5d9f3a6c0b12",
+		title: "Add dark mode",
+		threadNumber: 2,
+	},
 ]);
 
 function reply(text: string) {
