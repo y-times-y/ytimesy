@@ -1,4 +1,8 @@
-export type AuthEmailPurpose = "verify-email" | "reset-password";
+export type AuthEmailPurpose =
+	| "verify-email"
+	| "reset-password"
+	/** Sent when someone signs up with an address that already has an account. */
+	| "account-exists";
 
 /** Attempts before a message is given up. Links expire after an hour anyway. */
 export const AUTH_EMAIL_MAX_ATTEMPTS = 6;
@@ -28,6 +32,7 @@ export const isVerificationCode = (value: string) => /^\d{6}$/.test(value);
 export function authEmailContent(purpose: AuthEmailPurpose, actionUrl: string) {
 	if (purpose === "verify-email" && isVerificationCode(actionUrl))
 		return verificationCodeContent(actionUrl);
+	if (purpose === "account-exists") return accountExistsContent(actionUrl);
 	const copy =
 		purpose === "verify-email"
 			? {
@@ -67,6 +72,35 @@ function verificationCodeContent(code: string) {
 <tr><td style="font-size:15px;line-height:22px;padding-bottom:20px">Your verification code</td></tr>
 <tr><td style="padding-bottom:24px"><div style="font-size:34px;letter-spacing:10px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${code}</div></td></tr>
 <tr><td style="font-size:13px;line-height:20px;color:#666">Enter it on the verify page to finish signing in. ${expiry} ${ignore}</td></tr>
+</table></td></tr></table></body></html>`;
+	return { text, html };
+}
+
+/**
+ * The email for someone who tried to sign up with an address that already
+ * has an account. The sign-up page answers every address the same way, so
+ * this message, which only the address's owner can read, is how they learn.
+ * `signInUrl` is the sign-in page; the reset link sits beside it.
+ */
+function accountExistsContent(signInUrl: string) {
+	const resetUrl = signInUrl.replace(/\/sign-in$/, "/forgot-password");
+	const intro =
+		"Someone, probably you, just tried to create a ytimesy account with this email address, but you already have one.";
+	const ignore =
+		"If it wasn't you, ignore this email: nothing changed and no one can get in with it.";
+	const how =
+		"Sign in the way you did before: with your password, GitHub or Google.";
+	const text = `${intro}\n\n${how}\nSign in: ${signInUrl}\nForgot your password? ${resetUrl}\n\n${ignore}\n`;
+	const url = escapeHtml(signInUrl);
+	const reset = escapeHtml(resetUrl);
+	const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#f6f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#111">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;background:#fff;border-radius:12px;padding:32px">
+<tr><td style="font-size:18px;font-weight:600;padding-bottom:16px">ytimesy</td></tr>
+<tr><td style="font-size:15px;line-height:22px;padding-bottom:16px">${escapeHtml(intro)}</td></tr>
+<tr><td style="font-size:14px;line-height:21px;padding-bottom:24px">${escapeHtml(how)}</td></tr>
+<tr><td style="padding-bottom:24px"><a href="${url}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;font-size:14px;font-weight:600;padding:10px 18px;border-radius:8px">Sign in</a></td></tr>
+<tr><td style="font-size:13px;line-height:20px;color:#666">Forgot your password? <a href="${reset}" style="color:#666">Reset it</a>.<br><br>${escapeHtml(ignore)}</td></tr>
 </table></td></tr></table></body></html>`;
 	return { text, html };
 }

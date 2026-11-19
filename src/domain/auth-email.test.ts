@@ -57,3 +57,29 @@ describe("verification code email", () => {
 		expect(isVerificationCode("https://x.test/1234567")).toBe(false);
 	});
 });
+
+describe("account-exists email", () => {
+	const signIn = "https://app.example.test/auth/sign-in";
+
+	it("tells the owner they already have an account, with sign-in and reset links and no code", () => {
+		const { text, html } = authEmailContent("account-exists", signIn);
+		expect(text).toContain("already have one");
+		expect(text).toContain(`Sign in: ${signIn}`);
+		expect(text).toContain("https://app.example.test/auth/forgot-password");
+		expect(html).toContain(`href="${signIn}"`);
+		expect(html).toContain(
+			'href="https://app.example.test/auth/forgot-password"',
+		);
+		expect(text).not.toMatch(/\b\d{6}\b/);
+		expect(text).toContain("If it wasn't you, ignore this email");
+	});
+
+	it("escapes the link in HTML", () => {
+		const { html } = authEmailContent(
+			"account-exists",
+			"https://x.test/a?b=<c>&d=1/sign-in",
+		);
+		expect(html).not.toContain("<c>");
+		expect(html).toContain("&lt;c&gt;");
+	});
+});

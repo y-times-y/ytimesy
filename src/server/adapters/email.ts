@@ -180,11 +180,31 @@ export async function persistAuthEmail(input: {
 	subject: string;
 	purpose: AuthEmailPurpose;
 	actionUrl: string;
+	/**
+	 * Send nothing when the same kind of message was queued for this address
+	 * in this many milliseconds, so a page anyone can submit cannot be used to
+	 * flood someone's inbox.
+	 */
+	skipIfQueuedWithinMs?: number;
 }) {
 	const queued = await database().query<{ id: string }>(
-		"insert into auth_email_outbox(to_address, subject, purpose, encrypted_action_url) values($1,$2,$3,$4) returning id::text",
-		[input.to, input.subject, input.purpose, await seal(input.actionUrl)],
+		`insert into auth_email_outbox(to_address, subject, purpose, encrypted_action_url)
+		 select $1,$2,$3,$4
+		 where $5::int is null or not exists (
+		  select 1 from auth_email_outbox
+		  where to_address=$1 and purpose=$3
+		   and created_at > now() - ($5::int * interval '1 millisecond'))
+		 returning id::text`,
+		[
+			input.to,
+			input.subject,
+			input.purpose,
+			await seal(input.actionUrl),
+			input.skipIfQueuedWithinMs ?? null,
+		],
 	);
+	// Nothing was queued: a recent message already went to this address.
+	if (!queued.rows[0]) return;
 	// Send right away so the user is not waiting for the next cron tick; the
 	// row stays queued for the retry loop if this attempt fails.
 	if (authEmailDeliveryConfigured())

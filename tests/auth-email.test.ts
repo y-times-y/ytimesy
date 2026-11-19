@@ -33,6 +33,7 @@ beforeAll(async () => {
 		"20260913221500_workspaces_jobs_agent_accounts.sql",
 		"20260913234500_auth_email_outbox.sql",
 		"20260914010000_auth_email_reset_password.sql",
+		"20261119120000_auth_email_account_exists.sql",
 		"20260915053000_agent_sessions_and_snapshots.sql",
 		"20260915060000_agent_session_parent.sql",
 		"20260915083000_product_setting.sql",
@@ -94,7 +95,42 @@ it("encrypts password-reset URLs under the reset-password purpose", async () => 
 	expect(await unseal(stored.rows[0].encrypted_action_url)).toBe(actionUrl);
 });
 
-it("rejects outbox purposes other than verify-email and reset-password", async () => {
+it("queues an account-exists message once per address in the window, however often it is asked", async () => {
+	const send = (to: string, within?: number) =>
+		persistAuthEmail({
+			to,
+			subject: "You already have a ytimesy account",
+			purpose: "account-exists",
+			actionUrl: "https://app.example.test/auth/sign-in",
+			...(within === undefined ? {} : { skipIfQueuedWithinMs: within }),
+		});
+	await send("owner@example.test", 600_000);
+	await send("owner@example.test", 600_000);
+	await send("owner@example.test", 600_000);
+	await send("other@example.test", 600_000);
+	const count = async (to: string) =>
+		(
+			await db.query<{ n: number }>(
+				"select count(*)::int as n from auth_email_outbox where purpose='account-exists' and to_address=$1",
+				[to],
+			)
+		).rows[0].n;
+	expect(await count("owner@example.test")).toBe(1);
+	// Another address is not held back by it.
+	expect(await count("other@example.test")).toBe(1);
+	// Once the window has passed, the owner can be told again.
+	await db.query(
+		"update auth_email_outbox set created_at = now() - interval '11 minutes' where purpose='account-exists' and to_address='owner@example.test'",
+	);
+	await send("owner@example.test", 600_000);
+	expect(await count("owner@example.test")).toBe(2);
+	// Without the option every call queues, as verification and reset do.
+	await send("plain@example.test");
+	await send("plain@example.test");
+	expect(await count("plain@example.test")).toBe(2);
+});
+
+it("rejects outbox purposes other than verify-email, reset-password and account-exists", async () => {
 	await expect(
 		db.exec(
 			"insert into auth_email_outbox(to_address, subject, purpose, encrypted_action_url) values('het@example.test','x','welcome','sealed')",

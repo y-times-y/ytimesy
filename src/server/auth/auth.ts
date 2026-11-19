@@ -133,7 +133,68 @@ export function authCaptchaPlugins(appUrl: string) {
 	];
 }
 
-export function authOptions() {
+/** The part of a Better Auth instance a sign-up for an existing address uses. */
+export type CodeSender = {
+	readonly api: {
+		sendVerificationOTP(input: {
+			body: { email: string; type: "email-verification" };
+		}): Promise<unknown>;
+	};
+};
+
+/**
+ * What a sign-up with an address that already has an account sends.
+ *
+ * Better Auth answers such a sign-up exactly like a new one (same shape, a
+ * hashed password for equal timing, no token) so the page cannot be used to
+ * find out who has an account, and calls this instead of sending anything.
+ * Without it nothing was sent, while the page still said "enter your code".
+ *
+ * - An address that never finished verifying gets a fresh code, as a new
+ *   sign-up would: the person typing it is the one who can read the mail.
+ * - A verified account gets a short "you already have an account" message
+ *   with a link to sign in, readable only by the address's owner.
+ *
+ * Better Auth starts this the way it starts a new sign-up's code, in the
+ * background or awaited, so the response takes as long either way. The work
+ * is awaited in here, not detached: a code written after the request's
+ * database context ended was emailed but never stored, so it never worked.
+ * A failed send is logged; the outbox retries what it holds.
+ */
+export function existingAddressSignUp(
+	appUrl: string,
+	codeSender: () => CodeSender | undefined,
+) {
+	return async ({
+		user,
+	}: {
+		user: { email: string; emailVerified?: boolean };
+	}) => {
+		const send = user.emailVerified
+			? persistAuthEmail({
+					to: user.email,
+					subject: "You already have a ytimesy account",
+					purpose: "account-exists",
+					actionUrl: new URL("/auth/sign-in", appUrl).toString(),
+					// One message per address in ten minutes, however often it is tried.
+					skipIfQueuedWithinMs: 10 * 60_000,
+				})
+			: Promise.resolve(
+					codeSender()?.api.sendVerificationOTP({
+						body: { email: user.email, type: "email-verification" },
+					}),
+				);
+		await trackInvocationTask(send).catch((error: unknown) => {
+			console.warn("Could not send the existing-address sign-up email.", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+	};
+}
+
+export function authOptions(
+	codeSender: () => CodeSender | undefined = () => undefined,
+) {
 	const config = serverConfig();
 	return {
 		plugins: [
@@ -177,6 +238,7 @@ export function authOptions() {
 			requireEmailVerification: true,
 			minPasswordLength: 8,
 			autoSignIn: false,
+			onExistingUserSignUp: existingAddressSignUp(config.APP_URL, codeSender),
 			// A reset password ends every other session, including a thief's.
 			revokeSessionsOnPasswordReset: true,
 			sendResetPassword: async ({
@@ -273,7 +335,12 @@ export function authOptions() {
 	};
 }
 function createAuth() {
-	return betterAuth(authOptions());
+	// The hook for an existing address sends a code through the instance
+	// itself, which does not exist yet while its options are built.
+	let instance: CodeSender | undefined;
+	const created = betterAuth(authOptions(() => instance));
+	instance = created as unknown as CodeSender;
+	return created;
 }
 // One instance per database pool: on Workers each request has its own pool, and
 // an instance must never hold another request's (already closed) connections.
