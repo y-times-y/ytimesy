@@ -163,6 +163,11 @@ import {
 } from "./conversation-recovery";
 import { ComposerSignIn } from "./harness-login";
 import { MODEL_PICKER_ID } from "./harness-picker";
+import {
+	type ComposerChoice,
+	readComposerChoice,
+	writeComposerChoice,
+} from "./last-composer-choice";
 import type { MemoryMarkerActions } from "./memory-markers";
 import { MentionPopover } from "./mention-popover";
 import {
@@ -745,6 +750,17 @@ export function SessionLauncher({
 	>(() =>
 		session.listedModelId ? { [harnessId]: session.listedModelId } : {},
 	);
+	// The model chosen last time in this browser; read after hydration. A new
+	// chat opens on it (and its harness), not on the first model listed.
+	const [rememberedChoice, setRememberedChoice] =
+		useState<ComposerChoice | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: once, when the composer opens.
+	useEffect(() => {
+		const choice = readComposerChoice();
+		setRememberedChoice(choice);
+		if (choice && session.items.length === 0 && choice.harnessId !== harnessId)
+			onHarnessIdChange(choice.harnessId);
+	}, []);
 	const selectedModel = models.find((model) => model.id === modelId);
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
 	const [slashIndex, setSlashIndex] = useState(0);
@@ -1113,7 +1129,8 @@ export function SessionLauncher({
 		const connectedHarness = connectedProviderId(session.connection);
 		const lastUsedForCatalog =
 			lastModelByHarness[harnessId] ||
-			(connectedHarness === harnessId ? session.listedModelId : "");
+			(connectedHarness === harnessId ? session.listedModelId : "") ||
+			(session.items.length === 0 ? (rememberedChoice?.modelId ?? "") : "");
 		setModelId((current) => {
 			if (current && !catalogSettled) return current;
 			// The chat's own retired model is no longer listed: keep sending on
@@ -1131,6 +1148,8 @@ export function SessionLauncher({
 		catalogSettled,
 		harnessId,
 		lastModelByHarness,
+		rememberedChoice,
+		session.items.length,
 		session.blockedListedModelIds,
 		session.connection,
 		session.listedModelId,
@@ -1817,7 +1836,10 @@ export function SessionLauncher({
 								withoutClaudeCode={withoutClaudeCode}
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
-								onModelIdChange={setModelId}
+								onModelIdChange={(id) => {
+									setModelId(id);
+									writeComposerChoice({ harnessId, modelId: id });
+								}}
 								reasoningId={reasoningId}
 								onReasoningIdChange={setReasoningId}
 								speed={speed}
