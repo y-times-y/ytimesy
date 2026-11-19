@@ -3,13 +3,11 @@ import { supabaseCertificate } from "./supabase-certificate";
 
 /**
  * Pre-flight for a production deploy: which chats are running a turn right
- * now. An API-connection turn is not waited for: each Worker takes one new
- * version, Durable Objects move to it once idle, and an interrupted step
- * resumes from its checkpoint. A Claude turn cannot resume that way (its
- * `claude` process lives on a runner box and the chat's Durable Object
- * coordinates it), and on 2026-11-16 25 of 26 failed turns were Claude turns
- * that overlapped a deploy's Durable Object reset. The deploy therefore
- * waits, for a bounded time, for those (waitForClaudeTurns).
+ * now. It is a report, never a reason to wait: turns are always running. Each
+ * Worker takes one new version, Durable Objects move to it once idle, and an
+ * interrupted step resumes from its checkpoint. A Claude turn cannot resume
+ * that way (its `claude` process lives on a runner box and the chat's Durable
+ * Object coordinates it), so one running during the deploy may need a retry.
  */
 export type RunningTurnsCheck =
 	| {
@@ -90,44 +88,5 @@ export async function readRunningTurns(
 		};
 	} finally {
 		await client?.end().catch(() => {});
-	}
-}
-
-export const CLAUDE_TURN_WAIT_MS = 10 * 60_000;
-const CLAUDE_TURN_POLL_MS = 15_000;
-
-/**
- * Waits until no Claude turn is running, at most `timeoutMs`, then returns
- * the chats still running one (the deploy goes ahead with them, as it always
- * did). An unreadable count ends the wait: the caller's decision handles it.
- */
-export async function waitForClaudeTurns(
-	read: () => Promise<RunningTurnsCheck>,
-	options: {
-		readonly timeoutMs?: number;
-		readonly pollMs?: number;
-		readonly sleep?: (ms: number) => Promise<void>;
-		readonly log?: (message: string) => void;
-	} = {},
-) {
-	const timeoutMs = options.timeoutMs ?? CLAUDE_TURN_WAIT_MS;
-	const pollMs = options.pollMs ?? CLAUDE_TURN_POLL_MS;
-	const sleep =
-		options.sleep ??
-		((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-	const log = options.log ?? console.log;
-	let waited = 0;
-	for (;;) {
-		const check = await read();
-		const running =
-			check.kind === "counted" ? [...new Set(check.claudeChatIds ?? [])] : [];
-		if (running.length === 0 || waited >= timeoutMs)
-			return { waitedMs: waited, remaining: running.map(shortChatId) };
-		if (waited === 0 || waited % 60_000 < pollMs)
-			log(
-				`Waiting for ${running.length} Claude turn${running.length === 1 ? "" : "s"} to finish before replacing the Workers (${running.map(shortChatId).join(", ")}); at most ${Math.round((timeoutMs - waited) / 60_000)} more minutes.`,
-			);
-		await sleep(pollMs);
-		waited += pollMs;
 	}
 }

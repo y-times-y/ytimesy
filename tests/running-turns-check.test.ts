@@ -1,9 +1,6 @@
-import { expect, it, vi } from "vitest";
-import {
-	type RunningTurnsCheck,
-	runningTurnsDecision,
-	waitForClaudeTurns,
-} from "../scripts/running-turns-check";
+import { readFileSync } from "node:fs";
+import { expect, it } from "vitest";
+import { runningTurnsDecision } from "../scripts/running-turns-check";
 
 const chat = (n: number) =>
 	`${String(n).padStart(8, "0")}-aaaa-bbbb-cccc-dddddddddddd`;
@@ -46,54 +43,22 @@ it("still refuses when the count cannot be read", () => {
 	expect(decision.message).toContain("Refusing to deploy");
 });
 
-const counted = (...claude: number[]): RunningTurnsCheck => ({
-	kind: "counted",
-	chatIds: [chat(1), ...claude.map(chat)],
-	claudeChatIds: claude.map(chat),
-});
-
-it("does not wait when no Claude turn is running, even if another turn is", async () => {
-	const sleep = vi.fn(async () => {});
-	const result = await waitForClaudeTurns(async () => counted(), {
-		sleep,
-		log: () => {},
+it("goes ahead with Claude turns running, naming them and not waiting", () => {
+	const decision = runningTurnsDecision({
+		kind: "counted",
+		chatIds: [chat(1), chat(2)],
+		claudeChatIds: [chat(2)],
 	});
-	expect(result).toEqual({ waitedMs: 0, remaining: [] });
-	expect(sleep).not.toHaveBeenCalled();
+	expect(decision.proceed).toBe(true);
+	expect(decision.message).toContain("Deploying anyway");
 });
 
-it("waits until the Claude turns finish", async () => {
-	const reads = [counted(2, 3), counted(3), counted()];
-	const sleep = vi.fn(async () => {});
-	const log = vi.fn();
-	const result = await waitForClaudeTurns(
-		async () => reads.shift() ?? counted(),
-		{
-			pollMs: 1_000,
-			sleep,
-			log,
-		},
-	);
-	expect(result).toEqual({ waitedMs: 2_000, remaining: [] });
-	expect(sleep).toHaveBeenCalledTimes(2);
-	expect(log.mock.calls[0][0]).toContain("2 Claude turns");
-	expect(log.mock.calls[0][0]).not.toContain("aaaa");
-});
-
-it("gives up after the time limit and names the chats still running", async () => {
-	const result = await waitForClaudeTurns(async () => counted(5), {
-		timeoutMs: 3_000,
-		pollMs: 1_000,
-		sleep: async () => {},
-		log: () => {},
-	});
-	expect(result).toEqual({ waitedMs: 3_000, remaining: ["00000005"] });
-});
-
-it("stops waiting when the count cannot be read", async () => {
-	const result = await waitForClaudeTurns(
-		async () => ({ kind: "unreadable", reason: "Error" }),
-		{ sleep: async () => {}, log: () => {} },
-	);
-	expect(result).toEqual({ waitedMs: 0, remaining: [] });
+it("the deploy script never waits for running turns", () => {
+	const deploy = readFileSync("scripts/deploy-production.ts", "utf8");
+	const check = readFileSync("scripts/running-turns-check.ts", "utf8");
+	for (const source of [deploy, check]) {
+		expect(source).not.toMatch(/waitForClaudeTurns/);
+		expect(source).not.toMatch(/wait-for-turns/);
+		expect(source).not.toMatch(/Waiting for \$\{/);
+	}
 });
