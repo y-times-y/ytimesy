@@ -34,7 +34,6 @@ import {
 	sessionItemsWithMergedUsers,
 	sessionTitleFromItems,
 } from "#/domain/session-item";
-import { OPEN_PAGE_TURNS } from "#/domain/transcript-page";
 import {
 	chatHoldingSend,
 	releasingChatClaimOnFailure,
@@ -45,8 +44,8 @@ import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	agentSessionMetadataForOwner,
-	agentSessionPageForOwner,
 	descendantAgentSessionMetadata,
+	openPageForOwner,
 	sessionHoldsUserMessage,
 } from "../adapters/agent-sessions";
 import { apiReasoningEffort } from "../adapters/api-reasoning-effort";
@@ -132,9 +131,7 @@ export async function readApiWorkspaceSession(
 			: read?.id === scope.sessionId
 				? read
 				: // The latest page (as the chat opens), never the whole transcript.
-					await agentSessionPageForOwner(scope.userId, scope.sessionId, {
-						turns: OPEN_PAGE_TURNS,
-					})
+					await openPageForOwner(scope.userId, scope.sessionId)
 		: null;
 	if (session && session.projectId !== scope.projectId)
 		throw new Error("Session is not in this project.");
@@ -687,9 +684,7 @@ async function sentView(
 	catalog: ReturnType<typeof apiModelCatalog>,
 ): Promise<PublicCodexSession> {
 	const page = sent.appended
-		? await agentSessionPageForOwner(scope.userId, session.id, {
-				turns: OPEN_PAGE_TURNS,
-			})
+		? await openPageForOwner(scope.userId, session.id)
 		: null;
 	const view = apiWorkspaceView(
 		{

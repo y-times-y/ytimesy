@@ -271,3 +271,116 @@ not as a forecast of the bill; confirm with `db.egress_summary` (now naming
 callers) and the measurement script before relying on it. Natural next
 step if D is large: serve polls from `itemRowsSinceForOwner` deltas (as the
 helper panel does) instead of re-reading the page.
+
+### Round 3: deltas, smaller first page, dedupe (chat page reads)
+
+Goal unchanged: <= ~1 GB per power user per month. Start: ~2.2 GB/month
+(ESTIMATED, end of round 2).
+
+**What was found first.** Re-reads of the *open* chat were already revision
+deltas (`getCodexSessionDelta` -> `readSessionSince` -> `transcriptDeltaForOwner`;
+the client's `createSessionDeltaReader` serves tab refocus, the running-chat
+poll and the background-chat poll). Two leaks were left in that path:
+
+1. The delta's `tail` (every row from the first change on) was read as the raw
+   `item`, **without the page diet**: a canvas `html` or a long tool output in
+   the tail travelled whole. It now goes through `pageItemSql`, so a delta row
+   is exactly a page row.
+2. Any change of `turnStatus` (every turn end) made the reader fall back to a
+   *whole page read*, and the post-turn refresh (progress stream `completed`/
+   `failed`) issued its own whole `getCodexSession`: two page reads per turn
+   per open chat. A status change is now settled by a fields-only delta
+   (`since: <new token>, fields: true`: no transcript, a few hundred bytes), and
+   the post-turn refresh calls the open chat's own query refetch.
+
+**Changed**
+
+| # | Change | Where |
+| --- | --- | --- |
+| 1 | Delta tail cut like a page | `agent-session-delta.ts` |
+| 1 | Status change = fields-only delta, not a page | `session-delta-reader.ts` |
+| 1 | Post-turn refresh = delta refetch of the open chat's query | `workspace-home.tsx` |
+| 2 | One in-flight read per chat key in the reader (open poll, hub read, post-turn refresh, background poll share it) | `session-delta-reader.ts` |
+| 3 | `OPEN_PAGE_TURNS` 10 -> 4; never fewer than `OPEN_PAGE_MIN_TURNS` = 2 (clamped in `openPageForOwner`, which the open, send, stop and connect answers use; `agentSessionPageForOwner` itself stays exact); a first page under `OPEN_PAGE_MIN_ITEMS` = 16 items with older turns is widened once to 10 turns. Scroll-back stays 30 turns. A running turn is the last turn and is always whole | `transcript-page.ts`, `agent-sessions.ts` |
+| 5 | `db.egress_summary` now has `sessionPageReads` and `sessionPageReadsSkipped: {unchanged, delta}` (per isolate, per 10 minutes); `session.page_read` lines stay | `database-byte-accounting.ts` |
+
+**Measured in PGlite tests** (`agent-session-page-deltas.test.ts`, 6 KB tool
+outputs and canvases; sizes of the JSON that leaves the database):
+
+- unchanged refocus: **221 B** vs a 4-turn page of **19,351 B** (88x).
+- a delta of the last turn plus a new turn's first rows: **2,411 B** vs
+  **21,761 B** for the page that would be re-read.
+- the delta-merged transcript equals a fresh page after 60 random edit rounds
+  (appends, streamed growth, edited tool output, rewrites of old rows that must
+  force a page read); a revision gap (edit older than the held page) returns
+  "read a page"; a database restored behind the browser's revision is read as a
+  page (`found.token.rev < since.rev`).
+
+**Per caller** (calls/day: the owner's 3-week measurement scaled /21; ESTIMATED
+after, since the split by caller is not in `pg_stat_statements`; check
+`session.page_read` and the new counters):
+
+| Caller | Page reads/day before | After | Bytes per read before -> after |
+| --- | --- | --- | --- |
+| refocus, 60 s running poll (open chat) | already deltas, but whole page at every turn end | deltas only | tail with html/long output -> page-cut tail; turn end 60 KB -> ~0.5 KB |
+| post-turn refresh (`completed`/`failed` on the stream) | ~1 per turn (~300) | 0 pages; a delta joins the poll in flight | 60 KB -> 0.2-3 KB |
+| first open / read-ahead of a chat with no copy | ~350 | ~350 | 10-turn page (60-70 KB) -> 4-turn page (~25-30 KB, estimate) |
+| scroll-back | unchanged | unchanged | 30 turns |
+| send/stop/connect answers (`publicSessionView`, `sentView`, `readApiWorkspaceSession`, `readSubscriptionSessionState`) | ~300 | ~300 | 10-turn -> 4-turn page |
+| `sendLanded`, login recheck, recovery, `older not found` | rare | rare | page |
+
+**Not converted: the send/stop/connect answers.** The browser does not send its
+revision with those server functions, so the server cannot answer with a delta
+without changing every send/stop/queue endpoint's contract and every client
+site that applies their `view`. They remain page reads (now 4 turns). This is
+the largest remaining page-read caller.
+
+**Server-side per-request memo: not added.** A memo by chat id keyed only on
+time would be wrong after a write in the same request (a send writes, then
+reads the page); a memo keyed by revision needs the revision, which costs the
+read it is meant to save (it is a cheaper read, ~100 B, but it is a second
+round trip on every page read). The send paths already pass the chat they read
+into `readApiWorkspaceSession`/`readSubscriptionSessionState` (`read`
+argument), so one send reads one page. The client-side dedupe (one in-flight
+read per chat key) covers the navigation case.
+
+#### Hyperdrive caching (findings, no config changed)
+
+- `wrangler.web.jsonc` and `wrangler.edge-executor.jsonc` only name the binding
+  (`HYPERDRIVE`, one config id per env). Query caching is a property of the
+  Hyperdrive *config* (`wrangler hyperdrive update --caching-disabled/--max-age/--swr`),
+  not of wrangler.jsonc, so it cannot be seen or set from the repo. **Owner
+  action: run `wrangler hyperdrive get <id>` for the web and executor configs
+  and confirm `caching.disabled` is false** (default: on, `max_age` 60 s,
+  `stale_while_revalidate` 15 s).
+- Hyperdrive caches only read-only statements that use no volatile function
+  and run outside a transaction. Egress is measured *between Postgres and
+  Hyperdrive*'s upstream connection: a cache hit saves Postgres egress, so
+  cacheable hot reads do help the Supabase bill.
+- Nothing on the chat hot path is cacheable *and* wanted: page reads and delta
+  reads depend on a revision that moves within seconds while a turn runs (a
+  60 s stale page would hide the stream's last rows; the delta read's
+  `items_rev` token would also repeat an old answer), and the queue, lease,
+  checkpoint and send reads must be current. They are left alone.
+- Read-only candidates where 60 s staleness is fine (sidebar list, usage window
+  display, model catalog) were not changed here: whether they use `now()` is
+  per statement and the byte accounting does not yet show them in the top 5.
+  Next step if `db.egress_summary` names one: pass a minute-rounded timestamp
+  parameter instead of `now()` for that statement only.
+
+#### Per power user per month and 100 users (ESTIMATED)
+
+Round-2 baseline ~2.2 GB/month. Assumptions from the measured calls (~1,060
+page reads/day, 6-turn reads 15k and open reads 7.3k per 3 weeks): open-chat
+turn-end page reads (about one per turn, ~300/day) now cost ~0.5 KB instead of
+~60 KB -> -0.5 GB/month; first-page 10 -> 4 turns on the ~650 remaining page
+reads/day (open, send, read-ahead) at ~65 KB -> ~28 KB -> -0.7 GB/month.
+**Projected ~1.0-1.2 GB/month per power user, ~100-120 GB/month at 100 power
+users** (about 40-50% of the 250 GB). Roughly at target, not comfortably under
+it; the remaining estimate is mostly send/stop answers and first opens.
+
+**Next lever:** a Worker-side page cache keyed by (chat id, `items_rev`) so a
+send's answer is `items_rev` check + rows since (send answers become deltas
+without a client contract change, valid only when the same isolate served the
+last read), or the client sending its token with sends. Second: read-ahead of
+only the first chat of a project (not hover), and `OPEN_PAGE_TURNS` 3.

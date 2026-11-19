@@ -1,4 +1,6 @@
 import { database } from "./database";
+import { recordPageReadSkipped } from "./database-byte-accounting";
+import { pageItemSql } from "./transcript-page-sql";
 
 /** What the browser holds of a chat's transcript: a read's revision and item count. */
 export type TranscriptToken = {
@@ -43,7 +45,7 @@ export type TranscriptDelta = {
 	readonly listedModelId: string | null;
 	/** First position that may differ from the browser's copy; null when nothing does. */
 	readonly fromPosition: number | null;
-	/** Stored items from `fromPosition` to the end. */
+	/** Items from `fromPosition` to the end, cut as a page cuts them (pageItemSql). */
 	readonly tail: readonly unknown[];
 	/** Rows just before `fromPosition`, nearest first. */
 	readonly before: readonly {
@@ -73,7 +75,7 @@ export async function transcriptDeltaForOwner(
 		 f as (select case when c.n < $4 then least(coalesce(ch.f, c.n), c.n) else ch.f end as at from c, ch)
 		 select s.*, c.n as item_count, f.at as from_position,
 		  case when f.at is null then '[]'::jsonb else
-		   (select coalesce(jsonb_agg(i.item order by i.position),'[]'::jsonb)
+		   (select coalesce(jsonb_agg(${pageItemSql("i")} order by i.position),'[]'::jsonb)
 		    from agent_session_item i where i.session_id=$1 and i.position >= f.at) end as tail,
 		  case when f.at is null then '[]'::jsonb else
 		   (select coalesce(jsonb_agg(jsonb_build_object('id', a.item_id, 'kind', a.kind,
@@ -87,6 +89,8 @@ export async function transcriptDeltaForOwner(
 	);
 	const row = result.rows[0];
 	if (!row) return null;
+	// This read stood where a page read would have (the browser holds the chat).
+	recordPageReadSkipped(row.from_position == null ? "unchanged" : "delta");
 	return {
 		token: { rev: Number(row.items_rev), count: row.item_count },
 		projectId: row.project_id,

@@ -2254,15 +2254,9 @@ export function WorkspaceHome({
 				progress.turnStatus === "completed" ||
 				progress.turnStatus === "failed"
 			) {
-				void getCodexSession({
-					data: {
-						projectId: activeProjectId,
-						sessionId: activeSessionId,
-						harnessId,
-					},
-				})
-					.then((next) => applySessionViewRef.current(epoch, next))
-					.catch(() => undefined);
+				// The turn's last rows, as a delta over the held view (one read per
+				// chat at a time: this joins a poll already running).
+				refetchOpenSession.current();
 			}
 		};
 		const close = openLiveProgress({

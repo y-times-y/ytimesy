@@ -25,7 +25,7 @@ type ChatSelection = {
 };
 
 type DeltaRead = (
-	input: ChatSelection & { since?: SessionReadToken },
+	input: ChatSelection & { since?: SessionReadToken; fields?: boolean },
 ) => Promise<SessionReadDelta | SessionReadFull<PublicCodexSession>>;
 
 /**
@@ -69,7 +69,25 @@ export function createSessionDeltaReader(options: {
 		return result.view;
 	}
 
-	async function read(
+	/** One read per chat at a time: a second caller in the same tick takes the first's answer. */
+	const inflight = new Map<string, Promise<PublicCodexSession>>();
+
+	function read(
+		selection: ChatSelection,
+		/** A whole view already being read ahead (it carries no token), if any. */
+		readAhead?: () => Promise<PublicCodexSession | null>,
+	): Promise<PublicCodexSession> {
+		const key = `${selection.projectId}|${selection.sessionId}|${selection.harnessId}`;
+		const running = inflight.get(key);
+		if (running) return running;
+		const started = readOnce(selection, readAhead).finally(() => {
+			if (inflight.get(key) === started) inflight.delete(key);
+		});
+		inflight.set(key, started);
+		return started;
+	}
+
+	async function readOnce(
 		selection: ChatSelection,
 		/** A whole view already being read ahead (it carries no token), if any. */
 		readAhead?: () => Promise<PublicCodexSession | null>,
@@ -99,14 +117,49 @@ export function createSessionDeltaReader(options: {
 					result,
 					selection.harnessId === "codex",
 				);
-				if (merged && merged.view.turnStatus === previous.view.turnStatus) {
+				if (merged) {
+					const statusChanged =
+						merged.view.turnStatus !== previous.view.turnStatus;
+					let view = merged.view;
+					let queuedCount = merged.queuedCount;
+					let token = result.token;
+					let fullAt = refreshFields ? now() : previous.fullAt;
+					if (statusChanged && !refreshFields) {
+						// A turn changed status (what canSend and the connection
+						// show may have changed with it): the view fields are read
+						// again from the new token, with no transcript. That is a
+						// few hundred bytes, where a whole page was 60 KB.
+						const fields = await options.read({
+							...selection,
+							since: token,
+							fields: true,
+						});
+						if (fields.mode !== "delta" || !fields.fields) {
+							return whole(key, selection);
+						}
+						const settled = applySessionDelta(
+							{
+								view: merged.view,
+								token,
+								queuedCount,
+								fullAt,
+							},
+							fields,
+							selection.harnessId === "codex",
+						);
+						if (!settled) return whole(key, selection);
+						view = settled.view;
+						fullAt = now();
+						queuedCount = settled.queuedCount;
+						token = fields.token;
+					}
 					remember(key, {
-						view: merged.view,
-						token: result.token,
-						queuedCount: merged.queuedCount,
-						fullAt: refreshFields ? now() : previous.fullAt,
+						view,
+						token,
+						queuedCount,
+						fullAt,
 					});
-					return merged.view;
+					return view;
 				}
 			} catch {
 				// Read whole below; a failure that persists fails there too.

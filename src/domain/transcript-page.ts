@@ -9,12 +9,23 @@ import type { SessionItem } from "./session-item";
  */
 export const TRANSCRIPT_PAGE_TURNS = 30;
 /**
- * A chat opens (and a send or a refresh reads it) on its last OPEN_PAGE_TURNS
- * turns, a third of a scroll-back page: the browser reads older pages as the
- * reader scrolls up (TRANSCRIPT_PAGE_TURNS each), so a long chat's open no
- * longer moves thirty turns (189 KB on average in production) out of Postgres.
+ * A chat opens (and a send or a recovery read answers) on its last
+ * OPEN_PAGE_TURNS turns. Four turns fill a screen in practice and cost ~40% of
+ * the ten the page used to carry (a ten-turn page averaged 60-70 KB after the
+ * payload diet); older turns load on scroll (TRANSCRIPT_PAGE_TURNS each).
+ * Re-reads of a chat the browser already holds are not pages at all: they
+ * are revision deltas (session-delta.ts). A page is the last turns whole, so
+ * a running turn (always the last) is never cut.
  */
-export const OPEN_PAGE_TURNS = 10;
+export const OPEN_PAGE_TURNS = 4;
+/** An open page never has fewer than the chat's last two turns, whatever a caller asks. */
+export const OPEN_PAGE_MIN_TURNS = 2;
+/**
+ * Short turns may not fill the viewport: an open page with fewer items than
+ * this (and older turns to read) is read again with OPEN_PAGE_FALLBACK_TURNS.
+ */
+export const OPEN_PAGE_MIN_ITEMS = 16;
+export const OPEN_PAGE_FALLBACK_TURNS = 10;
 /**
  * The live snapshot carries only the chat's last SNAPSHOT_TURNS turns. The
  * browser already shows the older ones (it merges a snapshot onto them; see

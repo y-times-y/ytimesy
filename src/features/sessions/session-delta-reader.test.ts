@@ -98,21 +98,16 @@ it("an unchanged chat returns the held view itself", async () => {
 	expect(next.items).toBe(opened.items);
 });
 
-it("reads whole when the turn changed status, the tail has no anchor, or the delta fails", async () => {
+it("reads whole when the tail has no anchor or the delta fails", async () => {
 	const base = [message("a"), message("b")];
-	const ended: SessionReadDelta = {
+	const lost: SessionReadDelta = {
 		mode: "delta",
 		token: { rev: 2, count: 2 },
-		row: row("completed"),
-		change: null,
 		queued: [],
-	};
-	const lost: SessionReadDelta = {
-		...ended,
 		row: row("running"),
 		change: { anchorId: "gone", tail: [message("c")] },
 	};
-	for (const second of [ended, lost, new Error("down")]) {
+	for (const second of [lost, new Error("down")]) {
 		const read = vi
 			.fn()
 			.mockResolvedValueOnce(whole(base, 1))
@@ -212,4 +207,65 @@ it("a read ahead is used when nothing is held, and carries no token", async () =
 	const first = await reader.read(selection, async () => ahead);
 	expect(first).toBe(ahead);
 	expect(read).not.toHaveBeenCalled();
+});
+
+it("a turn that changed status is settled by a fields-only delta, not a whole read", async () => {
+	const base = [message("a"), message("b")];
+	const read = vi
+		.fn()
+		.mockResolvedValueOnce(whole(base, 1))
+		.mockResolvedValueOnce({
+			mode: "delta",
+			token: { rev: 2, count: 3 },
+			row: row("completed"),
+			change: { anchorId: "b", tail: [message("c")] },
+			queued: [],
+		} satisfies SessionReadDelta)
+		.mockResolvedValueOnce({
+			mode: "delta",
+			token: { rev: 2, count: 3 },
+			row: row("completed"),
+			change: null,
+			queued: [],
+			fields: { canSend: false },
+		} satisfies SessionReadDelta);
+	const reader = createSessionDeltaReader({ read, now: () => 0 });
+	await reader.read(selection);
+	const next = await reader.read(selection);
+	expect(next.turnStatus).toBe("completed");
+	expect(next.items.map((item) => item.id)).toEqual(["a", "b", "c"]);
+	expect(next.canSend).toBe(false);
+	expect(read).toHaveBeenCalledTimes(3);
+	expect(read).toHaveBeenLastCalledWith({
+		...selection,
+		since: { rev: 2, count: 3 },
+		fields: true,
+	});
+});
+
+it("two reads of one chat in the same tick make one request", async () => {
+	let finish: (value: SessionReadFull<PublicCodexSession>) => void = () => {};
+	const read = vi.fn().mockImplementation(
+		() =>
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+	);
+	const reader = createSessionDeltaReader({ read, now: () => 0 });
+	const first = reader.read(selection);
+	const second = reader.read(selection);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	finish(whole([message("a")], 1));
+	expect(await first).toBe(await second);
+	expect(read).toHaveBeenCalledTimes(1);
+	// Once settled, the next read is a new request (a delta over what is held).
+	read.mockResolvedValueOnce({
+		mode: "delta",
+		token: { rev: 1, count: 1 },
+		row: row("running"),
+		change: null,
+		queued: [],
+	} satisfies SessionReadDelta);
+	await reader.read(selection);
+	expect(read).toHaveBeenCalledTimes(2);
 });

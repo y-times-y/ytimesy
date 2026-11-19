@@ -41,7 +41,7 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 				item.kind === "userMessage" && (!messageId || item.id === messageId),
 		);
 	},
-	agentSessionPageForOwner: async (user: string, id: string) => {
+	openPageForOwner: async (user: string, id: string) => {
 		const chat = (await (async (_user: string, _id: string) => store.chat)(
 			user,
 			id,

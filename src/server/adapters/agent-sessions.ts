@@ -25,9 +25,16 @@ import type {
 	SubagentFork,
 	SubagentRole,
 } from "#/domain/subagent";
+import {
+	OPEN_PAGE_FALLBACK_TURNS,
+	OPEN_PAGE_MIN_ITEMS,
+	OPEN_PAGE_MIN_TURNS,
+	OPEN_PAGE_TURNS,
+} from "#/domain/transcript-page";
 import { hubTopic } from "#/domain/user-hub";
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
+import { recordPageRead } from "./database-byte-accounting";
 import { heldForSetupSql } from "./queued-user-messages";
 import {
 	boundedPageStartSql,
@@ -415,6 +422,49 @@ export async function agentSessionPageForOwner(
 > {
 	// Reads agent_session_item (transcript-page-sql.ts): the cursor and the
 	// turn starts by index, then only the page's rows.
+	return readPageOnce(userId, sessionId, page);
+}
+
+/**
+ * The page a chat opens on (and a send, stop or connect answers with): its
+ * last `turns` turns (OPEN_PAGE_TURNS), never fewer than OPEN_PAGE_MIN_TURNS.
+ * The running turn is the last one, so it is always whole. A page of short
+ * turns that may not fill the screen is widened once to
+ * OPEN_PAGE_FALLBACK_TURNS (its rows are small by construction, so the second
+ * read is cheap).
+ */
+export async function openPageForOwner(
+	userId: string,
+	sessionId: string,
+	turns = OPEN_PAGE_TURNS,
+) {
+	const asked = Math.max(turns, OPEN_PAGE_MIN_TURNS);
+	const read = await agentSessionPageForOwner(userId, sessionId, {
+		turns: asked,
+	});
+	if (
+		read &&
+		asked < OPEN_PAGE_FALLBACK_TURNS &&
+		read.hasOlderItems &&
+		(Array.isArray(read.items) ? read.items.length : 0) < OPEN_PAGE_MIN_ITEMS
+	)
+		return agentSessionPageForOwner(userId, sessionId, {
+			turns: OPEN_PAGE_FALLBACK_TURNS,
+		});
+	return read;
+}
+
+async function readPageOnce(
+	userId: string,
+	sessionId: string,
+	page: { readonly turns: number; readonly beforeId?: string },
+): Promise<
+	| (AgentSessionRecord & {
+			readonly hasOlderItems: boolean;
+			readonly pageFound: boolean;
+	  })
+	| null
+> {
 	const result = await database().query(
 		`/* agentSessionPageForOwner */ with s as (select ${SESSION_COLUMNS.replace(",items,", ",")} from agent_session where id=$1 and user_id=$2),
 		 st as (select case when $3::text is null
@@ -443,6 +493,7 @@ export async function agentSessionPageForOwner(
 	if (!row) return null;
 	// One field per page read (bytes of the page's items as they left the
 	// database), beside db.egress_summary's per-statement totals.
+	recordPageRead();
 	console.info("session.page_read", {
 		label: "agentSessionPageForOwner",
 		items: Array.isArray(row.items) ? row.items.length : 0,

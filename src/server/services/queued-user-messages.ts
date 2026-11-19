@@ -23,18 +23,15 @@ import {
 	sessionTitleFromText,
 	withQueuedUserMessages,
 } from "#/domain/session-item";
-import {
-	latestTranscriptPage,
-	OPEN_PAGE_TURNS,
-} from "#/domain/transcript-page";
+import { latestTranscriptPage } from "#/domain/transcript-page";
 import { startAfterResponse } from "../adapters/after-response";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
-	agentSessionPageForOwner,
 	claimChatForSend,
 	claimInitialSetupChat,
 	insertAgentSession,
+	openPageForOwner,
 	reusableEmptyChat,
 	sessionHoldsUserMessage,
 } from "../adapters/agent-sessions";
@@ -781,9 +778,7 @@ export async function publicSessionView(
 		: null;
 	queued?.catch(() => {});
 	const reading = scope.sessionId
-		? agentSessionPageForOwner(scope.userId, scope.sessionId, {
-				turns: OPEN_PAGE_TURNS,
-			})
+		? openPageForOwner(scope.userId, scope.sessionId)
 		: undefined;
 	const view = await Effect.runPromise(
 		readHarnessWorkspaceSession(scope, reading),

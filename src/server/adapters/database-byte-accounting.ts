@@ -98,6 +98,23 @@ const totals = new Map<string, Totals>();
 const tagCache = new Map<string, string>();
 let windowStartedAt = 0;
 
+/**
+ * Chat page reads in this interval, and the ones a client's known revision
+ * replaced: `unchanged` (zero items sent) or `delta` (only changed rows).
+ * Logged in `db.egress_summary` as `sessionPageReads` / `sessionPageReadsSkipped`,
+ * beside the per-read `session.page_read` lines.
+ */
+export type PageReadSkipReason = "unchanged" | "delta";
+const pageReads = { read: 0, unchanged: 0, delta: 0 };
+
+export function recordPageRead() {
+	pageReads.read += 1;
+}
+
+export function recordPageReadSkipped(reason: PageReadSkipReason) {
+	pageReads[reason] += 1;
+}
+
 function cachedTag(sql: string) {
 	let tag = tagCache.get(sql);
 	if (tag === undefined) {
@@ -123,7 +140,7 @@ function recordEgress(sql: string, rows: number, bytes: number, now: number) {
 
 /** Logs the running totals as one line and starts a new interval. */
 export function flushEgressSummary(now = Date.now()) {
-	if (totals.size) {
+	if (totals.size || pageReads.read || pageReads.unchanged || pageReads.delta) {
 		let bytes = 0;
 		let rows = 0;
 		let calls = 0;
@@ -143,16 +160,23 @@ export function flushEgressSummary(now = Date.now()) {
 				totalApproxBytes: bytes,
 				totalRows: rows,
 				totalCalls: calls,
+				sessionPageReads: pageReads.read,
+				sessionPageReadsSkipped: {
+					unchanged: pageReads.unchanged,
+					delta: pageReads.delta,
+				},
 				top,
 			}),
 		);
 	}
 	totals.clear();
+	pageReads.read = pageReads.unchanged = pageReads.delta = 0;
 	windowStartedAt = now;
 }
 
 /** Test hook: forget the running totals. */
 export function resetEgressSummary() {
+	pageReads.read = pageReads.unchanged = pageReads.delta = 0;
 	totals.clear();
 	tagCache.clear();
 	windowStartedAt = 0;

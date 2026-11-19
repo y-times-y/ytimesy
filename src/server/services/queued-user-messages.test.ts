@@ -61,6 +61,7 @@ vi.mock("../adapters/agent-sessions", () => ({
 		);
 	},
 	agentSessionPageForOwner: vi.fn(async () => null),
+	openPageForOwner: vi.fn(async () => null),
 	claimChatForSend: mocks.claim,
 	reusableEmptyChat: mocks.reusable,
 	insertAgentSession: mocks.insert,
