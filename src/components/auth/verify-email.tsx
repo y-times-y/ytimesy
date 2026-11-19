@@ -11,8 +11,8 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card.tsx";
-import { FieldDescription } from "#/components/ui/field.tsx";
-import { Input } from "#/components/ui/input.tsx";
+import { FieldDescription, FieldError } from "#/components/ui/field.tsx";
+import { OtpInput, type OtpInputHandle } from "#/components/ui/otp-input.tsx";
 import { Spinner } from "#/components/ui/spinner.tsx";
 import { safeReturnTo } from "#/domain/return-to";
 import { authClient as client } from "#/features/auth/client";
@@ -65,7 +65,7 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 	const [checking, setChecking] = useState(false);
 	const [sending, setSending] = useState(false);
 	const [cooldown, setCooldown] = useState(RESEND_COOLDOWN_SECONDS);
-	const input = useRef<HTMLInputElement>(null);
+	const otp = useRef<OtpInputHandle>(null);
 
 	useEffect(() => {
 		setEmail(sessionStorage.getItem("better-auth-ui.verify-email") ?? "");
@@ -88,7 +88,8 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 			setError(codeProblem(result.error));
 			setCode("");
 			setChecking(false);
-			input.current?.focus();
+			// After the boxes are enabled again.
+			requestAnimationFrame(() => otp.current?.focus());
 			return;
 		}
 		sessionStorage.removeItem("better-auth-ui.verify-email");
@@ -96,8 +97,7 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 		window.location.assign(safeReturnTo(redirectTo));
 	}
 
-	function change(raw: string) {
-		const digits = raw.replace(/\D/g, "").slice(0, CODE_LENGTH);
+	function change(digits: string) {
 		setCode(digits);
 		setError(null);
 		if (digits.length === CODE_LENGTH) void verify(digits);
@@ -120,7 +120,7 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 		toast.success("We sent you a new code.");
 		setCooldown(RESEND_COOLDOWN_SECONDS);
 		setCode("");
-		input.current?.focus();
+		otp.current?.focus();
 	}
 
 	return (
@@ -145,29 +145,19 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 								void verify(code);
 							}}
 						>
-							<Input
-								ref={input}
+							<OtpInput
+								handle={otp}
 								value={code}
-								onChange={(event) => change(event.target.value)}
-								inputMode="numeric"
-								autoComplete="one-time-code"
-								pattern="[0-9]*"
-								maxLength={CODE_LENGTH}
-								placeholder="000000"
-								aria-label="6-digit code"
-								aria-invalid={error ? true : undefined}
-								// biome-ignore lint/a11y/noAutofocus: the code is the only thing to do on this page.
-								autoFocus
+								onChange={change}
+								length={CODE_LENGTH}
+								label="6-digit code"
+								invalid={Boolean(error)}
 								disabled={checking}
-								className="h-11 text-center font-mono text-2xl tracking-[0.5em]"
+								autoFocus
 							/>
 							{error && (
-								<p
-									role="alert"
-									className="text-center text-xs text-destructive"
-								>
-									{error}
-								</p>
+								// FieldError: the page's alert rule greys every plain alert.
+								<FieldError className="text-center">{error}</FieldError>
 							)}
 							<Button
 								type="submit"
@@ -199,6 +189,18 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 				</div>
 
 				<div className="mt-4 flex w-full flex-col items-center gap-3">
+					{email && (
+						<FieldDescription className="text-center">
+							No code? If this address already has an account, we emailed you a
+							link to sign in instead.{" "}
+							<Link
+								href={`${basePaths.auth}/${viewPaths.auth.signIn}`}
+								className="underline underline-offset-4"
+							>
+								Sign in
+							</Link>
+						</FieldDescription>
+					)}
 					<FieldDescription className="text-center">
 						Wrong address?{" "}
 						<Link
