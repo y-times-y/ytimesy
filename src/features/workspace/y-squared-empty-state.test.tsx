@@ -14,7 +14,10 @@ function buttons(node: unknown): ReactElement<Props>[] {
 
 it("says what Y² is for and offers three questions", () => {
 	const html = renderToStaticMarkup(<YSquaredEmptyState onSend={() => {}} />);
-	expect(html).toContain("Y² keeps track of this project&#x27;s threads.");
+	expect(html).toContain(
+		"Super agent keeps track of this project&#x27;s threads.",
+	);
+	expect(html).not.toContain("Y²");
 	expect(html.match(/<button type="button"/g)).toHaveLength(3);
 	expect(Y_SQUARED_SUGGESTIONS).toEqual([
 		"What needs me?",

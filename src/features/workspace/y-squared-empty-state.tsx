@@ -1,4 +1,5 @@
 import {
+	SUPER_AGENT_NAME,
 	Y_SQUARED_EMPTY_TEXT,
 	Y_SQUARED_SUGGESTIONS,
 } from "#/domain/y-squared";
@@ -14,7 +15,10 @@ export function YSquaredEmptyState({
 		<div className="y-squared-empty">
 			<YSquaredMark size={40} live />
 			<p className="y-squared-empty-text">{Y_SQUARED_EMPTY_TEXT}</p>
-			<ul className="y-squared-suggestions" aria-label="Ask Y²">
+			<ul
+				className="y-squared-suggestions"
+				aria-label={`Ask ${SUPER_AGENT_NAME}`}
+			>
 				{Y_SQUARED_SUGGESTIONS.map((text) => (
 					<li key={text}>
 						<button

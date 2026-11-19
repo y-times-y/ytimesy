@@ -79,6 +79,7 @@ import {
 	accountDisplayName,
 	accountInitials,
 } from "#/domain/workspace-settings";
+import { SUPER_AGENT_NAME } from "#/domain/y-squared";
 import {
 	dropFirstPaintStyles,
 	FIRST_PAINT_ROWS_SCRIPT,
@@ -402,7 +403,7 @@ export function ProjectSidebar({
 				data-section="y2"
 				aria-labelledby="sidebar-section-y2"
 			>
-				{sectionHeader("y2", "Super agent")}
+				{sectionHeader("y2", SUPER_AGENT_NAME)}
 				<ul className="sidebar-chats sidebar-y2-list">
 					{rows.map((row) => y2Row(row))}
 				</ul>

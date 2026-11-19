@@ -22,6 +22,13 @@ import {
 export const Y_SQUARED_TITLE = "Y²";
 
 /**
+ * What the person sees as this chat's name (sidebar section, chat header,
+ * Overview tab, empty state). The stored title above stays "Y²" and is never
+ * shown for it.
+ */
+export const SUPER_AGENT_NAME = "Super agent";
+
+/**
  * Y² has no machine, and Claude Code (the user's Claude subscription) runs the
  * `claude` CLI on one, unless the user has a Claude runner box
  * (claude-runner.ts): there the CLI runs with no machine at all and only
@@ -135,7 +142,7 @@ export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /** What an empty Y² chat says it is for, and the questions it offers to send. */
-export const Y_SQUARED_EMPTY_TEXT = "Y² keeps track of this project's threads.";
+export const Y_SQUARED_EMPTY_TEXT = `${SUPER_AGENT_NAME} keeps track of this project's threads.`;
 export const Y_SQUARED_SUGGESTIONS = [
 	"What needs me?",
 	"What's running?",

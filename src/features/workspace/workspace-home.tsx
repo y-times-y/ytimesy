@@ -104,7 +104,6 @@ import {
 } from "#/domain/pull-request-handoff-item";
 import { composerSendBlock } from "#/domain/send-blocked";
 import {
-	chatHeaderTitle,
 	composerSubmitTarget,
 	fileChangesFromSessionItems,
 	heldForSetupMessage,
@@ -294,6 +293,7 @@ import {
 } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { useStableCallback } from "../sessions/stable-callbacks";
+import { ChatHeaderTitle } from "./chat-header-title";
 import {
 	getWorkspaceDesktop,
 	prepareWorkspaceDesktopFn,
@@ -4093,13 +4093,11 @@ export function WorkspaceHome({
 										{followUpLayout ? (
 											<div className="session-title-row">
 												<div className="session-title-copy">
-													<span
-														className="session-title"
-														data-role={ySquaredOpen ? "y2" : undefined}
-													>
-														{ySquaredOpen ? <YSquaredMark size={20} /> : null}
-														{chatHeaderTitle(listedTitle, sessionTitle)}
-													</span>
+													<ChatHeaderTitle
+														superAgent={ySquaredOpen}
+														listedTitle={listedTitle}
+														sessionTitle={sessionTitle}
+													/>
 													{activeThreadLabel && !ySquaredOpen ? (
 														<span
 															className="thread-id"
