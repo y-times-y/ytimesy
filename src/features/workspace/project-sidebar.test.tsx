@@ -165,6 +165,44 @@ describe("left sidebar", () => {
 		expect(beta).not.toContain("Older chat");
 	});
 
+	it("gives every thread row a Y in its own colour, and the super agent keeps its own mark", () => {
+		const numbered = [
+			{
+				id: "c1",
+				title: "First",
+				updatedAt: "2026-10-19T00:00:00Z",
+				threadNumber: 1,
+			},
+			{
+				id: "c2",
+				title: "Second",
+				updatedAt: "2026-10-18T00:00:00Z",
+				threadNumber: 2,
+			},
+		];
+		const html = render(true, {
+			projectChats: [{ project: beta, chats: numbered }],
+		});
+		const row = (id: string) => {
+			const start = html.indexOf(`data-chat-id="${id}"`);
+			return html.slice(start, html.indexOf("</li>", start));
+		};
+		// The agent colours, in order: thread 1 the first, thread 2 the second.
+		expect(row("c1")).toContain("--thread-color:#FF8F96");
+		expect(row("c2")).toContain("--thread-color:#9CD242");
+		expect(row("c1")).toContain('class="thread-mark"');
+		expect(row("c1")).toContain('class="sidebar-chat-lead"');
+		// No second "2": that is the super agent's.
+		expect(row("c1")).not.toContain("y2-mark");
+	});
+
+	it("draws one thread Y for every thread row, and none for the super agent's row", () => {
+		const html = render();
+		const threadRows = html.match(/data-variant="thread"/g)?.length ?? 0;
+		expect(threadRows).toBeGreaterThan(0);
+		expect(html.match(/class="thread-mark"/g)).toHaveLength(threadRows);
+	});
+
 	it("names a numbered thread once: the dot and ytimesy-12, not the project twice", () => {
 		const numbered = [
 			{
