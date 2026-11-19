@@ -827,7 +827,7 @@
 }
 .session-message[data-role="user"]:not([data-sender])
 	> p:not(.session-queued-note) {
-	border-radius: 18px;
+	border-radius: 8px;
 }
 @media (max-width: 600px) {
 	.session-message[data-role="user"]:not([data-sender]) {
