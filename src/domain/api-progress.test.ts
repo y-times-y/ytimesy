@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { applyApiProgress, recordedContextUsage } from "./api-progress";
 import { SessionItemId } from "./ids";
 import { type SessionItem, sessionItemsFromUnknown } from "./session-item";
@@ -137,4 +137,26 @@ it("keeps replace on a secret request, so the card can say it replaces a value",
 			? request.secrets[1]
 			: undefined;
 	expect(second?.replace).toBeUndefined();
+});
+
+describe("a viewed image's tool result", () => {
+	it("keeps only what the image is in the card and the transcript, never its base64", () => {
+		const items = applyApiProgress([], "turn", {
+			type: "tool-result",
+			id: "c1",
+			name: "view_image",
+			failed: false,
+			output: {
+				name: "screenshot.png",
+				size: 84_000,
+				mediaType: "image/png",
+				base64: "A".repeat(112_000),
+			},
+		});
+		const output = (items[0] as { output?: string }).output ?? "";
+		expect(output).toContain("screenshot.png");
+		expect(output).toContain("not stored");
+		expect(output).not.toContain("AAAAAAAA");
+		expect(output.length).toBeLessThan(400);
+	});
 });

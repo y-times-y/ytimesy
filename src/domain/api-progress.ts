@@ -214,7 +214,7 @@ export function applyApiProgress(
 								? publicToolDetail(
 										storedCodeModeResult(event.output as CodeModeResult),
 									)
-								: publicToolDetail(event.output, "output"),
+								: publicToolDetail(withoutImageBytes(event.output), "output"),
 					}),
 			status:
 				event.type === "tool-call"
@@ -234,6 +234,21 @@ export function applyApiProgress(
 	return existing
 		? items.map((item) => (item.id === id ? next : item))
 		: [...items, next];
+}
+
+/**
+ * A viewed image's result carries its bytes for the model (toModelOutput); the
+ * card and the stored transcript keep only what the image is, not its base64.
+ */
+export function withoutImageBytes(value: unknown): unknown {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+	const record = value as Record<string, unknown>;
+	if (typeof record.base64 !== "string") return value;
+	const { base64, ...rest } = record;
+	return {
+		...rest,
+		image: `[${Math.round((base64.length * 3) / 4 / 1024)} KB, not stored]`,
+	};
 }
 
 /** A lean command result that started a background command (lean-engine.ts). */
