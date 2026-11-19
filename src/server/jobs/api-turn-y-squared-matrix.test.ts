@@ -1035,6 +1035,7 @@ describe("Y² on the Claude Code route", () => {
 				"stop_thread",
 				"thread",
 				"threads",
+				"view_image",
 			].sort(),
 		);
 		expect(outcome).toBe("completed");

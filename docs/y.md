@@ -6,7 +6,7 @@ Status 2026-11-12: built behind a per-project switch (Project settings → Y →
 
 | Layer | One per | Does | Tools |
 |---|---|---|---|
-| **Y²** | project | Watches every thread and tells the person what is going on: what needs them, what is working, what finished with its pull request. Never works. | `threads`, `thread`, `start_thread`, `message_thread`, `stop_thread`, `schedule`, `ask_user` (`src/domain/y-squared.ts`, `src/server/services/y-squared-tools.ts`) |
+| **Y²** | project | Watches every thread and tells the person what is going on: what needs them, what is working, what finished with its pull request. Never works. | `threads`, `thread`, `start_thread`, `message_thread`, `stop_thread`, `schedule`, `view_image`, `ask_user` (`src/domain/y-squared.ts`, `src/server/services/y-squared-tools.ts`) |
 | **Y** | thread (chat) | The agent the person talks to. Hands every change to builders, asks readers for code facts, reports in ≤100 words. Never changes, runs or reads code. | `agent`, `agent_send`, `ask_user`, `request_project_secret` (`src/domain/y-agent.ts`) |
 | **Builders** | piece of work | Today's builder harness as writer subagents on forks of the thread's VM. Not conversational: brief in, report out. | the full harness |
 | **Subagents** | — | Bounded helpers under a builder, as before. | as before |
@@ -31,7 +31,9 @@ Why Y does not execute: DeepSeek's Super-agent essay (Nov 1 2026, section 2.1): 
 
 ## Y² write tools
 
-`start_thread(title, brief)`, `message_thread(id, text)`, `stop_thread(id)` (`src/server/services/y-squared-tools.ts`, schemas in `src/domain/y-squared.ts`). Y² runs threads like a captain; it still never works and has no VM.
+`start_thread(title, brief, attachments?)`, `message_thread(id, text, attachments?)`, `stop_thread(id)` (`src/server/services/y-squared-tools.ts`, schemas in `src/domain/y-squared.ts`). Y² runs threads like a captain; it still never works and has no VM.
+
+**Attached images.** Y² has no machine, so an attachment is never a path to it. The attachment note it reads names each file ("The person attached shot.png (image, 120 KB). Use view_image to look at it.", `ySquaredAttachmentNote`, applied to every model input of a Y² turn, API/Codex/Grok and Claude runner alike) and never mentions /tmp. `view_image(attachment)` resolves a name, id or old-style path against the user messages of THIS chat only, reads that one object (`downloadMessageAttachment`, owner-checked) and returns just the image part (`toModelOutput`); over 3 MB it refuses by size (no image library to scale it down), non-images are refused. Persisted history (`checkpointApiTurn`/`finalizeApiTurn`) swaps a viewed image's bytes for a one-line note, so later steps and turns carry text; wakes, crew rows and `threads` output never carry bytes. `attachments` (max 4 names/ids from this chat) on `start_thread`/`message_thread` hands each file's bytes to the send path as the person's own attachments, so the target chat stores its own copy under its own id (builders then find them in the VM as usual). Limits stay 8 files, 10 MB each, 20 MB total.
 
 - **Start.** A new root chat in the project through the person's own send path (`sendComposerMessage`, `createNew: true`, Y²'s own model); the first line of the message is the title. The result says `Started` (the turn is running) or `Queued … behind the budget/concurrency limit`.
 - **Message.** The id must be a root thread of the same project, not Y² and not a subagent (metadata row only: `agentSessionMetadataForOwner`, never the transcript). A running thread queues the message behind its turn (or takes it at its next step with `mode: "steer"`); an idle one starts a turn. Same `sendComposerMessage`, so the existing queue applies. Not `queueAgentPeerMessage` (parent→child only, reads transcripts). Messages and briefs are capped at 8,000 characters.

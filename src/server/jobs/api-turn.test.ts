@@ -2218,6 +2218,7 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 			"stop_thread",
 			"thread",
 			"threads",
+			"view_image",
 		]);
 		expect(y2?.instructions).toContain(
 			"You are Y², the ytimesy agent above all",

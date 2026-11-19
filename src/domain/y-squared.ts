@@ -5,6 +5,10 @@ import type { SessionItem } from "./session-item";
 import type { ChatWaitingOn } from "./sidebar-chats";
 import { ASK_USER_TOOL } from "./user-question";
 import {
+	forwardAttachmentsField,
+	Y_SQUARED_VIEW_IMAGE_TOOL,
+} from "./y-squared-images";
+import {
 	Y_SQUARED_QUIET_REPLY,
 	Y_SQUARED_SCHEDULE_LIMIT,
 	Y_SQUARED_SCHEDULE_TOOL,
@@ -113,10 +117,12 @@ export const startThreadInput = z.object({
 		.min(1)
 		.max(Y_SQUARED_MESSAGE_LIMIT)
 		.describe("The thread's first message: self-contained"),
+	attachments: forwardAttachmentsField,
 });
 export const messageThreadInput = z.object({
 	id: z.string().min(1).max(64).describe("The thread's id"),
 	text: z.string().trim().min(1).max(Y_SQUARED_MESSAGE_LIMIT),
+	attachments: forwardAttachmentsField,
 	mode: z
 		.enum(Y_SQUARED_MESSAGE_MODES)
 		// Optional, not .default(): the schema every route shows the model keeps
@@ -140,6 +146,7 @@ export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
 	Y_SQUARED_READ_CANVAS_TOOL,
 	Y_SQUARED_SHOW_CANVAS_TOOL,
 	Y_SQUARED_SCHEDULE_TOOL,
+	Y_SQUARED_VIEW_IMAGE_TOOL,
 	ASK_USER_TOOL,
 ]);
 
@@ -167,6 +174,7 @@ export function ySquaredInstructions() {
 		"- Start a thread only with a self-contained brief (goal, constraints, what done looks like): the thread cannot see this chat. Never start more threads than the work needs; one thread per independent piece of work. A started thread may be queued behind the budget or concurrency limit: say how many were started and how many are queued, from the tool results.",
 		'- Acknowledge in ONE line right away when the person asks for something or you start, message or stop threads, naming what you did: "Started A and B; I\'ll tell you as each finishes or needs you." Never go silent between a start and the end.',
 		'- You wake when a thread finishes a turn, needs the person or fails, when the person starts a thread themselves, and about every 10 minutes while threads are still working. At each wake give a short delta ("A finished, PR #12 opened. B still working, 8 min."), never a full re-listing. A still-working wake with nothing new and no follow-up signal needs no message at all (see Quiet wakes). "You were not part of this: <thread> got <request>" means the person messaged that thread directly: take it into account, do not repeat it back.',
+		`- Images the person attached to a message here: look at each with \`${Y_SQUARED_VIEW_IMAGE_TOOL}\` (the attachment's name) before you answer about it, and never describe or act on an image you did not view. A thread cannot see this chat's files: when you start or message a thread about attached files, pass their names in \`attachments\` (at most 4) as well as saying in the text what matters.`,
 		"- Never poll. After starting or messaging threads, end your turn: you wake by yourself. Do not call `threads` again just to see progress.",
 		`- Choosing how a message reaches a working thread (\`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` mode): "queue" (default) when it can wait for the turn to end, a follow-up or a next step; "steer" for a correction or new fact the thread should use now, without losing its work (it reads it at its next step); "interrupt" only when its current work is wrong or must stop at once: the running turn is cancelled (what it already did stays in the thread), then your message starts its next turn. An idle thread just starts. Prefer steer over interrupt, and interrupt over a separate stop. Say which mode you used.`,
 		`- Answer terse commands tersely and act: "merge X", "hold Y" -> \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (mode "interrupt" to stop the running turn first, else the default) or \`${Y_SQUARED_STOP_THREAD_TOOL}\`, then confirm in one line. Ask the person only for a real decision or blocker.`,

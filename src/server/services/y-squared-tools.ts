@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { detectMediaType } from "@ai-sdk/provider-utils";
 import { type ToolSet, tool } from "ai";
 import { Effect } from "effect";
 import { z } from "zod";
@@ -16,6 +17,11 @@ import {
 	canvasOutlinePage,
 	canvasSizeKb,
 } from "#/domain/canvas-text";
+import {
+	attachmentSizeLabel,
+	isViewableImage,
+	type MessageAttachment,
+} from "#/domain/message-attachment";
 import { wakeMessageId } from "#/domain/pull-request-wake";
 import type { SessionItem } from "#/domain/session-item";
 import { threadOutcomeLines } from "#/domain/thread-outcome";
@@ -48,6 +54,14 @@ import {
 	crewDigest,
 } from "#/domain/y-squared-crew";
 import {
+	findAttachment,
+	viewImageInput,
+	Y_SQUARED_IMAGE_BYTES,
+	Y_SQUARED_IMAGE_MARK,
+	Y_SQUARED_VIEW_IMAGE_DESCRIPTION,
+	Y_SQUARED_VIEW_IMAGE_TOOL,
+} from "#/domain/y-squared-images";
+import {
 	describeSpec,
 	formatLocal,
 	scheduleInput,
@@ -60,6 +74,7 @@ import {
 	listSidebarAgentSessions,
 } from "../adapters/agent-sessions";
 import { latestCanvasForOwner } from "../adapters/canvas-read";
+import { downloadMessageAttachment } from "../adapters/checkpoints/storage";
 import { threadOutcomeForOwner } from "../adapters/thread-outcome";
 import {
 	type YSquaredCrewClient,
@@ -82,6 +97,8 @@ type Deps = {
 	readonly outcome: typeof threadOutcomeForOwner;
 	/** One canvas of a thread, latest revision, read whole (one item by id): only when Y² reads or shows it. */
 	readonly canvas: typeof latestCanvasForOwner;
+	/** One attachment's base64 bytes (checks the owner). */
+	readonly download: typeof downloadMessageAttachment;
 	/** The person's own send path: queues behind a running turn, else starts a turn (admission applies). */
 	readonly send: (
 		machines: WorkspaceMachines,
@@ -109,6 +126,7 @@ const defaultDeps: Deps = {
 	list: (...args) => listSidebarAgentSessions(...args),
 	crew: (projectId) => ySquaredCrewFor(projectId),
 	now: () => Date.now(),
+	download: (...args) => downloadMessageAttachment(...args),
 	metadata: (...args) => agentSessionMetadataForOwner(...args),
 	outcome: (...args) => threadOutcomeForOwner(...args),
 	canvas: (...args) => latestCanvasForOwner(...args),
@@ -208,6 +226,36 @@ export function ySquaredTools(input: {
 			.crew(input.projectId)
 			?.noteY2Sent?.(sessionId)
 			.catch(() => undefined);
+	};
+	/** The user-message attachments of THIS chat only. */
+	const ownAttachments = (): MessageAttachment[] =>
+		(input.items?.() ?? []).flatMap((item) =>
+			item.kind === "userMessage" ? (item.attachments ?? []) : [],
+		);
+	const unknownAttachment = (ref: string) =>
+		`No attachment "${ref}" in this chat. Attachments: ${
+			ownAttachments()
+				.map((a) => a.name)
+				.join(", ") || "none"
+		}.`;
+	/** Files of this chat to pass on with a message (the target chat stores its own copy). */
+	const forwarded = async (refs: readonly string[] | undefined) => {
+		if (!refs?.length) return { files: undefined };
+		const own = ownAttachments();
+		const found = new Map<string, MessageAttachment>();
+		for (const ref of refs) {
+			const attachment = findAttachment(own, ref);
+			if (!attachment) return { error: unknownAttachment(ref) };
+			found.set(attachment.id, attachment);
+		}
+		const files = await Promise.all(
+			[...found.values()].map(async (a) => ({
+				name: a.name,
+				mediaType: a.mediaType,
+				base64: await deps.download(input.userId, input.selfId, a.id),
+			})),
+		);
+		return { files };
 	};
 	const noThread = "No such thread in this project.";
 	const noMachines = "Threads cannot be run here.";
@@ -353,12 +401,60 @@ export function ySquaredTools(input: {
 				};
 			},
 		}),
+		[Y_SQUARED_VIEW_IMAGE_TOOL]: tool({
+			description: Y_SQUARED_VIEW_IMAGE_DESCRIPTION,
+			inputSchema: viewImageInput,
+			execute: async ({ attachment: reference }) => {
+				const attachment = findAttachment(ownAttachments(), reference);
+				if (!attachment) return unknownAttachment(reference);
+				if (!isViewableImage(attachment.mediaType))
+					return `${attachment.name} is not a PNG, JPEG, GIF or WebP image, so it cannot be viewed.`;
+				if (attachment.size > Y_SQUARED_IMAGE_BYTES)
+					return `${attachment.name} is ${attachmentSizeLabel(attachment.size)}; images over 3 MB cannot be viewed (there is no way to shrink them here). Ask the person for a smaller one.`;
+				const base64 = await deps.download(
+					input.userId,
+					input.selfId,
+					attachment.id,
+				);
+				const mediaType = detectMediaType({
+					data: base64,
+					topLevelType: "image",
+				});
+				if (!mediaType || !isViewableImage(mediaType))
+					return `${attachment.name} does not hold a PNG, JPEG, GIF or WebP image.`;
+				return {
+					name: attachment.name,
+					size: attachment.size,
+					mediaType,
+					base64,
+				};
+			},
+			toModelOutput: ({ output }) =>
+				typeof output === "string"
+					? { type: "text", value: output }
+					: {
+							type: "content",
+							value: [
+								{
+									type: "text",
+									text: `${Y_SQUARED_IMAGE_MARK}${output.name} (${attachmentSizeLabel(output.size)})`,
+								},
+								{
+									type: "file",
+									data: { type: "data", data: output.base64 },
+									mediaType: output.mediaType,
+								},
+							],
+						},
+		}),
 		[Y_SQUARED_START_THREAD_TOOL]: tool({
 			description: Y_SQUARED_START_THREAD_DESCRIPTION,
 			inputSchema: startThreadInput,
-			execute: async ({ title, brief }) => {
+			execute: async ({ title, brief, attachments }) => {
 				if (!input.machines || !input.modelId || !input.harnessId)
 					return noMachines;
+				const forward = await forwarded(attachments);
+				if (forward.error) return `Not started: ${forward.error}`;
 				if (starts >= Y_SQUARED_MAX_STARTS_PER_TURN)
 					return `Not started: at most ${Y_SQUARED_MAX_STARTS_PER_TURN} threads may be started in one turn. Tell the person what is left to start.`;
 				starts++;
@@ -375,7 +471,13 @@ export function ySquaredTools(input: {
 						// The first line names the chat (sessionTitleFromText).
 						text: `${title}\n\n${brief}`,
 						modelId: input.modelId,
-						idempotencyKey: sendKey("start", title, brief),
+						idempotencyKey: sendKey(
+							"start",
+							title,
+							brief,
+							...(attachments ?? []),
+						),
+						...(forward.files ? { attachments: forward.files } : {}),
 					},
 				);
 				if (sent.failed) return `Not started: ${sent.failed}`;
@@ -387,10 +489,12 @@ export function ySquaredTools(input: {
 		[Y_SQUARED_MESSAGE_THREAD_TOOL]: tool({
 			description: Y_SQUARED_MESSAGE_THREAD_DESCRIPTION,
 			inputSchema: messageThreadInput,
-			execute: async ({ id, text, mode = "queue" }) => {
+			execute: async ({ id, text, mode = "queue", attachments }) => {
 				if (!input.machines || !input.modelId) return noMachines;
 				const chat = await ownThread(id);
 				if (!chat) return noThread;
+				const forward = await forwarded(attachments);
+				if (forward.error) return `Not sent: ${forward.error}`;
 				await markSent(chat.id);
 				const interrupted =
 					mode === "interrupt" && chat.turnStatus === "running";
@@ -415,7 +519,13 @@ export function ySquaredTools(input: {
 					{
 						text,
 						modelId: chat.listedModelId ?? input.modelId,
-						idempotencyKey: sendKey("message", chat.id, text),
+						idempotencyKey: sendKey(
+							"message",
+							chat.id,
+							text,
+							...(attachments ?? []),
+						),
+						...(forward.files ? { attachments: forward.files } : {}),
 						// Steer: the row waits already released, so the running turn takes
 						// it at its next step (releaseQueuedComposerMessage's mark). An idle
 						// thread starts a turn as for any send; if the turn ends before the

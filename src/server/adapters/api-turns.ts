@@ -32,6 +32,7 @@ import {
 	type TurnExecutor,
 } from "#/domain/turn-executor";
 import { Y_SQUARED_CLAUDE_CODE_REFUSAL } from "#/domain/y-squared";
+import { withoutViewedImages } from "#/domain/y-squared-images";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import { withStepTrace } from "../services/step-timing";
 import {
@@ -906,6 +907,8 @@ export async function checkpointApiTurn(
 	items: readonly SessionItem[],
 	failover?: TurnFailoverColumn,
 ) {
+	// A viewed attachment's pixels are never persisted: a later step or turn reads a note.
+	messages = withoutViewedImages(messages);
 	// $5 is the failover, so the first item's id is $6.
 	const write = planItemsWrite(turn, items, 4, "agent_session.items", 6);
 	const result = await retryDroppedConnection(() =>
@@ -1012,6 +1015,7 @@ export async function finalizeApiTurn(
 	settled: readonly SessionItem[],
 	messages?: readonly ModelMessage[],
 ) {
+	if (messages) messages = withoutViewedImages(messages);
 	// Its messages record when it ended (turn-end.ts).
 	const items = settledTurnItems(settled, Date.now());
 	// $5 is the messages, so the first item's id is $6.

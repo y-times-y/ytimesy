@@ -135,6 +135,7 @@ import {
 import { hubTopic } from "#/domain/user-hub";
 import { ASK_USER_TOOL } from "#/domain/user-question";
 import { ySquaredInstructions } from "#/domain/y-squared";
+import { ySquaredModelMessages } from "#/domain/y-squared-images";
 import { apiReasoningEffort } from "#/server/adapters/api-reasoning-effort";
 import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
 import { lastUserMessageIndex } from "#/server/adapters/turn-items-storage";
@@ -2493,6 +2494,8 @@ async function runApiTurnAttempt(
 					failureStage = "model";
 				}
 				history = withCompactInstruction(history);
+				// Y² reads attachments by name (view_image), never by a path.
+				if (ySquared) history = ySquaredModelMessages(history);
 				// Y² has no checkout to read evidence from and runs no
 				// command, so none of the workspace reads below apply to it.
 				if (!ySquared) history = await repositoryContext.prepare(history);
@@ -2901,7 +2904,7 @@ async function runApiTurnAttempt(
 						// Claude starts once the checkout is ready; ~/memory keeps
 						// cloning beside it (22-72 s per turn in production), and the
 						// tools that read it wait for it through `workspace`.
-						messages,
+						messages: ySquared ? ySquaredModelMessages(messages) : messages,
 						// One workspace tool lifecycle on either host: commands must be
 						// registered for completion notices, Stop and restart recovery.
 						tools: claudeCodeBridgeToolSet(

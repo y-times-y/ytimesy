@@ -116,6 +116,7 @@ describe("Y² surface", () => {
 			"stop_thread",
 			"thread",
 			"threads",
+			"view_image",
 		]);
 	});
 
