@@ -596,6 +596,28 @@ describe("Y projects: the Y² and Threads sections", () => {
 		};
 	};
 	describe("Y sections", () => {
+		it("with two Y projects, each is its own group: its Super agent row, then only its own threads", () => {
+			const betaY: SidebarChat[] = [
+				{ id: "y2-beta", title: "Y²", role: "y2", updatedAt: at },
+				{ id: "beta-thread", title: "Beta thread", updatedAt: at },
+			];
+			const html = view(true, {
+				projectChats: [
+					{ project: alpha, chats: alphaChats },
+					{ project: beta, chats: betaY },
+				],
+			});
+			expect(html).not.toContain('data-section="y2"');
+			expect(html).not.toContain('data-section="threads"');
+			const groups = html.split('data-section="project"').slice(1);
+			expect(groups).toHaveLength(2);
+			const betaGroup = groups.find((group) => group.includes("y2-beta"));
+			expect(betaGroup).toContain("beta-thread");
+			expect(betaGroup).not.toContain('data-chat-id="busy"');
+			const alphaGroup = groups.find((group) => group.includes('"y2"'));
+			expect(alphaGroup).toContain('data-chat-id="busy"');
+			expect(alphaGroup).not.toContain("beta-thread");
+		});
 		it('labels the section "Super agent" once (the mark is already there), never a second label in the row', () => {
 			const html = view();
 			expect(html.match(/Super agent/g)).toHaveLength(1);
@@ -794,7 +816,7 @@ describe("Y projects: the Y² and Threads sections", () => {
 		);
 	});
 
-	it("shows no Threads '+' when several Y projects exist and none is open", () => {
+	it("with several Y projects there is no shared Threads '+': each project's own group has its own", () => {
 		const second: SidebarChat[] = [
 			{ id: "y2b", title: "Y²", role: "y2", updatedAt: at },
 			{ id: "bt", title: "Beta thread", updatedAt: at },
@@ -807,7 +829,7 @@ describe("Y projects: the Y² and Threads sections", () => {
 			],
 		});
 		expect(html.match(/data-role="y2"/g)).toHaveLength(2);
-		expect(html).not.toContain("sidebar-section-add");
+		expect(html.match(/aria-label="New chat in /g)).toHaveLength(2);
 		expect(html).not.toContain("sidebar-list-header");
 	});
 

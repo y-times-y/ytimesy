@@ -236,8 +236,12 @@ export function ProjectSidebar({
 		statusOf: chatStatus,
 	});
 	const yProjectIds = new Set(yRows.map(({ project }) => project.id));
+	// One Y project keeps the Super agent and Threads sections. With several,
+	// each project is its own group (its Super agent row, its threads, its own
+	// Settled), so threads of different projects are never mixed in one list.
+	const groupedByProject = yRows.length > 1;
 	const orderedProjects = projectsByRecentActivity(projects, groups).filter(
-		(project) => !yProjectIds.has(project.id),
+		(project) => groupedByProject || !yProjectIds.has(project.id),
 	);
 	const selected = projects.find((project) => project.id === selectedProjectId);
 	const newChatActive = newChatIsActive({
@@ -587,11 +591,16 @@ export function ProjectSidebar({
 	 * The Y² and Threads sections are above; nothing else is nested.
 	 */
 	function projectSection(project: Project) {
+		const yRow = groupedByProject
+			? yRows.find((row) => row.project.id === project.id)
+			: undefined;
 		const name = projectDisplayName(project);
 		const selected = project.id === selectedProjectId;
 		const open = !shownCollapsedIds.includes(project.id);
 		const bodyId = `sidebar-project-body-${project.id}`;
-		const rows = recent.plain.filter((row) => row.project.id === project.id);
+		const rows = (yRow ? recent.y : recent.plain).filter(
+			(row) => row.project.id === project.id,
+		);
 		const settledShown = settledProjectIds.includes(project.id);
 		return (
 			<section
@@ -663,6 +672,9 @@ export function ProjectSidebar({
 					"sidebar-status-heading sidebar-section-header sidebar-plain-header",
 				)}
 				<div className="sidebar-plain-body" id={bodyId}>
+					{open && yRow ? (
+						<ul className="sidebar-chats sidebar-y2-list">{y2Row(yRow)}</ul>
+					) : null}
 					{open
 						? threadBlocks(rows, {
 								listId: `sidebar-settled-list-${project.id}`,
@@ -673,7 +685,7 @@ export function ProjectSidebar({
 											? current.filter((id) => id !== project.id)
 											: [...current, project.id],
 									),
-								empty: "No chats yet.",
+								empty: yRow ? "No threads yet." : "No chats yet.",
 							})
 						: null}
 				</div>
@@ -1056,7 +1068,7 @@ export function ProjectSidebar({
 							</button>
 						</nav>
 					) : null}
-					{yRows.length ? (
+					{yRows.length && !groupedByProject ? (
 						<div className="sidebar-y-sections">
 							{y2Section(yRows)}
 							{threadsSection(recent.y)}
