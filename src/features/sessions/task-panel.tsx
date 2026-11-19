@@ -29,7 +29,10 @@ type PanelTask = AgentTask & { readonly subagent?: SubagentTaskView };
 /** Finished helpers that stay in view; older ones fold behind "Show N more". */
 const FINISHED_HELPERS_SHOWN = 3;
 
-/** `writer · fork · 41/150 steps · 6/30 min · 380k tok · $0.76 · 9.0 VM min` */
+/** An unknown cost ("$?") is left out of the panel; VM minutes are not shown at all. */
+const knownDollars = (dollars: string) => (dollars === "$?" ? "" : dollars);
+
+/** `writer · fork · 41/150 steps · 6/30 min · 380k tok · $0.76` */
 export function subagentUsageLine(view: SubagentTaskView) {
 	const spend = formatSpend(view.subtree);
 	const minutes = Math.round(view.minutes);
@@ -41,8 +44,7 @@ export function subagentUsageLine(view: SubagentTaskView) {
 			: `${view.steps} steps`,
 		view.budget ? `${minutes}/${view.budget.minutes} min` : `${minutes} min`,
 		`${spend.tokens} tok`,
-		spend.dollars,
-		spend.vm,
+		knownDollars(spend.dollars),
 	]
 		.filter(Boolean)
 		.join(" · ");
@@ -163,7 +165,7 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 			{treeSpend ? (
 				<p className="task-usage task-usage-total">
 					Subagents {subagents.length} ·{" "}
-					{[`${treeSpend.tokens} tok`, treeSpend.dollars, treeSpend.vm]
+					{[`${treeSpend.tokens} tok`, knownDollars(treeSpend.dollars)]
 						.filter(Boolean)
 						.join(" · ")}
 				</p>

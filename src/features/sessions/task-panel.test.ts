@@ -117,12 +117,14 @@ it("shows each subagent's role, VM, budget use and spend, and the tree total", (
 		}),
 	);
 	expect(html).toContain(
-		"writer · fork · 41/150 steps · 6/30 min · 480k tok · $0.96 · 9.0 VM min",
+		"writer · fork · 41/150 steps · 6/30 min · 480k tok · $0.96",
 	);
 	expect(html).toContain(
 		"reviewer · shared · 7 steps · 2 min · 100k tok · $0.20",
 	);
-	expect(html).toContain("Subagents 2 · 480k tok · $0.96 · 9.0 VM min");
+	expect(html).toContain("Subagents 2 · 480k tok · $0.96");
+	expect(html).not.toContain("VM min");
+	expect(html).not.toContain("$?");
 	expect(html).not.toContain("Private brief");
 	expect(html).not.toMatch(/<(button|input|select|textarea|details|a)\b/);
 });
