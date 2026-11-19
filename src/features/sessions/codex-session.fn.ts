@@ -380,9 +380,11 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 		// order the browser keeps (read in the browser, the projects reordered
 		// as the page loaded).
 		// A Y project's Y² chat is marked and pinned, as the browser's list read has it.
-		const ySquaredChats = ySquaredChatsByProject(user.id).catch(
-			() => new Map<string, string>(),
-		);
+		// If this read fails the project's list is not seeded (the browser
+		// reads it itself): a list without its Y² chat marked would draw a Y
+		// project as a plain one.
+		const ySquaredChats = ySquaredChatsByProject(user.id);
+		ySquaredChats.catch(() => undefined);
 		const sidebarChats = (projectId: string) =>
 			listSidebarAgentSessions(user.id, projectId).then(async (sessions) =>
 				pinnedYSquared(

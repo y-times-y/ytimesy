@@ -235,11 +235,21 @@ export function ProjectSidebar({
 		threads: recent.y,
 		statusOf: chatStatus,
 	});
-	const yProjectIds = new Set(yRows.map(({ project }) => project.id));
+	// A Y project is known from the project itself, not from its chat list: a
+	// list that has not arrived (or failed) must not draw it as a plain
+	// project, which is the old sidebar until the list shows up.
+	const yPending = projects.filter(
+		(project) =>
+			project.yEnabled && !yRows.some((row) => row.project.id === project.id),
+	);
+	const yProjectIds = new Set([
+		...yRows.map(({ project }) => project.id),
+		...yPending.map((project) => project.id),
+	]);
 	// One Y project keeps the Super agent and Threads sections. With several,
 	// each project is its own group (its Super agent row, its threads, its own
 	// Settled), so threads of different projects are never mixed in one list.
-	const groupedByProject = yRows.length > 1;
+	const groupedByProject = yProjectIds.size > 1;
 	const orderedProjects = projectsByRecentActivity(projects, groups).filter(
 		(project) => groupedByProject || !yProjectIds.has(project.id),
 	);
@@ -399,8 +409,11 @@ export function ProjectSidebar({
 	 * text): the mark, the project's name, its last activity and a grey line
 	 * summarising its threads.
 	 */
-	function y2Section(rows: readonly Y2Row<Project>[]) {
-		if (!rows.length) return null;
+	function y2Section(
+		rows: readonly Y2Row<Project>[],
+		pending: readonly Project[] = [],
+	) {
+		if (!rows.length && !pending.length) return null;
 		return (
 			<section
 				className="sidebar-y-section sidebar-y2-section"
@@ -410,8 +423,34 @@ export function ProjectSidebar({
 				{sectionHeader("y2", SUPER_AGENT_NAME)}
 				<ul className="sidebar-chats sidebar-y2-list">
 					{rows.map((row) => y2Row(row))}
+					{pending.map((project) => y2PendingRow(project))}
 				</ul>
 			</section>
+		);
+	}
+
+	/** A Y project whose chats have not loaded: its place and name, until its Super agent row arrives. */
+	function y2PendingRow(project: Project) {
+		const name = projectDisplayName(project);
+		return (
+			<li
+				key={`pending-${project.id}`}
+				className="sidebar-chat-row sidebar-y2-row"
+				data-project-id={project.id}
+				data-role="y2"
+				data-pending="true"
+				aria-busy="true"
+			>
+				<div className="sidebar-chat" title={name}>
+					<span className="sidebar-chat-lead" aria-hidden="true">
+						<YSquaredMark size={16} />
+					</span>
+					<span className="sidebar-chat-body">
+						<span className="sidebar-chat-title">{name}</span>
+						<span className="sidebar-chat-meta">Loading…</span>
+					</span>
+				</div>
+			</li>
 		);
 	}
 
@@ -594,6 +633,8 @@ export function ProjectSidebar({
 		const yRow = groupedByProject
 			? yRows.find((row) => row.project.id === project.id)
 			: undefined;
+		// A Y project whose chats have not loaded: its Super agent row's place.
+		const yLoading = groupedByProject && yPending.includes(project);
 		const name = projectDisplayName(project);
 		const selected = project.id === selectedProjectId;
 		const open = !shownCollapsedIds.includes(project.id);
@@ -675,7 +716,12 @@ export function ProjectSidebar({
 					{open && yRow ? (
 						<ul className="sidebar-chats sidebar-y2-list">{y2Row(yRow)}</ul>
 					) : null}
-					{open
+					{open && yLoading ? (
+						<ul className="sidebar-chats sidebar-y2-list">
+							{y2PendingRow(project)}
+						</ul>
+					) : null}
+					{open && !yLoading
 						? threadBlocks(rows, {
 								listId: `sidebar-settled-list-${project.id}`,
 								settledShown,
@@ -1068,10 +1114,10 @@ export function ProjectSidebar({
 							</button>
 						</nav>
 					) : null}
-					{yRows.length && !groupedByProject ? (
+					{(yRows.length || yPending.length) && !groupedByProject ? (
 						<div className="sidebar-y-sections">
-							{y2Section(yRows)}
-							{threadsSection(recent.y)}
+							{y2Section(yRows, yPending)}
+							{yRows.length ? threadsSection(recent.y) : null}
 						</div>
 					) : null}
 					{orderedProjects.length ? (

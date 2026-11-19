@@ -40,6 +40,12 @@ export interface RepositoryChoice {
 export interface Project {
 	/** The project's machine size; absent (older rows, tests) means the default. */
 	readonly machineSize?: MachineSizeId | null;
+	/**
+	 * A Y project (project.y_enabled): its Super agent and threads have their
+	 * own sidebar sections. Known with the project, so the sidebar's layout
+	 * never waits for the project's chat list to say so.
+	 */
+	readonly yEnabled?: boolean;
 	id: string;
 	name?: string;
 	repositories?: ProjectRepository[];

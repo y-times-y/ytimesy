@@ -76,21 +76,30 @@ export const listProjectAgentSessions = createServerFn({ method: "GET" })
 	}))
 	.handler(async ({ data }): Promise<readonly PublicAgentChat[]> => {
 		if (!data.projectId) return [];
+		// Signed out: nothing to list. Any other failure is a failure: it is
+		// logged and thrown, so the browser keeps the list it had and asks
+		// again, instead of keeping an empty one (which drew a Y project as a
+		// plain one for the next half minute).
+		const user = await requireUser(getRequest().headers).catch(() => null);
+		if (!user) return [];
 		try {
-			const user = await requireUser(getRequest().headers);
 			// A Y project gets its Y² chat on first listing (after a thread
 			// exists to stand beside), pinned first.
-			const yMode = await projectYMode(user.id, data.projectId).catch(
-				() => null,
-			);
+			const yMode = await projectYMode(user.id, data.projectId);
 			const ySquaredId = yMode?.enabled
 				? (yMode.ySquaredId ??
-					(await ensureYSquaredChat(user.id, data.projectId).catch(() => null)))
+					(await ensureYSquaredChat(user.id, data.projectId).catch(
+						(error: unknown) => {
+							console.error("y_squared.ensure_failed", error);
+							return null;
+						},
+					)))
 				: null;
 			const sessions = await listSidebarAgentSessions(user.id, data.projectId);
 			return pinnedYSquared(chatsFromAgentSessions(sessions), ySquaredId);
-		} catch {
-			return [];
+		} catch (error) {
+			console.error("agent_sessions.list_failed", error);
+			throw error;
 		}
 	});
 

@@ -887,3 +887,82 @@ describe("Y² and Threads (styles)", () => {
 		expect(css).toMatch(/\.sidebar-settled-list \[data-done-overflow\] \{/);
 	});
 });
+
+describe("a Y project is a Y project before its chats load", () => {
+	const alphaY: Project = { ...alpha, yEnabled: true };
+	const betaY: Project = { ...beta, yEnabled: true };
+	const loading = (projects: Project[], extra = {}) =>
+		render(true, {
+			projects,
+			chats: [],
+			projectChats: projects.map((p) => ({ project: p, chats: [] })),
+			...extra,
+		});
+
+	it("draws the Super agent section with a placeholder row, not a plain project, while the list has not arrived", () => {
+		const html = loading([alphaY, beta]);
+		expect(html).toContain('data-section="y2"');
+		expect(html).toContain('data-pending="true"');
+		// Alpha is not drawn as a plain project section (the old layout)...
+		expect(html).not.toMatch(
+			/data-section="project"[^>]*data-project-id="alpha"/,
+		);
+		// ...and the other project, which is plain, still is.
+		expect(html).toMatch(/data-section="project"[^>]*data-project-id="beta"/);
+		// No claim about threads it has not read.
+		expect(html).not.toContain("No threads yet.");
+	});
+
+	it("keeps the same layout when the list fails: still no plain Alpha", () => {
+		const html = loading([alphaY]);
+		expect(html).toContain('data-pending="true"');
+		expect(html).not.toContain('data-section="project"');
+	});
+
+	it("swaps the placeholder for the real Super agent row when the list arrives, without changing layout", () => {
+		const html = render(true, {
+			projects: [alphaY, beta],
+			chats: [
+				{
+					id: "y2",
+					title: "Y²",
+					role: "y2",
+					updatedAt: "2026-10-20T00:00:00Z",
+				},
+				{ id: "t1", title: "A thread", updatedAt: "2026-10-20T00:00:00Z" },
+			],
+			projectChats: [
+				{
+					project: alphaY,
+					chats: [
+						{
+							id: "y2",
+							title: "Y²",
+							role: "y2",
+							updatedAt: "2026-10-20T00:00:00Z",
+						},
+						{ id: "t1", title: "A thread", updatedAt: "2026-10-20T00:00:00Z" },
+					],
+				},
+				{ project: beta, chats: [] },
+			],
+		});
+		expect(html).toContain('data-section="y2"');
+		expect(html).toContain('data-section="threads"');
+		expect(html).not.toContain('data-pending="true"');
+	});
+
+	it("with two Y projects still loading, each is its own group from the start (no flat-then-grouped jump)", () => {
+		const html = loading([alphaY, betaY]);
+		expect(html.match(/data-pending="true"/g)).toHaveLength(2);
+		expect(html.match(/data-section="project"/g)).toHaveLength(2);
+		expect(html).not.toContain('data-section="y2"');
+	});
+
+	it("a plain project is untouched", () => {
+		const html = loading([alpha, beta]);
+		expect(html).not.toContain('data-pending="true"');
+		expect(html).not.toContain('data-section="y2"');
+		expect(html.match(/data-section="project"/g)).toHaveLength(2);
+	});
+});

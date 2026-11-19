@@ -11,7 +11,7 @@ beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create table project(id uuid primary key, user_id text not null,
 	 repository_id bigint not null, installation_id bigint not null, full_name text not null,
-	 branch text not null, name text, machine_size text, repository_set_key text not null default '',
+	 branch text not null, name text, machine_size text, y_enabled boolean not null default false, repository_set_key text not null default '',
 	 archived_at timestamptz, created_at timestamptz default now(),
 	 unique(user_id,repository_id,repository_set_key));
 	 create table project_repository(project_id uuid, repository_id bigint, installation_id bigint,
@@ -65,4 +65,16 @@ it("lists each project's machine size for the thread hover card", async () => {
 		saved.id,
 	]);
 	expect((await listProjects("u"))[0]?.machineSize).toBe("small");
+});
+
+it("lists whether each project is a Y project, with the project", async () => {
+	await saveProject("u", repo(1, "plain") as never, "main");
+	await saveProject("u", repo(2, "yproject") as never, "main");
+	await db.query("update project set y_enabled=true where full_name=$1", [
+		"me/yproject",
+	]);
+	const listed = await listProjects("u");
+	expect(
+		Object.fromEntries(listed.map((p) => [p.fullName, p.yEnabled])),
+	).toEqual({ "me/plain": false, "me/yproject": true });
 });
