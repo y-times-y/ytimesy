@@ -99,7 +99,10 @@ describe("a Claude Code turn without a machine (Y²)", () => {
 		});
 		await runClaudeCodeTurnStep(turn());
 		expect(step?.cwd).toBe(`/var/lib/ytimesy-runner/work/${SESSION}`);
-		expect(step?.ySquared).toEqual({ instructions: "You are Y²." });
+		expect(step?.ySquared).toEqual({
+			instructions: "You are Y².",
+			tools: [],
+		});
 		expect(step?.remote).toEqual({
 			repository: `/var/lib/ytimesy-runner/work/${SESSION}`,
 			workspaceTools: [],

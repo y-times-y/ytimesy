@@ -54,6 +54,7 @@ import {
 	readerNetworkedCommand,
 	readerScratchDirectory,
 } from "#/domain/subagent-reader";
+import { Y_SQUARED_TOOLS } from "#/domain/y-squared";
 import type {
 	ClaudeCodeSessionRecord,
 	ClaudeSubscriptionStatus,
@@ -183,7 +184,11 @@ export type ClaudeCodeStepInput = {
 	 * the repository, run_code, browser, job and canvas lines of the system
 	 * prompt, and every native Claude tool is off.
 	 */
-	readonly ySquared?: { readonly instructions: string };
+	readonly ySquared?: {
+		readonly instructions: string;
+		/** The names of the tools the run is offered (the real set, not a hand list). */
+		readonly tools?: readonly string[];
+	};
 	/**
 	 * With `remote`: the run serves these lean workspace tools on its runner
 	 * box, straight against the chat's VM (claude-box-tools/), instead of
@@ -412,6 +417,14 @@ async function writeFilesThenRun(
 		await checked(shell, command, "could not write its input.");
 }
 
+/** "a, b and c" over the offered tool names (Y_SQUARED_TOOLS when the step names none). */
+export function ySquaredToolList(names?: readonly string[]): string {
+	const list = names?.length ? names : [...Y_SQUARED_TOOLS];
+	return list.length > 1
+		? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`
+		: (list[0] ?? "");
+}
+
 function systemPrompt(
 	cwd: string,
 	reader: boolean,
@@ -422,7 +435,7 @@ function systemPrompt(
 		return [
 			"You are running inside ytimesy.",
 			ySquared.instructions,
-			`Your tools are ytimesy's, offered as mcp__${CLAUDE_CODE_MCP_SERVER}__*: threads, thread, ask_user, start_thread, message_thread and stop_thread. You have no repository, shell, files or web of your own: your built-in tools are off. When these instructions name a tool, call its mcp__${CLAUDE_CODE_MCP_SERVER}__ form.`,
+			`Your tools are ytimesy's, offered as mcp__${CLAUDE_CODE_MCP_SERVER}__*: ${ySquaredToolList(ySquared.tools)}. You have no repository, shell, files or web of your own: your built-in tools are off. When these instructions name a tool, call its mcp__${CLAUDE_CODE_MCP_SERVER}__ form.`,
 		].join("\n");
 	return [
 		remote

@@ -465,15 +465,16 @@ describe("ySquaredTools write tools", () => {
 		expect(idle.stop).not.toHaveBeenCalled();
 	});
 
-	it("the message_thread schema defaults the mode to queue and rejects an unknown one; the description no longer says steer is queue", () => {
+	it("the message_thread schema leaves the mode optional (queue is applied in execute) and rejects an unknown one; the description no longer says steer is queue", () => {
 		const f = writeFixture({ t1: chat() });
 		const tool = f.tools.message_thread as {
 			inputSchema: z.ZodType;
 			description: string;
 		};
-		expect(tool.inputSchema.parse({ id: "t1", text: "x" })).toMatchObject({
-			mode: "queue",
-		});
+		expect(
+			(tool.inputSchema.parse({ id: "t1", text: "x" }) as { mode?: string })
+				.mode,
+		).toBeUndefined();
 		expect(
 			tool.inputSchema.safeParse({ id: "t1", text: "x", mode: "now" }).success,
 		).toBe(false);

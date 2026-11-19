@@ -387,7 +387,7 @@ export function ySquaredTools(input: {
 		[Y_SQUARED_MESSAGE_THREAD_TOOL]: tool({
 			description: Y_SQUARED_MESSAGE_THREAD_DESCRIPTION,
 			inputSchema: messageThreadInput,
-			execute: async ({ id, text, mode }) => {
+			execute: async ({ id, text, mode = "queue" }) => {
 				if (!input.machines || !input.modelId) return noMachines;
 				const chat = await ownThread(id);
 				if (!chat) return noThread;

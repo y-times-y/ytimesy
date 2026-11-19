@@ -286,7 +286,10 @@ export async function runClaudeCodeTurnStep(input: {
 						},
 					}
 				: {}),
-			...(ySquared ? { ySquared } : {}),
+			// The prompt names the tools really offered over MCP.
+			...(ySquared
+				? { ySquared: { ...ySquared, tools: Object.keys(input.tools) } }
+				: {}),
 			...(boxTools && ready && machines
 				? {
 						boxTools: {

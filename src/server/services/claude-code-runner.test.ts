@@ -2441,9 +2441,11 @@ describe("Y² on a runner box (no machine)", () => {
 			"ytimesy-job",
 			"request_project_secret",
 			"agent_send",
-			"canvas",
 		])
 			expect(system).not.toContain(gone);
+		// The workspace canvas tool is not Y²'s; read_canvas / show_canvas are.
+		expect(system).not.toMatch(/\bcanvas\b/);
+		expect(system).toContain("read_canvas, show_canvas, schedule and ask_user");
 		// Its own working directory, not the shared one.
 		expect(vm.launched[0]).toContain(`'${RUNS}/1/runner.mjs'`);
 		expect(vm.launched[0]).toContain(`'${Y_CWD}'`);

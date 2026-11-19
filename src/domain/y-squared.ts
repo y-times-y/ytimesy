@@ -119,7 +119,9 @@ export const messageThreadInput = z.object({
 	text: z.string().trim().min(1).max(Y_SQUARED_MESSAGE_LIMIT),
 	mode: z
 		.enum(Y_SQUARED_MESSAGE_MODES)
-		.default("queue")
+		// Optional, not .default(): the schema every route shows the model keeps
+		// the parameter plainly optional; execute applies "queue".
+		.optional()
 		.describe(
 			"queue (default): after the running turn, as its next turn. steer: at its next step, no extra turn. interrupt: stop the running turn, then send.",
 		),
