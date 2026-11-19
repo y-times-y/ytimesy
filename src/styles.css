@@ -338,14 +338,7 @@ button:enabled:active {
 	height: 8px;
 	margin: 0 calc((var(--list-icon-size) - 8px) / 2);
 }
-/* A thread's picture (src/features/workspace/thread-art.tsx) fills the lead
-   column; in Recent a project dot sits on its corner. */
-.sidebar-chat-lead[data-art="true"] {
-	position: relative;
-	flex-basis: 22px;
-	width: 22px;
-	height: 22px;
-}
+/* A thread's picture (src/features/workspace/thread-art.tsx): the hover card, the @ list and chips. */
 .thread-art {
 	display: block;
 	flex: none;
@@ -356,16 +349,6 @@ button:enabled:active {
 	/* An outline paints over the image; an inset shadow would sit under it. */
 	outline: 1px solid rgb(255 255 255 / 0.12);
 	outline-offset: -1px;
-}
-.sidebar-chat-lead[data-art="true"] .sidebar-chat-art-project {
-	position: absolute;
-	right: -2px;
-	bottom: -2px;
-	flex-basis: auto;
-	width: 7px;
-	height: 7px;
-	margin: 0;
-	box-shadow: 0 0 0 1.5px #0a0a0a;
 }
 .sidebar-chat-project > span:last-child {
 	overflow: hidden;
@@ -829,6 +812,32 @@ button:enabled:active {
 .sidebar-chat-row[data-variant="thread"] .sidebar-chat-title {
 	color: var(--list-text-strong);
 	font-weight: 600;
+}
+/* A thread row: the button (title and metadata) spans both lines, the age
+   sits top right and the pull request bottom right, in one grid, so the PR
+   link is never nested inside the button. */
+.sidebar-chat-row[data-variant="thread"] {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-rows: auto auto;
+	align-items: center;
+	padding-block: 4px;
+}
+.sidebar-chat-row[data-variant="thread"] > .sidebar-chat {
+	grid-column: 1;
+	grid-row: 1 / span 2;
+	min-height: 0;
+}
+.sidebar-chat-row[data-variant="thread"] > .sidebar-chat-trailing {
+	grid-column: 2;
+	grid-row: 1;
+}
+.sidebar-chat-meta-end {
+	grid-column: 2;
+	grid-row: 2;
+	display: flex;
+	justify-content: flex-end;
+	padding-right: 6px;
 }
 .sidebar-settled {
 	margin-top: 2px;

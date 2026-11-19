@@ -149,7 +149,7 @@ describe("left sidebar", () => {
 		expect(html).not.toContain('class="sidebar-section"');
 	});
 
-	it("lists a plain project's chats as flat thread rows with a picture, a hover card and the project dot", () => {
+	it("lists a plain project's chats as flat thread rows with an id, a hover card and the project dot", () => {
 		const html = render();
 		const beta = html.slice(
 			html.indexOf('data-project-id="beta"'),
@@ -157,16 +157,31 @@ describe("left sidebar", () => {
 		);
 		expect(beta).toContain('data-variant="thread"');
 		expect(beta).toContain(">Newest chat<");
-		// The picture leads the row, a project dot on its corner; the id,
-		// model and machine are in the hover card, not on the row.
-		expect(beta).toContain('class="thread-art"');
-		expect(beta).toContain('src="/thread-art/');
-		expect(beta).toContain("sidebar-chat-art-project");
-		expect(beta).not.toContain('class="thread-id"');
-		expect(beta).not.toContain("sidebar-chat-meta-project");
+		expect(beta).toContain('class="thread-id" data-in="sidebar"');
+		expect(beta).toContain("sidebar-chat-meta-project");
+		expect(beta).toContain("sidebar-project-dot");
 		// ThreadHoverCard's trigger wraps the row.
 		expect(beta).toContain('data-state="closed"');
 		expect(beta).not.toContain("Older chat");
+	});
+
+	it("names a numbered thread once: the dot and ytimesy-12, not the project twice", () => {
+		const numbered = [
+			{
+				id: "b1",
+				title: "Newest chat",
+				updatedAt: "2026-10-19T00:00:00Z",
+				threadNumber: 12,
+			},
+		];
+		const html = render(true, {
+			projectChats: [{ project: beta, chats: numbered }],
+		});
+		const row = html.slice(html.indexOf('data-chat-id="b1"'));
+		const meta = row.slice(0, row.indexOf("</li>"));
+		expect(meta).toContain('class="thread-id" data-in="sidebar"');
+		expect(meta).toContain("beta-12");
+		expect(meta).not.toContain("<span>Beta</span>");
 	});
 
 	it("has a + on each plain project's own header, labelled with that project (never on the Threads header)", () => {
@@ -571,7 +586,7 @@ describe("Y projects: the Y² and Threads sections", () => {
 			expect(y2).not.toContain("Asks");
 		});
 
-		it("lists the Y threads flat: the picture, the title and the status on one line", () => {
+		it("lists the Y threads flat: title, then a grey line with project, model, machine and PR", () => {
 			const { threads } = sections(view());
 			expect(threads).toContain('class="sidebar-chats sidebar-threads"');
 			const row = threads.slice(threads.indexOf('data-chat-id="shipped"'));
@@ -580,18 +595,26 @@ describe("Y projects: the Y² and Threads sections", () => {
 			expect(shipped).toContain(
 				'<span class="sidebar-chat-title">Shipped</span>',
 			);
-			expect(shipped).toContain('class="thread-art"');
-			expect(shipped).toContain("sidebar-chat-art-project");
-			// The project is named for screen readers, not drawn as a line.
-			expect(shipped).toContain('<span class="sr-only">Alpha</span>');
-			expect(shipped).not.toContain("data-meta=");
-			expect(shipped).not.toContain("sidebar-chat-meta");
-			// The pull request is the trailing status, after the button;
-			// nothing is a second line any more.
-			expect(shipped.indexOf("#105")).toBeGreaterThan(
+			expect(shipped).toContain(
+				'class="sidebar-chat-meta-project"><span class="sidebar-project-dot"',
+			);
+			expect(shipped).toContain("<span>Alpha</span>");
+			expect(shipped).toContain('data-meta="model"');
+			expect(shipped).toContain('title="gpt-5"');
+			expect(shipped).toContain('data-meta="machine"');
+			// The PR badge sits on the second line, outside the button.
+			expect(shipped).toContain('class="sidebar-chat-meta-end"');
+			expect(shipped).toContain("#105");
+			expect(shipped.indexOf("sidebar-chat-meta-end")).toBeGreaterThan(
 				shipped.indexOf("</button>"),
 			);
-			expect(shipped).not.toContain('class="sidebar-chat-meta-end"');
+			// The age stays top right.
+			expect(shipped).toContain('class="sidebar-chat-age"');
+			// A thread without a model or workspace shows neither icon.
+			const plainRow = threads.slice(threads.indexOf('data-chat-id="busy"'));
+			expect(plainRow.slice(0, plainRow.indexOf("</li>"))).not.toContain(
+				"data-meta=",
+			);
 		});
 
 		it("orders Needs you, then Working, then Done, and folds the rest into Settled", () => {
@@ -785,12 +808,11 @@ describe("Y² and Threads (styles)", () => {
 		expect(css).not.toMatch(/\.sidebar-y2 \{/);
 	});
 
-	it("draws a thread's picture as a rounded square and keeps the row to one line", () => {
-		expect(css).toMatch(/\.thread-art \{[^}]*border-radius: calc\(/);
-		expect(css).not.toMatch(/\.sidebar-chat-meta-end \{/);
-		expect(css).not.toMatch(
+	it("lays a thread out flat in a grid: no indent, a second line, the PR bottom right", () => {
+		expect(css).toMatch(
 			/\.sidebar-chat-row\[data-variant="thread"\] \{[^}]*display: grid;/,
 		);
+		expect(css).toMatch(/\.sidebar-chat-meta-end \{[^}]*grid-row: 2;/);
 		expect(css).toMatch(/\.sidebar-settled-list \[data-done-overflow\] \{/);
 	});
 });
