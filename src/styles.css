@@ -599,6 +599,16 @@ button:enabled:active {
 /* A thread's Y (src/features/workspace/thread-mark.tsx): the brand mark as its
    border, like the super agent's, in the thread's colour with a soft glow of
    the same colour. */
+/* The Y in the @ list: centred on the row's text like the agents' icons. */
+.mention-palette-thread {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+.reference-chip .thread-mark {
+	margin-top: 2px;
+	margin-right: 4px;
+	vertical-align: top;
+}
 .thread-mark {
 	display: inline-block;
 	flex: 0 0 auto;
@@ -612,7 +622,9 @@ button:enabled:active {
 	width: 100%;
 	height: 100%;
 	overflow: visible;
-	filter: drop-shadow(0 0 2px color-mix(in srgb, currentColor 45%, transparent));
+	filter: drop-shadow(
+		0 0 2px color-mix(in srgb, currentColor 45%, transparent)
+	);
 }
 .sidebar-status-tooltip {
 	z-index: 120;
@@ -911,13 +923,14 @@ button:enabled:active {
 
 /* ---- Y² mark (src/features/workspace/y-squared-mark.tsx) ----------------
    The logo as its border only, a "2" on top. While threads work a light runs
-   around the border. --y2m is the height; the drawing is a little wider for
-   the exponent. */
+   around the border. --y2m is the size of the Y itself, the same as a
+   thread's Y at that size (thread-mark.tsx: its Y is 28 of 32 units tall);
+   the drawing is 38 units tall and 40 wide to make room for the exponent. */
 .y2-mark {
 	display: inline-block;
 	flex: 0 0 auto;
-	height: var(--y2m);
-	width: calc(var(--y2m) * 40 / 38);
+	height: calc(var(--y2m) * 38 / 32);
+	width: calc(var(--y2m) * 40 / 32);
 	line-height: 0;
 }
 .y2-mark-glyph {
@@ -1370,7 +1383,7 @@ button:enabled:active {
 	flex-shrink: 0;
 	min-height: 42px;
 	padding: 8px 16px 8px 18px;
-	background: #0a0a0a;
+	background: transparent;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .panel-toggle.session-title-chats {
@@ -1429,6 +1442,9 @@ a.session-title-meta:focus-visible {
 .welcome-panel {
 	position: relative;
 	isolation: isolate;
+	/* A step lighter than both sidebars (#0a0a0a) so the chat reads as the
+	   page and the sidebars as its frame. */
+	background: #161616;
 	min-width: 0;
 	min-height: 0;
 	height: 100%;
@@ -5684,7 +5700,8 @@ details.environment-build[open] > summary .session-activity-chevron {
 	--t-matrix-gap: 1.5px;
 	width: 14px;
 	height: 14px;
-	color: #4ade80;
+	/* The thread's own colour (src/domain/thread-color.ts), green only if a row has none. */
+	color: var(--thread-color, #4ade80);
 }
 .y-overview-copy {
 	display: flex;

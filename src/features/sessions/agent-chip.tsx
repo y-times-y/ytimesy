@@ -83,6 +83,7 @@ export function AgentSegments({
 							key={index}
 							id={thread.id}
 							label={segment.name}
+							threadNumber={thread.threadNumber}
 							title={thread.title}
 						/>
 					);

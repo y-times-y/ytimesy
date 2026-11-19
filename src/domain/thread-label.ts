@@ -68,7 +68,12 @@ export function threadLabel(
 
 export type ThreadDirectory = ReadonlyMap<
 	string,
-	{ readonly id: string; readonly title: string }
+	{
+		readonly id: string;
+		readonly title: string;
+		/** The thread's number, which gives its colour (src/domain/thread-color.ts). */
+		readonly threadNumber?: number | null;
+	}
 >;
 
 /**
@@ -80,18 +85,31 @@ export function threadDirectory(
 	projectName: string | null | undefined,
 	chats: readonly (ThreadRef & { readonly title: string })[],
 ): ThreadDirectory {
-	const map = new Map<string, { id: string; title: string }>();
+	const map = new Map<
+		string,
+		{ id: string; title: string; threadNumber?: number | null }
+	>();
 	const prefix = threadLabelPrefix(projectName);
 	// Numbered names first, so one never loses to another thread's old label
 	// that happens to read the same ("web-1234").
 	for (const chat of chats) {
 		if (chat.threadNumber == null || chat.threadNumber <= 0) continue;
 		const key = threadLabel(projectName, chat)?.toLowerCase();
-		if (key && !map.has(key)) map.set(key, { id: chat.id, title: chat.title });
+		if (key && !map.has(key))
+			map.set(key, {
+				id: chat.id,
+				title: chat.title,
+				threadNumber: chat.threadNumber ?? null,
+			});
 	}
 	for (const chat of chats) {
 		const key = legacyThreadLabel(prefix, chat.id)?.toLowerCase();
-		if (key && !map.has(key)) map.set(key, { id: chat.id, title: chat.title });
+		if (key && !map.has(key))
+			map.set(key, {
+				id: chat.id,
+				title: chat.title,
+				threadNumber: chat.threadNumber ?? null,
+			});
 	}
 	return map;
 }

@@ -38,6 +38,8 @@ export type NeedsYouRow = {
 
 export type InProgressRow = {
 	readonly threadId: string;
+	/** The thread's number: its spinner takes the thread's colour (thread-color.ts). */
+	readonly threadNumber: number | null;
 	readonly label: string | null;
 	readonly title: string;
 	readonly workingSince: string | null;
@@ -164,6 +166,7 @@ export function yOverview(input: {
 		else if (threadIsRunning(thread))
 			inProgress.push({
 				threadId: thread.id,
+				threadNumber: thread.threadNumber ?? null,
 				label: labelOf(input.projectName, thread),
 				title: thread.title,
 				workingSince: thread.workingSince ?? null,

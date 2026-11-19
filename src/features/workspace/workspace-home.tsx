@@ -3525,7 +3525,16 @@ export function WorkspaceHome({
 					chat.role === "y2" || chat.threadNumber == null
 						? null
 						: threadLabel(labelProjectName, chat);
-				return name ? [{ id: chat.id, name, title: chat.title }] : [];
+				return name
+					? [
+							{
+								id: chat.id,
+								name,
+								title: chat.title,
+								threadNumber: chat.threadNumber,
+							},
+						]
+					: [];
 			}),
 		[labelProjectName, threadsKey],
 	);

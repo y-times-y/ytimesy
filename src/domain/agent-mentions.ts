@@ -21,6 +21,8 @@ export type MentionAgent = {
 	readonly id: string;
 	/** Set for a thread of the project (not an agent of this chat): `name` is its readable name ("ytimesy-12"), `task` its title. */
 	readonly threadId?: string;
+	/** A thread's number: its Y takes the thread's colour (src/domain/thread-color.ts). */
+	readonly threadNumber?: number | null;
 	/** "Main", "build-1". */
 	readonly name: string;
 	readonly task?: string;
@@ -65,6 +67,7 @@ export type MentionThread = {
 	readonly id: string;
 	readonly name: string;
 	readonly title: string;
+	readonly threadNumber?: number | null;
 };
 
 /**
@@ -82,6 +85,7 @@ export function threadMentionAgents(
 		.map((thread) => ({
 			id: thread.id,
 			threadId: thread.id,
+			threadNumber: thread.threadNumber ?? null,
 			name: thread.name,
 			task: thread.title,
 			icon: KIND_ICONS.main,

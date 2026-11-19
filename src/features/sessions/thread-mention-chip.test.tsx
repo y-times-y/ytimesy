@@ -10,11 +10,18 @@ const threads = threadDirectory("ytimesy", [
 ]);
 
 describe("a thread in chat text", () => {
-	it("draws a thread chip with its name and title", () => {
+	it("draws a thread chip with its Y in the thread's colour, its name and its title", () => {
 		const html = renderToStaticMarkup(
-			<ThreadChip id={ID} label="ytimesy-12" title="Fix login redirect" />,
+			<ThreadChip
+				id={ID}
+				label="ytimesy-12"
+				title="Fix login redirect"
+				threadNumber={3}
+			/>,
 		);
-		expect(html).toContain("reference-chip-icon");
+		expect(html).toContain('class="thread-mark"');
+		// Thread 3 takes the third agent colour.
+		expect(html).toContain("--thread-color:#83C1FF");
 		expect(html).not.toContain("thread-art");
 		expect(html).toContain("ytimesy-12");
 		expect(html).toContain(`href="/thread/${ID}"`);
@@ -27,6 +34,9 @@ describe("a thread in chat text", () => {
 			</ReferenceContext.Provider>,
 		);
 		expect(html.match(/data-reference="thread"/g)).toHaveLength(1);
+		// The Y and its colour come from the thread's number: 12 is the second.
+		expect(html.match(/class="thread-mark"/g)).toHaveLength(1);
+		expect(html).toContain("--thread-color:#9CD242");
 		expect(html).not.toContain("thread-art");
 		expect(html).toContain("Fix login redirect");
 		// An unknown thread stays the words the person wrote.

@@ -292,10 +292,17 @@ export function AgentMarkdown({
 	const components = useMemo<Components>(() => {
 		// A thread has its name and its old label in the directory: the
 		// first, the numbered name, is the one a chip shows.
-		const labelById = new Map<string, { label: string; title: string }>();
+		const labelById = new Map<
+			string,
+			{ label: string; title: string; threadNumber?: number | null }
+		>();
 		for (const [label, thread] of threads ?? [])
 			if (!labelById.has(thread.id))
-				labelById.set(thread.id, { label, title: thread.title });
+				labelById.set(thread.id, {
+					label,
+					title: thread.title,
+					threadNumber: thread.threadNumber,
+				});
 		const agentByName = new Map<string, MentionAgent>(
 			agents?.map((agent) => [agent.name, agent]) ?? [],
 		);
@@ -324,6 +331,7 @@ export function AgentMarkdown({
 						<ThreadChip
 							id={thread}
 							label={known?.label}
+							threadNumber={known?.threadNumber}
 							title={known && label === known.label ? known.title : children}
 						/>
 					);

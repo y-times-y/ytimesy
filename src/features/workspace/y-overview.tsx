@@ -7,10 +7,16 @@ import {
 	GitPullRequestDraft,
 	TriangleAlert,
 } from "lucide-react";
-import { type ReactNode, useLayoutEffect, useState } from "react";
+import {
+	type CSSProperties,
+	type ReactNode,
+	useLayoutEffect,
+	useState,
+} from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { compactRelativeAge } from "#/domain/sidebar-chats";
 import type { RepositoryPullRequest } from "#/domain/sidebar-pr";
+import { threadColor } from "#/domain/thread-color";
 import {
 	type InProgressRow,
 	type NeedsYouRow,
@@ -273,7 +279,20 @@ function InProgressItem({
 		<YOverviewRow
 			threadId={row.threadId}
 			status="in-progress"
-			icon={<MatrixDotLoader className="y-overview-working" />}
+			icon={
+				<MatrixDotLoader
+					className="y-overview-working"
+					// The thread's own colour, as on its sidebar row.
+					style={
+						{
+							"--thread-color": threadColor({
+								id: row.threadId,
+								threadNumber: row.threadNumber,
+							}),
+						} as CSSProperties
+					}
+				/>
+			}
 			title={row.title}
 			detail={
 				<ThreadId label={row.label}>

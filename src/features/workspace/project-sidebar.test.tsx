@@ -831,6 +831,17 @@ describe("Y² and Threads (styles)", () => {
 		new URL("../../styles.css", import.meta.url),
 		"utf8",
 	);
+	it("draws Y²'s Y as tall as a thread's Y at the same size", () => {
+		// A thread's Y is 28 of the 32 units of its drawing; Y²'s drawing is 38
+		// tall to make room for the exponent, so it is drawn 38/32 as tall.
+		expect(css).toMatch(
+			/\.y2-mark \{[^}]*height: calc\(var\(--y2m\) \* 38 \/ 32\);[^}]*width: calc\(var\(--y2m\) \* 40 \/ 32\);/,
+		);
+		expect(css).toMatch(
+			/\.thread-mark \{[^}]*height: var\(--thread-mark, 16px\);/,
+		);
+	});
+
 	it("drops the nested branch, guide line, indent and fold properties", () => {
 		for (const gone of [
 			".sidebar-y2-branch",

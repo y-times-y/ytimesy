@@ -6,11 +6,17 @@ import {
 	GitMerge,
 	GitPullRequest,
 	type LucideIcon,
-	MessageSquare,
 } from "lucide-react";
-import { createContext, type ReactNode, useContext } from "react";
+import {
+	type CSSProperties,
+	createContext,
+	type ReactNode,
+	useContext,
+} from "react";
 import { chatAddress } from "#/domain/chat-address";
+import { threadColor } from "#/domain/thread-color";
 import type { ThreadDirectory } from "#/domain/thread-label";
+import { ThreadMark } from "../workspace/thread-mark";
 import {
 	type EventKind,
 	type IssueReference,
@@ -118,9 +124,12 @@ export function ThreadChip({
 	id,
 	title,
 	label,
+	threadNumber,
 }: {
 	id: string;
 	title: ReactNode;
+	/** The thread's number: its Y takes the thread's colour (thread-color.ts). */
+	threadNumber?: number | null;
 	/** "ytimesy-12": the thread's name in the project. */
 	label?: string;
 }) {
@@ -129,13 +138,11 @@ export function ThreadChip({
 			className="reference-chip"
 			data-reference="thread"
 			href={`/thread/${id}`}
+			style={
+				{ "--thread-color": threadColor({ id, threadNumber }) } as CSSProperties
+			}
 		>
-			<MessageSquare
-				className="reference-chip-icon"
-				aria-hidden
-				size={13}
-				strokeWidth={2}
-			/>
+			<ThreadMark size={13} />
 			{label ? (
 				<span className="reference-chip-id" data-thread-label>
 					{label}

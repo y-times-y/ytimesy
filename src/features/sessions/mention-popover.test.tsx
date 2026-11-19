@@ -15,6 +15,7 @@ describe("MentionPopover", () => {
 				id: "3f9a2b1c-7d4e-4f10-9a55-0c2d8e6b1a77",
 				name: "ytimesy-12",
 				title: "Fix login redirect",
+				threadNumber: 2,
 			},
 		]),
 	];
@@ -31,7 +32,9 @@ describe("MentionPopover", () => {
 		expect(html).toContain('aria-label="Agents and threads"');
 		expect(html).toContain("ytimesy-12");
 		expect(html).toContain("Fix login redirect");
-		// No pictures: the thread has an icon like an agent.
+		// A thread has its Y in its colour (thread 2 is the second); no pictures.
+		expect(html.match(/class="thread-mark"/g)).toHaveLength(1);
+		expect(html).toContain("--thread-color:#9CD242");
 		expect(html).not.toContain("thread-art");
 		expect(html).toContain("Main");
 		expect(agents[0]?.id).toBe(MAIN_MENTION_ID);
