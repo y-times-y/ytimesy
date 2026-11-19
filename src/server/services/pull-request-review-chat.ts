@@ -9,6 +9,7 @@ import { projectForOwner } from "../adapters/projects";
 import { requireUserAction } from "../adapters/user-action-rate";
 import { githubAccessToken } from "../auth/github-connection";
 import { openAgentSession } from "./agent-session-machine";
+import { resolveLinkedChatRoute } from "./linked-chat-route";
 import { sendComposerMessage } from "./queued-user-messages";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -54,15 +55,16 @@ async function startLinkedChat(
 		input.requestId,
 	);
 	if (existing) return { sessionId: existing };
+	// The composer's choice, kept only when connected; before any chat opens.
+	const route = await resolveLinkedChatRoute(input);
 	await requireUserAction(input.userId, "chat-send");
 	const opened = await openAgentSession({
 		userId: input.userId,
 		projectId: input.projectId,
-		harness: input.harnessId,
+		harness: route.harnessId,
 		title: chat.title,
 	});
-	const modelId = input.modelId.trim() || opened.listedModelId?.trim() || "";
-	if (!modelId) throw new Error("Select a model before starting a chat.");
+	const modelId = route.modelId;
 	const view = await Effect.runPromise(
 		sendComposerMessage(
 			machines,
