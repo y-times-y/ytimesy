@@ -1,6 +1,7 @@
 import { FreestyleApiError } from "freestyle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+	machineBudgetSpent,
 	machineFailureDetail,
 	machineFailureKind,
 	machineStartUnstartable,
@@ -226,4 +227,20 @@ it("counts only the VM's own failed starts as unstartable", () => {
 		new Error("something else"),
 	])
 		expect(machineStartUnstartable(refused)).toBe(false);
+});
+
+it("recognises a spent runtime budget so the chat's VM is replaced at once", () => {
+	expect(
+		machineBudgetSpent(
+			api(409, "CONFLICT", "vm has used its total runtime budget of 900s"),
+		),
+	).toBe(true);
+	expect(
+		machineBudgetSpent(
+			new Error(
+				"The machine's runtime budget is used up and this deployment cannot extend it.",
+			),
+		),
+	).toBe(true);
+	expect(machineBudgetSpent(new Error("fetch failed"))).toBe(false);
 });
