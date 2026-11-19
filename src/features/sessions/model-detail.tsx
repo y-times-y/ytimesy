@@ -8,14 +8,20 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { type ReasoningLevel, reasoningLevelLabel } from "./model-capabilities";
+import { isClaudeCodeRoute } from "#/domain/claude-code-route";
+import { parseModelRouteId } from "#/domain/model-connection";
+import {
+	type ReasoningLevel,
+	reasoningLevelLabel,
+	type SessionModel,
+} from "./model-capabilities";
 import {
 	INCLUDED_IN_PLAN,
 	modelContextLabel,
 	modelPriceDisplay,
 	reasoningStepTarget,
 } from "./model-picker-format";
-import { ModelProviderLogo } from "./model-provider-logo";
+import { ModelProviderLogo, modelLogoProvider } from "./model-provider-logo";
 
 /** What a row tells the detail card; all of it is already in the picker (no fetch). */
 export type ModelDetailSpec = {
@@ -169,9 +175,12 @@ export function ReasoningSlider({
 	);
 }
 
-/** The side card (desktop) or inline expandable block (mobile) for the hovered or focused model. */
 const CARD_GAP = 8;
 const SCREEN_PAD = 8;
+/** The side card's width (model-picker.css): the card measures itself against this, never its own width, which is the list's once it sits under it. */
+export const DETAIL_CARD_WIDTH = 260;
+/** Where CSS puts the card beside the list; narrower or touch screens keep it under the list. */
+const SIDE_CARD_QUERY = "(min-width: 760px) and (hover: hover)";
 
 /** Where the card goes so it stays on screen: right of the list, else left of it, else under it. */
 export function cardSide(
@@ -182,6 +191,40 @@ export function cardSide(
 	if (list.right + CARD_GAP + cardWidth <= viewportWidth - SCREEN_PAD)
 		return "right";
 	return list.left - CARD_GAP - cardWidth >= SCREEN_PAD ? "left" : "inline";
+}
+
+/**
+ * What the card shows before any row is hovered: the model the composer has
+ * selected, built from the model itself, so the card (and the reasoning
+ * slider it carries) is there as soon as the picker opens.
+ */
+export function selectedModelSpec(
+	harnessId: "codex" | "api",
+	modelId: string,
+	model: Pick<SessionModel, "label" | "contextWindow"> | undefined,
+): ModelDetailSpec | null {
+	if (!model) return null;
+	if (harnessId === "codex")
+		return {
+			id: modelId,
+			provider: "codex",
+			label: model.label,
+			logo: "codex",
+			priceId: modelId,
+			plan: true,
+			contextTokens: model.contextWindow?.standard,
+		};
+	const claude = isClaudeCodeRoute(modelId);
+	return {
+		id: modelId,
+		provider: "api",
+		label: model.label,
+		logo: claude
+			? "anthropic"
+			: modelLogoProvider(parseModelRouteId(modelId)?.modelId ?? ""),
+		priceId: modelId,
+		plan: claude,
+	};
 }
 
 export function ModelDetailCard({
@@ -208,11 +251,48 @@ export function ModelDetailCard({
 	const [side, setSide] = useState<"right" | "left" | "inline">("right");
 	// Beside the list on a wide screen; when the picker sits near an edge the
 	// card flips to the other side, and sits under the list when neither fits.
+	// Measured before paint and again whenever the window or the list changes
+	// size, so a resize never leaves it off screen.
 	useLayoutEffect(() => {
 		const card = ref.current;
-		if (!card || getComputedStyle(card).position !== "absolute") return;
-		const list = (card.offsetParent ?? card).getBoundingClientRect();
-		setSide(cardSide(list, card.offsetWidth, window.innerWidth));
+		const list = card?.parentElement;
+		if (!card || !list) return;
+		const place = () =>
+			setSide(
+				window.matchMedia(SIDE_CARD_QUERY).matches
+					? cardSide(
+							list.getBoundingClientRect(),
+							DETAIL_CARD_WIDTH,
+							window.innerWidth,
+						)
+					: "right",
+			);
+		place();
+		// The popover moves a frame after a resize (and a list's own size does
+		// not change), so measure again once it has settled.
+		let frame = 0;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const settle = () => {
+			place();
+			cancelAnimationFrame(frame);
+			clearTimeout(timer);
+			frame = requestAnimationFrame(() => {
+				frame = requestAnimationFrame(place);
+			});
+			timer = setTimeout(place, 150);
+		};
+		window.addEventListener("resize", settle);
+		window.visualViewport?.addEventListener("resize", settle);
+		const observer =
+			typeof ResizeObserver === "undefined" ? null : new ResizeObserver(settle);
+		observer?.observe(list);
+		return () => {
+			cancelAnimationFrame(frame);
+			clearTimeout(timer);
+			window.removeEventListener("resize", settle);
+			window.visualViewport?.removeEventListener("resize", settle);
+			observer?.disconnect();
+		};
 	}, []);
 	const price = modelPriceDisplay(spec.priceId, spec.plan);
 	const context = modelContextLabel(spec.priceId, spec.contextTokens);

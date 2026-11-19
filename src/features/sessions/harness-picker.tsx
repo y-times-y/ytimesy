@@ -42,6 +42,7 @@ import {
 	type ModelDetailSpec,
 	ModelInfoButton,
 	ModelRowMeta,
+	selectedModelSpec,
 	useModelDetail,
 } from "./model-detail";
 import {
@@ -289,11 +290,16 @@ export function HarnessPicker({
 		options[next]?.focus();
 		options[next]?.scrollIntoView({ block: "nearest" });
 	}
+	// The card shows the row last hovered or focused, and the selected model
+	// until then, so the reasoning slider it carries is there at once.
+	const shownDetail = detail ?? selectedModelSpec(harnessId, modelId, model);
 	const detailSelected =
-		detail !== null && detail.provider === harnessId && detail.id === modelId;
+		shownDetail !== null &&
+		shownDetail.provider === harnessId &&
+		shownDetail.id === modelId;
 	const detailModel = detailSelected ? model : undefined;
-	const detailFavorite = detail
-		? favorites.includes(favoriteModelKey(detail.provider, detail.id))
+	const detailFavorite = shownDetail
+		? favorites.includes(favoriteModelKey(shownDetail.provider, shownDetail.id))
 		: false;
 
 	return (
@@ -305,7 +311,15 @@ export function HarnessPicker({
 					setFavorites(readModelFavorites());
 					setSearch("");
 					setDetail(null);
-					setDetailExpanded(false);
+					// On a phone the card sits under the list, folded: open it
+					// when it carries the reasoning slider.
+					setDetailExpanded(
+						Boolean(
+							model?.reasoning &&
+								model.reasoning.levels.length > 1 &&
+								onReasoningIdChange,
+						),
+					);
 					// Open on the section the chosen model belongs to: Codex,
 					// Claude Code, the Grok plan, or its provider's API keys.
 					const view = pickerViewFor(harnessId, modelId, connections.data);
@@ -353,9 +367,6 @@ export function HarnessPicker({
 				align="start"
 				className="harness-picker"
 				aria-label="Choose model"
-				data-detail-reasoning={
-					detailModel?.reasoning && onReasoningIdChange ? "" : undefined
-				}
 				onKeyDown={onPickerKeyDown}
 			>
 				<ModelDetailProvider
@@ -379,15 +390,20 @@ export function HarnessPicker({
 					{model ? (
 						<ModelPickerSettings
 							model={model}
-							reasoningId={reasoningId}
-							onReasoningIdChange={onReasoningIdChange}
 							speed={speed}
 							onSpeedChange={onSpeedChange}
 							alternateContext={alternateContext}
 							onAlternateContextChange={onAlternateContextChange}
 						/>
 					) : null}
-					<div className="model-picker-body">
+					<div
+						className="model-picker-body"
+						// The mouse leaving the list brings back the selected model's
+						// card, the one that carries the reasoning slider.
+						onPointerLeave={(event) => {
+							if (event.pointerType === "mouse") setDetail(null);
+						}}
+					>
 						<nav className="model-provider-rail" aria-label="Model providers">
 							<button
 								type="button"
@@ -625,15 +641,14 @@ export function HarnessPicker({
 						</section>
 					</div>
 					<ModelPickerUsage windows={usageWindows} />
-					{detail ? (
+					{shownDetail ? (
 						<ModelDetailCard
-							key={`${detail.provider}:${detail.id}`}
-							spec={detail}
+							spec={shownDetail}
 							expanded={detailExpanded}
 							onExpandedChange={setDetailExpanded}
 							favorite={detailFavorite}
 							onToggleFavorite={() =>
-								toggleFavorite(detail.id, detail.provider)
+								toggleFavorite(shownDetail.id, shownDetail.provider)
 							}
 							reasoning={
 								detailModel?.reasoning && onReasoningIdChange

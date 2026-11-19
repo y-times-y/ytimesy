@@ -126,3 +126,42 @@ describe("cardSide", () => {
 		expect(cardSide({ left: 40, right: 340 }, 260, 400)).toBe("inline");
 	});
 });
+
+describe("selectedModelSpec", () => {
+	it("gives the card the selected model before any row is hovered", async () => {
+		const { selectedModelSpec } = await import("./model-detail");
+		const model = { label: "GPT-A", contextWindow: null };
+		expect(selectedModelSpec("codex", "gpt-a", model)).toMatchObject({
+			id: "gpt-a",
+			provider: "codex",
+			label: "GPT-A",
+			plan: true,
+		});
+		expect(selectedModelSpec("api", "claude-code/sonnet", model)).toMatchObject(
+			{ provider: "api", logo: "anthropic" },
+		);
+		// No model selected: no card to show.
+		expect(selectedModelSpec("codex", "", undefined)).toBeNull();
+	});
+});
+
+describe("reasoning is shown once, in the card", () => {
+	it("keeps the menu's settings free of a Reasoning row and the CSS free of a hide rule", async () => {
+		const { readFileSync } = await import("node:fs");
+		const css = readFileSync(
+			new URL("./model-picker.css", import.meta.url),
+			"utf8",
+		);
+		// The old fix hid the row with CSS on wide screens only, so narrow and
+		// touch screens showed reasoning twice.
+		expect(css).not.toContain("data-detail-reasoning");
+		const picker = readFileSync(
+			new URL("./harness-picker.tsx", import.meta.url),
+			"utf8",
+		);
+		expect(picker).not.toContain("data-detail-reasoning");
+		// One card, kept while the mouse moves between rows: no key that
+		// re-creates it (and replays its fade) on every hover.
+		expect(picker).not.toMatch(/<ModelDetailCard[^>]*\bkey=/);
+	});
+});

@@ -994,11 +994,6 @@
 		border-radius: 0;
 		box-shadow: none;
 	}
-	/* The card carries the reasoning slider: the menu's own row is not repeated. */
-	.harness-picker[data-detail-reasoning]
-	.model-picker-setting[data-setting="reasoning"] {
-		display: none;
-	}
 }
 @media (max-width: 480px) {
 	.model-row-info {

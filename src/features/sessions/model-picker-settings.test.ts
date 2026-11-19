@@ -20,13 +20,31 @@ function settings(
 	return renderToStaticMarkup(
 		createElement(ModelPickerSettings, {
 			model: model as NonNullable<typeof model>,
-			reasoningId: "",
 			speed: "",
 			alternateContext,
 			onAlternateContextChange: () => {},
 		}),
 	);
 }
+
+describe("reasoning", () => {
+	it("is not a row here: the model card carries it", () => {
+		const [model] = sessionModelsFromListed([
+			{
+				id: "m",
+				label: "Model",
+				reasoning: { levels: [{ id: "low" }, { id: "high" }] },
+			} as never,
+		]);
+		const html = renderToStaticMarkup(
+			createElement(ModelPickerSettings, {
+				model: model as NonNullable<typeof model>,
+				speed: "",
+			}),
+		);
+		expect(html).not.toContain("Reasoning");
+	});
+});
 
 describe("context window row", () => {
 	it("shows the chosen window where the route offers a second one", () => {
