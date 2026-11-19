@@ -21,7 +21,7 @@ describe("a thread in chat text", () => {
 		);
 		expect(html).toContain('class="thread-mark"');
 		// Thread 3 takes the third agent colour.
-		expect(html).toContain("--thread-color:#83C1FF");
+		expect(html).toContain("--thread-color:#FF8F96");
 		expect(html).not.toContain("thread-art");
 		expect(html).toContain("ytimesy-12");
 		expect(html).toContain(`href="/thread/${ID}"`);

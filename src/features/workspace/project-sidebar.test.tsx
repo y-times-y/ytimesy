@@ -188,7 +188,7 @@ describe("left sidebar", () => {
 			return html.slice(start, html.indexOf("</li>", start));
 		};
 		// The agent colours, in order: thread 1 the first, thread 2 the second.
-		expect(row("c1")).toContain("--thread-color:#FF8F96");
+		expect(row("c1")).toContain("--thread-color:#83C1FF");
 		expect(row("c2")).toContain("--thread-color:#9CD242");
 		expect(row("c1")).toContain('class="thread-mark"');
 		expect(row("c1")).toContain('class="sidebar-chat-lead"');

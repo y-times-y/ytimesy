@@ -38,7 +38,7 @@ it("shows task hierarchy and statuses without interactive controls", () => {
 	// Short names and icon colours as the agents list gives them, in start order.
 	expect(html).toContain("<strong>build-1</strong>");
 	expect(html).toContain("<strong>build-2</strong>");
-	expect(html).toContain('style="color:#FF8F96"');
+	expect(html).toContain('style="color:#83C1FF"');
 	expect(html).toContain("Subagents <span");
 	expect(html).not.toContain("Task 1");
 	expect(html).toContain("1/2 completed");

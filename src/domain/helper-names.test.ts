@@ -38,16 +38,16 @@ describe("helper short names", () => {
 });
 
 describe("helper colours", () => {
-	it("takes red, green, blue, orange, gold, then paler versions, in start order", () => {
+	it("takes blue, green, red, orange, gold, then paler versions, in start order", () => {
 		expect(HELPER_COLORS).toHaveLength(10);
 		expect(new Set(HELPER_COLORS).size).toBe(10);
-		expect(helperColor(0)).toBe("#FF8F96");
+		expect(helperColor(0)).toBe("#83C1FF");
 		expect(helperColor(4)).toBe("#E0BA31");
-		// The sixth helper gets a paler red, not the first's red.
-		expect(helperColor(5)).toBe("#FFC1C5");
-		expect(helperColor(7)).toBe("#BBDDFF");
+		// The sixth helper gets a paler blue, not the first's blue.
+		expect(helperColor(5)).toBe("#BBDDFF");
+		expect(helperColor(7)).toBe("#FFC1C5");
 		// After ten the ten repeat.
-		expect(helperColor(10)).toBe("#FF8F96");
+		expect(helperColor(10)).toBe("#83C1FF");
 	});
 	it("numbers and colours helpers by start order, whatever order they come in", () => {
 		const helpers = [
@@ -66,7 +66,7 @@ describe("helper colours", () => {
 					task: "Task a",
 					kind: "researcher",
 					icon: "search",
-					color: "#FF8F96",
+					color: "#83C1FF",
 				},
 			],
 			[
@@ -86,7 +86,7 @@ describe("helper colours", () => {
 					task: "Task c",
 					kind: "writer",
 					icon: "hammer",
-					color: "#83C1FF",
+					color: "#FF8F96",
 				},
 			],
 		]);

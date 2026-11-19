@@ -34,7 +34,7 @@ it("shows a sent message's mentions of the chat's agents as chips", () => {
 	expect(html).toContain('class="session-file-chip agent-chip"');
 	expect(html).toContain('<span class="session-file-name">build-1</span>');
 	// Colour on the icon only.
-	expect(html).toMatch(/agent-chip"[^>]*><svg[^>]*style="color:#FF8F96"/);
+	expect(html).toMatch(/agent-chip"[^>]*><svg[^>]*style="color:#83C1FF"/);
 	expect(html).toContain("@build-7");
 });
 

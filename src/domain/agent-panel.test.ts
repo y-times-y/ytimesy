@@ -119,14 +119,14 @@ describe("helper names, icons and colours", () => {
 			name: "build-1",
 			task: "Build the CSV export",
 			icon: "hammer",
-			color: "#FF8F96",
+			color: "#83C1FF",
 		});
 		// A sidekick and a writer are both Build helpers, numbered together.
 		expect(ids.get("w1")).toMatchObject({ name: "build-2", color: "#9CD242" });
 		expect(ids.get("r")).toMatchObject({
 			name: "research-1",
 			icon: "search",
-			color: "#83C1FF",
+			color: "#FF8F96",
 		});
 		expect(ids.get("w2")).toMatchObject({ name: "build-3", color: "#FF9D62" });
 		expect(ids.get("v")).toMatchObject({
@@ -137,7 +137,7 @@ describe("helper names, icons and colours", () => {
 		// The sixth takes a paler red, not the first's.
 		expect(ids.get("r2")).toMatchObject({
 			name: "research-2",
-			color: "#FFC1C5",
+			color: "#BBDDFF",
 		});
 	});
 	it("keeps a helper's name and colour when another finishes or starts", () => {
