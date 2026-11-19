@@ -20,7 +20,6 @@ function settings(
 	return renderToStaticMarkup(
 		createElement(ModelPickerSettings, {
 			model: model as NonNullable<typeof model>,
-			reasoningId: "",
 			speed: "",
 			alternateContext,
 			onAlternateContextChange: () => {},
@@ -43,5 +42,11 @@ describe("context window row", () => {
 	});
 	it("shows no row for a model without a second window", () => {
 		expect(settings(undefined, false)).not.toContain("Context");
+	});
+});
+
+describe("reasoning", () => {
+	it("is not repeated in the menu: the model card's slider is the only control", () => {
+		expect(settings(undefined, false)).not.toMatch(/Reasoning/);
 	});
 });

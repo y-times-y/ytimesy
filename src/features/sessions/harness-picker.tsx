@@ -353,9 +353,6 @@ export function HarnessPicker({
 				align="start"
 				className="harness-picker"
 				aria-label="Choose model"
-				data-detail-reasoning={
-					detailModel?.reasoning && onReasoningIdChange ? "" : undefined
-				}
 				onKeyDown={onPickerKeyDown}
 			>
 				<ModelDetailProvider
@@ -379,8 +376,6 @@ export function HarnessPicker({
 					{model ? (
 						<ModelPickerSettings
 							model={model}
-							reasoningId={reasoningId}
-							onReasoningIdChange={onReasoningIdChange}
 							speed={speed}
 							onSpeedChange={onSpeedChange}
 							alternateContext={alternateContext}
@@ -627,7 +622,6 @@ export function HarnessPicker({
 					<ModelPickerUsage windows={usageWindows} />
 					{detail ? (
 						<ModelDetailCard
-							key={`${detail.provider}:${detail.id}`}
 							spec={detail}
 							expanded={detailExpanded}
 							onExpandedChange={setDetailExpanded}

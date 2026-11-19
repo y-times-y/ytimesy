@@ -208,12 +208,13 @@ export function ModelDetailCard({
 	const [side, setSide] = useState<"right" | "left" | "inline">("right");
 	// Beside the list on a wide screen; when the picker sits near an edge the
 	// card flips to the other side, and sits under the list when neither fits.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the card shows another model
 	useLayoutEffect(() => {
 		const card = ref.current;
 		if (!card || getComputedStyle(card).position !== "absolute") return;
 		const list = (card.offsetParent ?? card).getBoundingClientRect();
 		setSide(cardSide(list, card.offsetWidth, window.innerWidth));
-	}, []);
+	}, [spec.id, spec.provider]);
 	const price = modelPriceDisplay(spec.priceId, spec.plan);
 	const context = modelContextLabel(spec.priceId, spec.contextTokens);
 	const level = reasoning?.levels.find((item) => item.id === reasoning.valueId);
