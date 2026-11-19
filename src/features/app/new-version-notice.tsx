@@ -24,7 +24,7 @@ export function NewVersionCard(props: { readonly onUpdate: () => void }) {
 			<p className="flex-1" role="status">
 				<span className="block font-medium">ytimesy just updated</span>
 				<span className="block text-muted-foreground">
-					Reload to get the latest. Your draft is kept.
+					Reload to get the latest changes.
 				</span>
 			</p>
 			<Button type="button" size="sm" onClick={props.onUpdate}>

@@ -9,7 +9,7 @@ import { NewVersionCard, NewVersionNotice } from "./new-version-notice";
 it("offers one click to reload, bottom right", () => {
 	const html = renderToStaticMarkup(<NewVersionCard onUpdate={() => {}} />);
 	expect(html).toContain("ytimesy just updated");
-	expect(html).toContain("Your draft is kept.");
+	expect(html).toContain("the latest changes");
 	expect(html).toContain("Reload");
 	expect(html).toContain("right-4 bottom-4");
 	expect(html).toContain('role="status"');
