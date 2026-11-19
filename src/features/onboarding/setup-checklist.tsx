@@ -127,7 +127,10 @@ export function SetupChecklist() {
 	useEffect(() => {
 		if (userId) setPrefs(readSetupPrefs(window.localStorage, userId));
 	}, [userId]);
-	if (!userId || !prefs || !state.data) return null;
+	// Nothing until every answer is in: GitHub only counts as done once the
+	// repository list has loaded, so deciding earlier flashes the card at
+	// someone who finished setup long ago.
+	if (!userId || !prefs || !state.data || repositories.isPending) return null;
 
 	const data: FirstRunState = state.data;
 	const progress = setupProgress({
