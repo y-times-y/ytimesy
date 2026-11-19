@@ -249,6 +249,19 @@ const NEW_WORDS_FADE = {
 	stagger: 0,
 } as const;
 
+/** The thread directory without the names this chat's own agents (never a thread) answer to. */
+export function withoutAgentNames(
+	threads: ThreadDirectory | undefined,
+	agents: readonly MentionAgent[] | undefined,
+): ThreadDirectory | undefined {
+	if (!threads?.size || !agents?.length) return threads;
+	const own = new Set(
+		agents.filter((agent) => !agent.threadId).map((a) => a.name.toLowerCase()),
+	);
+	if (![...threads.keys()].some((name) => own.has(name))) return threads;
+	return new Map([...threads].filter(([name]) => !own.has(name)));
+}
+
 export function AgentMarkdown({
 	text,
 	streaming = false,
@@ -279,7 +292,16 @@ export function AgentMarkdown({
 	);
 	const references = useContext(ReferenceContext);
 	const defaultRepository = references?.defaultRepository;
-	const threads = references?.threads;
+	// A name that is both one of this chat's agents and a thread's (a project
+	// called "build" has a thread "build-1", and the chat a helper "build-1")
+	// reads as the agent, as it does in a user's message: the agent keeps its
+	// own icon and only real threads get the Y. An explicit `thread:` link
+	// still draws the thread.
+	const allThreads = references?.threads;
+	const threads = useMemo(
+		() => withoutAgentNames(allThreads, agents),
+		[allThreads, agents],
+	);
 	const projectPullRequests = references?.pullRequests;
 	const rehypePlugins = useMemo<RehypePlugins>(
 		() => [
@@ -296,7 +318,7 @@ export function AgentMarkdown({
 			string,
 			{ label: string; title: string; threadNumber?: number | null }
 		>();
-		for (const [label, thread] of threads ?? [])
+		for (const [label, thread] of allThreads ?? [])
 			if (!labelById.has(thread.id))
 				labelById.set(thread.id, {
 					label,
@@ -447,7 +469,7 @@ export function AgentMarkdown({
 		agentNames,
 		onOpenAgent,
 		sharedNames,
-		threads,
+		allThreads,
 		projectPullRequests,
 	]);
 	return (
