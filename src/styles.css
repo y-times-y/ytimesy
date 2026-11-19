@@ -6183,3 +6183,7 @@ details.environment-build[open] > summary .session-activity-chevron {
 		display: none;
 	}
 }
+/* The new-version notice owns the bottom-right corner; the usage banner steps above it. */
+body:has([data-new-version]) .usage-warning-banner {
+	bottom: 72px;
+}

@@ -1,5 +1,5 @@
 import type { AnyRouter } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { BUILD_ID } from "#/lib/build-id";
 import { type HubConnection, userHubStore } from "../workspace/user-hub-store";
 
@@ -10,7 +10,30 @@ import { type HubConnection, userHubStore } from "../workspace/user-hub-store";
  * load. A chunk that no longer exists after a deploy reloads the tab once.
  * The composer's draft survives every reload (session-launcher.tsx saves it
  * on pagehide).
+ *
+ * Quiet is for a tab nobody is using. A tab in use (typing, or watching a
+ * turn stream) cannot reload unseen, so it shows a small notice at the bottom
+ * right (NewVersionNotice) and the person updates when they choose.
  */
+
+/** Whether this tab knows the server runs a newer build (drives the notice). */
+let newBuildKnown = false;
+const newBuildListeners = new Set<() => void>();
+export function markNewBuildAvailable() {
+	if (newBuildKnown) return;
+	newBuildKnown = true;
+	for (const listener of newBuildListeners) listener();
+}
+export function useNewBuildAvailable(): boolean {
+	return useSyncExternalStore(
+		(listener) => {
+			newBuildListeners.add(listener);
+			return () => newBuildListeners.delete(listener);
+		},
+		() => newBuildKnown,
+		() => false,
+	);
+}
 
 /** How often a visible tab asks the server which build it runs. */
 export const BUILD_CHECK_INTERVAL_MS = 5 * 60_000;
@@ -242,6 +265,7 @@ export function watchForNewBuild(router: AnyRouter) {
 			const build = await serverBuild();
 			if (build && build !== BUILD_ID) {
 				newBuild = true;
+				markNewBuildAvailable();
 				blockNextNavigation();
 			} else {
 				const hub = userHubStore.connection();

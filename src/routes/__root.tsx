@@ -6,6 +6,7 @@ import interLatin from "../assets/fonts/inter-latin-wght-400-700.woff2?url";
 import { Analytics } from "../features/analytics/analytics";
 import { AppError, AppNotFound } from "../features/app/app-status";
 import { FIRST_PAINT_SCRIPT } from "../features/app/first-paint";
+import { NewVersionNotice } from "../features/app/new-version-notice";
 import { PrivacyRegionProvider } from "../features/app/privacy-region";
 import { readPrivacyRegionFn } from "../features/app/privacy-region.fn";
 import { SPECULATION_RULES } from "../features/app/speculation-rules";
@@ -122,6 +123,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 						<AuthProviders>
 							<Analytics />
 							<LegalUpdateNotice />
+							<NewVersionNotice />
 							{children}
 						</AuthProviders>
 					</PrivacyRegionProvider>
