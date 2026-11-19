@@ -48,6 +48,7 @@ import {
 	useGithubAction,
 	useRepositoryChoices,
 } from "./github-ui";
+import { StartChatError } from "./start-chat-error";
 import "./pull-request-inspector.css";
 import { PullStateIcon } from "./pull-request-list";
 import { ChatRail, type PullRequestChat } from "./pull-request-marks";
@@ -939,11 +940,7 @@ function StartIssueChat({
 			>
 				{action.pending ? "Starting…" : "Start chat"}
 			</button>
-			{action.error ? (
-				<span className="gh-error" role="alert">
-					{action.error}
-				</span>
-			) : null}
+			{action.error ? <StartChatError message={action.error} /> : null}
 		</span>
 	);
 }

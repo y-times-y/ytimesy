@@ -14,7 +14,13 @@ const mocks = vi.hoisted(() => ({
 	project: vi.fn(),
 	access: vi.fn(),
 	token: vi.fn(),
+	subscribed: vi.fn(),
+	catalog: vi.fn(),
 }));
+vi.mock("../auth/codex-managed-auth", () => ({
+	hasManagedCodexAuth: mocks.subscribed,
+}));
+vi.mock("./agent-model-catalog", () => ({ agentModelCatalog: mocks.catalog }));
 vi.mock("../adapters/projects", () => ({ projectForOwner: mocks.project }));
 vi.mock("../adapters/github", () => ({ authorizedRepository: mocks.access }));
 vi.mock("../auth/github-connection", () => ({
@@ -34,7 +40,7 @@ const review = {
 	userId: "alice",
 	projectId: "11111111-1111-4111-8111-111111111111",
 	harnessId: "codex" as const,
-	modelId: "gpt-5",
+	modelId: "gpt-5.5",
 	requestId: "22222222-2222-4222-8222-222222222222",
 	fullName: "acme/app",
 	number: 12,
@@ -54,6 +60,11 @@ beforeEach(() => {
 	mocks.token.mockResolvedValue("token");
 	mocks.access.mockResolvedValue({ fullName: "acme/app" });
 	mocks.holding.mockResolvedValue(null);
+	// A connected ChatGPT subscription listing one current model.
+	mocks.subscribed.mockResolvedValue(true);
+	mocks.catalog.mockImplementation(async (_user: string, harness: string) =>
+		harness === "codex" ? [{ id: "gpt-5.5" }] : [],
+	);
 	mocks.allow.mockResolvedValue(undefined);
 	mocks.open.mockResolvedValue({
 		id: "new-chat",
@@ -120,14 +131,50 @@ it("starts an issue in a new chat and refuses repositories outside the owned pro
 	);
 });
 
-it("does not send when no model is selected", async () => {
-	mocks.open.mockResolvedValue({
-		id: "new-chat",
-		harness: "codex",
-		listedModelId: null,
-	});
-	await expect(
-		startPullRequestReview(machines, { ...review, modelId: "  " }),
-	).rejects.toThrow(/Select a model/);
+it("opens the model setup step, not a bare error, when no route is connected", async () => {
+	mocks.subscribed.mockResolvedValue(false);
+	mocks.catalog.mockResolvedValue([]);
+	for (const start of [startIssueChat, startPullRequestReview]) {
+		await expect(start(machines, review)).rejects.toMatchObject({
+			code: "no-model-connected",
+		});
+	}
+	expect(mocks.open).not.toHaveBeenCalled();
 	expect(mocks.send).not.toHaveBeenCalled();
+});
+
+it("never picks a Codex subscription the user has not connected", async () => {
+	mocks.subscribed.mockResolvedValue(false);
+	// The generic Codex list exists even without a sign-in.
+	mocks.catalog.mockImplementation(async (_user: string, harness: string) =>
+		harness === "codex" ? [{ id: "gpt-5.5" }] : [{ id: "conn|model" }],
+	);
+	await startIssueChat(machines, {
+		...review,
+		url: "https://github.com/acme/app/issues/42",
+		number: 42,
+	});
+	expect(mocks.open.mock.calls[0][0].harness).toBe("api");
+	expect(mocks.send.mock.calls[0][2].modelId).toBe("conn|model");
+});
+
+it("replaces a retired or unlisted saved model with a connected one", async () => {
+	await startIssueChat(machines, {
+		...review,
+		modelId: "gpt-5",
+		url: "https://github.com/acme/app/issues/42",
+		number: 42,
+	});
+	expect(mocks.send.mock.calls[0][2].modelId).toBe("gpt-5.5");
+	expect(mocks.send.mock.calls[0][2].text).toContain("closes #42");
+});
+
+it("uses the chat's own route when the saved model is an API route", async () => {
+	const route = "api/33333333-3333-4333-8333-333333333333/gpt-x";
+	mocks.catalog.mockImplementation(async (_user: string, harness: string) =>
+		harness === "api" ? [{ id: route }] : [{ id: "gpt-5.5" }],
+	);
+	await startPullRequestReview(machines, { ...review, modelId: route });
+	expect(mocks.open.mock.calls[0][0].harness).toBe("api");
+	expect(mocks.send.mock.calls[0][2].modelId).toBe(route);
 });

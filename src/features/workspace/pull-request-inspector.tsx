@@ -25,6 +25,7 @@ import type {
 	PullRequestWriteAction,
 	ReviewLineComment,
 } from "#/domain/github-write";
+import { isNoModelConnected } from "#/domain/no-model-connected";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	githubPullFullName,
@@ -61,6 +62,7 @@ import {
 } from "./pull-request-detail-query";
 import { PullRequestList } from "./pull-request-list";
 import type { PullRequestChat } from "./pull-request-marks";
+import { StartChatError } from "./start-chat-error";
 import "./pull-request-inspector.css";
 
 export type PullRequestRepository = {
@@ -233,9 +235,13 @@ function ReviewWithYtimesy({
 					: "Review with ytimesy"}
 			</button>
 			{review.error ? (
-				<p className="pr-review-error" role="alert">
-					{review.error.message}
-				</p>
+				isNoModelConnected(review.error.message) ? (
+					<StartChatError message={review.error.message} />
+				) : (
+					<p className="pr-review-error" role="alert">
+						{review.error.message}
+					</p>
+				)
 			) : null}
 		</div>
 	);
