@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 import {
+	type CSSProperties,
 	type ReactNode,
 	useEffect,
 	useLayoutEffect,
@@ -72,6 +73,7 @@ import {
 	y2NeedsYouLabel,
 	y2Rows,
 } from "#/domain/sidebar-tree";
+import { threadColor } from "#/domain/thread-color";
 import { threadLabel } from "#/domain/thread-label";
 import {
 	accountDisplayName,
@@ -85,6 +87,7 @@ import {
 import { useShortcutHint } from "../app/keyboard-shortcuts";
 import { requestJson } from "../projects/api";
 import { ThreadHoverCard } from "./thread-hover-card";
+import { ThreadMark } from "./thread-mark";
 import { YSquaredMark } from "./y-squared-mark";
 
 /** Who is signed in, as the account button shows them. */
@@ -713,6 +716,12 @@ export function ProjectSidebar({
 				data-variant={thread ? "thread" : undefined}
 				data-group={thread ? status : undefined}
 				data-done-overflow={pastFold ? "true" : undefined}
+				// The thread's colour: its Y and its working spinner.
+				style={
+					thread
+						? ({ "--thread-color": threadColor(chat) } as CSSProperties)
+						: undefined
+				}
 				{...firstPaintMarks(chat)}
 			>
 				<button
@@ -743,47 +752,53 @@ export function ProjectSidebar({
 					}
 				>
 					{thread ? (
-						<span className="sidebar-chat-body">
-							<span className="sidebar-chat-title">{chat.title}</span>
-							<span className="sidebar-chat-meta">
-								{project ? (
-									<span className="sidebar-chat-meta-project">
-										<span
-											className="sidebar-project-dot"
-											style={{ background: projectColor(project.id) }}
-											aria-hidden="true"
-										/>
-										{/* A numbered name ("ytimesy-12") already says the project. */}
-										{chat.threadNumber == null ? (
-											<span>{projectName}</span>
-										) : null}
-										<span className="thread-id" data-in="sidebar">
-											{threadLabel(projectName, chat)}
-										</span>
-									</span>
-								) : null}
-								{chat.listedModelId ? (
-									<span
-										className="sidebar-chat-meta-icon"
-										data-meta="model"
-										title={chat.listedModelId}
-									>
-										<Cpu size={12} strokeWidth={1.5} aria-hidden="true" />
-										<span className="sr-only">{chat.listedModelId}</span>
-									</span>
-								) : null}
-								{chat.workspaceId ? (
-									<span
-										className="sidebar-chat-meta-icon"
-										data-meta="machine"
-										title="Has a cloud workspace"
-									>
-										<Cloud size={12} strokeWidth={1.5} aria-hidden="true" />
-										<span className="sr-only">Cloud workspace</span>
-									</span>
-								) : null}
+						<>
+							{/* The thread's Y, in its own colour, as the super agent has its Y. */}
+							<span className="sidebar-chat-lead" aria-hidden="true">
+								<ThreadMark size={16} />
 							</span>
-						</span>
+							<span className="sidebar-chat-body">
+								<span className="sidebar-chat-title">{chat.title}</span>
+								<span className="sidebar-chat-meta">
+									{project ? (
+										<span className="sidebar-chat-meta-project">
+											<span
+												className="sidebar-project-dot"
+												style={{ background: projectColor(project.id) }}
+												aria-hidden="true"
+											/>
+											{/* A numbered name ("ytimesy-12") already says the project. */}
+											{chat.threadNumber == null ? (
+												<span>{projectName}</span>
+											) : null}
+											<span className="thread-id" data-in="sidebar">
+												{threadLabel(projectName, chat)}
+											</span>
+										</span>
+									) : null}
+									{chat.listedModelId ? (
+										<span
+											className="sidebar-chat-meta-icon"
+											data-meta="model"
+											title={chat.listedModelId}
+										>
+											<Cpu size={12} strokeWidth={1.5} aria-hidden="true" />
+											<span className="sr-only">{chat.listedModelId}</span>
+										</span>
+									) : null}
+									{chat.workspaceId ? (
+										<span
+											className="sidebar-chat-meta-icon"
+											data-meta="machine"
+											title="Has a cloud workspace"
+										>
+											<Cloud size={12} strokeWidth={1.5} aria-hidden="true" />
+											<span className="sr-only">Cloud workspace</span>
+										</span>
+									) : null}
+								</span>
+							</span>
+						</>
 					) : (
 						<>
 							{/* The icon column every sidebar row shares: in Recent, the
