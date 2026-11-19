@@ -47,7 +47,10 @@ import {
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
 import { conversationForkPending } from "../adapters/conversation-fork";
-import { machineStartUnstartable } from "../adapters/freestyle/machine-failure";
+import {
+	machineBudgetSpent,
+	machineStartUnstartable,
+} from "../adapters/freestyle/machine-failure";
 import { prewarmedMachine } from "../adapters/machine-prewarm";
 import { readWakeFailureStreak } from "../adapters/machine-wake-failures";
 import { purgeConversationState } from "../adapters/realtime-delivery";
@@ -396,6 +399,8 @@ export async function bindAgentSessionMachine(
 			// allowance or auth; and only after it has failed for the whole
 			// window, read from the durable record (turns resume on other
 			// objects). A failed read never replaces.
+			// A spent runtime budget is certain: no wait, replace at once.
+			if (machineBudgetSpent(cause)) return true;
 			if (!machineStartUnstartable(cause)) return false;
 			const streak = await readWakeFailureStreak(vmId);
 			return machineStartAbandoned({

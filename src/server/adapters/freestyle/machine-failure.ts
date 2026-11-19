@@ -82,6 +82,26 @@ export function machineFailureKind(error: unknown): MachineFailureKind {
 	return "permanent";
 }
 
+const BUDGET_SPENT =
+	/total runtime budget|maxRunTotalSeconds|runtime budget is (?:spent|used up)/i;
+
+/**
+ * The VM has used its whole runtime budget, so every start of it is refused.
+ * The refusal is certain and permanent for that VM (a new one has a fresh
+ * budget), so it is replaced at once rather than after a failure streak.
+ */
+export function machineBudgetSpent(error: unknown): boolean {
+	return chain(error).some((link) => {
+		const detail =
+			link && typeof link === "object"
+				? String((link as { detail?: unknown }).detail ?? "")
+				: "";
+		return BUDGET_SPENT.test(
+			`${link instanceof Error ? link.message : ""} ${detail}`,
+		);
+	});
+}
+
 /**
  * A failed start of an existing VM that is the VM's own (the provider never
  * brought it up: a 5xx/timeout, "did not become running"), not our account's

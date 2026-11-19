@@ -63,3 +63,9 @@ describe("context window row", () => {
 		expect(settings(undefined, false)).not.toContain("Context");
 	});
 });
+
+describe("reasoning", () => {
+	it("is not repeated in the menu: the model card's slider is the only control", () => {
+		expect(settings(undefined, false)).not.toMatch(/Reasoning/);
+	});
+});
