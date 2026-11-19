@@ -1,5 +1,5 @@
+import { MessageSquare } from "lucide-react";
 import type { MentionAgent } from "#/domain/agent-mentions";
-import { ThreadArt } from "../workspace/thread-art";
 import { AgentIcon } from "./agent-icon";
 
 /** The "@" popover over the composer: the chat's agents, Main first, then the project's threads. */
@@ -35,7 +35,7 @@ export function MentionPopover({
 						onClick={() => onSelect(agent)}
 					>
 						{agent.threadId ? (
-							<ThreadArt id={agent.threadId} size={16} />
+							<MessageSquare size={14} strokeWidth={2} aria-hidden="true" />
 						) : (
 							<AgentIcon icon={agent.icon} color={agent.color} size={14} />
 						)}

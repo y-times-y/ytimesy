@@ -206,7 +206,7 @@ describe("pull request, issue and thread mentions", () => {
 		expect(html).toContain('<span class="reference-chip-label">lib#3</span>');
 	});
 
-	it("draws a thread's readable name in a reply as a chip with its picture", () => {
+	it("draws a thread's readable name in a reply as a chip", () => {
 		const html = renderToStaticMarkup(
 			createElement(
 				ReferenceContext.Provider,
@@ -224,7 +224,7 @@ describe("pull request, issue and thread mentions", () => {
 			),
 		);
 		expect(html.match(/data-reference="thread"/g)).toHaveLength(1);
-		expect(html).toContain('class="thread-art"');
+		expect(html).not.toContain("thread-art");
 		// The chip shows the readable name, not the thread's old hex label.
 		expect(html).toContain(">ytimesy-12</span>");
 		expect(html).not.toMatch(/yti-[0-9a-f]{4}/i);

@@ -6,11 +6,11 @@ import {
 	GitMerge,
 	GitPullRequest,
 	type LucideIcon,
+	MessageSquare,
 } from "lucide-react";
 import { createContext, type ReactNode, useContext } from "react";
 import { chatAddress } from "#/domain/chat-address";
 import type { ThreadDirectory } from "#/domain/thread-label";
-import { ThreadArt } from "../workspace/thread-art";
 import {
 	type EventKind,
 	type IssueReference,
@@ -130,7 +130,12 @@ export function ThreadChip({
 			data-reference="thread"
 			href={`/thread/${id}`}
 		>
-			<ThreadArt id={id} size={16} />
+			<MessageSquare
+				className="reference-chip-icon"
+				aria-hidden
+				size={13}
+				strokeWidth={2}
+			/>
 			{label ? (
 				<span className="reference-chip-id" data-thread-label>
 					{label}

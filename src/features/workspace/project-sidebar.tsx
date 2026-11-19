@@ -874,7 +874,6 @@ export function ProjectSidebar({
 				<ThreadHoverCard
 					key={chat.id}
 					data={{
-						artId: chat.id,
 						id: threadLabel(projectName, chat),
 						title: chat.title,
 						projectName,

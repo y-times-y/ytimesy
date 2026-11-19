@@ -5799,12 +5799,6 @@ details.environment-build[open] > summary .session-activity-chevron {
 	margin-right: 4px;
 	vertical-align: top;
 }
-.reference-chip .thread-art {
-	display: inline-block;
-	margin-top: 1px;
-	margin-right: 5px;
-	vertical-align: top;
-}
 .session-event-icon {
 	flex-shrink: 0;
 	color: var(--event-icon);
@@ -6057,6 +6051,13 @@ details.environment-build[open] > summary .session-activity-chevron {
 	margin-left: auto;
 	color: var(--list-text-muted);
 	font-size: 11px;
+}
+.thread-card-avatar {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 auto;
+	border-radius: 50%;
+	background: var(--list-text-muted);
 }
 .thread-card-title {
 	margin: 8px 0 10px;

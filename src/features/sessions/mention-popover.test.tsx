@@ -19,7 +19,7 @@ describe("MentionPopover", () => {
 		]),
 	];
 
-	it("draws a thread with its picture, name and title, and an agent with its icon", () => {
+	it("draws a thread with its name and title, and an agent with its icon", () => {
 		const html = renderToStaticMarkup(
 			<MentionPopover
 				agents={agents}
@@ -31,8 +31,8 @@ describe("MentionPopover", () => {
 		expect(html).toContain('aria-label="Agents and threads"');
 		expect(html).toContain("ytimesy-12");
 		expect(html).toContain("Fix login redirect");
-		// One picture, the thread's; Main keeps its icon.
-		expect(html.match(/class="thread-art"/g)).toHaveLength(1);
+		// No pictures: the thread has an icon like an agent.
+		expect(html).not.toContain("thread-art");
 		expect(html).toContain("Main");
 		expect(agents[0]?.id).toBe(MAIN_MENTION_ID);
 	});

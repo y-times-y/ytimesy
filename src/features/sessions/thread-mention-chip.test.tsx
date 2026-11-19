@@ -10,11 +10,12 @@ const threads = threadDirectory("ytimesy", [
 ]);
 
 describe("a thread in chat text", () => {
-	it("draws a thread chip with the thread's picture", () => {
+	it("draws a thread chip with its name and title", () => {
 		const html = renderToStaticMarkup(
 			<ThreadChip id={ID} label="ytimesy-12" title="Fix login redirect" />,
 		);
-		expect(html).toContain('class="thread-art"');
+		expect(html).toContain("reference-chip-icon");
+		expect(html).not.toContain("thread-art");
 		expect(html).toContain("ytimesy-12");
 		expect(html).toContain(`href="/thread/${ID}"`);
 	});
@@ -25,7 +26,8 @@ describe("a thread in chat text", () => {
 				<MentionText text="please look at @ytimesy-12 and @ytimesy-99" />
 			</ReferenceContext.Provider>,
 		);
-		expect(html.match(/class="thread-art"/g)).toHaveLength(1);
+		expect(html.match(/data-reference="thread"/g)).toHaveLength(1);
+		expect(html).not.toContain("thread-art");
 		expect(html).toContain("Fix login redirect");
 		// An unknown thread stays the words the person wrote.
 		expect(html).toContain("@ytimesy-99");
