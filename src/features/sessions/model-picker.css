@@ -980,6 +980,25 @@
 	.model-detail[data-expanded="false"] .model-detail-body {
 		display: block;
 	}
+	/* Near the right edge the card flips to the left of the list... */
+	.model-detail[data-side="left"] {
+		left: auto;
+		right: calc(100% + 8px);
+	}
+	/* ...and sits under the list when neither side has room. */
+	.model-detail[data-side="inline"] {
+		position: static;
+		width: 100%;
+		border: 0;
+		border-top: 1px solid var(--menu-divider);
+		border-radius: 0;
+		box-shadow: none;
+	}
+	/* The card carries the reasoning slider: the menu's own row is not repeated. */
+	.harness-picker[data-detail-reasoning]
+	.model-picker-setting[data-setting="reasoning"] {
+		display: none;
+	}
 }
 @media (max-width: 480px) {
 	.model-row-info {

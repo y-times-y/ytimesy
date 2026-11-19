@@ -353,6 +353,9 @@ export function HarnessPicker({
 				align="start"
 				className="harness-picker"
 				aria-label="Choose model"
+				data-detail-reasoning={
+					detailModel?.reasoning && onReasoningIdChange ? "" : undefined
+				}
 				onKeyDown={onPickerKeyDown}
 			>
 				<ModelDetailProvider

@@ -4,6 +4,9 @@ import {
 	type KeyboardEvent,
 	type PointerEvent,
 	useContext,
+	useLayoutEffect,
+	useRef,
+	useState,
 } from "react";
 import { type ReasoningLevel, reasoningLevelLabel } from "./model-capabilities";
 import {
@@ -167,6 +170,20 @@ export function ReasoningSlider({
 }
 
 /** The side card (desktop) or inline expandable block (mobile) for the hovered or focused model. */
+const CARD_GAP = 8;
+const SCREEN_PAD = 8;
+
+/** Where the card goes so it stays on screen: right of the list, else left of it, else under it. */
+export function cardSide(
+	list: { left: number; right: number },
+	cardWidth: number,
+	viewportWidth: number,
+): "right" | "left" | "inline" {
+	if (list.right + CARD_GAP + cardWidth <= viewportWidth - SCREEN_PAD)
+		return "right";
+	return list.left - CARD_GAP - cardWidth >= SCREEN_PAD ? "left" : "inline";
+}
+
 export function ModelDetailCard({
 	spec,
 	expanded,
@@ -187,14 +204,26 @@ export function ModelDetailCard({
 		onChange: (id: string) => void;
 	};
 }) {
+	const ref = useRef<HTMLElement>(null);
+	const [side, setSide] = useState<"right" | "left" | "inline">("right");
+	// Beside the list on a wide screen; when the picker sits near an edge the
+	// card flips to the other side, and sits under the list when neither fits.
+	useLayoutEffect(() => {
+		const card = ref.current;
+		if (!card || getComputedStyle(card).position !== "absolute") return;
+		const list = (card.offsetParent ?? card).getBoundingClientRect();
+		setSide(cardSide(list, card.offsetWidth, window.innerWidth));
+	}, []);
 	const price = modelPriceDisplay(spec.priceId, spec.plan);
 	const context = modelContextLabel(spec.priceId, spec.contextTokens);
 	const level = reasoning?.levels.find((item) => item.id === reasoning.valueId);
 	return (
 		<aside
+			ref={ref}
 			className="model-detail"
 			aria-label={`${spec.label} details`}
 			data-expanded={expanded}
+			data-side={side}
 		>
 			<button
 				type="button"

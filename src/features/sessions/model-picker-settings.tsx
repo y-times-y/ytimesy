@@ -39,7 +39,7 @@ export function ModelPickerSettings({
 		<div className="model-picker-settings">
 			<p className="model-picker-current">{model.label}</p>
 			{model.reasoning && onReasoningIdChange ? (
-				<div className="model-picker-setting">
+				<div className="model-picker-setting" data-setting="reasoning">
 					<Brain size={16} aria-hidden="true" />
 					<span>Reasoning</span>
 					<MenuSelect

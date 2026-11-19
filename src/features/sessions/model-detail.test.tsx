@@ -115,3 +115,14 @@ describe("row meta", () => {
 		expect(html).toContain("model-row-check");
 	});
 });
+
+describe("cardSide", () => {
+	it("keeps the card on the right while it fits, then flips left, then goes under the list", async () => {
+		const { cardSide } = await import("./model-detail");
+		expect(cardSide({ left: 100, right: 400 }, 260, 1200)).toBe("right");
+		// The user's case: the picker near the right edge of the window.
+		expect(cardSide({ left: 560, right: 860 }, 260, 1000)).toBe("left");
+		// No room on either side.
+		expect(cardSide({ left: 40, right: 340 }, 260, 400)).toBe("inline");
+	});
+});
