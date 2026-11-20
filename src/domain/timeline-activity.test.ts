@@ -512,3 +512,51 @@ describe("commands in a running turn fold into quiet rows", () => {
 		expect(rows.map((row) => row.kind)).toEqual(["item"]);
 	});
 });
+
+describe("a harness's shell tool calls fold like native commands", () => {
+	const shell = (id: string, command: string): SessionItem => ({
+		kind: "dynamicToolCall",
+		id: SessionItemId(id),
+		tool: "execute_command",
+		input: JSON.stringify({ command }),
+		status: "completed",
+	});
+
+	it("folds adjacent read-only shell calls into one Explored row", () => {
+		const rows = groupExplorationRows([
+			shell("a", "sed -n 1138,1156p src/session-launcher.tsx"),
+			shell("b", 'grep -n "harnessId" src/session-launcher.tsx'),
+		]);
+		expect(rows).toHaveLength(1);
+		const row = rows[0];
+		expect(row?.kind).toBe("exploration");
+		if (row?.kind === "exploration")
+			expect(explorationLabel(row.counts)).toBe("Explored 1 file 1 search");
+	});
+
+	it("folds adjacent shell calls that do more than look into 'Ran N commands'", () => {
+		const rows = groupExplorationRows([
+			shell("a", "git fetch -q origin"),
+			shell("b", "pnpm exec vitest run"),
+		]);
+		expect(rows).toHaveLength(1);
+		const row = rows[0];
+		expect(row?.kind).toBe("commands");
+		if (row?.kind === "commands")
+			expect(commandsLabel(row.items)).toBe("Ran 2 commands");
+	});
+
+	it("leaves a lone call, and calls split by narration, as single rows", () => {
+		const thought: SessionItem = {
+			kind: "reasoning",
+			id: SessionItemId("t"),
+			summaries: ["Checking the result"],
+		};
+		const rows = groupExplorationRows([
+			shell("a", "git fetch -q origin"),
+			thought,
+			shell("b", "pnpm exec vitest run"),
+		]);
+		expect(rows.map((row) => row.kind)).toEqual(["item", "item", "item"]);
+	});
+});

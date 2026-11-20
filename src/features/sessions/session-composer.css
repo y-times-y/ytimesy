@@ -1503,6 +1503,20 @@ details[open] > summary .session-activity-chevron {
 }
 .session-activity[data-kind="reasoning"] .session-activity-title {
 	font-weight: 400;
+	/* A thought is read whole, never cut off with an ellipsis. */
+	white-space: normal;
+	overflow: visible;
+	text-overflow: clip;
+}
+.session-narration {
+	margin: 10px 0 4px;
+}
+.session-narration > p {
+	margin: 0;
+	line-height: 20px;
+}
+.session-narration .session-activity-title {
+	color: rgba(255, 255, 255, 0.78);
 }
 .session-activity[data-kind="fileChange"] > p,
 .session-activity[data-kind="fileChange"] > summary {

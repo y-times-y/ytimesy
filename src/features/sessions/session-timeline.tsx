@@ -1226,6 +1226,23 @@ function SessionItemView({
 					</div>
 				);
 			}
+			// One line says it all: shown whole as readable text, not as a cut-off
+			// row that opens onto the same words.
+			const only = summaries.length === 1 ? summaries[0] : undefined;
+			if (only !== undefined && !only.trim().includes("\n"))
+				return (
+					<div
+						className="session-activity session-narration"
+						data-kind="reasoning"
+						data-live={live ? "true" : undefined}
+					>
+						<p>
+							<span className={titleClass}>
+								{only.trim().replace(/^#+\s*|\*\*/g, "")}
+							</span>
+						</p>
+					</div>
+				);
 			return (
 				<LiveCollapsible
 					className="session-activity"

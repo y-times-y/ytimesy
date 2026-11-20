@@ -9,6 +9,7 @@ import {
 	type SessionItem,
 	type SessionTurnStatus,
 } from "./session-item";
+import { toolActivity, toolCommand } from "./tool-detail";
 import { workedLabel } from "./turn-timing";
 
 export type ExplorationCounts = {
@@ -111,11 +112,29 @@ export function readOnlyCommandKind(command: string): "read" | "search" | null {
 	return kind;
 }
 
+/**
+ * The shell command of a tool call that the timeline shows as "Ran <command>"
+ * (a harness's shell tool, not a background start), so it folds like a native
+ * command; null for any other call.
+ */
+function shellToolCommand(item: SessionItem): string | null {
+	if (item.kind !== "dynamicToolCall") return null;
+	const command = toolCommand(item);
+	if (!command) return null;
+	return toolActivity(item).verb === "Ran" ? command : null;
+}
+
+/** The command a command-like item ran, whichever way the harness reports it. */
+function itemCommand(item: SessionItem): string | null {
+	if (item.kind === "commandExecution") return item.command;
+	return shellToolCommand(item);
+}
+
 export function isExplorationItem(item: SessionItem): boolean {
 	if (item.kind === "fileChange") return false;
 	if (item.kind === "webSearch") return true;
-	if (item.kind === "commandExecution")
-		return readOnlyCommandKind(item.command) !== null;
+	const command = itemCommand(item);
+	if (command !== null) return readOnlyCommandKind(command) !== null;
 	if (item.kind === "dynamicToolCall") {
 		return isExplorationGlyph(activityGlyphForToolName(item.tool));
 	}
@@ -133,8 +152,9 @@ function explorationCounts(items: readonly SessionItem[]): ExplorationCounts {
 			searches += 1;
 			continue;
 		}
-		if (item.kind === "commandExecution") {
-			if (readOnlyCommandKind(item.command) === "read") files += 1;
+		const command = itemCommand(item);
+		if (command !== null) {
+			if (readOnlyCommandKind(command) === "read") files += 1;
 			else searches += 1;
 			continue;
 		}
@@ -345,7 +365,7 @@ function groupCommandRuns(rows: readonly TimelineRow[]): TimelineRow[] {
 		run = [];
 	};
 	for (const row of rows) {
-		if (row.kind === "item" && row.item.kind === "commandExecution") {
+		if (row.kind === "item" && itemCommand(row.item) !== null) {
 			run.push(row.item);
 			continue;
 		}

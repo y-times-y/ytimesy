@@ -343,7 +343,7 @@ describe("session timeline live collapse", () => {
 		expect(historical).not.toContain('data-streaming="true"');
 		expect(historical).not.toMatch(/<details[^>]*open/);
 		expect(html.split('data-kind="userMessage"')[1]).toMatch(
-			/data-kind="reasoning"[^>]*open/,
+			/data-kind="reasoning"[^>]*data-live="true"/,
 		);
 	});
 
@@ -388,14 +388,25 @@ describe("session timeline live collapse", () => {
 		expect(html).not.toMatch(/session-exploration"[^>]*data-live/);
 	});
 
-	it("opens thinking with summaries while live and collapses when the thought finishes", () => {
+	it("shows a one-line thought whole as text, with no row to open", () => {
 		const live = renderTimeline([thought("r1", true)], "running");
-		expect(live).toMatch(/data-kind="reasoning"[^>]*open/);
+		expect(live).toContain("session-narration");
+		expect(live).not.toMatch(/<details[^>]*data-kind="reasoning"/);
 		expect(live).toContain("Looking at the session timeline");
+	});
 
-		const done = renderTimeline([thought("r1", false)], "completed");
+	it("keeps a thought with a body collapsible, open while live and closed when done", () => {
+		const long = (inProgress: boolean): SessionItem => ({
+			kind: "reasoning",
+			id: SessionItemId("r2"),
+			summaries: ["Looking at the timeline\n\nIt folds each turn's work."],
+			durationSeconds: inProgress ? undefined : 4,
+		});
+		const live = renderTimeline([long(true)], "running");
+		expect(live).toMatch(/data-kind="reasoning"[^>]*open/);
+		const done = renderTimeline([long(false)], "completed");
 		expect(done).not.toMatch(/data-kind="reasoning"[^>]*open/);
-		expect(done).toContain("Looking at the session timeline");
+		expect(done).toContain("Looking at the timeline");
 	});
 
 	it("renders mentioned files as clickable text with a file icon", () => {
