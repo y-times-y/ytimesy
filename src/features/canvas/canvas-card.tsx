@@ -1,6 +1,7 @@
 import { AppWindow, ArrowUpRight } from "lucide-react";
-import { memo } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { CanvasItem } from "#/domain/session-item";
+import { useWholeItem } from "../sessions/whole-item";
 import { CanvasFrame } from "./canvas-frame";
 import { useCanvasOpener } from "./canvas-open-context";
 import "./canvas.css";
@@ -19,6 +20,33 @@ export function CanvasCard({
 	latest: boolean;
 }) {
 	const open = useCanvasOpener();
+	// A page read leaves a canvas's html out (it can be 500 KB): the card reads
+	// it whole, once, when it scrolls into view, as the panel does when opened.
+	const thumb = useRef<HTMLDivElement>(null);
+	const [seen, setSeen] = useState(false);
+	useEffect(() => {
+		const element = thumb.current;
+		if (seen || !element) return;
+		if (typeof IntersectionObserver === "undefined") {
+			setSeen(true);
+			return;
+		}
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries.some((entry) => entry.isIntersecting)) {
+					setSeen(true);
+					observer.disconnect();
+				}
+			},
+			{ rootMargin: "200px" },
+		);
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, [seen]);
+	const whole = useWholeItem(item, seen);
+	const html = whole.html;
+	// Left out by the page and still being read: not the same as no longer kept.
+	const reading = html === null && whole.htmlOmitted === true;
 	const show = open
 		? () =>
 				open({
@@ -29,16 +57,16 @@ export function CanvasCard({
 	return (
 		<article
 			className="canvas-card"
-			data-kept={item.html === null ? "false" : undefined}
+			data-kept={html === null && !reading ? "false" : undefined}
 			data-owner-thread={item.ownerThreadId}
 			aria-label={`Canvas ${item.title}`}
 		>
-			<div className="canvas-card-thumb">
-				{item.html === null ? (
+			<div className="canvas-card-thumb" ref={thumb}>
+				{html === null ? (
 					<AppWindow size={18} strokeWidth={1.5} aria-hidden="true" />
 				) : (
 					<CanvasFrame
-						html={item.html}
+						html={html}
 						title={`${item.title} thumbnail`}
 						className="canvas-card-thumb-frame"
 						preview
@@ -63,7 +91,7 @@ export function CanvasCard({
 					{item.title}
 				</strong>
 				<span className="canvas-card-meta">
-					{item.html === null
+					{html === null && !reading
 						? "This older revision is no longer kept."
 						: item.path
 							? item.path

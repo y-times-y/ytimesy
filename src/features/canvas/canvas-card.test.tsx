@@ -96,3 +96,19 @@ it("marks a thread's canvas in Y²'s chat with its owner", () => {
 	expect(own).not.toContain("data-owner-thread");
 	expect(own).not.toContain("From a thread");
 });
+
+it("does not say a canvas is gone when a page read only left its html out", () => {
+	const left = {
+		...item(3, null),
+		htmlOmitted: true,
+		detailSession: "chat-1",
+	} as CanvasItem;
+	const html = renderToStaticMarkup(<CanvasCard item={left} latest />);
+	expect(html).not.toContain("no longer kept");
+	expect(html).not.toContain('data-kept="false"');
+	// A revision the chat's budget really dropped still says so.
+	const dropped = renderToStaticMarkup(
+		<CanvasCard item={item(1, null)} latest={false} />,
+	);
+	expect(dropped).toContain("no longer kept");
+});
