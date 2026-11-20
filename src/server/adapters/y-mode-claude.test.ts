@@ -32,30 +32,22 @@ function configure(users: string, sessions?: string) {
 }
 
 describe("claudeCodeYSquaredAvailable", () => {
-	it("is false without runner configuration and true for a listed user", async () => {
+	it("is false without runner configuration and true for any user once runners exist", async () => {
 		for (const key of KEYS) delete process.env[key];
 		expect(await claudeCodeYSquaredAvailable("alice")).toBe(false);
 		expect(await claudeCodeYSquaredAvailable("alice", "s")).toBe(false);
+		// Only runners matter for Y²: no user or chat has to be listed.
 		configure("alice");
 		expect(await claudeCodeYSquaredAvailable("alice")).toBe(true);
 		expect(await claudeCodeYSquaredAvailable("alice", "any-chat")).toBe(true);
-		expect(await claudeCodeYSquaredAvailable("bob")).toBe(false);
-		configure("*");
 		expect(await claudeCodeYSquaredAvailable("bob")).toBe(true);
+		configure("");
+		expect(await claudeCodeYSquaredAvailable("carol", "any-chat")).toBe(true);
 	});
 
-	it("honours a per-chat rollout list, also for the picker's flag", async () => {
-		configure("alice", "55555555-5555-4555-8555-555555555555");
-		expect(
-			await claudeCodeYSquaredAvailable(
-				"alice",
-				"55555555-5555-4555-8555-555555555555",
-			),
-		).toBe(true);
-		expect(await claudeCodeYSquaredAvailable("alice", "other")).toBe(false);
-		// The flag looks at the user's live Y² chats (mocked: one is listed).
-		expect(await claudeCodeYSquaredAvailable("alice")).toBe(true);
+	it("ignores the per-chat rollout list, which guards builders", async () => {
 		configure("alice", "someone-elses-chat");
-		expect(await claudeCodeYSquaredAvailable("alice")).toBe(false);
+		expect(await claudeCodeYSquaredAvailable("alice", "other")).toBe(true);
+		expect(await claudeCodeYSquaredAvailable("bob")).toBe(true);
 	});
 });

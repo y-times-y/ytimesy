@@ -212,3 +212,18 @@ describe("claudeWorkspaceCommandsPrompt", () => {
 		expect(text).not.toContain("Browser Use CLI Python");
 	});
 });
+
+describe("claudeRunnerFor for Y²", () => {
+	const env = {
+		YTIMESY_CLAUDE_RUNNER_URLS: "https://runner.example",
+		YTIMESY_CLAUDE_RUNNER_SIGNING_KEY: "A".repeat(64),
+		YTIMESY_CLAUDE_RUNNER_USERS: "alice",
+		YTIMESY_CLAUDE_RUNNER_SESSIONS: "chat-1",
+	};
+	it("skips the user and chat lists that guard builders, but needs runners", () => {
+		const input = { userId: "bob", sessionId: "chat-9", reader: false };
+		expect(claudeRunnerFor({ env, ...input })).toBeNull();
+		expect(claudeRunnerFor({ env, ...input, ySquared: true })).not.toBeNull();
+		expect(claudeRunnerFor({ env: {}, ...input, ySquared: true })).toBeNull();
+	});
+});

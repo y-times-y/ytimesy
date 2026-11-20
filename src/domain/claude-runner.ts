@@ -152,6 +152,12 @@ export function claudeRunnerFor(input: {
 	readonly userId: string;
 	readonly sessionId: string;
 	readonly reader: boolean;
+	/**
+	 * Y²: it has no repository and no shell, only ytimesy's tools, so it needs
+	 * only that runners are configured. The per-user and per-chat rollout lists
+	 * guard builders (code on a box) and do not apply to it.
+	 */
+	readonly ySquared?: boolean;
 }): ClaudeRunnerBox | null {
 	const { env } = input;
 	const secret = env.YTIMESY_CLAUDE_RUNNER_SECRET ?? "";
@@ -167,9 +173,14 @@ export function claudeRunnerFor(input: {
 		.split(",")
 		.map((value) => value.trim())
 		.filter(Boolean);
-	if (!allowed.includes("*") && !allowed.includes(input.userId)) return null;
+	if (
+		!input.ySquared &&
+		!allowed.includes("*") &&
+		!allowed.includes(input.userId)
+	)
+		return null;
 	const scoped = env.YTIMESY_CLAUDE_RUNNER_SESSIONS;
-	if (scoped !== undefined) {
+	if (!input.ySquared && scoped !== undefined) {
 		const sessions = scoped
 			.split(",")
 			.map((value) => value.trim())

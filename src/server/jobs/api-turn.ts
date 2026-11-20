@@ -1111,6 +1111,7 @@ async function runApiTurnAttempt(
 				userId: turn.user_id,
 				sessionId: owner.id,
 				reader: isReaderRole(owner.agentRole) || sideReadOnly,
+				ySquared: Boolean(ySquared),
 			});
 			// Y² has no machine for the CLI: only a runner box can host it.
 			if (ySquared && !candidate) throw new ClaudeRunnerRequired();

@@ -83,35 +83,24 @@ export async function isYSquaredSession(
 /**
  * Whether a Y² chat of this user may run on a Claude subscription: only on a
  * Claude runner box (claude-runner.ts; no machine hosts the CLI for Y²), so
- * this is true exactly when the user has one. The one place that decides it:
- * the send gates, the failover plan and the picker's capability flag.
- *
- * With a session id the runner's per-chat rollout list is honoured. Without
- * one (the picker's flag) a rollout list is checked against the user's live
- * Y² chats, so the flag never promises what the send would refuse.
+ * this is true exactly when runners are configured. Y² needs no rollout list:
+ * it has no repository and no shell, only ytimesy's tools, so the per-user and
+ * per-chat lists that guard builders do not apply to it. The one place that
+ * decides it: the send gates, the failover plan and the picker's capability flag.
  */
 export async function claudeCodeYSquaredAvailable(
 	userId: string,
 	sessionId?: string,
 ): Promise<boolean> {
-	const runner = (session: string) =>
+	return (
 		claudeRunnerFor({
 			env: process.env,
 			userId,
-			sessionId: session,
+			sessionId: sessionId ?? "00000000-0000-4000-8000-000000000000",
 			reader: false,
-		}) !== null;
-	if (sessionId) return runner(sessionId);
-	// A throwaway id passes only when no per-chat rollout list is set.
-	if (runner("00000000-0000-4000-8000-000000000000")) return true;
-	if (process.env.YTIMESY_CLAUDE_RUNNER_SESSIONS === undefined) return false;
-	const result = await database().query<{ id: string }>(
-		`select s.id from agent_session s
-		 join project p on p.id=s.project_id and p.user_id=s.user_id
-		 where s.user_id=$1 and s.chat_role='y2' and s.archived_at is null and p.y_enabled`,
-		[userId],
+			ySquared: true,
+		}) !== null
 	);
-	return result.rows.some((row) => runner(row.id));
 }
 
 export async function setProjectYMode(
