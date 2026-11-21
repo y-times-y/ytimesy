@@ -548,10 +548,25 @@ export async function routeTurnBoxEdge(
 				return failed();
 			throw error;
 		}
-	} catch {
-		log("Turn box edge request failed.", { path });
+	} catch (error) {
+		// Why, never a value: the error's name and message, cut short.
+		log("Turn box edge request failed.", {
+			path,
+			...(path === TURN_BOX_PATHS.port && opOf(body) ? { op: opOf(body) } : {}),
+			name: error instanceof Error ? error.name : typeof error,
+			message: error instanceof Error ? error.message.slice(0, 300) : "",
+		});
 		return refuse("unavailable", 503);
 	}
+}
+
+function opOf(body: unknown) {
+	const op = (body as { op?: unknown } | null)?.op;
+	const inner = (body as { args?: { op?: unknown; dep?: unknown } } | null)
+		?.args;
+	return typeof op === "string"
+		? `${op}${typeof inner?.op === "string" ? `:${inner.op}` : ""}${typeof inner?.dep === "string" ? `:${inner.dep}` : ""}`
+		: undefined;
 }
 
 function identityOf(turn: ApiTurn, leaseId: string): TurnBoxTurnIdentity {
