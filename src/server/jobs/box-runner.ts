@@ -6,6 +6,7 @@ import { MAX_WORKFLOW_MODEL_STEPS } from "#/domain/model-workflow";
 import { configuredTurnExecutor } from "#/domain/turn-executor";
 import type { ApiTurn } from "../adapters/api-turns";
 import type { GuestExec } from "../claude-box-tools/identity-machines";
+import { registerRemoteCommandReceipts } from "../services/remote-command-receipts";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 import { assertTurnBoxHoldsNoSecrets } from "./box-secrets-guard";
@@ -15,7 +16,7 @@ import {
 	TurnBoxLeaseLost,
 	type TurnBoxTurnSession,
 } from "./turn-box-client";
-import { boxTurnPorts } from "./turn-box-ports";
+import { boxCommandReceipts, boxTurnPorts } from "./turn-box-ports";
 import {
 	type BoxWorkspaceMachines,
 	boxWorkspaceMachines,
@@ -290,6 +291,13 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 					...(options.fetch ? { fetch: options.fetch } : {}),
 				});
 			let settled = false;
+			// The chat's tool receipts are the edge's while this box runs it.
+			const unregister = registerRemoteCommandReceipts(
+				session.turn.session_id,
+				boxCommandReceipts((op, args) =>
+					session.port("commandReceipt", { op, ...args } as never),
+				),
+			);
 			try {
 				await session.openSocket();
 				const history = await session.history();
@@ -303,6 +311,7 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 					outcome === "failed" ||
 					outcome === "cancelled";
 			} finally {
+				unregister();
 				await ports.flush().catch(() => undefined);
 				// finalize and a reported Stop delete the turn's VM identity at the
 				// edge; any other end (an error, a lost lease) asks it to now.

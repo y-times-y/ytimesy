@@ -1931,6 +1931,23 @@ async function runApiTurnAttempt(
 		// private, loopback, link-local and metadata hosts are refused.
 		const webFetch: ToolSet =
 			variant.fetch === "on" ? webFetchTool({ checkHost: nodePublicHost }) : {};
+		// On a box, the tools that need a secret value or a record the box
+		// must not hold run on the edge whole (turn-box-tool-port.ts): the
+		// same tool, only its execution moves.
+		const viaEdge = (set: ToolSet, cwd?: () => Promise<string>): ToolSet => {
+			const remote = ports.remoteTool;
+			if (!remote) return set;
+			return Object.fromEntries(
+				Object.entries(set).map(([name, definition]) => [
+					name,
+					{
+						...definition,
+						execute: async (input: unknown) =>
+							remote(name, input, cwd ? await cwd() : undefined),
+					} as ToolSet[string],
+				]),
+			);
+		};
 		const ownTools = turnTools({
 			surfaceTools,
 			mcp,
@@ -1949,76 +1966,87 @@ async function runApiTurnAttempt(
 						items: () => items,
 						workspace,
 						savedRevision: (title) =>
-							savedCanvasRevision(turn.session_id, title),
+							ports.savedCanvasRevision
+								? ports.savedCanvasRevision(title)
+								: savedCanvasRevision(turn.session_id, title),
 					})
 				: {},
 			environmentSetup:
 				rootChat && owner.projectId
-					? environmentSetupTools({
-							userId: owner.userId,
-							projectId: owner.projectId,
-							sessionId: owner.id,
-						})
+					? viaEdge(
+							environmentSetupTools({
+								userId: owner.userId,
+								projectId: owner.projectId,
+								sessionId: owner.id,
+							}),
+						)
 					: {},
 			saveSecret:
 				rootChat && owner.projectId
-					? saveProjectSecretTools({
-							runInWorkspace: async (command) => {
-								const ready = await workspace();
-								return ready.machines.exec(
-									ready.vm,
-									`${SOURCE_AGENT_SECRETS}\n${command}`,
-									30_000,
-								);
-							},
-							save: async ({ scope, ...secret }) => {
-								if (scope === "account")
-									await saveAccountWideSecret({
-										userId: owner.userId,
-										...secret,
-									});
-								else
-									await saveVisibleProjectSecret({
-										userId: owner.userId,
-										projectId: owner.projectId as string,
-										...secret,
-									});
-							},
-						})
+					? viaEdge(
+							saveProjectSecretTools({
+								runInWorkspace: async (command) => {
+									const ready = await workspace();
+									return ready.machines.exec(
+										ready.vm,
+										`${SOURCE_AGENT_SECRETS}\n${command}`,
+										30_000,
+									);
+								},
+								save: async ({ scope, ...secret }) => {
+									if (scope === "account")
+										await saveAccountWideSecret({
+											userId: owner.userId,
+											...secret,
+										});
+									else
+										await saveVisibleProjectSecret({
+											userId: owner.userId,
+											projectId: owner.projectId as string,
+											...secret,
+										});
+								},
+							}),
+						)
 					: {},
 			describeSecret:
 				rootChat && owner.projectId && receivesSecrets
-					? describeSecretTools({
-							values: () => redact,
-							save: ({ name, description }) =>
-								setSecretDescription({
-									userId: owner.userId,
-									projectId: owner.projectId as string,
-									name,
-									description,
-								}),
-						})
+					? viaEdge(
+							describeSecretTools({
+								values: () => redact,
+								save: ({ name, description }) =>
+									setSecretDescription({
+										userId: owner.userId,
+										projectId: owner.projectId as string,
+										name,
+										description,
+									}),
+							}),
+						)
 					: {},
 			pushApproval:
 				rootChat && owner.projectId
-					? pushApprovalTools({
-							userId: owner.userId,
-							projectId: owner.projectId,
-							sessionId: owner.id,
-							requests: ports.gitPushRequests,
-							countCommits: async (oldId, newId) => {
-								const ready = await workspace();
-								const counted = await ready.machines.exec(
-									ready.vm,
-									`cd ${posixShellQuoted(ready.cwd)} && ${countCommitsCommand(oldId, newId)}`,
-									15_000,
-								);
-								const count = Number(counted.stdout.trim());
-								return counted.exitCode === 0 && Number.isInteger(count)
-									? count
-									: null;
-							},
-						})
+					? viaEdge(
+							pushApprovalTools({
+								userId: owner.userId,
+								projectId: owner.projectId,
+								sessionId: owner.id,
+								requests: ports.gitPushRequests,
+								countCommits: async (oldId, newId) => {
+									const ready = await workspace();
+									const counted = await ready.machines.exec(
+										ready.vm,
+										`cd ${posixShellQuoted(ready.cwd)} && ${countCommitsCommand(oldId, newId)}`,
+										15_000,
+									);
+									const count = Number(counted.stdout.trim());
+									return counted.exitCode === 0 && Number.isInteger(count)
+										? count
+										: null;
+								},
+							}),
+							async () => (await workspace()).cwd,
+						)
 					: {},
 		});
 		// Harness variant plan (on in the product): the root builder's

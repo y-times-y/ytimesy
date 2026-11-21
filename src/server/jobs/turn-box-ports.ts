@@ -16,6 +16,7 @@ import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
 import type { CodexSelection } from "../adapters/codex-subscription-runtime";
 import type { McpCatalogEntry } from "../services/mcp-tools";
+import type { RemoteCommandReceipts } from "../services/remote-command-receipts";
 import type { SubagentToolDeps } from "../services/subagent-tools";
 import type { TurnMemory } from "../services/turn-memory";
 import type { TurnBoxTurnSession } from "./turn-box-client";
@@ -374,6 +375,9 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		// - the workspace is prepared by the edge's vm/ensure (box-runner
 		//   installs boxApiTurnWorkspace; this placeholder refuses).
 		subagentToolDeps: boxSubagentToolDeps(call),
+		savedCanvasRevision: (title) => call<number>("canvasRevision", { title }),
+		remoteTool: (name, input, cwd) =>
+			call("remoteTool", { tool: name, input, ...(cwd ? { cwd } : {}) }),
 		// The edge lists the turn's MCP tools once and makes each call.
 		mcpTools: async () => {
 			// As in the Durable Object, MCP never fails a turn: a listing the
@@ -421,7 +425,19 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 			return boxTurnMemory(call, options);
 		}) as unknown as TurnPorts["turnMemory"],
 		subagentMemory: async () => null,
-		withPushResultNotices: async () => null,
+		// Push cards answered meanwhile: claimed through the edge, once each.
+		withPushResultNotices: (async (input: never) => {
+			const { withPushResultNotices } = await import(
+				"../services/push-approval"
+			);
+			return withPushResultNotices(input, {
+				claimUnnoticed: (async (userId: string, sessionId: string) => {
+					ownUser(userId);
+					ownSession(sessionId);
+					return call("pushNotices", {});
+				}) as never,
+			});
+		}) as unknown as TurnPorts["withPushResultNotices"],
 		deferredApiTurnWorkspace: unavailable("deferredApiTurnWorkspace"),
 
 		// Post-settle work the edge does at finalize (adapters/turn-box-after-settle.ts):
@@ -685,5 +701,30 @@ export async function boxTurnMemory(
 		// The save hook runs after finalize, where the box's port calls are no
 		// longer lease-checked: the edge queues it then (turn-box-edge-work.ts).
 		afterTurn: async () => undefined,
+	};
+}
+
+/** The chat's tool-call receipts through the edge (registered by box-runner.ts for the running turn's chat). */
+export function boxCommandReceipts(
+	port: (op: string, args: Record<string, unknown>) => Promise<unknown>,
+): RemoteCommandReceipts {
+	return {
+		claim: async (requestId) =>
+			(await port("claim", { requestId })) as Awaited<
+				ReturnType<RemoteCommandReceipts["claim"]>
+			>,
+		complete: async (response) => {
+			await port("complete", { response });
+		},
+		renew: async (requestId) => {
+			await port("renew", { requestId });
+		},
+		retained: async (requestIds) =>
+			new Map(
+				(await port("retained", { requestIds: [...requestIds] })) as [
+					string,
+					unknown,
+				][],
+			),
 	};
 }

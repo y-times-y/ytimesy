@@ -250,6 +250,11 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 						"mcpCall",
 						// Memory: turn-box-memory-port.test.ts and box-turn-e2e.test.ts.
 						"memory",
+						// Tools the edge runs whole: turn-box-tool-port.test.ts and box-turn-e2e.test.ts.
+						"remoteTool",
+						"pushNotices",
+						"commandReceipt",
+						"canvasRevision",
 					].includes(op),
 			),
 		).toEqual([]);

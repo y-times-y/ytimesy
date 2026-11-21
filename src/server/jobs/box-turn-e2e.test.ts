@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mcpToolName } from "../../domain/mcp-tool-call";
 import type { VmEnsureResponse } from "../../domain/turn-box-vm-protocol";
@@ -100,6 +104,8 @@ async function scenario(input: {
 	onModel?: (n: number, edge: Awaited<ReturnType<typeof fakeEdge>>) => void;
 	env?: Record<string, string>;
 	commit?: { notice?: string; publish: boolean } | null;
+	/** A real local shell as the VM: commands run with bash in this directory (its repo/). */
+	shell?: string;
 }) {
 	const edge = await fakeEdge();
 	edge.row.messages = [{ role: "user", content: "add a file" }];
@@ -221,6 +227,27 @@ async function scenario(input: {
 			vmWorld.tokens.add(grant.token);
 			vmWorld.commands.push(options.command.slice(0, 200));
 			const command = options.command;
+			if (input.shell) {
+				if (command.includes("ytimesy-project-cwd"))
+					return { stdout: `${input.shell}/repo`, stderr: "", statusCode: 0 };
+				const ran = spawnSync("bash", ["-c", command], {
+					...(options.stdin
+						? { input: Buffer.from(options.stdin, "base64") }
+						: {}),
+					cwd: `${input.shell}/repo`,
+					env: {
+						PATH: process.env.PATH ?? "/usr/bin:/bin",
+						HOME: `${input.shell}/home`,
+					},
+					encoding: "utf8",
+					timeout: 30_000,
+				});
+				return {
+					stdout: ran.stdout ?? "",
+					stderr: ran.stderr ?? "",
+					statusCode: ran.status ?? 1,
+				};
+			}
 			if (command.includes("ytimesy-project-cwd"))
 				return { stdout: "/home/ubuntu/repo", stderr: "", statusCode: 0 };
 			if (command.startsWith("python3 -c"))
@@ -516,6 +543,79 @@ describe("memory from a box (read and written by the edge)", () => {
 	}, 60_000);
 });
 
+describe("tools the edge runs whole (secrets, push approval)", () => {
+	it("saves a secret through the edge: the value never reaches the box", async () => {
+		const s = await scenario({
+			model: [
+				{
+					tool: "save_project_secret",
+					input: {
+						name: "GH_TOKEN",
+						valueCommand: "gh auth token",
+						kind: "runtime",
+						scope: "project",
+					},
+				},
+				{ text: "Saved." },
+			],
+		});
+		const calls: { tool: string; input: unknown }[] = [];
+		(s.edge.state.ports as Record<string, unknown>).remoteTool = async (args: {
+			tool: string;
+			input: unknown;
+		}) => {
+			calls.push(args);
+			return { saved: true, name: "GH_TOKEN", note: "Saved to this project." };
+		};
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+		expect(dbCalls.stacks).toEqual([]);
+		expect(calls).toEqual([
+			{
+				tool: "save_project_secret",
+				input: {
+					name: "GH_TOKEN",
+					valueCommand: "gh auth token",
+					kind: "runtime",
+					scope: "project",
+				},
+			},
+		]);
+		// The box never ran the value command on the VM itself.
+		expect(s.vmWorld.commands.some((c) => c.includes("gh auth token"))).toBe(
+			false,
+		);
+		expect(JSON.stringify(s.edge.row.items)).toContain(
+			"Saved to this project.",
+		);
+	}, 60_000);
+
+	it("asks for a push approval through the edge with the checkout path", async () => {
+		const s = await scenario({
+			model: [
+				{
+					tool: "request_push_approval",
+					input: { repo: "acme/app", branch: "main", summary: "ship it" },
+				},
+				{ text: "Waiting for the push." },
+			],
+		});
+		const calls: { tool: string; cwd?: string }[] = [];
+		(s.edge.state.ports as Record<string, unknown>).remoteTool = async (args: {
+			tool: string;
+			cwd?: string;
+		}) => {
+			calls.push(args);
+			return { requested: true };
+		};
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+		expect(dbCalls.stacks).toEqual([]);
+		expect(calls.map((c) => c.tool)).toEqual(["request_push_approval"]);
+		expect(calls[0]?.cwd).toBe("/home/ubuntu/repo");
+	}, 60_000);
+});
+
 describe("Stop and lease loss mid-step", () => {
 	it("Stop requested while the model streams: the box stops, commits nothing, publishes nothing", async () => {
 		const s = await scenario({
@@ -628,4 +728,136 @@ describe("MCP listing failure on a box", () => {
 		await s.run();
 		expect(s.edge.row.state).toBe("completed");
 	});
+});
+
+describe("every product tool on a box (a real shell as the VM, the database blocked)", () => {
+	async function run(tool: string, input: Record<string, unknown>) {
+		const dir = mkdtempSync(join(tmpdir(), "box-tool-"));
+		mkdirSync(join(dir, "repo"));
+		mkdirSync(join(dir, "home"));
+		writeFileSync(join(dir, "repo", "README.md"), "# Probe\nhello\n");
+		writeFileSync(join(dir, "repo", "a.txt"), "x\n");
+		const s = await scenario({
+			model: [{ tool, input }, { text: "Done." }],
+			shell: dir,
+		});
+		const ports = s.edge.state.ports as Record<string, unknown>;
+		ports.subagent = async () => [];
+		const receipts = new Map<string, unknown>();
+		ports.commandReceipt = async (args: {
+			op: string;
+			requestId?: string;
+			response?: { id: string };
+		}) => {
+			if (args.op === "claim") {
+				const done = receipts.get(args.requestId ?? "");
+				return done ? { kind: "done", response: done } : { kind: "claimed" };
+			}
+			if (args.op === "complete" && args.response)
+				receipts.set(args.response.id, args.response);
+			if (args.op === "retained") return [];
+			return null;
+		};
+		ports.canvasRevision = async () => 0;
+		const remote: string[] = [];
+		ports.remoteTool = async (args: { tool: string }) => {
+			remote.push(args.tool);
+			return { ok: true };
+		};
+		const bodies: string[] = [];
+		const deps = s.edge.deps as unknown as {
+			upstream: (request: unknown, init?: RequestInit) => Promise<unknown>;
+		};
+		const upstream = deps.upstream;
+		deps.upstream = async (request: unknown, init?: RequestInit) => {
+			const copy = new Request(request as RequestInfo, init);
+			bodies.push(await copy.clone().text());
+			return upstream(copy);
+		};
+		await s.run();
+		const call = (
+			s.edge.row.items as { kind: string; tool?: string; output?: string }[]
+		).find((item) => item.kind === "dynamicToolCall" && item.tool === tool);
+		return { s, dir, call, remote, bodies, receipts };
+	}
+
+	it("offers exactly these tools (a new one needs a box check here)", async () => {
+		const { bodies } = await run("read", { path: "README.md" });
+		const offered = (
+			JSON.parse(bodies[0] ?? "{}").tools as { function: { name: string } }[]
+		).map((entry) => entry.function.name);
+		expect(offered.sort()).toEqual(
+			[
+				"read",
+				"write",
+				"edit",
+				"bash",
+				"agent",
+				"agent_send",
+				"request_project_secret",
+				"ask_user",
+				"request_push_approval",
+				"web_fetch",
+				"canvas",
+				"save_project_environment",
+				"save_project_secret",
+				"describe_secret",
+				"update_plan",
+				"goal",
+				"run_code",
+			].sort(),
+		);
+	}, 60_000);
+
+	it("reads, writes and edits files on the VM, with receipts at the edge", async () => {
+		const read = await run("read", { path: "README.md" });
+		expect(read.call?.output).toContain("hello");
+		const write = await run("write", { path: "a.txt", content: "new\n" });
+		expect(write.call?.output).toContain("Overwrote");
+		expect(readFileSync(join(write.dir, "repo", "a.txt"), "utf8")).toBe(
+			"new\n",
+		);
+		expect(write.receipts.size).toBe(1);
+		const edit = await run("edit", {
+			path: "a.txt",
+			edits: [{ old_string: "x", new_string: "y" }],
+		});
+		expect(edit.call?.output).toContain("1 edit applied");
+		expect(readFileSync(join(edit.dir, "repo", "a.txt"), "utf8")).toBe("y\n");
+		expect(dbCalls.stacks).toEqual([]);
+	}, 120_000);
+
+	it("runs code, shows a canvas, plans and asks, without the database", async () => {
+		for (const [tool, input] of [
+			["run_code", { code: "return 1 + 1;" }],
+			["canvas", { title: "Probe", html: "<html><body>hi</body></html>" }],
+			["update_plan", { plan: [{ step: "one", status: "in_progress" }] }],
+			["goal", { op: "get" }],
+			[
+				"ask_user",
+				{
+					questions: [
+						{ question: "Which?", options: [{ label: "A" }, { label: "B" }] },
+					],
+				},
+			],
+			[
+				"request_project_secret",
+				{ secrets: [{ name: "STRIPE_KEY", reason: "billing" }] },
+			],
+		] as [string, Record<string, unknown>][]) {
+			const result = await run(tool, input);
+			expect(result.s.edge.row.state, tool).toBe("completed");
+			expect(dbCalls.stacks, tool).toEqual([]);
+		}
+	}, 180_000);
+
+	it("sends the environment setup to the edge whole", async () => {
+		const result = await run("save_project_environment", {
+			install: "pnpm install",
+			summary: "Installs.",
+		});
+		expect(result.remote).toEqual(["save_project_environment"]);
+		expect(dbCalls.stacks).toEqual([]);
+	}, 60_000);
 });

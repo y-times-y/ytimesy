@@ -152,4 +152,7 @@ export const localTurnPorts: TurnPorts = {
 	subagentToolDeps: undefined,
 	// The loop connects to the user's MCP servers itself.
 	mcpTools: undefined,
+	// The tools run here, with the database and the secret values.
+	remoteTool: undefined,
+	savedCanvasRevision: undefined,
 };

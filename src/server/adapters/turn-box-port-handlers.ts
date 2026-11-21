@@ -283,6 +283,58 @@ async function handle(
 				call.args,
 				{ ...(deps.machines ? { machines: deps.machines } : {}) },
 			);
+		case "commandReceipt": {
+			const receipts = await import("./agent-task-command-receipts");
+			const requestId = call.args.requestId ?? "";
+			switch (call.args.op) {
+				case "claim":
+					return receipts.claimAgentTaskCommand(session, requestId);
+				case "renew":
+					return receipts.renewAgentTaskCommandClaim(session, requestId);
+				case "complete": {
+					const response = call.args.response as
+						| Parameters<typeof receipts.completeAgentTaskCommand>[1]
+						| undefined;
+					if (typeof response?.id !== "string")
+						throw new TurnBoxPortForbidden(call.op);
+					return receipts.completeAgentTaskCommand(session, response);
+				}
+				case "retained": {
+					const metadata = await ownMetadata(turn);
+					if (!metadata.projectId) return [];
+					return [
+						...(
+							await receipts.retainedTaskCheckResults({
+								userId: user,
+								projectId: metadata.projectId,
+								sessionId: session,
+								requestIds: call.args.requestIds ?? [],
+							})
+						).entries(),
+					];
+				}
+			}
+			return null;
+		}
+		case "canvasRevision":
+			return (await import("./canvas-revisions")).savedCanvasRevision(
+				session,
+				call.args.title,
+			);
+		case "remoteTool":
+			return (await import("./turn-box-tool-port")).remoteToolPort(
+				turn,
+				{
+					tool: call.args.tool,
+					input: call.args.input,
+					...(call.args.cwd ? { cwd: call.args.cwd } : {}),
+				},
+				{ ...(deps.machines ? { machines: deps.machines } : {}) },
+			);
+		case "pushNotices":
+			return (
+				await import("./git-push-requests")
+			).gitPushRequests.claimUnnoticed(user, session);
 		case "mcpListing":
 			return (await import("./turn-box-mcp-port")).mcpListingPort(turn);
 		case "mcpCall":

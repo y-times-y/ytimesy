@@ -188,6 +188,18 @@ export interface TurnPorts {
 	 * in the Durable Object, which connects to the servers itself.
 	 */
 	readonly mcpTools?: (signal: AbortSignal) => Promise<McpConnection>;
+	/**
+	 * Set on a box: runs one of the tools whose work needs a secret value or a
+	 * record the box must not hold (save/describe a secret, push approval) on
+	 * the edge (turn-box-tool-port.ts). Unset in the Durable Object.
+	 */
+	/** Set on a box: a canvas's highest saved revision, read by the edge (canvas-revisions.ts). */
+	readonly savedCanvasRevision?: (title: string) => Promise<number>;
+	readonly remoteTool?: (
+		name: string,
+		input: unknown,
+		cwd?: string,
+	) => Promise<unknown>;
 }
 
 export type TurnPortName = keyof TurnPorts;

@@ -1,5 +1,6 @@
 import type { AgentTaskToolResponse } from "#/domain/agent-task-tool";
 import { jsonbText } from "#/domain/jsonb";
+import { remoteCommandReceipts } from "../services/remote-command-receipts";
 import { database } from "./database";
 
 export async function completedLifecycleContinuations(
@@ -26,6 +27,8 @@ export async function retainedTaskCheckResults(input: {
 	requestIds: readonly string[];
 }) {
 	if (!input.requestIds.length) return new Map<string, unknown>();
+	const elsewhere = remoteCommandReceipts(input.sessionId);
+	if (elsewhere) return elsewhere.retained(input.requestIds);
 	if (input.requestIds.length > 64)
 		throw new Error("Check discovery is bounded to 64 calls.");
 	const result = await database().query<{
@@ -53,6 +56,8 @@ export async function claimAgentTaskCommand(
 	parentSessionId: string,
 	requestId: string,
 ): Promise<CommandReceipt> {
+	const elsewhere = remoteCommandReceipts(parentSessionId);
+	if (elsewhere) return elsewhere.claim(requestId);
 	const inserted = await database().query(
 		`insert into agent_task_command_receipt(parent_session_id,request_id,status)
 		 values($1,$2,'processing') on conflict do nothing returning request_id`,
@@ -90,6 +95,8 @@ export async function completeAgentTaskCommand(
 	parentSessionId: string,
 	response: AgentTaskToolResponse,
 ) {
+	const elsewhere = remoteCommandReceipts(parentSessionId);
+	if (elsewhere) return elsewhere.complete(response);
 	await database().query(
 		`update agent_task_command_receipt
 		 set status='done',response=$3,completed_at=now(),updated_at=now()
@@ -102,6 +109,8 @@ export async function renewAgentTaskCommandClaim(
 	parentSessionId: string,
 	requestId: string,
 ) {
+	const elsewhere = remoteCommandReceipts(parentSessionId);
+	if (elsewhere) return elsewhere.renew(requestId);
 	const renewed = await database().query(
 		`update agent_task_command_receipt set updated_at=now()
 		 where parent_session_id=$1 and request_id=$2 and status='processing'`,

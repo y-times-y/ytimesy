@@ -358,6 +358,35 @@ export const boxPortArgs = {
 		messages: messages.optional(),
 		items: items.optional(),
 	}),
+	/**
+	 * A tool the edge runs whole for the turn's own chat (turn-box-tool-port.ts):
+	 * saving or describing a secret, asking for a push approval. `cwd` is the
+	 * checkout path the box read (for counting the push's commits).
+	 */
+	remoteTool: z.object({
+		tool: z.enum([
+			"save_project_secret",
+			"describe_secret",
+			"request_push_approval",
+			"save_project_environment",
+		]),
+		input: z.unknown(),
+		cwd: z.string().max(4096).optional(),
+	}),
+	/**
+	 * The chat's tool-call receipts (agent-task-command-receipts.ts), which
+	 * keep a resumed step from running a journaled tool call twice.
+	 */
+	commandReceipt: z.object({
+		op: z.enum(["claim", "complete", "renew", "retained"]),
+		requestId: portText.optional(),
+		requestIds: z.array(portText).max(64).optional(),
+		response: z.record(z.string(), z.unknown()).optional(),
+	}),
+	/** The highest revision a canvas with this title has in the turn's chat. */
+	canvasRevision: z.object({ title: z.string().min(1).max(200) }),
+	/** Push cards of this chat answered meanwhile, claimed once (gitPushRequests.claimUnnoticed). */
+	pushNotices: z.object({}),
 	/** The turn's MCP tools as data (names, descriptions, input schemas); credentials stay on the edge. */
 	mcpListing: z.object({}),
 	/** One MCP tool call, made by the edge on one of the turn's own servers. */
