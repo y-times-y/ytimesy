@@ -263,6 +263,39 @@ describe("turn box edge: claim and identity", () => {
 		expect(register.status).toBe(403);
 	});
 
+	it("serves the box program to a live identity only", async () => {
+		const bundle = {
+			url: "https://r2.test/turn-box/a.mjs.gz?sig",
+			sha256: "a".repeat(64),
+			version: "a",
+		};
+		const edge = await fakeEdge({ bundle: async () => bundle });
+		const url = "https://edge.test/box/v1/bundle";
+		const get = (token: string | null) =>
+			edge.fetchEdge(url, {
+				headers: token ? { authorization: `Bearer ${token}` } : {},
+			});
+		expect((await get(null)).status).toBe(401);
+		// A grant is not an identity.
+		expect((await get(await grantFor(edge))).status).toBe(401);
+		const served = await get(edge.identity);
+		expect(served.status).toBe(200);
+		expect(await served.json()).toEqual(bundle);
+		expect(
+			(await edge.fetchEdge(url, { method: "POST", headers: {} })).status,
+		).toBe(405);
+		edge.state.revoked = true;
+		expect((await get(edge.identity)).status).toBe(403);
+		const none = await fakeEdge();
+		expect(
+			(
+				await none.fetchEdge(url, {
+					headers: { authorization: `Bearer ${none.identity}` },
+				})
+			).status,
+		).toBe(404);
+	});
+
 	it("releases a claimed turn of a user not enabled for boxes", async () => {
 		const edge = await fakeEdge({ users: "someone-else" });
 		edge.queue.push({ ...edge.row });

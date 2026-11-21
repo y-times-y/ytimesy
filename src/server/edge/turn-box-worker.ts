@@ -12,6 +12,7 @@ import { createTurnBoxEdgeOps } from "../adapters/turn-box-edge";
 import { createTurnBoxVmOps } from "../adapters/turn-box-vm-edge";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
+import { turnBoxBundleFromR2 } from "./turn-box-bundle";
 import { routeTurnBoxEdge, turnBoxEdgeConfig } from "./turn-box-routes";
 
 const replay = new TurnBoxReplayGuard();
@@ -55,6 +56,7 @@ function routeTurnBox(
 		boxUsers: config.boxUsers,
 		ops: createTurnBoxEdgeOps(scope, { machines: () => vm.machines }),
 		vm,
+		bundle: turnBoxBundleFromR2,
 		replay,
 		forwardSocket: (grant, upgrade) =>
 			env.MODEL_CONVERSATIONS.getByName(

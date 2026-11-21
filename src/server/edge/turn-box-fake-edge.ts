@@ -31,7 +31,11 @@ export type FakeRow = ApiTurn & {
 };
 
 export async function fakeEdge(
-	options: { users?: string; revoked?: boolean } = {},
+	options: {
+		users?: string;
+		revoked?: boolean;
+		bundle?: TurnBoxEdgeDeps["bundle"];
+	} = {},
 ) {
 	const keys = await generateTurnBoxKeyPair();
 	const row: FakeRow = {
@@ -150,6 +154,7 @@ export async function fakeEdge(
 		replay: new TurnBoxReplayGuard(),
 		forwardSocket: async () => new Response(null, { status: 204 }),
 		upstream: upstream as unknown as typeof fetch,
+		...(options.bundle ? { bundle: options.bundle } : {}),
 		now: () => state.now,
 		log: () => undefined,
 	};

@@ -98,6 +98,13 @@ export interface TurnBoxEdgeOps {
 	): Promise<{ served: true; result: unknown } | { served: false }>;
 }
 
+/** Where a box downloads its program: gzip, checked against `sha256` of the inflated file. */
+export type TurnBoxBundle = {
+	readonly url: string;
+	readonly sha256: string;
+	readonly version: string;
+};
+
 export type TurnBoxEdgeDeps = {
 	readonly publicKey: string;
 	readonly privateKey: string;
@@ -113,6 +120,8 @@ export type TurnBoxEdgeDeps = {
 	readonly countRequest?: (userId: string | null) => void;
 	/** The `vm/*` endpoints (turn-box-vm-routes.ts); absent: they answer 404. */
 	readonly vm?: TurnBoxVmOps;
+	/** The box program to download (a short-lived link and its checksum); absent: none is served. */
+	readonly bundle?: () => Promise<TurnBoxBundle | null>;
 	readonly upstream?: typeof fetch;
 	readonly now?: () => number;
 	readonly log?: (message: string, detail: Record<string, unknown>) => void;
@@ -179,6 +188,28 @@ export async function routeTurnBoxEdge(
 	const log = deps.log ?? ((m, d) => console.warn(m, d));
 	const path = new URL(request.url).pathname;
 	const drop = () => request.body?.cancel().catch(() => undefined);
+
+	// A new box's program: by identity alone, so a box can start before it has
+	// registered. A revoked box is given nothing.
+	if (path === TURN_BOX_PATHS.bundle) {
+		if (request.method !== "GET") return new Response(null, { status: 405 });
+		const identity = await verifyTurnBoxIdentity(
+			deps.publicKey,
+			presentedTurnBoxToken(request.headers),
+			now(),
+		);
+		deps.countRequest?.(null);
+		if (!identity) return refuse("unauthorized", 401);
+		try {
+			if (!(await deps.ops.boxActive(identity.boxId)))
+				return refuse("forbidden", 403);
+			const bundle = await deps.bundle?.();
+			return bundle ? json(bundle) : refuse("not-served", 404);
+		} catch {
+			log("Turn box bundle request failed.", { path });
+			return refuse("unavailable", 503);
+		}
+	}
 
 	// Box identity endpoints.
 	if (path === TURN_BOX_PATHS.claim || path === TURN_BOX_PATHS.register) {

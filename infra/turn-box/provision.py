@@ -2,15 +2,15 @@
 
   node --import tsx scripts/build-turn-box.ts
   node --import tsx scripts/turn-box-keys.ts identity --private-key-file KEY --box-id NAME --out ID_FILE
-  python3 infra/turn-box/provision.py --name NAME --bundle-url URL --identity-file ID_FILE
+  node --import tsx scripts/publish-turn-box.ts
+  python3 infra/turn-box/provision.py --name NAME --identity-file ID_FILE
 
-BUNDLE_URL is a (presigned) HTTPS URL of .ytimesy/turn-box.mjs; the box checks
-its SHA-256 (--bundle-file). The box takes the instance profile `ytimesy-box`
+The box downloads its program from the edge (GET /box/v1/bundle) and checks its
+SHA-256; publish-turn-box.ts puts the current one there. The box takes the instance profile `ytimesy-box`
 (CloudWatch Logs only), no inbound port and IMDSv2. Prints the instance id.
 Everything it creates is tagged ytimesy=turn-box so it can be found and removed.
 """
 import argparse
-import hashlib
 from pathlib import Path
 
 import boto3
@@ -21,8 +21,6 @@ ROOT = HERE.parent.parent
 parser = argparse.ArgumentParser()
 parser.add_argument("--name", required=True)
 parser.add_argument("--region", default="us-east-1")
-parser.add_argument("--bundle-url", required=True)
-parser.add_argument("--bundle-file", default=str(ROOT / ".ytimesy/turn-box.mjs"))
 parser.add_argument("--identity-file", required=True)
 parser.add_argument("--edge-url", default="https://edge.ytimesy.com")
 parser.add_argument("--log-group", default="/ytimesy/box")
@@ -33,8 +31,6 @@ args = parser.parse_args()
 
 script = (HERE / "bootstrap.sh").read_text()
 for placeholder, value in {
-    "__BUNDLE_URL__": args.bundle_url,
-    "__BUNDLE_SHA256__": hashlib.sha256(Path(args.bundle_file).read_bytes()).hexdigest(),
     "__EDGE_URL__": args.edge_url,
     "__IDENTITY__": Path(args.identity_file).read_text().strip(),
     "__BOX_ID__": args.name,

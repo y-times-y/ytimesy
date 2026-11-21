@@ -15,8 +15,15 @@ curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux
 
 useradd --system --create-home --home-dir /var/lib/ytimesy-turn-box --shell /usr/sbin/nologin ytimesy-turn-box || true
 install -d -o ytimesy-turn-box -g ytimesy-turn-box /opt/ytimesy-turn-box
-curl -fsSL -o /opt/ytimesy-turn-box/turn-box.mjs '__BUNDLE_URL__'
-echo '__BUNDLE_SHA256__  /opt/ytimesy-turn-box/turn-box.mjs' | sha256sum -c -
+# The program comes from the edge: a short-lived link to the current bundle in
+# R2 and its checksum, given to this box's identity alone (GET /box/v1/bundle).
+curl -fsS --retry 5 --retry-delay 5 -H 'authorization: Bearer __IDENTITY__' '__EDGE_URL__/box/v1/bundle' -o /tmp/bundle.json
+BUNDLE_URL=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync("/tmp/bundle.json","utf8")).url)')
+BUNDLE_SHA=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync("/tmp/bundle.json","utf8")).sha256)')
+curl -fsS --retry 3 -o /tmp/turn-box.mjs.gz "$BUNDLE_URL"
+gunzip -c /tmp/turn-box.mjs.gz > /opt/ytimesy-turn-box/turn-box.mjs
+echo "$BUNDLE_SHA  /opt/ytimesy-turn-box/turn-box.mjs" | sha256sum -c -
+rm -f /tmp/bundle.json /tmp/turn-box.mjs.gz
 
 install -m 600 -o root -g root /dev/null /etc/ytimesy-turn-box.env
 cat > /etc/ytimesy-turn-box.env <<'ENV'
