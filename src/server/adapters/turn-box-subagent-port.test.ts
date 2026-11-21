@@ -50,8 +50,14 @@ function world() {
 	const machines = () => ({ marker: "edge-machines" }) as never;
 	return {
 		calls,
+		// As the box sends them: through JSON, where an omitted (undefined)
+		// argument in the array arrives as null.
 		call: (dep: Parameters<typeof subagentPort>[1], args: unknown[]) =>
-			subagentPort(turn, dep, args, { run, family, machines }),
+			subagentPort(turn, dep, JSON.parse(JSON.stringify(args)), {
+				run,
+				family,
+				machines,
+			}),
 	};
 }
 
@@ -134,6 +140,19 @@ describe("subagent port: a box reaches only its own chat and helpers", () => {
 				{ parentVm: "vm-root", slug: agentSessionMachineSlug(STRANGER) },
 			]),
 		);
+	});
+
+	it("starts and stops a helper with no options, as the box sends them (null after JSON)", async () => {
+		const w = world();
+		await w.call("start", [
+			{ userId: "u1", sessionId: ROOT },
+			CHILD,
+			undefined,
+		]);
+		expect(w.calls[0]?.args[1]).toBe(CHILD);
+		expect(w.calls[0]?.args[2]).toBeUndefined();
+		await w.call("stop", [CHILD, undefined]);
+		expect(w.calls[1]?.args).toEqual([CHILD, { now: false }]);
 	});
 
 	it("rebuilds a start's scope and a sender's record itself", async () => {

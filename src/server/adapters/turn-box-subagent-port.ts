@@ -174,7 +174,8 @@ export async function subagentPort(
 			const task = await ownChat(args[1]);
 			if (task.parentSessionId !== parent.id)
 				throw new TurnBoxPortForbidden(`${dep}:task`);
-			const options = args[2] === undefined ? undefined : record(args[2], dep);
+			// An omitted argument arrives as null: JSON turns undefined in an array into null.
+			const options = args[2] == null ? undefined : record(args[2], dep);
 			const reasoning =
 				typeof options?.reasoning === "string" ? options.reasoning : undefined;
 			return run.start(
@@ -222,7 +223,7 @@ export async function subagentPort(
 			);
 		}
 		case "stop": {
-			const options = args[1] === undefined ? {} : record(args[1], dep);
+			const options = args[1] == null ? {} : record(args[1], dep);
 			return run.stop((await ownChat(args[0])).id, {
 				now: options.now === true,
 			});
