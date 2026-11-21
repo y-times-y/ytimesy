@@ -618,15 +618,76 @@ are separate work: verify each new instance’s identity, enroll it under a uniq
 revocable box ID, and protect credential delivery and storage. The heartbeat
 does not provide those guarantees.
 
-## Not yet done
+## The fleet on AWS (2026-11-21)
 
-- Everything under "What the box still cannot do" above and "Still
-  unavailable on a box" in stage 2b. Required before enabling any user.
-- The box's bootstrap (systemd unit, its identity) with no secrets in it.
-- AWS: launching the boxes (the current key cannot create or list resources).
-- Subscription routes (stage 3) were never run against a real Worker, ChatGPT, xAI
-  or an AWS box; see its risks.
-- Measure per-turn memory on a real box to set `YTIMESY_TURN_BOX_CAPACITY`.
+`infra/turn-box/fleet.py` keeps an Auto Scaling group `ytimesy-turn-box`
+(default 2 to 6 `t3.small`, us-east-1) on a launch template that holds no
+credential. Each box runs `infra/turn-box/bootstrap.sh` once; the systemd unit
+then runs `start.mjs` (as root) before every start of the box process:
+
+- **Enrollment.** The box signs an STS `GetCallerIdentity` request with its
+  instance role's short-lived keys (`sigv4.mjs`) and posts only the signature
+  headers to `POST /box/v1/enroll`. The edge builds the request itself (fixed
+  URL and body), sends it to STS, and accepts
+  `arn:aws:sts::<TURN_BOX_AWS_ACCOUNT_ID>:assumed-role/<TURN_BOX_AWS_ROLE, default ytimesy-box>/<instance id>`.
+  The instance id becomes the box id (revocable as any other); the answer is
+  a 24-hour identity. `x-ytimesy-audience` is signed into the request, so a
+  signature made for anything else is refused. Off (404) without
+  `TURN_BOX_AWS_ACCOUNT_ID`.
+- **Program.** `GET /box/v1/bundle` (identity only) answers a five-minute R2
+  link and the SHA-256 of the current program, which
+  `scripts/publish-turn-box.ts` uploads (`turn-box/<hash>.mjs.gz`, then the
+  manifest `turn-box/latest.json`). A restart picks up a new program.
+- **Identity loss.** A rejected identity (401) makes the process exit
+  (`YTIMESY_BOX_EXIT_ON_REJECTED=1`); systemd restarts it and `start.mjs`
+  enrolls again. The heartbeat also renews an identity in its last hour.
+- **Logs.** The process logs to `/var/log/ytimesy-turn-box.log`, shipped to
+  CloudWatch `/ytimesy/box` (14 days) by the agent with the instance role; it
+  logs its memory every five minutes.
+
+## Everything a root chat uses, on a box (2026-11-21)
+
+The box runs the product's whole tool surface; what needs the database, a
+credential or a record the box must not hold goes through the edge, checked
+against the turn's own user, chat, helpers, project and VM. The box test
+`box-turn-e2e.test.ts` ("every product tool on a box") runs each offered tool
+with a real shell as the VM and the database mocked to throw, and pins the
+offered tool list, so a new tool fails it until it is checked here.
+
+- **Helpers** (`agent`, `agent_send`): the tools run on the box; their
+  database and helper-VM operations (`SubagentToolDeps`) are the `subagent`
+  port (`turn-box-subagent-port.ts`). Every chat must be the turn's chat or a
+  descendant, every VM one of theirs, a fork named for one of them; records
+  cross as ids and are reloaded on the edge. The helpers themselves run in
+  Durable Objects (routing keeps helper chats off boxes). A box polls a
+  helper's report no more than every 5 s. Lead mode fusion is kept off boxes.
+- **MCP**: `mcpListing` gives the turn's tools as data (no URL, header or
+  token), once per turn; `mcpCall` connects the edge to the named server of
+  the turn's own user and project for that one call. A failed listing leaves
+  the turn without MCP tools, as in the Durable Object.
+- **Memory**: the `memory` port (`turn-box-memory-port.ts`) runs
+  `turnMemory` on the edge for the chat's own VM: instructions, the clone (its
+  short-lived token comes back to the box only for redaction), the recall
+  parts (the box adds them to the request), the saved-lines marker, release.
+  The save hook is queued by the edge after finalize.
+- **Tool receipts** (bash, write, edit, run_code, completion checks): the
+  adapter asks `remote-command-receipts.ts` first; the box registers its
+  running chat there, so receipts go through the `commandReceipt` port.
+- **Canvas** revisions: the `canvasRevision` port.
+- **Run whole on the edge** (`remoteTool`, `turn-box-tool-port.ts`): saving
+  a secret (its value is read on the chat's VM by the edge and never passes
+  through the box), describing one (checked against values only the edge
+  holds), asking for a push approval, saving the environment setup. Push
+  cards answered meanwhile are claimed through `pushNotices`.
+- **Routing**: Y² chats (their tools read the database by name) and lead
+  mode fusion stay in Durable Objects, as do helper chats, evaluation runs and
+  Claude Code. `YTIMESY_TURN_BOX_SECRETS=1` lets chats whose project or
+  account holds runtime secrets run on a box (the VM redacts its own output),
+  without changing the Claude runner's `YTIMESY_CLAUDE_BOX_TOOLS_SECRETS`.
+
+Still not on a box: failover to another connection mid-turn (a failing
+route ends the turn with its own message) and the @mention note
+(`withMentionNote` reads sessions; it degrades to no note).
 
 ## Sizing
 
