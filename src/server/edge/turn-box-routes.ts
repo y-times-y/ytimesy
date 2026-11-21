@@ -464,8 +464,19 @@ export async function routeTurnBoxEdge(
 			} catch (error) {
 				if (error instanceof ApiTurnCancelled)
 					return json({ ok: false, reason: "cancelled" }, 409);
-				if (error instanceof TurnBoxPortForbidden)
+				if (error instanceof TurnBoxPortForbidden) {
+					// Which check refused (an op name, never a value).
+					log("Turn box port refused.", {
+						op: opOf(body),
+						check: error.message.slice(0, 120),
+						stack: (error.stack ?? "")
+							.split("\n")
+							.slice(1, 4)
+							.join(" | ")
+							.slice(0, 400),
+					});
 					return refuse("forbidden", 403);
+				}
 				if (error instanceof Error && /lease was lost/i.test(error.message))
 					return json({ ok: false, reason: "lease-lost" }, 409);
 				throw error;
