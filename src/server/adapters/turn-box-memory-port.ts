@@ -4,7 +4,7 @@ import { SCRUB_MEMORY_CREDENTIAL } from "#/domain/memory-repo";
 import type { SessionItem } from "#/domain/session-item";
 import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import type { AgentToolWorkspace } from "../services/agent-tool-workspace";
-import { type TurnMemory, turnMemory } from "../services/turn-memory";
+import { turnMemory } from "../services/turn-memory";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { agentSessionMetadataForOwner } from "./agent-sessions";
 import type { ApiTurn } from "./api-turns";
@@ -17,9 +17,12 @@ import type { ApiTurn } from "./api-turns";
  * short-lived clone token prepareVm puts on the VM goes back to the box only
  * so tool output can be redacted, as the VM's scoped grant does.
  *
- * Each call rebuilds the turn's memory unless this isolate still holds it
- * (kept per turn for a few minutes): the snapshot and line vectors are warm
- * per isolate anyway, and memory never fails a turn.
+ * Each call builds the turn's memory afresh, never reusing one an earlier
+ * request built: a TurnMemory holds promises (the prefetched line vectors),
+ * and a Worker cannot settle a promise in a request other than the one that
+ * created it ("This promise was created by a request that has since ended").
+ * Nothing is lost: the snapshot and line vectors are warm per isolate, and
+ * releaseVm finds every step's tokens in the ledger.
  */
 export type MemoryPortCall = {
 	readonly op:
@@ -44,29 +47,15 @@ export type TurnBoxMemoryDeps = {
 	readonly owner?: typeof agentSessionMetadataForOwner;
 };
 
-const KEEP_MS = 10 * 60_000;
-const kept = new Map<
-	string,
-	{ readonly at: number; readonly memory: Promise<TurnMemory | null> }
->();
-
 function memoryFor(
-	turn: ApiTurn,
 	owner: { id: string; userId: string; projectId: string | null },
 	call: MemoryPortCall,
 	deps: TurnBoxMemoryDeps,
 ) {
-	const key = `${turn.id}:${call.wording ?? ""}:${call.writer ?? ""}`;
-	const now = Date.now();
-	for (const [id, entry] of kept) if (now - entry.at > KEEP_MS) kept.delete(id);
-	const found = kept.get(key);
-	if (found) return found.memory;
-	const memory = (deps.memory ?? turnMemory)(owner, {
+	return (deps.memory ?? turnMemory)(owner, {
 		...(call.wording ? { wording: call.wording as never } : {}),
 		...(call.writer ? { writer: call.writer as never } : {}),
 	}).catch(() => null);
-	kept.set(key, { at: now, memory });
-	return memory;
 }
 
 export async function memoryPort(
@@ -82,7 +71,6 @@ export async function memoryPort(
 	// The root builder only: helpers never run on a box.
 	if (chat.parentSessionId) throw new TurnBoxPortForbidden("memory:helper");
 	const memory = await memoryFor(
-		turn,
 		{ id: chat.id, userId: turn.user_id, projectId: chat.projectId ?? null },
 		call,
 		deps,

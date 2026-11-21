@@ -62,6 +62,23 @@ function setup(over: Partial<typeof chat> = {}, turnId = "t1") {
 }
 
 describe("memory port: the edge runs memory on the turn's own chat and VM", () => {
+	it("builds the turn's memory in every request, never reusing one an earlier request built (a Worker cannot settle its promises)", async () => {
+		let built = 0;
+		const memory = (async () => {
+			built++;
+			return {
+				mode: "full",
+				instructions: "use memory",
+				memoryParts: async () => ({ at: 0, parts: [], recall: null }),
+			};
+		}) as never;
+		const owner = (async () => chat) as never;
+		const turn = { id: "t-fresh", user_id: "u1", session_id: "s1" } as ApiTurn;
+		await memoryPort(turn, { op: "init" }, { memory, owner });
+		await memoryPort(turn, { op: "parts", cwd: "/w" }, { memory, owner });
+		expect(built).toBe(2);
+	});
+
 	it("starts, clones on the chat's own VM and answers the token for redaction", async () => {
 		const s = setup();
 		expect(await s.call({ op: "init" })).toEqual({
