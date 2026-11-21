@@ -372,12 +372,20 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		subagentToolDeps: boxSubagentToolDeps(call),
 		// The edge lists the turn's MCP tools once and makes each call.
 		mcpTools: async () => {
+			// As in the Durable Object, MCP never fails a turn: a listing the
+			// edge could not give leaves the turn without MCP tools.
+			// The fallback is kept for the turn too: one request per turn either way.
 			const listing = await once("mcp-listing", () =>
 				call<{
 					catalog: McpCatalogEntry[];
 					purposes: Record<string, string>;
 					unavailable: string[];
-				}>("mcpListing", {}),
+				}>("mcpListing", {}).catch((error: unknown) => {
+					console.warn("MCP tools could not be listed for a box turn.", {
+						message: error instanceof Error ? error.message.slice(0, 200) : "",
+					});
+					return { catalog: [], purposes: {}, unavailable: [] };
+				}),
 			);
 			const tools: ToolSet = {};
 			for (const entry of listing.catalog)

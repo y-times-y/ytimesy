@@ -245,6 +245,9 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 						"cloudProjectReport",
 						// Helper operations: turn-box-subagent-port.test.ts and box-turn-e2e.test.ts.
 						"subagent",
+						// MCP: turn-box-mcp-port.test.ts and box-turn-e2e.test.ts.
+						"mcpListing",
+						"mcpCall",
 					].includes(op),
 			),
 		).toEqual([]);

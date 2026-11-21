@@ -167,6 +167,7 @@ async function scenario(input: {
 			revision: "rev-1",
 		},
 		commitTurn: input.commit === undefined ? { publish: false } : input.commit,
+		mcpListing: { catalog: [], purposes: {}, unavailable: [] },
 	};
 	const ports = edge.state.ports as Record<string, unknown>;
 	for (const op of [
@@ -559,4 +560,16 @@ describe("request counts (Worker requests a box makes to the edge)", () => {
 			JSON.stringify(Object.fromEntries(counts)),
 		);
 	}, 120_000);
+});
+
+describe("MCP listing failure on a box", () => {
+	it("leaves the turn without MCP tools instead of failing it", async () => {
+		const s = await scenario({ model: [{ text: "Done." }] });
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		(s.edge.state.ports as Record<string, unknown>).mcpListing = async () => {
+			throw new Error("edge could not list");
+		};
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+	});
 });
