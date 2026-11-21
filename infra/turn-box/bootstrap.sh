@@ -37,7 +37,9 @@ User=ytimesy-turn-box
 Environment=YTIMESY_EDGE_URL=__EDGE_URL__
 # Enroll (a fresh identity for this instance) and fetch the program, as root.
 ExecStartPre=+/usr/local/bin/node /opt/ytimesy-turn-box/start.mjs
-EnvironmentFile=/run/ytimesy-turn-box.env
+# "-": the file does not exist until the ExecStartPre below writes it; without
+# it systemd refuses to start the unit at all.
+EnvironmentFile=-/run/ytimesy-turn-box.env
 ExecStart=/usr/local/bin/node /opt/ytimesy-turn-box/turn-box.mjs
 StandardOutput=append:/var/log/ytimesy-turn-box.log
 StandardError=append:/var/log/ytimesy-turn-box.log
