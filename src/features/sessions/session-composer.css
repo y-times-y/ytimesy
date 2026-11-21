@@ -1515,6 +1515,9 @@ details[open] > summary .session-activity-chevron {
 	margin: 0;
 	line-height: 20px;
 }
+.session-narration > p + p {
+	margin-top: 6px;
+}
 .session-narration .session-activity-title {
 	color: rgba(255, 255, 255, 0.78);
 }

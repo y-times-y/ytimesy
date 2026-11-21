@@ -395,18 +395,22 @@ describe("session timeline live collapse", () => {
 		expect(live).toContain("Looking at the session timeline");
 	});
 
-	it("keeps a thought with a body collapsible, open while live and closed when done", () => {
+	it("shows a thought with a body whole as text too, live or done", () => {
 		const long = (inProgress: boolean): SessionItem => ({
 			kind: "reasoning",
 			id: SessionItemId("r2"),
 			summaries: ["Looking at the timeline\n\nIt folds each turn's work."],
 			durationSeconds: inProgress ? undefined : 4,
 		});
-		const live = renderTimeline([long(true)], "running");
-		expect(live).toMatch(/data-kind="reasoning"[^>]*open/);
-		const done = renderTimeline([long(false)], "completed");
-		expect(done).not.toMatch(/data-kind="reasoning"[^>]*open/);
-		expect(done).toContain("Looking at the timeline");
+		for (const [inProgress, status] of [
+			[true, "running"],
+			[false, "completed"],
+		] as const) {
+			const html = renderTimeline([long(inProgress)], status);
+			expect(html).toContain("Looking at the timeline");
+			expect(html).toContain("It folds each turn&#x27;s work.");
+			expect(html).not.toMatch(/<details[^>]*data-kind="reasoning"/);
+		}
 	});
 
 	it("renders mentioned files as clickable text with a file icon", () => {
