@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mcpToolName } from "../../domain/mcp-tool-call";
 import type { VmEnsureResponse } from "../../domain/turn-box-vm-protocol";
 import type { GuestExec } from "../claude-box-tools/identity-machines";
 import { fakeEdge } from "../edge/turn-box-fake-edge";
@@ -413,6 +414,48 @@ describe("helpers from a box (the subagent port)", () => {
 		const result = JSON.stringify(s.edge.row.items);
 		expect(result).toContain("The name is demo.");
 		console.log("E2E helper", deps.join(" "));
+	}, 60_000);
+});
+
+describe("MCP servers from a box (listed and called by the edge)", () => {
+	it("offers the edge's MCP tools and sends the call there", async () => {
+		const name = mcpToolName("docs", "search");
+		const s = await scenario({
+			model: [{ tool: name, input: { query: "box" } }, { text: "Found it." }],
+		});
+		const calls: unknown[] = [];
+		const ports = s.edge.state.ports as Record<string, unknown>;
+		ports.mcpListing = async () => ({
+			catalog: [
+				{
+					name,
+					server: "docs",
+					tool: "search",
+					description: "Search the docs",
+					inputSchema: {
+						type: "object",
+						properties: { query: { type: "string" } },
+						required: ["query"],
+					},
+				},
+			],
+			purposes: {},
+			unavailable: [],
+		});
+		ports.mcpCall = async (args: unknown) => {
+			calls.push(args);
+			return { content: [{ type: "text", text: "box docs page" }] };
+		};
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+		expect(dbCalls.stacks).toEqual([]);
+		expect(s.reads).toEqual([]);
+		expect(calls).toEqual([
+			{ server: "docs", tool: "search", input: { query: "box" } },
+		]);
+		expect(JSON.stringify(s.edge.row.items)).toContain("box docs page");
+		// Listed once for the turn, whatever the number of steps.
+		expect(s.requests.filter((r) => r === "port:mcpListing").length).toBe(1);
 	}, 60_000);
 });
 

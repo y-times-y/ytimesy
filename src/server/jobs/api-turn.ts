@@ -1755,43 +1755,53 @@ async function runApiTurnAttempt(
 		// list with OAuth servers is re-read each step because a token refresh
 		// rotates their record.
 		const connecting = timed("turn:mcp", async () =>
-			connectMcpTools(
-				await Promise.all(
-					(ySquared
-						? []
-						: await turnMemo(
-								`${turn.id}:mcp-servers`,
-								() =>
-									connectableMcpServers(owner.userId, owner.projectId ?? null),
-								(servers) => servers.every((server) => server.auth !== "oauth"),
+			// On a box the edge lists and calls them (no credential on the box).
+			ports.mcpTools && !ySquared
+				? ports.mcpTools(abort.signal)
+				: connectMcpTools(
+						await Promise.all(
+							(ySquared
+								? []
+								: await turnMemo(
+										`${turn.id}:mcp-servers`,
+										() =>
+											connectableMcpServers(
+												owner.userId,
+												owner.projectId ?? null,
+											),
+										(servers) =>
+											servers.every((server) => server.auth !== "oauth"),
+									)
 							)
-					)
-						// OAuth servers join once the user has signed in.
-						.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
-						.map(async (server) => ({
-							key: `${server.id}:${server.url}`,
-							name: server.name,
-							url: server.url,
-							headers: server.headers,
-							authProvider:
-								server.auth === "oauth"
-									? await turnOAuthProvider({
-											userId: owner.userId,
-											serverId: server.id,
-											sealedOAuth: server.sealedOAuth,
-											appUrl: process.env.APP_URL ?? "http://localhost:3000",
-										})
-									: undefined,
-						})),
-				),
-				{
-					signal: abort.signal,
-					// The tool list is fixed for the turn, like plugins; a step
-					// connects only to call a tool.
-					listing: (key, load) =>
-						turnMemo(`${turn.id}:mcp-listing:${key}`, load),
-				},
-			),
+								// OAuth servers join once the user has signed in.
+								.filter(
+									(server) => server.auth !== "oauth" || server.sealedOAuth,
+								)
+								.map(async (server) => ({
+									key: `${server.id}:${server.url}`,
+									name: server.name,
+									url: server.url,
+									headers: server.headers,
+									authProvider:
+										server.auth === "oauth"
+											? await turnOAuthProvider({
+													userId: owner.userId,
+													serverId: server.id,
+													sealedOAuth: server.sealedOAuth,
+													appUrl:
+														process.env.APP_URL ?? "http://localhost:3000",
+												})
+											: undefined,
+								})),
+						),
+						{
+							signal: abort.signal,
+							// The tool list is fixed for the turn, like plugins; a step
+							// connects only to call a tool.
+							listing: (key, load) =>
+								turnMemo(`${turn.id}:mcp-listing:${key}`, load),
+						},
+					),
 		);
 		const loadingPlugins = timed("turn:plugins", () =>
 			turnMemo(`${turn.id}:plugins`, () =>

@@ -212,6 +212,9 @@ export async function connectMcpTools(
 	};
 }
 
+/** A turn's connected MCP tools: what `connectMcpTools` answers. */
+export type McpConnection = Awaited<ReturnType<typeof connectMcpTools>>;
+
 /** Listing tools has no signal of its own; a stalled server must not hold the step. */
 function withinConnectTimeout<T>(work: Promise<T>, signal?: AbortSignal) {
 	const deadline = AbortSignal.any([

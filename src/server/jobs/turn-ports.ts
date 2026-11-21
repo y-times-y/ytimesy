@@ -59,6 +59,7 @@ import type { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import type { ApiModelAccess } from "../services/api-agent-runtime";
 import type { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
 import type { ensureConversationCodePoint } from "../services/conversation-recovery";
+import type { McpConnection } from "../services/mcp-tools";
 import type { recordCloudProjectReport } from "../services/project-knowledge";
 import type {
 	loadAgentProjectSecrets,
@@ -181,6 +182,12 @@ export interface TurnPorts {
 	 * where the tools call them directly.
 	 */
 	readonly subagentToolDeps?: Partial<SubagentToolDeps>;
+	/**
+	 * Set on a box: the turn's MCP tools, listed and called by the edge
+	 * (turn-box-mcp-port.ts), so no server credential reaches the box. Unset
+	 * in the Durable Object, which connects to the servers itself.
+	 */
+	readonly mcpTools?: (signal: AbortSignal) => Promise<McpConnection>;
 }
 
 export type TurnPortName = keyof TurnPorts;

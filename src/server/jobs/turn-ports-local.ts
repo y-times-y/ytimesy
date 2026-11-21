@@ -150,4 +150,6 @@ export const localTurnPorts: TurnPorts = {
 	withPushResultNotices: lazy(() => withPushResultNotices),
 	// The agent tools call their own database functions here.
 	subagentToolDeps: undefined,
+	// The loop connects to the user's MCP servers itself.
+	mcpTools: undefined,
 };

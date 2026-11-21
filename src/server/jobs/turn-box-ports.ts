@@ -1,3 +1,4 @@
+import { jsonSchema, type ToolSet, tool } from "ai";
 import {
 	type PeerInboxRow,
 	planPeerInjection,
@@ -11,6 +12,7 @@ import type {
 import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
 import type { CodexSelection } from "../adapters/codex-subscription-runtime";
+import type { McpCatalogEntry } from "../services/mcp-tools";
 import type { SubagentToolDeps } from "../services/subagent-tools";
 import type { TurnBoxTurnSession } from "./turn-box-client";
 import { type TurnPorts, TurnPortUnavailable } from "./turn-ports";
@@ -232,9 +234,8 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 			ownUser(userId);
 			return once("dev-eval", () => call("isDevEvalUser", {}));
 		},
-		// MCP servers carry credentials (headers, sealed OAuth): not served, so a
-		// box runs without them (the loop's "MCP servers unavailable" notice
-		// covers a failed connection, not an absent one). Missing: docs table.
+		// MCP servers carry credentials (headers, sealed OAuth): never served;
+		// the box's MCP tools come from the edge (mcpTools below).
 		connectableMcpServers: async () => [],
 
 		saveAgentTaskResultAndEvent: async (input) =>
@@ -369,6 +370,35 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		// - the workspace is prepared by the edge's vm/ensure (box-runner
 		//   installs boxApiTurnWorkspace; this placeholder refuses).
 		subagentToolDeps: boxSubagentToolDeps(call),
+		// The edge lists the turn's MCP tools once and makes each call.
+		mcpTools: async () => {
+			const listing = await once("mcp-listing", () =>
+				call<{
+					catalog: McpCatalogEntry[];
+					purposes: Record<string, string>;
+					unavailable: string[];
+				}>("mcpListing", {}),
+			);
+			const tools: ToolSet = {};
+			for (const entry of listing.catalog)
+				tools[entry.name] = tool({
+					description: `[MCP ${entry.server}] ${entry.description || entry.tool}`,
+					inputSchema: jsonSchema(entry.inputSchema),
+					execute: (input: unknown) =>
+						call("mcpCall", {
+							server: entry.server,
+							tool: entry.tool,
+							input,
+						}),
+				});
+			return {
+				tools,
+				catalog: listing.catalog,
+				purposes: listing.purposes,
+				unavailable: listing.unavailable,
+				close: async () => undefined,
+			};
+		},
 		turnMemory: async () => null,
 		subagentMemory: async () => null,
 		withPushResultNotices: async () => null,

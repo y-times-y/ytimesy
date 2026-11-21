@@ -277,6 +277,14 @@ async function handle(
 					...(deps.machines ? { machines: deps.machines } : {}),
 				},
 			);
+		case "mcpListing":
+			return (await import("./turn-box-mcp-port")).mcpListingPort(turn);
+		case "mcpCall":
+			return (await import("./turn-box-mcp-port")).mcpCallPort(turn, {
+				server: call.args.server,
+				tool: call.args.tool,
+				input: call.args.input,
+			});
 		default:
 			return NOT_SERVED;
 	}

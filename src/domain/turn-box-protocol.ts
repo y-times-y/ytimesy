@@ -335,6 +335,10 @@ export const boxPortArgs = {
 		dep: z.enum(SUBAGENT_PORT_DEPS),
 		args: z.array(z.unknown()).max(8),
 	}),
+	/** The turn's MCP tools as data (names, descriptions, input schemas); credentials stay on the edge. */
+	mcpListing: z.object({}),
+	/** One MCP tool call, made by the edge on one of the turn's own servers. */
+	mcpCall: z.object({ server: portText, tool: portText, input: z.unknown() }),
 } as const;
 export type BoxPortOp = keyof typeof boxPortArgs;
 export const boxPortOps = Object.keys(boxPortArgs) as BoxPortOp[];
