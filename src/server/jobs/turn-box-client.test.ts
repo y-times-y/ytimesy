@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
-import { TURN_BOX_IDENTITY_TTL_MS } from "#/domain/turn-box-grant";
+import {
+	TURN_BOX_IDENTITY_REFRESH_MS,
+	TURN_BOX_IDENTITY_TTL_MS,
+} from "#/domain/turn-box-grant";
 import { TURN_BOX_REQUEST_BUDGET } from "#/domain/turn-box-protocol";
 import { fakeEdge } from "../edge/turn-box-fake-edge";
 import { answerTurnBoxSocketMessage } from "../edge/turn-box-socket";
@@ -80,12 +83,30 @@ describe("turn box client against the edge", () => {
 	it("distinguishes an expired identity from a deferred registration", async () => {
 		const { client, tick } = await setup();
 		const registration = { capacity: 2, running: 0 };
-		tick(TURN_BOX_IDENTITY_TTL_MS - 1);
+		tick(TURN_BOX_IDENTITY_TTL_MS - TURN_BOX_IDENTITY_REFRESH_MS - 1);
 		await expect(client.register(registration)).resolves.toBe(true);
-		tick(1);
+		tick(TURN_BOX_IDENTITY_REFRESH_MS + 1);
 		await expect(client.register(registration)).rejects.toThrow(
 			TurnBoxIdentityRejected,
 		);
+	});
+
+	it("keeps heartbeating and claiming after the bootstrap identity expires", async () => {
+		const { client, edge, tick } = await setup();
+		const heartbeat = { capacity: 3, running: 0 };
+		await expect(client.register(heartbeat)).resolves.toBe(true);
+		tick(TURN_BOX_IDENTITY_TTL_MS - TURN_BOX_IDENTITY_REFRESH_MS);
+		await expect(client.register(heartbeat)).resolves.toBe(true);
+		tick(TURN_BOX_IDENTITY_REFRESH_MS);
+		await expect(client.register(heartbeat)).resolves.toBe(true);
+		await expect(client.claim()).resolves.toMatchObject({
+			turn: { id: edge.row.id },
+		});
+
+		tick(TURN_BOX_IDENTITY_TTL_MS - 2 * TURN_BOX_IDENTITY_REFRESH_MS);
+		edge.state.revoked = true;
+		await expect(client.register(heartbeat)).resolves.toBe(false);
+		await expect(client.claim()).rejects.toThrow("Turn claim failed (403).");
 	});
 
 	it("claims a turn and runs the loop's writes through the grant, no secret needed", async () => {

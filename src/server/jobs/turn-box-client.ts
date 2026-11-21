@@ -10,6 +10,7 @@ import {
 	edgeSocketMessage,
 	historyResponse,
 	portResponse,
+	registerResponse,
 	renewResponse,
 	TURN_BOX_PATHS,
 	TURN_BOX_PROGRESS_EVERY_MS,
@@ -166,7 +167,11 @@ export class TurnBoxIdentityRejected extends Error {
 }
 
 export class TurnBoxEdgeClient {
-	constructor(private readonly options: ClientOptions) {}
+	private identity: string;
+
+	constructor(private readonly options: ClientOptions) {
+		this.identity = options.identity;
+	}
 
 	private call(path: string, token: string, body: unknown, headers = {}) {
 		return (this.options.fetch ?? fetch)(
@@ -189,15 +194,23 @@ export class TurnBoxEdgeClient {
 		running: number;
 		version?: string;
 	}) {
-		const response = await this.call(
-			TURN_BOX_PATHS.register,
-			this.options.identity,
-			input,
-		);
-		await response.body?.cancel().catch(() => undefined);
-		if (response.status === 403) return false;
-		if (response.status === 401) throw new TurnBoxIdentityRejected();
-		if (!response.ok) throw new Error("Box registration failed.");
+		const presented = this.identity;
+		const response = await this.call(TURN_BOX_PATHS.register, presented, {
+			...input,
+			refreshIdentity: true,
+		});
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => undefined);
+			if (response.status === 403) return false;
+			if (response.status === 401) throw new TurnBoxIdentityRejected();
+			throw new Error("Box registration failed.");
+		}
+		const body: unknown = await response.json().catch(() => null);
+		const result = registerResponse.safeParse(body);
+		if (!result.success) throw new Error("Invalid box registration response.");
+		// A delayed response cannot overwrite a replacement we already adopted.
+		if (result.data.identity && this.identity === presented)
+			this.identity = result.data.identity;
 		return true;
 	}
 
@@ -205,7 +218,7 @@ export class TurnBoxEdgeClient {
 	async claim(perUserLimit?: number): Promise<TurnBoxTurnSession | null> {
 		const response = await this.call(
 			TURN_BOX_PATHS.claim,
-			this.options.identity,
+			this.identity,
 			perUserLimit ? { perUserLimit } : {},
 			{
 				"x-ytimesy-nonce": (this.options.randomNonce ?? nonce)(),

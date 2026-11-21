@@ -594,6 +594,30 @@ the turn and aborts the upstream request; 2.0 Worker requests per step.
 `turn-box-model-proxy.test.ts` covers paths, the header allowlist, pass-through
 streaming and the codes.
 
+## Runner identity renewal and enrollment boundary
+
+An updated runner opts in on its normal registration heartbeat. With at most
+one hour left, a successful heartbeat can return a new 24-hour identity for
+the same signed box ID. The edge checks the revocation-aware registration
+write and rechecks expiry before signing. Old runners still receive `{ ok: true }`.
+The replacement is sent in a non-cacheable response, kept in process memory,
+and used for subsequent heartbeats and claims. No private key goes to the runner.
+
+This is bearer renewal, not proof of instance identity or single-use token
+rotation. An old token remains usable until expiry or box revocation; a copied
+valid token can renew in the same window. Revoke the box ID and retain its
+revocation row if compromise is suspected; do not reuse that ID.
+
+Renewal covers a continuously running trial box, not restart recovery. A
+restart uses the originally provisioned identity; if that credential has expired
+(or the box missed its renewal window), it must be enrolled again. `aws-trial-1`
+cannot recover with its expired identity. After separate approval, bootstrap a
+replacement with a distinct ID and a fresh per-box credential delivered through+a controlled, non-logging channel. Do not copy a running box’s token into an
+image or launch template. Durable restart recovery and autoscaling enrollment
+are separate work: verify each new instance’s identity, enroll it under a unique
+revocable box ID, and protect credential delivery and storage. The heartbeat
+does not provide those guarantees.
+
 ## Not yet done
 
 - Everything under "What the box still cannot do" above and "Still

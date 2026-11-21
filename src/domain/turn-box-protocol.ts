@@ -63,6 +63,15 @@ export const registerRequest = z.object({
 	capacity: z.number().int().min(1).max(64),
 	running: z.number().int().min(0).max(64),
 	version: z.string().max(128).optional(),
+	refreshIdentity: z.literal(true).optional(),
+});
+export const registerResponse = z.object({
+	ok: z.literal(true),
+	identity: z
+		.string()
+		.max(1024)
+		.regex(/^ytbi1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+		.optional(),
 });
 export const claimRequest = z.object({
 	perUserLimit: z.number().int().min(1).max(64).optional(),

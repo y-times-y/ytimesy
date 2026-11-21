@@ -24,6 +24,7 @@ export const TURN_BOX_GRANT_TTL_MS = 10 * 60 * 1000;
 /** A grant with less than this left is replaced in the heartbeat response. */
 export const TURN_BOX_GRANT_REFRESH_MS = 5 * 60 * 1000;
 export const TURN_BOX_IDENTITY_TTL_MS = 24 * 60 * 60 * 1000;
+export const TURN_BOX_IDENTITY_REFRESH_MS = 60 * 60 * 1000;
 
 const nonce = z.string().regex(/^[a-f0-9]{16}$/);
 const boxId = z.string().regex(/^[A-Za-z0-9._-]{1,128}$/);

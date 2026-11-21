@@ -3,8 +3,10 @@ import { ApiTurnCancelled } from "../../domain/api-turn-failure";
 import { readBoundedRequestBody } from "../../domain/bounded-request-body";
 import {
 	issueTurnBoxGrant,
+	issueTurnBoxIdentity,
 	presentedTurnBoxToken,
 	TURN_BOX_GRANT_REFRESH_MS,
+	TURN_BOX_IDENTITY_REFRESH_MS,
 	type TurnBoxGrant,
 	type TurnBoxReplayGuard,
 	verifyTurnBoxGrant,
@@ -230,10 +232,23 @@ export async function routeTurnBoxEdge(
 			if (path === TURN_BOX_PATHS.register) {
 				const input = registerRequest.safeParse(body);
 				if (!input.success) return refuse("bad-request", 400);
-				// Revoked boxes are told so; their next claim fails too.
-				return (await deps.ops.register(identity.boxId, input.data))
-					? json({ ok: true })
-					: refuse("forbidden", 403);
+				const { refreshIdentity, ...heartbeat } = input.data;
+				if (!(await deps.ops.register(identity.boxId, heartbeat)))
+					return refuse("forbidden", 403);
+				if (!refreshIdentity) return json({ ok: true });
+				const signingTime = now();
+				const remaining = identity.expiresAt - signingTime;
+				if (remaining <= 0) return refuse("unauthorized", 401);
+				if (remaining > TURN_BOX_IDENTITY_REFRESH_MS) return json({ ok: true });
+				const replacement = await issueTurnBoxIdentity(
+					deps.privateKey,
+					{ boxId: identity.boxId },
+					signingTime,
+				);
+				return Response.json(
+					{ ok: true, identity: replacement },
+					{ headers: { "cache-control": "no-store" } },
+				);
 			}
 			const input = claimRequest.safeParse(body);
 			if (!input.success) return refuse("bad-request", 400);

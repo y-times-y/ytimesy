@@ -1,9 +1,61 @@
 import { describe, expect, it } from "vitest";
-import { issueTurnBoxGrant } from "../../domain/turn-box-grant";
+import {
+	issueTurnBoxGrant,
+	TURN_BOX_IDENTITY_REFRESH_MS,
+	TURN_BOX_IDENTITY_TTL_MS,
+	verifyTurnBoxIdentity,
+} from "../../domain/turn-box-grant";
 import { TURN_BOX_PATHS } from "../../domain/turn-box-protocol";
 import { FAKE_TURN, fakeEdge } from "./turn-box-fake-edge";
 import { turnBoxEdgeConfig } from "./turn-box-routes";
 import { answerTurnBoxSocketMessage } from "./turn-box-socket";
+
+describe("runner identity renewal", () => {
+	it("returns a non-cacheable replacement for the same box only when requested", async () => {
+		const edge = await fakeEdge();
+		edge.state.now += TURN_BOX_IDENTITY_TTL_MS - TURN_BOX_IDENTITY_REFRESH_MS;
+		const body = { capacity: 4, running: 1 };
+		const legacy = await post(
+			edge,
+			TURN_BOX_PATHS.register,
+			edge.identity,
+			body,
+		);
+		expect(await legacy.json()).toEqual({ ok: true });
+		const renewed = await post(edge, TURN_BOX_PATHS.register, edge.identity, {
+			...body,
+			refreshIdentity: true,
+		});
+		expect(renewed.status).toBe(200);
+		expect(renewed.headers.get("cache-control")).toBe("no-store");
+		const { identity } = await renewed.json();
+		const verified = await verifyTurnBoxIdentity(
+			edge.keys.publicKey,
+			identity,
+			edge.state.now,
+		);
+		expect(verified).toMatchObject({
+			boxId: "box-a",
+			expiresAt: edge.state.now + TURN_BOX_IDENTITY_TTL_MS,
+		});
+	});
+
+	it("refuses renewal if the identity expires during registration", async () => {
+		const edge = await fakeEdge();
+		edge.state.now += TURN_BOX_IDENTITY_TTL_MS - 1;
+		edge.ops.register = async () => {
+			edge.state.now += 1;
+			return true;
+		};
+		const response = await post(edge, TURN_BOX_PATHS.register, edge.identity, {
+			capacity: 1,
+			running: 0,
+			refreshIdentity: true,
+		});
+		expect(response.status).toBe(401);
+		expect(await response.json()).toEqual({ error: "unauthorized" });
+	});
+});
 
 const grantFor = async (
 	edge: Awaited<ReturnType<typeof fakeEdge>>,
