@@ -545,6 +545,13 @@ describe("helper launch notices", () => {
 		expect(many.match(/class="helper-launches"/g)).toHaveLength(2);
 		// The cards are inside the closed disclosure, not in the chat's flow.
 		expect(many).not.toContain('data-verb="finished"');
+		// Failures fold into the run too; its title counts them.
+		const mixed = render([user("ask"), answer("a1", "Mixed.")], "completed", [
+			done("h1"),
+			done("h2", "failed"),
+			done("h3", "failed"),
+		]);
+		expect(mixed).toMatch(/3 helpers finished · 2 failed<\/summary>/);
 		const one = render(
 			[user("ask"), answer("a1", "One helper.")],
 			"completed",

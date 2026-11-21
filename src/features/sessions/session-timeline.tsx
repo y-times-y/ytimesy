@@ -356,6 +356,8 @@ export function SessionTimeline({
 	type Quiet = {
 		readonly group: "started" | "finished";
 		readonly entry: Omit<TranscriptEntry, "follows">;
+		/** A helper that failed or never got going: counted in its row's title. */
+		readonly failed?: boolean;
 	};
 	const quiet: Quiet[] = [];
 	const append = (entry: Omit<TranscriptEntry, "follows">) =>
@@ -371,6 +373,7 @@ export function SessionTimeline({
 			const entry = helperRunEntry(
 				run.map((item) => item.entry),
 				run[0]?.group ?? "started",
+				run.filter((item) => item.failed).length,
 			);
 			if (entry) append(entry);
 			from = to + 1;
@@ -383,13 +386,20 @@ export function SessionTimeline({
 	const queueLaunch = (entry: Omit<TranscriptEntry, "follows">) =>
 		quiet.push({ group: "started", entry });
 	const addHelperStart = (task: AgentTaskActivity) => {
-		const addStart = task.status === "failed" ? add : queueLaunch;
-		addStart(helperStartEntry(task, stableHelperLines));
+		quiet.push({
+			group: "started",
+			entry: helperStartEntry(task, stableHelperLines),
+			failed: task.status === "failed",
+		});
 	};
 	const addHelperFinish = (task: AgentTaskActivity) => {
-		const entry = helperFinishEntry(task, stableHelperLines);
-		if (task.status === "failed") add(entry);
-		else quiet.push({ group: "finished", entry });
+		// Failures fold too (a wall of "Couldn't start" cards is the clutter);
+		// their row's title says how many, and each card is inside it.
+		quiet.push({
+			group: "finished",
+			entry: helperFinishEntry(task, stableHelperLines),
+			failed: task.status === "failed",
+		});
 	};
 	for (const row of rows) {
 		const rowId = row.kind === "item" ? row.item.id : row.id;
@@ -700,6 +710,7 @@ function isLaunchNotice(row: TimelineRow) {
 function helperRunEntry(
 	notices: readonly Omit<TranscriptEntry, "follows">[],
 	group: "started" | "finished",
+	failed = 0,
 ): Omit<TranscriptEntry, "follows"> | undefined {
 	const first = notices[0];
 	if (!first || notices.length === 1) return first;
@@ -715,7 +726,7 @@ function helperRunEntry(
 						strokeWidth={1.5}
 						className="session-activity-chevron"
 					/>
-					{`${notices.length} helpers ${group}`}
+					{`${notices.length} helpers ${group}${failed ? ` · ${failed} failed` : ""}`}
 				</summary>
 				<div>
 					{notices.map((notice) => (
