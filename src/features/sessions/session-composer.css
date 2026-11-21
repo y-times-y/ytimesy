@@ -1508,18 +1508,28 @@ details[open] > summary .session-activity-chevron {
 	overflow: visible;
 	text-overflow: clip;
 }
+/* The agent's thinking: set apart from its replies (dimmer, smaller, a thin
+   rule on the left), so the two never read as one block of text. */
 .session-narration {
-	margin: 10px 0 4px;
+	margin: 8px 0 6px;
+	padding-left: 12px;
+	border-left: 2px solid rgba(255, 255, 255, 0.1);
 }
 .session-narration > p {
 	margin: 0;
-	line-height: 20px;
+	font-size: 13px;
+	line-height: 19px;
 }
 .session-narration > p + p {
 	margin-top: 6px;
 }
 .session-narration .session-activity-title {
-	color: rgba(255, 255, 255, 0.78);
+	color: rgba(255, 255, 255, 0.46);
+}
+/* Thinking that follows thinking is one passage: no gap, one rule. */
+.session-narration + .session-narration {
+	margin-top: -6px;
+	padding-top: 6px;
 }
 .session-activity[data-kind="fileChange"] > p,
 .session-activity[data-kind="fileChange"] > summary {
