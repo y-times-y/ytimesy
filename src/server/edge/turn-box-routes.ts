@@ -122,6 +122,11 @@ export type TurnBoxEdgeDeps = {
 	readonly countRequest?: (userId: string | null) => void;
 	/** The `vm/*` endpoints (turn-box-vm-routes.ts); absent: they answer 404. */
 	readonly vm?: TurnBoxVmOps;
+	/**
+	 * Who STS says signed an enrollment request (its instance id), or null;
+	 * absent: enrollment is off (docs/turn-runner-boxes.md, "Enrollment").
+	 */
+	readonly enroll?: (headers: unknown) => Promise<string | null>;
 	/** The box program to download (a short-lived link and its checksum); absent: none is served. */
 	readonly bundle?: () => Promise<TurnBoxBundle | null>;
 	readonly upstream?: typeof fetch;
@@ -190,6 +195,39 @@ export async function routeTurnBoxEdge(
 	const log = deps.log ?? ((m, d) => console.warn(m, d));
 	const path = new URL(request.url).pathname;
 	const drop = () => request.body?.cancel().catch(() => undefined);
+
+	// An EC2 box's first call: proof of its instance role (STS), answered with an
+	// identity for that instance. A revoked instance id is refused.
+	if (path === TURN_BOX_PATHS.enroll) {
+		if (!deps.enroll) {
+			await drop();
+			return new Response(null, { status: 404 });
+		}
+		if (request.method !== "POST") return new Response(null, { status: 405 });
+		deps.countRequest?.(null);
+		const body = await readJson(request);
+		if (body === undefined) return refuse("too-large", 413);
+		try {
+			const boxId = await deps.enroll(
+				(body as { headers?: unknown } | null)?.headers,
+			);
+			if (!boxId) return refuse("unauthorized", 401);
+			if (!(await deps.ops.boxActive(boxId))) return refuse("forbidden", 403);
+			return Response.json(
+				{
+					identity: await issueTurnBoxIdentity(
+						deps.privateKey,
+						{ boxId },
+						now(),
+					),
+				},
+				{ headers: { "cache-control": "no-store" } },
+			);
+		} catch {
+			log("Turn box enrollment failed.", { path });
+			return refuse("unavailable", 503);
+		}
+	}
 
 	// A new box's program: by identity alone, so a box can start before it has
 	// registered. A revoked box is given nothing.

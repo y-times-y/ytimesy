@@ -23,6 +23,9 @@ export interface EdgeExecutorEnvironment {
 	/** Ed25519 keys (base64) that sign box identities and per-turn grants; the box holds only the public one. */
 	TURN_BOX_EDGE_PRIVATE_KEY?: string;
 	TURN_BOX_EDGE_PUBLIC_KEY?: string;
+	/** The AWS account (and role, default ytimesy-box) whose EC2 boxes may enroll. */
+	TURN_BOX_AWS_ACCOUNT_ID?: string;
+	TURN_BOX_AWS_ROLE?: string;
 	/** Per-user memory repos (Cloudflare Artifacts). */
 	ARTIFACTS?: ArtifactsNamespace;
 	/** Workers AI, for memory line embeddings. */

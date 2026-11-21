@@ -231,6 +231,8 @@ export type TurnRunnerBoxOptions = {
 	readonly client?: TurnBoxEdgeClient;
 	readonly run?: typeof runApiTurn;
 	readonly signalHandlers?: boolean;
+	/** Called when the edge rejects the box's identity (expired or unknown). */
+	readonly onIdentityRejected?: () => void;
 };
 
 export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
@@ -334,6 +336,15 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 					? error.message
 					: "Box registration deferred.",
 			);
+			// An EC2 box's service starts by enrolling for a fresh identity
+			// (infra/turn-box/start.mjs): leaving is how it gets one.
+			if (error instanceof TurnBoxIdentityRejected)
+				(
+					options.onIdentityRejected ??
+					(env.YTIMESY_BOX_EXIT_ON_REJECTED === "1"
+						? () => process.exit(1)
+						: () => undefined)
+				)();
 		}
 	};
 	await register();

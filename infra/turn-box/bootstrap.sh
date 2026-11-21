@@ -1,10 +1,10 @@
 #!/bin/bash
 # First-boot setup of a turn runner box (Ubuntu 24.04 x86_64, run as root from
-# the instance's user data; infra/turn-box/provision.py fills the placeholders).
-# The box runs the model loop of turns the edge hands it (docs/turn-runner-boxes.md)
-# and holds no production secret: its only credential is its identity token
-# (__IDENTITY__), 24 hours, revocable at the edge, and the process refuses to
-# start when anything else secret is in its environment.
+# the launch template's user data; infra/turn-box/fleet.py fills the
+# placeholders). The user data holds NO credential: each time the service
+# starts, start.mjs proves the instance's role to the edge (STS) and receives
+# an identity for this instance, then downloads the current program. The box
+# holds no production secret (docs/turn-runner-boxes.md, "No secrets on a box").
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
@@ -14,26 +14,19 @@ NODE_VERSION=22.11.0
 curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" | tar -xJ -C /usr/local --strip-components=1
 
 useradd --system --create-home --home-dir /var/lib/ytimesy-turn-box --shell /usr/sbin/nologin ytimesy-turn-box || true
-install -d -o ytimesy-turn-box -g ytimesy-turn-box /opt/ytimesy-turn-box
-# The program comes from the edge: a short-lived link to the current bundle in
-# R2 and its checksum, given to this box's identity alone (GET /box/v1/bundle).
-curl -fsS --retry 5 --retry-delay 5 -H 'authorization: Bearer __IDENTITY__' '__EDGE_URL__/box/v1/bundle' -o /tmp/bundle.json
-BUNDLE_URL=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync("/tmp/bundle.json","utf8")).url)')
-BUNDLE_SHA=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync("/tmp/bundle.json","utf8")).sha256)')
-curl -fsS --retry 3 -o /tmp/turn-box.mjs.gz "$BUNDLE_URL"
-gunzip -c /tmp/turn-box.mjs.gz > /opt/ytimesy-turn-box/turn-box.mjs
-echo "$BUNDLE_SHA  /opt/ytimesy-turn-box/turn-box.mjs" | sha256sum -c -
-rm -f /tmp/bundle.json /tmp/turn-box.mjs.gz
-
-install -m 600 -o root -g root /dev/null /etc/ytimesy-turn-box.env
-cat > /etc/ytimesy-turn-box.env <<'ENV'
-YTIMESY_MODEL_EXECUTION_TARGET=durable-object
-YTIMESY_EDGE_URL=__EDGE_URL__
-YTIMESY_BOX_IDENTITY=__IDENTITY__
-YTIMESY_TURN_BOX_ID=__BOX_ID__
-ENV
+install -d -o root -g root /opt/ytimesy-turn-box
+cat > /opt/ytimesy-turn-box/sigv4.mjs <<'SIGV4'
+__SIGV4_MJS__
+SIGV4
+cat > /opt/ytimesy-turn-box/start.mjs <<'START'
+__START_MJS__
+START
+chmod 755 /opt/ytimesy-turn-box
+# The program is written by start.mjs (root) and read by the service user.
+install -m 644 /dev/null /opt/ytimesy-turn-box/turn-box.mjs
 
 install -m 644 /dev/null /var/log/ytimesy-turn-box.log
+chown ytimesy-turn-box /var/log/ytimesy-turn-box.log
 cat > /etc/systemd/system/ytimesy-turn-box.service <<'UNIT'
 [Unit]
 Description=ytimesy turn runner box
@@ -41,12 +34,15 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 User=ytimesy-turn-box
-EnvironmentFile=/etc/ytimesy-turn-box.env
+Environment=YTIMESY_EDGE_URL=__EDGE_URL__
+# Enroll (a fresh identity for this instance) and fetch the program, as root.
+ExecStartPre=+/usr/local/bin/node /opt/ytimesy-turn-box/start.mjs
+EnvironmentFile=/run/ytimesy-turn-box.env
 ExecStart=/usr/local/bin/node /opt/ytimesy-turn-box/turn-box.mjs
 StandardOutput=append:/var/log/ytimesy-turn-box.log
 StandardError=append:/var/log/ytimesy-turn-box.log
 Restart=always
-RestartSec=3
+RestartSec=5
 NoNewPrivileges=yes
 [Install]
 WantedBy=multi-user.target

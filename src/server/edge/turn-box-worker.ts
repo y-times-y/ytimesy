@@ -13,6 +13,7 @@ import { createTurnBoxVmOps } from "../adapters/turn-box-vm-edge";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { turnBoxBundleFromR2 } from "./turn-box-bundle";
+import { awsEnrollmentConfig, verifiedInstanceId } from "./turn-box-enroll";
 import { routeTurnBoxEdge, turnBoxEdgeConfig } from "./turn-box-routes";
 
 const replay = new TurnBoxReplayGuard();
@@ -50,6 +51,7 @@ function routeTurnBox(
 	scope: <T>(run: () => Promise<T>) => Promise<T>,
 	vm: ReturnType<typeof createTurnBoxVmOps>,
 ) {
+	const enrollment = awsEnrollmentConfig(asRecord(env));
 	return routeTurnBoxEdge(request, {
 		publicKey: config.publicKey,
 		privateKey: config.privateKey,
@@ -57,6 +59,9 @@ function routeTurnBox(
 		ops: createTurnBoxEdgeOps(scope, { machines: () => vm.machines }),
 		vm,
 		bundle: turnBoxBundleFromR2,
+		...(enrollment
+			? { enroll: (headers) => verifiedInstanceId(headers, enrollment) }
+			: {}),
 		replay,
 		forwardSocket: (grant, upgrade) =>
 			env.MODEL_CONVERSATIONS.getByName(

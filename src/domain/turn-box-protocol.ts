@@ -14,6 +14,8 @@ export const TURN_BOX_API_PREFIX = "/box/v1";
 export const TURN_BOX_PATHS = {
 	register: `${TURN_BOX_API_PREFIX}/register`,
 	claim: `${TURN_BOX_API_PREFIX}/claim`,
+	/** POST, no identity: an EC2 box proves its instance role through STS and is given an identity. */
+	enroll: `${TURN_BOX_API_PREFIX}/enroll`,
 	/** GET, by identity: where a new box downloads its program (a short-lived link). */
 	bundle: `${TURN_BOX_API_PREFIX}/bundle`,
 	renew: `${TURN_BOX_API_PREFIX}/renew`,

@@ -468,3 +468,36 @@ describe("turn box socket (Durable Object side)", () => {
 		expect(revoked).toEqual({ reply: [{ t: "lease-lost" }], close: true });
 	});
 });
+
+describe("EC2 enrollment", () => {
+	const url = "https://edge.test/box/v1/enroll";
+	const send = (
+		edge: Awaited<ReturnType<typeof fakeEdge>>,
+		headers: unknown = { x: 1 },
+	) =>
+		edge.fetchEdge(url, { method: "POST", body: JSON.stringify({ headers }) });
+
+	it("is off (404) unless configured", async () => {
+		expect((await send(await fakeEdge())).status).toBe(404);
+	});
+
+	it("gives an identity for the instance STS vouches for, and refuses the rest", async () => {
+		let asked: string | null = "i-0123456789abcdef0";
+		const edge = await fakeEdge({ enroll: async () => asked });
+		const ok = await send(edge);
+		expect(ok.status).toBe(200);
+		expect(ok.headers.get("cache-control")).toBe("no-store");
+		const { identity } = (await ok.json()) as { identity: string };
+		const verified = await verifyTurnBoxIdentity(
+			edge.keys.publicKey,
+			identity,
+			edge.state.now,
+		);
+		expect(verified?.boxId).toBe("i-0123456789abcdef0");
+		asked = null;
+		expect((await send(edge)).status).toBe(401);
+		asked = "i-0123456789abcdef0";
+		edge.state.revoked = true;
+		expect((await send(edge)).status).toBe(403);
+	});
+});

@@ -35,6 +35,7 @@ export async function fakeEdge(
 		users?: string;
 		revoked?: boolean;
 		bundle?: TurnBoxEdgeDeps["bundle"];
+		enroll?: TurnBoxEdgeDeps["enroll"];
 	} = {},
 ) {
 	const keys = await generateTurnBoxKeyPair();
@@ -155,6 +156,7 @@ export async function fakeEdge(
 		forwardSocket: async () => new Response(null, { status: 204 }),
 		upstream: upstream as unknown as typeof fetch,
 		...(options.bundle ? { bundle: options.bundle } : {}),
+		...(options.enroll ? { enroll: options.enroll } : {}),
 		now: () => state.now,
 		log: () => undefined,
 	};
