@@ -97,6 +97,9 @@ describe("boxTurnBlock (what keeps a turn off the boxes)", () => {
 
 describe("turn box routing: Y² and the turn-box secrets switch", () => {
 	const none = { subagent: false, evaluation: false, hasRuntimeSecrets: false };
+	it("keeps lead mode fusion off the boxes", () => {
+		expect(boxTurnBlock({ ...none, leadFusion: true }, {})).toBe("lead-fusion");
+	});
 	it("keeps a Y² chat off the boxes", () => {
 		expect(boxTurnBlock({ ...none, ySquared: true }, {})).toBe("y-squared");
 	});

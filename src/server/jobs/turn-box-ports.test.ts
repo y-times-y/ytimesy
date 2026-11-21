@@ -243,6 +243,8 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 						// The edge does these itself at finalize (the box's ports are no-ops).
 						"releaseHeldTaskEvents",
 						"cloudProjectReport",
+						// Helper operations: turn-box-subagent-port.test.ts and box-turn-e2e.test.ts.
+						"subagent",
 					].includes(op),
 			),
 		).toEqual([]);

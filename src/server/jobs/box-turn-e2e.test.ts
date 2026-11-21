@@ -341,6 +341,81 @@ describe("a coding turn on a box, claim to finalize", () => {
 	});
 });
 
+describe("helpers from a box (the subagent port)", () => {
+	it("starts a reader, waits for its report and finishes, all through the edge", async () => {
+		const s = await scenario({
+			model: [
+				{
+					tool: "agent",
+					input: {
+						role: "researcher",
+						title: "Read package metadata",
+						brief: "Read package.json and report its name.",
+						wait: true,
+					},
+				},
+				{ text: "The package is called demo." },
+			],
+		});
+		// The chat's model: a helper inherits it.
+		Object.assign(s.owner, { listedModelId: "c1:m1" });
+		const child = {
+			...s.owner,
+			id: "22222222-2222-4222-8222-222222222222",
+			parentSessionId: s.owner.id,
+			title: "Read package metadata",
+			taskState: "draft",
+			taskPlacement: "shared",
+			taskAccess: "read_only",
+		};
+		const deps: string[] = [];
+		let reports = 0;
+		(s.edge.state.ports as Record<string, unknown>).subagent = async (args: {
+			dep: string;
+			args: unknown[];
+		}) => {
+			deps.push(args.dep);
+			switch (args.dep) {
+				case "usageWindowsOpen":
+				case "saveSpec":
+				case "mergeFork":
+				case "markFailed":
+				case "stop":
+					return null;
+				case "routes":
+					return [];
+				case "ancestors":
+					return [];
+				case "tree":
+					return [s.owner, ...(deps.includes("openTask") ? [child] : [])];
+				case "itemsOfKinds":
+					return [];
+				case "openTask":
+					return child;
+				case "start":
+					return { id: child.id, machineId: null };
+				case "takeReport":
+					reports += 1;
+					return reports < 2
+						? null
+						: { outcome: "completed", report: "The name is demo." };
+				default:
+					throw new Error(`unexpected dep ${args.dep}`);
+			}
+		};
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+		expect(dbCalls.stacks).toEqual([]);
+		expect(s.reads).toEqual([]);
+		expect(deps).toContain("openTask");
+		expect(deps).toContain("start");
+		expect(deps.filter((dep) => dep === "takeReport").length).toBe(2);
+		const result = JSON.stringify(s.edge.row.items);
+		expect(result).toContain("The name is demo.");
+		console.log("E2E helper", deps.join(" "));
+	}, 60_000);
+});
+
 describe("Stop and lease loss mid-step", () => {
 	it("Stop requested while the model streams: the box stops, commits nothing, publishes nothing", async () => {
 		const s = await scenario({

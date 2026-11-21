@@ -189,7 +189,7 @@ export type SubagentToolDeps = {
 
 // Resolved at call time, so a test that mocks one of these modules does not
 // need every export the tools use.
-const defaultDeps: SubagentToolDeps = {
+export const subagentToolDefaultDeps: SubagentToolDeps = {
 	now: () => Date.now(),
 	sleep: (ms, signal) =>
 		new Promise((resolve) => {
@@ -416,7 +416,7 @@ type Tree = {
  * error telling the agent to do the work itself.
  */
 export function subagentTools(context: SubagentToolContext): ToolSet {
-	const deps = { ...defaultDeps, ...context.deps };
+	const deps = { ...subagentToolDefaultDeps, ...context.deps };
 	const { parent } = context;
 	const loadTree = () => loadTreeFor(deps, parent);
 
@@ -801,7 +801,7 @@ type WorkerSpec = z.infer<typeof workerSpec>;
  * as the reader user, like the judge.
  */
 export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
-	const deps = { ...defaultDeps, ...context.deps };
+	const deps = { ...subagentToolDefaultDeps, ...context.deps };
 	const { parent } = context;
 	const worker = tool({
 		description: `Hand reading, test writing and test runs to workers: cheaper read-only agents on this VM that see only your brief and report compact evidence (commands with exit status and output, file:line excerpts, test results). Pass brief for one worker, or workers (up to ${MAX_LIVE_CHECKER_WORKERS}) to run independent groups in parallel; waits for every report. model "strong" uses your own model for one hard investigation. Pass id with brief to brief a worker that already reported again.`,
@@ -1083,7 +1083,7 @@ export async function startHarnessExploration(
 	context: SubagentToolContext,
 	input: { readonly requestKey: string; readonly requestText: string },
 ) {
-	const deps = { ...defaultDeps, ...context.deps };
+	const deps = { ...subagentToolDefaultDeps, ...context.deps };
 	const { parent } = context;
 	const tree = await loadTreeFor(deps, parent);
 	const node = tree.nodes.find(
@@ -1485,7 +1485,7 @@ export async function startRuntimeSubagent(
 		readonly pair?: boolean;
 	},
 ) {
-	const deps = { ...defaultDeps, ...context.deps };
+	const deps = { ...subagentToolDefaultDeps, ...context.deps };
 	const workspace = await context.workspace();
 	const { childId, budget, model, notice } = await spawnSubagent(
 		context,
@@ -1532,11 +1532,9 @@ async function checkerBriefFor(
 	// The root's user messages: held, else read alone (not the transcript).
 	const userMessages =
 		root.items === null || root.items === undefined
-			? await (context.deps?.itemsOfKinds ?? defaultDeps.itemsOfKinds)(
-					root.userId,
-					root.id,
-					["userMessage"],
-				)
+			? await (
+					context.deps?.itemsOfKinds ?? subagentToolDefaultDeps.itemsOfKinds
+				)(root.userId, root.id, ["userMessage"])
 			: root.items;
 	const taskText = latestUserRequestText(sessionItemsFromUnknown(userMessages));
 	if (!taskText.trim())

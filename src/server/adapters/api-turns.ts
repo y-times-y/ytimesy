@@ -52,6 +52,7 @@ import {
 	turnMessagesObject,
 } from "./conversation-recovery";
 import { database } from "./database";
+import { harnessVariantForUser } from "./dev-eval-users";
 import {
 	CONNECT_RETRY_DELAYS_MS,
 	isConnectFailure,
@@ -259,8 +260,16 @@ export async function enqueueApiTurn(input: {
 					),
 				)
 			: true;
+		// Lead mode fusion's sidekick work is not served to a box.
+		const leadFusion = facts
+			? await harnessVariantForUser(input.userId).then(
+					(variant) => variant.lead === "fusion",
+					() => true,
+				)
+			: true;
 		eligibleForBox =
-			!!facts && boxTurnBlock({ ...facts, evaluation }, process.env) === null;
+			!!facts &&
+			boxTurnBlock({ ...facts, evaluation, leadFusion }, process.env) === null;
 	}
 	const chosenExecutor = chooseTurnExecutor({
 		configured: configuredExecutor,

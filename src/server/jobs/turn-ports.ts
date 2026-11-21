@@ -69,6 +69,7 @@ import type {
 } from "../services/project-secrets";
 import type { withPushResultNotices } from "../services/push-approval";
 import type { startQueuedUserTurn } from "../services/queued-user-messages";
+import type { SubagentToolDeps } from "../services/subagent-tools";
 import type { commitSessionTurn } from "../services/turn-commit";
 import type { subagentMemory, turnMemory } from "../services/turn-memory";
 import type { enqueueAgentTaskEvent } from "./queue";
@@ -174,6 +175,12 @@ export interface TurnPorts {
 	readonly subagentMemory: typeof subagentMemory;
 	/** Notices for push cards answered meanwhile (reads the push request table). */
 	readonly withPushResultNotices: typeof withPushResultNotices;
+	/**
+	 * Set on a box: the agent tools' database and helper-VM operations, served
+	 * by the edge (turn-box-subagent-port.ts). Unset in the Durable Object,
+	 * where the tools call them directly.
+	 */
+	readonly subagentToolDeps?: Partial<SubagentToolDeps>;
 }
 
 export type TurnPortName = keyof TurnPorts;

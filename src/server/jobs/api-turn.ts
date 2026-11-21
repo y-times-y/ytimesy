@@ -1846,6 +1846,8 @@ async function runApiTurnAttempt(
 			owner.agentBudget?.checkerPair === "judge" &&
 			subagentLevel < MAX_SUBAGENT_LEVEL;
 		const subagentContext: SubagentToolContext = {
+			// On a box the tools' database and helper-VM work goes to the edge.
+			...(ports.subagentToolDeps ? { deps: ports.subagentToolDeps } : {}),
 			machines: unscopedMachines,
 			parent: owner as AgentSessionRecord,
 			workspace,

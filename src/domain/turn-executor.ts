@@ -54,6 +54,8 @@ export function chooseTurnExecutor(input: {
  *   runtime-kind secret. `vm/ensure` answers 403 `secrets` for those unless
  *   YTIMESY_TURN_BOX_SECRETS=1 (or the Claude runner's
  *   YTIMESY_CLAUDE_BOX_TOOLS_SECRETS=1); then the VM redacts its own output.
+ * - `lead-fusion`: harness variant lead=fusion; its sidekick's round, state
+ *   and retirement are not served to a box.
  * - `y-squared`: a project's Y² chat; its tools read the database by name
  *   (y-squared-tools.ts), which a box cannot.
  */
@@ -61,7 +63,8 @@ export type BoxTurnBlock =
 	| "subagent"
 	| "evaluation"
 	| "runtime-secrets"
-	| "y-squared";
+	| "y-squared"
+	| "lead-fusion";
 
 /** Whether turn boxes may run chats whose project or account holds runtime secrets. */
 export function turnBoxSecretsAllowed(env: {
@@ -80,6 +83,8 @@ export function boxTurnBlock(
 		readonly evaluation: boolean;
 		readonly hasRuntimeSecrets: boolean;
 		readonly ySquared?: boolean;
+		/** Harness variant lead=fusion (its sidekick work is not served to a box). */
+		readonly leadFusion?: boolean;
 	},
 	env: {
 		readonly YTIMESY_TURN_BOX_SECRETS?: string;
@@ -89,6 +94,7 @@ export function boxTurnBlock(
 	if (facts.subagent) return "subagent";
 	if (facts.evaluation) return "evaluation";
 	if (facts.ySquared) return "y-squared";
+	if (facts.leadFusion) return "lead-fusion";
 	if (facts.hasRuntimeSecrets && !turnBoxSecretsAllowed(env))
 		return "runtime-secrets";
 	return null;

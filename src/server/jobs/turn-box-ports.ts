@@ -3,10 +3,15 @@ import {
 	planPeerInjection,
 } from "#/domain/peer-inbox-injection";
 import { agentSecretsEnvFile } from "#/domain/project-secret";
-import type { BoxPortArgs, BoxPortOp } from "#/domain/turn-box-protocol";
+import type {
+	BoxPortArgs,
+	BoxPortOp,
+	SubagentPortDep,
+} from "#/domain/turn-box-protocol";
 import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
 import type { CodexSelection } from "../adapters/codex-subscription-runtime";
+import type { SubagentToolDeps } from "../services/subagent-tools";
 import type { TurnBoxTurnSession } from "./turn-box-client";
 import { type TurnPorts, TurnPortUnavailable } from "./turn-ports";
 
@@ -363,6 +368,7 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		//   box (the edge-written push tools do not exist yet either);
 		// - the workspace is prepared by the edge's vm/ensure (box-runner
 		//   installs boxApiTurnWorkspace; this placeholder refuses).
+		subagentToolDeps: boxSubagentToolDeps(call),
 		turnMemory: async () => null,
 		subagentMemory: async () => null,
 		withPushResultNotices: async () => null,
@@ -438,4 +444,74 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		) as TurnPorts["gitPushRequests"],
 	};
 	return Object.assign(ports, { flush });
+}
+
+/** A box waits on a helper's report no more often than this (each look is a Worker request). */
+const BOX_REPORT_POLL_MS = 5_000;
+
+/**
+ * The agent tools' operations on a box (docs/turn-runner-boxes.md, "Helpers
+ * on a box"): the tool logic runs here; each database or helper-VM operation
+ * is one `subagent` port call. Records cross as their id (the edge reloads
+ * them) and machines are never sent (the edge uses its own).
+ */
+export function boxSubagentToolDeps(
+	call: <T>(op: BoxPortOp, args: unknown) => Promise<T>,
+): Partial<SubagentToolDeps> {
+	const dep = <T>(name: SubagentPortDep, ...args: unknown[]) =>
+		call<T>("subagent", { dep: name, args });
+	const ref = (value: { readonly id: string }) => ({ id: value.id });
+	const unavailable = (name: string) => () => {
+		throw new TurnPortUnavailable(`subagent.${name}`);
+	};
+	return {
+		sleep: (ms, signal) =>
+			new Promise((resolve) => {
+				const timer = setTimeout(done, Math.max(ms, BOX_REPORT_POLL_MS));
+				function done() {
+					clearTimeout(timer);
+					signal.removeEventListener("abort", done);
+					resolve();
+				}
+				signal.addEventListener("abort", done, { once: true });
+			}),
+		ancestors: (userId, sessionId) => dep("ancestors", userId, sessionId),
+		tree: (userId, rootId) => dep("tree", userId, rootId),
+		itemsOfKinds: (userId, sessionId, kinds) =>
+			dep("itemsOfKinds", userId, sessionId, [...kinds]),
+		openTask: (input) => dep("openTask", input),
+		saveSpec: (userId, sessionId, spec) =>
+			dep("saveSpec", userId, sessionId, spec),
+		fork: (input) =>
+			dep("fork", { parentVm: input.parentVm, slug: input.slug }),
+		saveProviderRef: (sessionId, providerRef) =>
+			dep("saveProviderRef", sessionId, providerRef),
+		mergeFork: (sessionId, fields) => dep("mergeFork", sessionId, fields),
+		start: (scope, taskId, options) =>
+			dep(
+				"start",
+				{ userId: scope.userId, sessionId: scope.sessionId },
+				taskId,
+				options,
+			),
+		routes: (userId) => dep("routes", userId),
+		markFailed: (sessionId) => dep("markFailed", sessionId),
+		releaseStart: (userId, projectId, taskId) =>
+			dep("releaseStart", userId, projectId, taskId),
+		takeReport: (childId) => dep("takeReport", childId),
+		message: (sender, recipientId, message, requestId) =>
+			dep("message", ref(sender), recipientId, message, requestId),
+		queueAfterTurn: (sender, recipientId, message, requestId) =>
+			dep("queueAfterTurn", ref(sender), recipientId, message, requestId),
+		interrupt: (_machines, sender, recipientId, message, requestId) =>
+			dep("interrupt", null, ref(sender), recipientId, message, requestId),
+		stop: (sessionId, options) => dep("stop", sessionId, options ?? {}),
+		usageWindowsOpen: async (userId) => {
+			await dep("usageWindowsOpen", userId);
+		},
+		// Lead mode fusion: routing keeps it off boxes.
+		markRoundStart: unavailable("markRoundStart"),
+		saveSidekick: unavailable("saveSidekick"),
+		retireSidekick: unavailable("retireSidekick"),
+	} as Partial<SubagentToolDeps>;
 }

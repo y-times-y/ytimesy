@@ -148,4 +148,6 @@ export const localTurnPorts: TurnPorts = {
 	turnMemory: lazy(() => turnMemory),
 	subagentMemory: lazy(() => subagentMemory),
 	withPushResultNotices: lazy(() => withPushResultNotices),
+	// The agent tools call their own database functions here.
+	subagentToolDeps: undefined,
 };

@@ -188,6 +188,35 @@ export const TURN_BOX_REQUEST_BUDGET = {
 	durableObjectRequests: 10,
 } as const;
 
+/**
+ * The helper (subagent) operations a box's agent tools reach through the
+ * edge (`subagent` port, turn-box-subagent-port.ts): the members of
+ * SubagentToolDeps that read or write the database or act on another VM.
+ * Lead mode fusion's three (round start, sidekick state, retirement) are not
+ * served: routing keeps fusion turns off boxes.
+ */
+export const SUBAGENT_PORT_DEPS = [
+	"ancestors",
+	"tree",
+	"itemsOfKinds",
+	"openTask",
+	"saveSpec",
+	"fork",
+	"saveProviderRef",
+	"mergeFork",
+	"start",
+	"routes",
+	"markFailed",
+	"releaseStart",
+	"takeReport",
+	"message",
+	"queueAfterTurn",
+	"interrupt",
+	"stop",
+	"usageWindowsOpen",
+] as const;
+export type SubagentPortDep = (typeof SUBAGENT_PORT_DEPS)[number];
+
 const portText = z.string().min(1).max(512);
 const portKey = z.string().min(1).max(256);
 const optionalText = portText.nullable();
@@ -297,6 +326,15 @@ export const boxPortArgs = {
 	 * chat, never from the box); `cwd` is the checkout path the box read.
 	 */
 	ensureCodePoint: z.object({ messageId: portKey, cwd: z.string().max(4096) }),
+	/**
+	 * One helper operation of the turn's own agent tools. Every chat, VM and
+	 * user it names is checked against the turn's own chat and its helpers
+	 * (the edge's handler); records travel as ids and are reloaded there.
+	 */
+	subagent: z.object({
+		dep: z.enum(SUBAGENT_PORT_DEPS),
+		args: z.array(z.unknown()).max(8),
+	}),
 } as const;
 export type BoxPortOp = keyof typeof boxPortArgs;
 export const boxPortOps = Object.keys(boxPortArgs) as BoxPortOp[];

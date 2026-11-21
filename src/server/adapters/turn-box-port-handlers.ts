@@ -267,6 +267,16 @@ async function handle(
 			});
 			return null;
 		}
+		case "subagent":
+			// Loaded on first use: the helper tools pull in the task services.
+			return (await import("./turn-box-subagent-port")).subagentPort(
+				turn,
+				call.args.dep,
+				call.args.args,
+				{
+					...(deps.machines ? { machines: deps.machines } : {}),
+				},
+			);
 		default:
 			return NOT_SERVED;
 	}
