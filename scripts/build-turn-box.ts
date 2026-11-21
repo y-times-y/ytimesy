@@ -21,7 +21,9 @@ export async function buildTurnBox(): Promise<string> {
 		platform: "node",
 		// The box's Node (infra/turn-box/bootstrap.sh).
 		target: "node22",
-		minify: true,
+		// Readable stack traces in the box log (the size does not matter here).
+		minify: false,
+		keepNames: true,
 		legalComments: "none",
 		external: ["node:*", ...builtinModules],
 		banner: {

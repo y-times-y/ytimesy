@@ -322,9 +322,22 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 				running--;
 			}
 		},
-		onError: () =>
+		// What failed, so a box's own log says why (never a value: messages and
+		// the first frames of the stack; the box holds no secret to leak).
+		onError: (error: unknown) =>
 			console.warn(
 				"A box turn ended with an error; the queue is checked again.",
+				{
+					name: error instanceof Error ? error.name : typeof error,
+					message:
+						error instanceof Error
+							? error.message.slice(0, 500)
+							: String(error).slice(0, 500),
+					stack:
+						error instanceof Error
+							? (error.stack ?? "").split("\n").slice(1, 9).join(" | ")
+							: undefined,
+				},
 			),
 	});
 	const register = async () => {
