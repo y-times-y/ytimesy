@@ -62,8 +62,10 @@ export async function boxRoutingFacts(userId: string, sessionId: string) {
 	const result = await database().query<{
 		subagent: boolean;
 		runtime_secrets: boolean;
+		y_squared: boolean;
 	}>(
 		`select s.parent_session_id is not null as subagent,
+		 (s.chat_role is not distinct from 'y2') as y_squared,
 		 (exists(select 1 from project_secret ps where ps.project_id=s.project_id and ps.kind='runtime')
 		  or exists(select 1 from account_secret a where a.user_id=s.user_id and a.kind='runtime')) as runtime_secrets
 		 from agent_session s where s.id=$1 and s.user_id=$2`,
@@ -73,5 +75,6 @@ export async function boxRoutingFacts(userId: string, sessionId: string) {
 	return {
 		subagent: row?.subagent ?? false,
 		hasRuntimeSecrets: row?.runtime_secrets ?? false,
+		ySquared: row?.y_squared ?? false,
 	};
 }

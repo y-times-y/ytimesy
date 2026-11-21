@@ -94,3 +94,17 @@ describe("boxTurnBlock (what keeps a turn off the boxes)", () => {
 		).toBe("subagent");
 	});
 });
+
+describe("turn box routing: Y² and the turn-box secrets switch", () => {
+	const none = { subagent: false, evaluation: false, hasRuntimeSecrets: false };
+	it("keeps a Y² chat off the boxes", () => {
+		expect(boxTurnBlock({ ...none, ySquared: true }, {})).toBe("y-squared");
+	});
+	it("lets runtime-secret chats on with YTIMESY_TURN_BOX_SECRETS=1 alone", () => {
+		const secrets = { ...none, hasRuntimeSecrets: true };
+		expect(boxTurnBlock(secrets, { YTIMESY_TURN_BOX_SECRETS: "1" })).toBeNull();
+		expect(boxTurnBlock(secrets, { YTIMESY_TURN_BOX_SECRETS: "0" })).toBe(
+			"runtime-secrets",
+		);
+	});
+});

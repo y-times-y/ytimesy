@@ -26,6 +26,8 @@ export interface EdgeExecutorEnvironment {
 	/** The AWS account (and role, default ytimesy-box) whose EC2 boxes may enroll. */
 	TURN_BOX_AWS_ACCOUNT_ID?: string;
 	TURN_BOX_AWS_ROLE?: string;
+	/** "1": turn boxes run chats with runtime secrets (the VM redacts its own output). */
+	YTIMESY_TURN_BOX_SECRETS?: string;
 	/** Per-user memory repos (Cloudflare Artifacts). */
 	ARTIFACTS?: ArtifactsNamespace;
 	/** Workers AI, for memory line embeddings. */

@@ -379,4 +379,14 @@ if (
 	import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
 	await runTurnRunnerBox();
+	// The runner's own timers are unref'd (so tests and embedders can exit);
+	// as the box's process this one keeps it alive, and logs its memory so a
+	// box's capacity can be sized from what turns really use.
+	setInterval(() => {
+		const { rss, heapUsed } = process.memoryUsage();
+		console.info("turn box memory", {
+			rssMb: Math.round(rss / 1_048_576),
+			heapMb: Math.round(heapUsed / 1_048_576),
+		});
+	}, 300_000);
 }

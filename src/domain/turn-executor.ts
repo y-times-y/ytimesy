@@ -52,21 +52,44 @@ export function chooseTurnExecutor(input: {
  * - `evaluation`: harness evaluation runs stay in Durable Objects.
  * - `runtime-secrets`: the project (or the user's account) holds a
  *   runtime-kind secret. `vm/ensure` answers 403 `secrets` for those unless
- *   YTIMESY_CLAUDE_BOX_TOOLS_SECRETS=1 (then the VM redacts its own output).
+ *   YTIMESY_TURN_BOX_SECRETS=1 (or the Claude runner's
+ *   YTIMESY_CLAUDE_BOX_TOOLS_SECRETS=1); then the VM redacts its own output.
+ * - `y-squared`: a project's Y² chat; its tools read the database by name
+ *   (y-squared-tools.ts), which a box cannot.
  */
-export type BoxTurnBlock = "subagent" | "evaluation" | "runtime-secrets";
+export type BoxTurnBlock =
+	| "subagent"
+	| "evaluation"
+	| "runtime-secrets"
+	| "y-squared";
+
+/** Whether turn boxes may run chats whose project or account holds runtime secrets. */
+export function turnBoxSecretsAllowed(env: {
+	readonly YTIMESY_TURN_BOX_SECRETS?: string;
+	readonly YTIMESY_CLAUDE_BOX_TOOLS_SECRETS?: string;
+}) {
+	return (
+		env.YTIMESY_TURN_BOX_SECRETS === "1" ||
+		env.YTIMESY_CLAUDE_BOX_TOOLS_SECRETS === "1"
+	);
+}
 
 export function boxTurnBlock(
 	facts: {
 		readonly subagent: boolean;
 		readonly evaluation: boolean;
 		readonly hasRuntimeSecrets: boolean;
+		readonly ySquared?: boolean;
 	},
-	env: { readonly YTIMESY_CLAUDE_BOX_TOOLS_SECRETS?: string } = process.env,
+	env: {
+		readonly YTIMESY_TURN_BOX_SECRETS?: string;
+		readonly YTIMESY_CLAUDE_BOX_TOOLS_SECRETS?: string;
+	} = process.env,
 ): BoxTurnBlock | null {
 	if (facts.subagent) return "subagent";
 	if (facts.evaluation) return "evaluation";
-	if (facts.hasRuntimeSecrets && env.YTIMESY_CLAUDE_BOX_TOOLS_SECRETS !== "1")
+	if (facts.ySquared) return "y-squared";
+	if (facts.hasRuntimeSecrets && !turnBoxSecretsAllowed(env))
 		return "runtime-secrets";
 	return null;
 }

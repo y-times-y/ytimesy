@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { WorkspaceId } from "../../domain/ids";
 import { UsageWindowExhausted } from "../../domain/infrastructure-usage";
+import { turnBoxSecretsAllowed } from "../../domain/turn-executor";
 import { budgetAdmission } from "../edge/budget-admission";
 import type { EdgeExecutorEnvironment } from "../edge/environment";
 import type { TurnBoxVmOps } from "../edge/turn-box-vm-routes";
@@ -47,8 +48,7 @@ export function createTurnBoxVmOps(
 		get machines() {
 			return accountMachines();
 		},
-		allowRuntimeSecrets: () =>
-			process.env.YTIMESY_CLAUDE_BOX_TOOLS_SECRETS === "1",
+		allowRuntimeSecrets: () => turnBoxSecretsAllowed(process.env),
 		currentVm: async (turn) =>
 			(await session(turn.user_id, turn.session_id))?.providerRef ?? null,
 		prepare: async (turn) => {
