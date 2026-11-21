@@ -460,6 +460,62 @@ describe("MCP servers from a box (listed and called by the edge)", () => {
 	}, 60_000);
 });
 
+describe("memory from a box (read and written by the edge)", () => {
+	it("adds the edge's instructions and recalled lines, clones and saves through the edge", async () => {
+		const s = await scenario({
+			model: [
+				{ tool: "execute_command", input: { command: "echo hi" } },
+				{ text: "Done." },
+			],
+		});
+		const ops: string[] = [];
+		(s.edge.state.ports as Record<string, unknown>).memory = async (args: {
+			op: string;
+			items?: unknown[];
+			messages?: unknown[];
+		}) => {
+			ops.push(args.op);
+			switch (args.op) {
+				case "init":
+					return { mode: "full", instructions: "MEMORY-INSTRUCTIONS-XYZ" };
+				case "prepareVm":
+					return { tokens: ["mem-token-123"] };
+				case "parts":
+					return {
+						parts: ["<memory>\nRecalled: the user prefers pnpm.\n</memory>"],
+						recall: { head: "h1", lines: [] },
+					};
+				case "recordSaved":
+					return args.items ?? [];
+				default:
+					return null;
+			}
+		};
+		const bodies: string[] = [];
+		const deps = s.edge.deps as unknown as {
+			upstream: (request: unknown, init?: RequestInit) => Promise<unknown>;
+		};
+		const upstream = deps.upstream;
+		deps.upstream = async (request: unknown, init?: RequestInit) => {
+			const copy = new Request(request as RequestInfo, init);
+			bodies.push(await copy.clone().text());
+			return upstream(copy);
+		};
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+		expect(dbCalls.stacks).toEqual([]);
+		expect(s.reads).toEqual([]);
+		expect(ops).toContain("init");
+		expect(ops).toContain("parts");
+		// The save hook is the edge's, after finalize (afterBoxTurnSettled).
+		expect(ops).not.toContain("afterTurn");
+		expect(ops).toContain("recordSaved");
+		const first = bodies[0] ?? "";
+		expect(first).toContain("MEMORY-INSTRUCTIONS-XYZ");
+		expect(first).toContain("the user prefers pnpm");
+	}, 60_000);
+});
+
 describe("Stop and lease loss mid-step", () => {
 	it("Stop requested while the model streams: the box stops, commits nothing, publishes nothing", async () => {
 		const s = await scenario({

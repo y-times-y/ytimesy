@@ -335,6 +335,29 @@ export const boxPortArgs = {
 		dep: z.enum(SUBAGENT_PORT_DEPS),
 		args: z.array(z.unknown()).max(8),
 	}),
+	/**
+	 * Cross-chat memory for the turn's own chat (turn-box-memory-port.ts): the
+	 * edge reads the memory repo, embeds, clones onto the chat's own VM and
+	 * queues the save hook; the box applies the recalled parts. `wording` and
+	 * `writer` are the harness variant's memory options.
+	 */
+	memory: z.object({
+		op: z.enum([
+			"init",
+			"prepareVm",
+			"releaseVm",
+			"parts",
+			"recordSaved",
+			"afterTurn",
+		]),
+		wording: portText.optional(),
+		writer: portText.optional(),
+		vm: portText.nullable().optional(),
+		scrub: z.boolean().optional(),
+		cwd: z.string().max(4096).optional(),
+		messages: messages.optional(),
+		items: items.optional(),
+	}),
 	/** The turn's MCP tools as data (names, descriptions, input schemas); credentials stay on the edge. */
 	mcpListing: z.object({}),
 	/** One MCP tool call, made by the edge on one of the turn's own servers. */

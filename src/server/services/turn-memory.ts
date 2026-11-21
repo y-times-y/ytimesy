@@ -177,6 +177,16 @@ export type TurnMemory = {
 		items: readonly SessionItem[],
 		workspace: () => Promise<AgentToolWorkspace>,
 	): Promise<{ messages: ModelMessage[]; recall: MemoryRecall | null }>;
+	/**
+	 * What `attach` adds, without the conversation: the index of the current
+	 * request, the parts to add to it and the recall (null: nothing to add and
+	 * nothing to show). A box asks the edge for this and adds the parts itself.
+	 */
+	memoryParts(
+		messages: ModelMessage[],
+		items: readonly SessionItem[],
+		workspace: () => Promise<AgentToolWorkspace>,
+	): Promise<MemoryParts | null>;
 	/** Adds a marker for the lines this chat saved since the request's recall. */
 	recordSaved(
 		items: readonly SessionItem[],
@@ -184,6 +194,13 @@ export type TurnMemory = {
 	): Promise<SessionItem[]>;
 	/** The save hook: queued after a completed turn (full mode, unless the agent alone writes). */
 	afterTurn(turnId: string): Promise<void>;
+};
+
+/** The parts `attach` adds to the current request (turn-memory.ts `memoryParts`). */
+export type MemoryParts = {
+	readonly at: number;
+	readonly parts: readonly string[];
+	readonly recall: MemoryRecall;
 };
 
 type MemoryOptions = {
@@ -358,7 +375,7 @@ export async function turnMemory(
 	const revokedIds = new Set<string>();
 	const minted = new Map<string, string>();
 	const ledger = options.vmTokenLedger ?? memoryVmTokens;
-	return {
+	const memory: TurnMemory = {
 		mode,
 		instructions: memoryInstructions(
 			mode,
@@ -442,14 +459,24 @@ export async function turnMemory(
 			}
 		},
 		async attach(messages, items, workspace) {
-			const unchanged = { messages, recall: null };
+			const found = await memory.memoryParts(messages, items, workspace);
+			if (!found) return { messages, recall: null };
+			if (!found.parts.length) return { messages, recall: found.recall };
+			const next = [...messages];
+			next[found.at] = withMemoryParts(
+				messages[found.at] as { role: "user"; content: string },
+				[...found.parts],
+			) as ModelMessage;
+			return { messages: next, recall: found.recall };
+		},
+		async memoryParts(messages, items, workspace) {
 			const at = currentRequestIndex(messages, items);
-			if (at < 0) return unchanged;
+			if (at < 0) return null;
 			const current = messages[at];
 			// A resumed step replays the parts it already attached.
-			if (attachedMemory([current]).length) return unchanged;
+			if (attachedMemory([current]).length) return null;
 			const loaded = await source.loaded();
-			if (!loaded) return unchanged;
+			if (!loaded) return null;
 			let { snapshot, vectors } = loaded;
 			const spans: Record<string, number> = {
 				snapshotMs: loaded.snapshotMs,
@@ -557,7 +584,7 @@ export async function turnMemory(
 				...(hook ? { hook: recalledHook(hook, spans) } : {}),
 			};
 			if (!showEntry && !rulesPart && !matches.length && !fresh.length)
-				return { messages, recall };
+				return { at, parts: [], recall };
 			const parts = [
 				...(showEntry
 					? [
@@ -585,12 +612,7 @@ export async function turnMemory(
 						]
 					: []),
 			];
-			const next = [...messages];
-			next[at] = withMemoryParts(
-				current as { role: "user"; content: string },
-				parts,
-			) as ModelMessage;
-			return { messages: next, recall };
+			return { at, parts, recall };
 		},
 		async recordSaved(items, turnId) {
 			const recall = currentMemoryRecall(items);
@@ -646,6 +668,7 @@ export async function turnMemory(
 			});
 		},
 	};
+	return memory;
 }
 
 /** What a subagent is told about the index it is shown, and the tools that read past it. */

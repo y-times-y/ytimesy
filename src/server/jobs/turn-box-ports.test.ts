@@ -248,6 +248,8 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 						// MCP: turn-box-mcp-port.test.ts and box-turn-e2e.test.ts.
 						"mcpListing",
 						"mcpCall",
+						// Memory: turn-box-memory-port.test.ts and box-turn-e2e.test.ts.
+						"memory",
 					].includes(op),
 			),
 		).toEqual([]);

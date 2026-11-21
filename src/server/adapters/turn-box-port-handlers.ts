@@ -277,6 +277,12 @@ async function handle(
 					...(deps.machines ? { machines: deps.machines } : {}),
 				},
 			);
+		case "memory":
+			return (await import("./turn-box-memory-port")).memoryPort(
+				turn,
+				call.args,
+				{ ...(deps.machines ? { machines: deps.machines } : {}) },
+			);
 		case "mcpListing":
 			return (await import("./turn-box-mcp-port")).mcpListingPort(turn);
 		case "mcpCall":

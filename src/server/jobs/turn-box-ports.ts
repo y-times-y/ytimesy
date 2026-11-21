@@ -1,9 +1,12 @@
-import { jsonSchema, type ToolSet, tool } from "ai";
+import { jsonSchema, type ModelMessage, type ToolSet, tool } from "ai";
+import { isUserRequestMessage } from "#/domain/api-conversation";
+import { attachedMemory, withMemoryParts } from "#/domain/memory-repo";
 import {
 	type PeerInboxRow,
 	planPeerInjection,
 } from "#/domain/peer-inbox-injection";
 import { agentSecretsEnvFile } from "#/domain/project-secret";
+import type { SessionItem } from "#/domain/session-item";
 import type {
 	BoxPortArgs,
 	BoxPortOp,
@@ -14,6 +17,7 @@ import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
 import type { CodexSelection } from "../adapters/codex-subscription-runtime";
 import type { McpCatalogEntry } from "../services/mcp-tools";
 import type { SubagentToolDeps } from "../services/subagent-tools";
+import type { TurnMemory } from "../services/turn-memory";
 import type { TurnBoxTurnSession } from "./turn-box-client";
 import { type TurnPorts, TurnPortUnavailable } from "./turn-ports";
 
@@ -364,7 +368,7 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		},
 
 		// Decisions (docs/turn-runner-boxes.md, "Whole turn on a box"):
-		// - memory is off on a box (it reads the database and clones a repo onto the VM);
+		// - helpers' memory: helpers never run on a box;
 		// - a push card answered while the turn runs gets no notice from a
 		//   box (the edge-written push tools do not exist yet either);
 		// - the workspace is prepared by the edge's vm/ensure (box-runner
@@ -407,7 +411,15 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 				close: async () => undefined,
 			};
 		},
-		turnMemory: async () => null,
+		// Memory: the edge reads and writes it on this chat (boxTurnMemory).
+		turnMemory: (async (
+			owner: { id: string; userId: string },
+			options: { wording?: string; writer?: string } = {},
+		) => {
+			ownUser(owner.userId);
+			ownSession(owner.id);
+			return boxTurnMemory(call, options);
+		}) as unknown as TurnPorts["turnMemory"],
 		subagentMemory: async () => null,
 		withPushResultNotices: async () => null,
 		deferredApiTurnWorkspace: unavailable("deferredApiTurnWorkspace"),
@@ -552,4 +564,126 @@ export function boxSubagentToolDeps(
 		saveSidekick: unavailable("saveSidekick"),
 		retireSidekick: unavailable("retireSidekick"),
 	} as Partial<SubagentToolDeps>;
+}
+
+/**
+ * Cross-chat memory on a box (docs/turn-runner-boxes.md, "Memory on a box"):
+ * every operation is the edge's (`memory` port, turn-box-memory-port.ts) on
+ * this turn's own chat and VM; here only the recalled parts are added to the
+ * current request. Memory never fails a turn: a failed call degrades to none.
+ */
+export async function boxTurnMemory(
+	call: <T>(op: BoxPortOp, args: unknown) => Promise<T>,
+	options: { readonly wording?: string; readonly writer?: string },
+): Promise<TurnMemory | null> {
+	const base = {
+		...(options.wording ? { wording: options.wording } : {}),
+		...(options.writer ? { writer: options.writer } : {}),
+	};
+	const memory = <T>(op: string, args: Record<string, unknown> = {}) =>
+		call<T>("memory", { ...base, op, ...args });
+	const quiet = <T>(work: Promise<T>, fallback: T) =>
+		work.catch((error: unknown) => {
+			console.warn("Memory is unavailable for this box step.", {
+				message: error instanceof Error ? error.message.slice(0, 200) : "",
+			});
+			return fallback;
+		});
+	const init = await quiet(
+		memory<{ mode: TurnMemory["mode"]; instructions: string } | null>("init"),
+		null,
+	);
+	if (!init) return null;
+	const tokens: string[] = [];
+	const parts: TurnMemory["memoryParts"] = async (
+		messages,
+		items,
+		workspace,
+	) => {
+		let at = -1;
+		for (let index = messages.length - 1; index >= 0; index--)
+			if (isUserRequestMessage(items, messages[index] as ModelMessage)) {
+				at = index;
+				break;
+			}
+		if (at < 0) return null;
+		const current = messages[at] as ModelMessage;
+		if (attachedMemory([current]).length) return null;
+		// What the edge needs: the memory already shown, the request's text
+		// (no image or file bytes) and the person's own messages.
+		const shown = messages.filter(
+			(message, index) => index !== at && attachedMemory([message]).length,
+		);
+		const request = {
+			...current,
+			content: Array.isArray(current.content)
+				? (current.content as { type: string }[]).filter(
+						(part) => part.type === "text",
+					)
+				: current.content,
+		} as ModelMessage;
+		const found = await memory<{
+			parts: string[];
+			recall: NonNullable<
+				Awaited<ReturnType<TurnMemory["memoryParts"]>>
+			>["recall"];
+		} | null>("parts", {
+			messages: [...shown, request],
+			items: items.filter((item) => item.kind === "userMessage"),
+			cwd: (await workspace()).cwd,
+		});
+		return found ? { at, parts: found.parts, recall: found.recall } : null;
+	};
+	return {
+		mode: init.mode,
+		instructions: init.instructions,
+		prepareVm: async (workspace, beforeVm) => {
+			const minted = await quiet(
+				memory<{ tokens: string[] }>("prepareVm", { vm: workspace.vm }),
+				{ tokens: [] },
+			);
+			for (const token of minted.tokens) {
+				tokens.push(token);
+				beforeVm?.(token);
+			}
+		},
+		vmTokens: () => tokens,
+		releaseVm: async (workspace) => {
+			const scrub = tokens.length > 0;
+			tokens.length = 0;
+			await quiet(
+				memory("releaseVm", { vm: workspace?.vm ?? null, scrub }),
+				null,
+			);
+		},
+		memoryParts: (messages, items, workspace) =>
+			quiet(parts(messages, items, workspace), null),
+		attach: async (messages, items, workspace) => {
+			const found = await quiet(parts(messages, items, workspace), null);
+			if (!found) return { messages, recall: null };
+			if (!found.parts.length) return { messages, recall: found.recall };
+			const next = [...messages];
+			next[found.at] = withMemoryParts(
+				messages[found.at] as { role: "user"; content: string },
+				[...found.parts],
+			) as ModelMessage;
+			return { messages: next, recall: found.recall };
+		},
+		recordSaved: async (items, turnId) => {
+			let user = items.length - 1;
+			while (user >= 0 && items[user]?.kind !== "userMessage") user--;
+			if (user < 0) return [...items];
+			const tail = await quiet(
+				memory<SessionItem[] | null>("recordSaved", {
+					items: items.slice(user),
+				}),
+				null,
+			);
+			void turnId;
+			return tail ? [...items.slice(0, user), ...tail] : [...items];
+		},
+		// The save hook runs after finalize, where the box's port calls are no
+		// longer lease-checked: the edge queues it then (turn-box-edge-work.ts).
+		afterTurn: async () => undefined,
+	};
 }

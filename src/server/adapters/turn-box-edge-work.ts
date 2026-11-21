@@ -83,6 +83,23 @@ export async function afterBoxTurnSettled(
 				publishCommitted(turn, owner, input.items, deps),
 			);
 		if (input.state !== "completed") return;
+		// The memory save hook (runApiTurn's memory.afterTurn): after finalize
+		// the box's own port calls are no longer lease-checked, so it is here.
+		await run("memory", async () => {
+			if (owner.parentSessionId) return;
+			const { harnessVariantForUser } = await import("./dev-eval-users");
+			const variant = await harnessVariantForUser(turn.user_id);
+			const { memoryPort } = await import("./turn-box-memory-port");
+			await memoryPort(
+				turn,
+				{
+					op: "afterTurn",
+					wording: variant.memoryWording,
+					writer: variant.memoryWriter,
+				},
+				{ machines: deps.machines },
+			);
+		});
 		await run("report", () =>
 			recordCloudProjectReport(owner, turn.id, input.items),
 		);
