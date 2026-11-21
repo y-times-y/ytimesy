@@ -236,7 +236,10 @@ async function scenario(input: {
 						: {}),
 					cwd: `${input.shell}/repo`,
 					env: {
-						PATH: process.env.PATH ?? "/usr/bin:/bin",
+						// Its own sudo refuses: the VM's setup (linking commands
+						// into /usr/local/bin, installing packages) must never
+						// reach the machine running the tests.
+						PATH: `${input.shell}/shim:${process.env.PATH ?? "/usr/bin:/bin"}`,
 						HOME: `${input.shell}/home`,
 					},
 					encoding: "utf8",
@@ -735,6 +738,10 @@ describe("every product tool on a box (a real shell as the VM, the database bloc
 		const dir = mkdtempSync(join(tmpdir(), "box-tool-"));
 		mkdirSync(join(dir, "repo"));
 		mkdirSync(join(dir, "home"));
+		mkdirSync(join(dir, "shim"));
+		writeFileSync(join(dir, "shim", "sudo"), "#!/bin/sh\nexit 1\n", {
+			mode: 0o755,
+		});
 		writeFileSync(join(dir, "repo", "README.md"), "# Probe\nhello\n");
 		writeFileSync(join(dir, "repo", "a.txt"), "x\n");
 		const s = await scenario({
