@@ -514,6 +514,46 @@ describe("helper launch notices", () => {
 		expect(html).toContain('data-kind="agentCall" data-status="failed"');
 	});
 
+	it("folds a run of finished helpers into one row, and keeps one or a failed helper whole", () => {
+		const done = (id: string, status = "done") =>
+			({
+				id,
+				parentSessionId: "root",
+				title: `Task ${id}`,
+				label: id,
+				depth: 1,
+				status,
+				prompt: "",
+				placement: "fresh",
+				access: "read_write",
+				summary: `Report of ${id}.`,
+				harnessId: "api",
+				listedModelId: null,
+				createdAt: new Date(1_000).toISOString(),
+				updatedAt: new Date(2_000).toISOString(),
+				items: [],
+				turnStatus: "completed",
+			}) as AgentTaskActivity;
+		const many = render(
+			[user("ask"), answer("a1", "The helpers are done.")],
+			"completed",
+			[done("h1"), done("h2"), done("h3")],
+		);
+		expect(many).toMatch(/3 helpers finished<\/summary>/);
+		// The starts fold into their own row.
+		expect(many).toMatch(/3 helpers started<\/summary>/);
+		expect(many.match(/class="helper-launches"/g)).toHaveLength(2);
+		// The cards are inside the closed disclosure, not in the chat's flow.
+		expect(many).not.toContain('data-verb="finished"');
+		const one = render(
+			[user("ask"), answer("a1", "One helper.")],
+			"completed",
+			[done("h1")],
+		);
+		expect(one).not.toContain("helpers finished");
+		expect(one).toContain('data-verb="finished"');
+	});
+
 	it("retains each original launch row inside the disclosure", () => {
 		const html = renderTimeline(
 			[user("ask"), launch("Fix parser"), launch("Fix formatter")],

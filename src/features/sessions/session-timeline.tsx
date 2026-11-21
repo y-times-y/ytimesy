@@ -353,22 +353,43 @@ export function SessionTimeline({
 
 	// Each row of the list, in order; the list mounts only those near the view.
 	const entries: TranscriptEntry[] = [];
-	const launchNotices: Omit<TranscriptEntry, "follows">[] = [];
+	type Quiet = {
+		readonly group: "started" | "finished";
+		readonly entry: Omit<TranscriptEntry, "follows">;
+	};
+	const quiet: Quiet[] = [];
 	const append = (entry: Omit<TranscriptEntry, "follows">) =>
 		entries.push({ ...entry, follows: entries.at(-1)?.kind });
-	const flushLaunches = () => {
-		const entry = launchNoticeEntry(launchNotices.splice(0));
-		if (entry) append(entry);
+	// Runs of helper starts, and runs of finished helpers, fold into one row
+	// each, so a burst of helpers never pushes the reply out of view.
+	const flushQuiet = () => {
+		const queued = quiet.splice(0);
+		for (let from = 0; from < queued.length; ) {
+			let to = from;
+			while (queued[to + 1]?.group === queued[from]?.group) to += 1;
+			const run = queued.slice(from, to + 1);
+			const entry = helperRunEntry(
+				run.map((item) => item.entry),
+				run[0]?.group ?? "started",
+			);
+			if (entry) append(entry);
+			from = to + 1;
+		}
 	};
 	const add = (entry: Omit<TranscriptEntry, "follows">) => {
-		flushLaunches();
+		flushQuiet();
 		append(entry);
 	};
 	const queueLaunch = (entry: Omit<TranscriptEntry, "follows">) =>
-		launchNotices.push(entry);
+		quiet.push({ group: "started", entry });
 	const addHelperStart = (task: AgentTaskActivity) => {
 		const addStart = task.status === "failed" ? add : queueLaunch;
 		addStart(helperStartEntry(task, stableHelperLines));
+	};
+	const addHelperFinish = (task: AgentTaskActivity) => {
+		const entry = helperFinishEntry(task, stableHelperLines);
+		if (task.status === "failed") add(entry);
+		else quiet.push({ group: "finished", entry });
 	};
 	for (const row of rows) {
 		const rowId = row.kind === "item" ? row.item.id : row.id;
@@ -453,12 +474,12 @@ export function SessionTimeline({
 		for (const { task } of helperMarks.filter((mark) =>
 			rowHas(row, mark.finish),
 		))
-			add(helperFinishEntry(task, stableHelperLines));
+			addHelperFinish(task);
 	}
 	for (const { task } of helperMarks.filter((mark) => !mark.start))
 		addHelperStart(task);
 	for (const { task } of helperMarks.filter((mark) => mark.finish === null))
-		add(helperFinishEntry(task, stableHelperLines));
+		addHelperFinish(task);
 	if (showTurnWorking(items, turnStatus))
 		add({
 			key: "working",
@@ -530,7 +551,7 @@ export function SessionTimeline({
 			estimate: 220,
 			content: trailing,
 		});
-	flushLaunches();
+	flushQuiet();
 
 	return (
 		<TimelineProviders
@@ -676,8 +697,9 @@ function isLaunchNotice(row: TimelineRow) {
 	return !!call && !call.explore && !call.report;
 }
 
-function launchNoticeEntry(
+function helperRunEntry(
 	notices: readonly Omit<TranscriptEntry, "follows">[],
+	group: "started" | "finished",
 ): Omit<TranscriptEntry, "follows"> | undefined {
 	const first = notices[0];
 	if (!first || notices.length === 1) return first;
@@ -693,7 +715,7 @@ function launchNoticeEntry(
 						strokeWidth={1.5}
 						className="session-activity-chevron"
 					/>
-					{`${notices.length} helpers started`}
+					{`${notices.length} helpers ${group}`}
 				</summary>
 				<div>
 					{notices.map((notice) => (
