@@ -210,6 +210,7 @@ import {
 	deferredToolSurface,
 	loadedDeferredTools,
 } from "../services/deferred-tools";
+import { describeSecretTools } from "../services/describe-secret-tool";
 import { environmentSetupTools } from "../services/environment-setup-tool";
 import {
 	FIRST_REQUEST_WORKSPACE_WAIT_MS,
@@ -564,6 +565,7 @@ async function runApiTurnAttempt(
 		loadAgentProjectSecrets,
 		saveAccountWideSecret,
 		saveVisibleProjectSecret,
+		setSecretDescription,
 		writeAgentProjectSecrets,
 		startQueuedUserTurn,
 		commitSessionTurn,
@@ -1970,6 +1972,19 @@ async function runApiTurnAttempt(
 										...secret,
 									});
 							},
+						})
+					: {},
+			describeSecret:
+				rootChat && owner.projectId && receivesSecrets
+					? describeSecretTools({
+							values: () => redact,
+							save: ({ name, description }) =>
+								setSecretDescription({
+									userId: owner.userId,
+									projectId: owner.projectId as string,
+									name,
+									description,
+								}),
 						})
 					: {},
 			pushApproval:
@@ -3987,6 +4002,8 @@ function turnTools(input: {
 	pushApproval: ToolSet;
 	/** save_project_secret, in a person's root chats in a project. */
 	saveSecret: ToolSet;
+	/** describe_secret, in a person's root chats in a project that receives secrets. */
+	describeSecret: ToolSet;
 	/** canvas, in a person's root chats. */
 	canvas: ToolSet;
 }) {
@@ -4017,6 +4034,7 @@ function turnTools(input: {
 					...input.environmentSetup,
 					...input.pushApproval,
 					...input.saveSecret,
+					...input.describeSecret,
 				},
 				redact,
 			),

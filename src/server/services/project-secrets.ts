@@ -170,7 +170,11 @@ export async function loadAgentProjectSecrets(
 			({ name }) => !ownNames.has(name),
 		),
 	];
-	const names = all.map(({ name, kind }) => ({ name, kind }));
+	const names = all.map(({ name, kind, description }) => ({
+		name,
+		kind,
+		description,
+	}));
 	const stored = all.filter((secret) => secret.kind !== "build");
 	if (!stored.length)
 		return { envFile: agentSecretsEnvFile([]), redact: [], names };
@@ -393,3 +397,6 @@ export async function removeAccountWideSecret(input: {
 export function listAccountWideSecrets(userId: string) {
 	return listAccountSecrets(userId);
 }
+
+/** Saves what an agent learned by testing a secret (describe_secret); see the adapter. */
+export { setSecretDescription } from "../adapters/project-secrets";

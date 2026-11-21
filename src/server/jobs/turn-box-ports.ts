@@ -23,6 +23,7 @@ export const BOX_PORTS_UNAVAILABLE = [
 	// Post-step GitHub publish/PR handoff and the VM: need the edge's Freestyle/GitHub credentials.
 	"saveAccountWideSecret",
 	"saveVisibleProjectSecret",
+	"setSecretDescription",
 	// Claude Code box tool grants and its subscription are never run on a box (Codex and Grok are: stage 3).
 	"turnBoxToolIdentity",
 	"recordTurnBoxToolIdentity",
@@ -407,6 +408,7 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		},
 		saveAccountWideSecret: unavailable("saveAccountWideSecret"),
 		saveVisibleProjectSecret: unavailable("saveVisibleProjectSecret"),
+		setSecretDescription: unavailable("setSecretDescription"),
 		turnBoxToolIdentity: unavailable("turnBoxToolIdentity"),
 		recordTurnBoxToolIdentity: unavailable("recordTurnBoxToolIdentity"),
 		clearTurnBoxToolIdentity: unavailable("clearTurnBoxToolIdentity"),

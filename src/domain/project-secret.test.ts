@@ -57,6 +57,33 @@ describe("project secrets", () => {
 		expect(text).toContain("screenshots are not redacted");
 	});
 
+	it("shows what a tested secret is, and asks for the rest to be identified only when the tool is offered", () => {
+		const secrets = [
+			{
+				name: "AWS_ACCESS_KEY_ID",
+				kind: "runtime" as const,
+				description:
+					"AWS user deploy-bot in us-east-2; can launch EC2, not IAM.",
+			},
+			{ name: "MYSTERY_KEY", kind: "runtime" as const },
+		];
+		const without = projectSecretsInstructions(secrets);
+		expect(without).toContain(
+			"AWS_ACCESS_KEY_ID (AWS user deploy-bot in us-east-2; can launch EC2, not IAM.)",
+		);
+		expect(without).not.toContain("Not yet identified");
+		const withTool = projectSecretsInstructions(secrets, {
+			describeTool: true,
+		});
+		expect(withTool).toContain("Not yet identified: MYSTERY_KEY.");
+		expect(withTool).not.toContain("Not yet identified: AWS_ACCESS_KEY_ID");
+		expect(withTool).toContain("describe_secret");
+		// Nothing left to identify: no instruction.
+		expect(
+			projectSecretsInstructions([secrets[0] as never], { describeTool: true }),
+		).not.toContain("Not yet identified");
+	});
+
 	it("redacts common encodings of a runtime value", () => {
 		const secret = "sk_live_51HxQz9Ab/Cd+Ef";
 		const bytes = Buffer.from(secret);

@@ -82,6 +82,8 @@ export type PublicProjectSecret = {
 	readonly kind: ProjectSecretKind;
 	readonly hint: string;
 	readonly updatedAt: string;
+	/** What an agent that tested it saved: provider, identity, what it can do. */
+	readonly description?: string;
 	/** Imported from a local .env and not yet reviewed (saved again or removed). */
 	readonly imported?: true;
 };
@@ -148,7 +150,13 @@ export function agentSecretsEnvFile(
 export type AgentSecretName = {
 	readonly name: string;
 	readonly kind: ProjectSecretKind;
+	/** What it is and what it can do, saved by an agent that tested it (describe_secret). */
+	readonly description?: string | null;
 };
+
+/** The tool that saves what a tested secret is and can do. */
+export const DESCRIBE_SECRET_TOOL = "describe_secret";
+export const SECRET_DESCRIPTION_LIMIT = 500;
 
 /**
  * Tells the agent which project secrets exist and how each reaches it, by name
@@ -156,13 +164,21 @@ export type AgentSecretName = {
  */
 export function projectSecretsInstructions(
 	secrets: readonly AgentSecretName[],
+	options: { readonly describeTool?: boolean } = {},
 ) {
 	if (!secrets.length) return "";
 	const listed = (kind: ProjectSecretKind) =>
 		secrets
 			.filter((secret) => secret.kind === kind)
-			.map((secret) => secret.name)
+			.map((secret) =>
+				secret.description
+					? `${secret.name} (${secret.description})`
+					: secret.name,
+			)
 			.join(", ");
+	const unverified = secrets
+		.filter((secret) => secret.kind !== "build" && !secret.description)
+		.map((secret) => secret.name);
 	const lines = [
 		listed("runtime") &&
 			`Runtime secrets (their values are replaced with ${REDACTED} in tool output, and commits containing them are refused): ${listed("runtime")}.`,
@@ -170,7 +186,7 @@ export function projectSecretsInstructions(
 		listed("build") &&
 			`Build secrets (environment setup only, not set for you): ${listed("build")}.`,
 	].filter(Boolean);
-	return `Project secrets are set in every command's environment. ${lines.join(" ")} Reference them by name (for example "$NAME"); never print, echo or write their values to files, and never display them on screen: screenshots are not redacted.`;
+	return `Project secrets are set in every command's environment. ${lines.join(" ")} Reference them by name (for example "$NAME"); never print, echo or write their values to files, and never display them on screen: screenshots are not redacted.${options.describeTool && unverified.length ? ` Not yet identified: ${unverified.join(", ")}. Before you rely on one of these, or ask the user for a credential, identify it (its name, the first four characters and the length of its value, how this repository uses it), test it from the shell with that service's read-only whoami or list call (look it up in the service's documentation), then save what you learned with ${DESCRIBE_SECRET_TOOL}: the service, whose identity it is, what it can do, how you tested it. Never put a value in the description.` : ""}`;
 }
 
 /**

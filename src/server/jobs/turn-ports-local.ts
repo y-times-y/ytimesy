@@ -63,6 +63,7 @@ import {
 	loadAgentProjectSecrets,
 	saveAccountWideSecret,
 	saveVisibleProjectSecret,
+	setSecretDescription,
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
 import { withPushResultNotices } from "../services/push-approval";
@@ -138,6 +139,7 @@ export const localTurnPorts: TurnPorts = {
 	loadAgentProjectSecrets: lazy(() => loadAgentProjectSecrets),
 	saveAccountWideSecret: lazy(() => saveAccountWideSecret),
 	saveVisibleProjectSecret: lazy(() => saveVisibleProjectSecret),
+	setSecretDescription: lazy(() => setSecretDescription),
 	writeAgentProjectSecrets: lazy(() => writeAgentProjectSecrets),
 	startQueuedUserTurn: lazy(() => startQueuedUserTurn),
 	commitSessionTurn: lazy(() => commitSessionTurn),

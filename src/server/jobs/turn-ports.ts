@@ -64,6 +64,7 @@ import type {
 	loadAgentProjectSecrets,
 	saveAccountWideSecret,
 	saveVisibleProjectSecret,
+	setSecretDescription,
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
 import type { withPushResultNotices } from "../services/push-approval";
@@ -156,6 +157,7 @@ export interface TurnPorts {
 	readonly loadAgentProjectSecrets: typeof loadAgentProjectSecrets;
 	readonly saveAccountWideSecret: typeof saveAccountWideSecret;
 	readonly saveVisibleProjectSecret: typeof saveVisibleProjectSecret;
+	readonly setSecretDescription: typeof setSecretDescription;
 	readonly writeAgentProjectSecrets: typeof writeAgentProjectSecrets;
 	readonly startQueuedUserTurn: typeof startQueuedUserTurn;
 	readonly commitSessionTurn: typeof commitSessionTurn;

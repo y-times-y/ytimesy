@@ -33,7 +33,7 @@ export async function loadProjectSecretsForOwner(
 	projectId: string,
 ): Promise<readonly StoredProjectSecret[]> {
 	const result = await database().query(
-		`select s.id, s.name, s.kind, s.hint, s.updated_at as "updatedAt",
+		`select s.id, s.name, s.kind, s.hint, s.description, s.updated_at as "updatedAt",
 		        s.imported_at is not null as imported,
 		        s.encrypted_iv as iv, s.encrypted_tag as tag,
 		        s.encrypted_ciphertext as ciphertext, s.encrypted_version as version
@@ -73,6 +73,7 @@ export async function saveProjectSecretForOwner(input: {
 		       encrypted_ciphertext = excluded.encrypted_ciphertext,
 		       encrypted_version = excluded.encrypted_version,
 		       imported_at = excluded.imported_at,
+		       description = null,
 		       updated_at = now()
 		 returning id, name, kind, hint, updated_at as "updatedAt",
 		           imported_at is not null as imported`,
@@ -113,6 +114,7 @@ function publicSecret(row: {
 	name: string;
 	kind: ProjectSecretKind;
 	hint: string;
+	description?: string | null;
 	updatedAt: Date | string;
 	imported?: boolean;
 }): PublicProjectSecret {
@@ -121,6 +123,7 @@ function publicSecret(row: {
 		name: row.name,
 		kind: row.kind,
 		hint: row.hint,
+		...(row.description ? { description: row.description } : {}),
 		...(row.imported ? { imported: true } : {}),
 		updatedAt:
 			row.updatedAt instanceof Date
@@ -134,6 +137,7 @@ function storedSecret(row: {
 	name: string;
 	kind: ProjectSecretKind;
 	hint: string;
+	description?: string | null;
 	updatedAt: Date | string;
 	imported?: boolean;
 	iv: string;
@@ -157,7 +161,7 @@ export async function loadAccountSecrets(
 	userId: string,
 ): Promise<readonly StoredProjectSecret[]> {
 	const result = await database().query(
-		`select id, name, kind, hint, updated_at as "updatedAt",
+		`select id, name, kind, hint, description, updated_at as "updatedAt",
 		        encrypted_iv as iv, encrypted_tag as tag,
 		        encrypted_ciphertext as ciphertext, encrypted_version as version
 		 from account_secret
@@ -188,6 +192,7 @@ export async function saveAccountSecret(input: {
 		       encrypted_tag = excluded.encrypted_tag,
 		       encrypted_ciphertext = excluded.encrypted_ciphertext,
 		       encrypted_version = excluded.encrypted_version,
+		       description = null,
 		       updated_at = now()
 		 returning id, name, kind, hint, updated_at as "updatedAt"`,
 		[
@@ -224,4 +229,29 @@ export async function listAccountSecrets(
 		[userId],
 	);
 	return result.rows.map(publicSecret);
+}
+
+/**
+ * Saves what an agent learned by testing a secret (never a value). The
+ * project's own secret of that name wins over an account-wide one, as when the
+ * turn loads them. Returns where it was saved, or null when there is no such secret.
+ */
+export async function setSecretDescription(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly name: string;
+	readonly description: string;
+}): Promise<"project" | "account" | null> {
+	const own = await database().query(
+		`update project_secret s set description = $4
+		 from project p
+		 where s.project_id = p.id and p.id = $1 and p.user_id = $2 and s.name = $3`,
+		[input.projectId, input.userId, input.name, input.description],
+	);
+	if (own.rowCount) return "project";
+	const shared = await database().query(
+		"update account_secret set description = $3 where user_id = $1 and name = $2",
+		[input.userId, input.name, input.description],
+	);
+	return shared.rowCount ? "account" : null;
 }
