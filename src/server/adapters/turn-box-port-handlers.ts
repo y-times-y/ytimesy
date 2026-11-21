@@ -283,6 +283,12 @@ async function handle(
 				call.args,
 				{ ...(deps.machines ? { machines: deps.machines } : {}) },
 			);
+		case "machineGit":
+			return (await import("./turn-box-machine-git-port")).machineGitPort(
+				turn,
+				call.args,
+				{ ...(deps.machines ? { machines: deps.machines } : {}) },
+			);
 		case "commandReceipt": {
 			const receipts = await import("./agent-task-command-receipts");
 			const requestId = call.args.requestId ?? "";

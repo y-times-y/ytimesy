@@ -1234,7 +1234,10 @@ async function runApiTurnAttempt(
 		/** Told to the agent once, on its first tool result, when its machine was replaced. */
 		let workspaceNote: string | null = null;
 		// Readers' commands run as another user without the network; evaluations never reach GitHub.
-		machineGit = receivesSecrets && !evaluation ? machineGitStep(owner) : null;
+		machineGit =
+			receivesSecrets && !evaluation
+				? (ports.machineGit ?? machineGitStep)(owner)
+				: null;
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
 		let handoffWritten: Promise<void> | undefined;

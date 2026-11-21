@@ -255,6 +255,8 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 						"pushNotices",
 						"commandReceipt",
 						"canvasRevision",
+						// Plain git on the VM: turn-box-machine-git-port.test.ts.
+						"machineGit",
 					].includes(op),
 			),
 		).toEqual([]);

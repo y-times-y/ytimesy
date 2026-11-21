@@ -689,6 +689,17 @@ Still not on a box: failover to another connection mid-turn (a failing
 route ends the turn with its own message) and the @mention note
 (`withMentionNote` reads sessions; it degrades to no note).
 
+- **Plain git on the VM.** The edge holds the git proxy's signing secret, so
+  the `machineGit` port mints the step's machine token and sets git up on the
+  chat's own VM (turn-box-machine-git-port.ts); the box only gets the token
+  back to redact it. The box releases it at the end of a step that set it up;
+  after finalize that release is refused (no lease), so the edge also releases
+  it (scrub and revoke every token of the chat) when the turn settles.
+- **No per-turn state on the edge between requests.** A Worker cannot settle
+  a promise created by a request that has ended, so the memory port builds
+  the turn's memory in every request instead of keeping it (it once failed
+  recall with a 503 for exactly that reason).
+
 ## Sizing
 
 `t3.small` (2 vCPU, 2 GB, ~$15/month + ~$8 disk) fits roughly 8-10 concurrent

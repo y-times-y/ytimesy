@@ -155,4 +155,6 @@ export const localTurnPorts: TurnPorts = {
 	// The tools run here, with the database and the secret values.
 	remoteTool: undefined,
 	savedCanvasRevision: undefined,
+	// Git is set up here, with the proxy's secret.
+	machineGit: undefined,
 };

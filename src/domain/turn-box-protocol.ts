@@ -359,6 +359,15 @@ export const boxPortArgs = {
 		items: items.optional(),
 	}),
 	/**
+	 * Plain git on the turn's own VM (turn-box-machine-git-port.ts): the edge
+	 * mints the step's git proxy token and sets git up, or removes and
+	 * revokes it. `vm` must be the chat's own.
+	 */
+	machineGit: z.object({
+		op: z.enum(["prepareVm", "releaseVm"]),
+		vm: portText.nullable().optional(),
+	}),
+	/**
 	 * A tool the edge runs whole for the turn's own chat (turn-box-tool-port.ts):
 	 * saving or describing a secret, asking for a push approval. `cwd` is the
 	 * checkout path the box read (for counting the push's commits).

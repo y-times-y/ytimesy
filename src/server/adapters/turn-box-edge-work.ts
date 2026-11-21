@@ -90,6 +90,16 @@ export async function afterBoxTurnSettled(
 				{ machines: deps.machines },
 			);
 		});
+		// The step's git proxy token, likewise.
+		await run("machine-git-release", async () => {
+			if (owner.parentSessionId) return;
+			const { machineGitPort } = await import("./turn-box-machine-git-port");
+			await machineGitPort(
+				turn,
+				{ op: "releaseVm", vm: owner.providerRef ?? null },
+				{ machines: deps.machines },
+			);
+		});
 		if (input.publish)
 			await run("publish", () =>
 				publishCommitted(turn, owner, input.items, deps),

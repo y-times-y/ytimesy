@@ -15,6 +15,7 @@ import type {
 import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
 import type { CodexSelection } from "../adapters/codex-subscription-runtime";
+import type { MachineGitStep } from "../services/machine-git";
 import type { McpCatalogEntry } from "../services/mcp-tools";
 import type { RemoteCommandReceipts } from "../services/remote-command-receipts";
 import type { SubagentToolDeps } from "../services/subagent-tools";
@@ -376,6 +377,7 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		//   installs boxApiTurnWorkspace; this placeholder refuses).
 		subagentToolDeps: boxSubagentToolDeps(call),
 		savedCanvasRevision: (title) => call<number>("canvasRevision", { title }),
+		machineGit: () => boxMachineGit(call),
 		remoteTool: (name, input, cwd) =>
 			call("remoteTool", { tool: name, input, ...(cwd ? { cwd } : {}) }),
 		// The edge lists the turn's MCP tools once and makes each call.
@@ -733,5 +735,36 @@ export function boxCommandReceipts(
 					unknown,
 				][],
 			),
+	};
+}
+
+/**
+ * Plain git on the VM for a turn on a box: the edge mints and sets up the
+ * step's git proxy token (`machineGit` port, turn-box-machine-git-port.ts)
+ * and answers it for redaction. Never fails a turn. A release after
+ * finalize is refused (no lease); the edge releases when the turn settles.
+ */
+export function boxMachineGit(
+	call: <T>(op: BoxPortOp, args: unknown) => Promise<T>,
+): MachineGitStep {
+	/** Whether this step set git up: a step that did not has nothing to release. */
+	let prepared = false;
+	return {
+		prepareVm: async (workspace, beforeVm) => {
+			prepared = true;
+			const minted = await call<{ tokens: string[] } | null>("machineGit", {
+				op: "prepareVm",
+				vm: workspace.vm,
+			}).catch(() => null);
+			for (const token of minted?.tokens ?? []) beforeVm?.(token);
+		},
+		releaseVm: async (workspace) => {
+			if (!prepared) return;
+			prepared = false;
+			await call("machineGit", {
+				op: "releaseVm",
+				vm: workspace?.vm ?? null,
+			}).catch(() => undefined);
+		},
 	};
 }

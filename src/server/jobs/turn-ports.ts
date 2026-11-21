@@ -59,6 +59,7 @@ import type { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import type { ApiModelAccess } from "../services/api-agent-runtime";
 import type { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
 import type { ensureConversationCodePoint } from "../services/conversation-recovery";
+import type { MachineGitStep } from "../services/machine-git";
 import type { McpConnection } from "../services/mcp-tools";
 import type { recordCloudProjectReport } from "../services/project-knowledge";
 import type {
@@ -193,6 +194,15 @@ export interface TurnPorts {
 	 * record the box must not hold (save/describe a secret, push approval) on
 	 * the edge (turn-box-tool-port.ts). Unset in the Durable Object.
 	 */
+	/**
+	 * Set on a box: plain git on the VM through the edge, which holds the git
+	 * proxy's secret (turn-box-machine-git-port.ts). Unset in the Durable
+	 * Object, which sets git up itself (machine-git.ts).
+	 */
+	readonly machineGit?: (owner: {
+		userId: string;
+		id: string;
+	}) => MachineGitStep | null;
 	/** Set on a box: a canvas's highest saved revision, read by the edge (canvas-revisions.ts). */
 	readonly savedCanvasRevision?: (title: string) => Promise<number>;
 	readonly remoteTool?: (
