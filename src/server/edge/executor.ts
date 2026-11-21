@@ -105,6 +105,7 @@ import { withConversationTurnCoordinator } from "../adapters/conversation-turn-c
 import { database } from "../adapters/database";
 import { withDatabaseScope } from "../adapters/database-scope";
 import { registerAuthEmailBinding } from "../adapters/email";
+import { withExecutorBinding } from "../adapters/executor-fetch";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
@@ -1987,7 +1988,7 @@ const CRON_EVERY_MINUTES: Readonly<Record<string, number>> = {
 	"archive-expiry": 360,
 };
 
-export default {
+const edgeExecutorWorker = {
 	async scheduled(
 		controller: ScheduledController,
 		env: EdgeExecutorEnvironment,
@@ -2118,7 +2119,7 @@ export default {
 		request: Request,
 		env: EdgeExecutorEnvironment,
 		ctx?: ExecutionContext,
-	) {
+	): Promise<Response> {
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
@@ -2439,7 +2440,20 @@ export default {
 				);
 			}
 			if (isTurnBoxEdgePath(new URL(request.url).pathname))
-				return await routeTurnBoxWorker(request, env);
+				// A box's turn coordinates with, and publishes to, its chat's
+				// object through this same Worker's realtime routes: in process,
+				// since a Worker cannot fetch its own public URL.
+				return await withExecutorBinding(
+					(input, init): Promise<Response> =>
+						(
+							edgeExecutorWorker.fetch as (
+								request: Request,
+								env: EdgeExecutorEnvironment,
+								ctx?: ExecutionContext,
+							) => Promise<Response>
+						)(new Request(input, init), env, ctx),
+					async () => routeTurnBoxWorker(request, env),
+				);
 			if (isClaudeCodeEdgePath(new URL(request.url).pathname))
 				return await routeClaudeCodeEdge(
 					request,
@@ -2548,3 +2562,4 @@ export default {
 		}
 	},
 };
+export default edgeExecutorWorker;
