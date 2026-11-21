@@ -646,7 +646,12 @@ export async function boxTurnMemory(
 		} | null>("parts", {
 			messages: [...shown, request],
 			items: items.filter((item) => item.kind === "userMessage"),
-			cwd: (await workspace()).cwd,
+			// The checkout may not be ready on a first request: the edge then
+			// skips the missing-path marks, as the Durable Object does.
+			...(await workspace().then(
+				(ready) => ({ cwd: ready.cwd }),
+				() => ({}),
+			)),
 		});
 		return found ? { at, parts: found.parts, recall: found.recall } : null;
 	};
@@ -664,12 +669,14 @@ export async function boxTurnMemory(
 			}
 		},
 		vmTokens: () => tokens,
+		// After finalize the box's port calls are no longer lease-checked, so
+		// the edge releases the clone's token when the turn settles
+		// (turn-box-edge-work.ts); a release earlier in the turn is tried here.
 		releaseVm: async (workspace) => {
 			const scrub = tokens.length > 0;
 			tokens.length = 0;
-			await quiet(
-				memory("releaseVm", { vm: workspace?.vm ?? null, scrub }),
-				null,
+			await memory("releaseVm", { vm: workspace?.vm ?? null, scrub }).catch(
+				() => undefined,
 			);
 		},
 		memoryParts: (messages, items, workspace) =>

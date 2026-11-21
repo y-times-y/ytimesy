@@ -128,7 +128,11 @@ export async function memoryPort(
 			return memory.memoryParts(
 				call.messages ?? [],
 				call.items ?? [],
-				async () => workspace(call.cwd ?? ""),
+				async () => {
+					if (call.cwd === undefined)
+						throw new Error("The checkout is not ready yet.");
+					return workspace(call.cwd);
+				},
 			);
 		case "recordSaved":
 			return memory ? memory.recordSaved(call.items ?? [], turn.id) : null;

@@ -78,6 +78,18 @@ export async function afterBoxTurnSettled(
 				});
 			}
 		};
+		// The memory clone's token: released (scrubbed from the chat's VM and
+		// revoked) however the turn ended; the box's own release came after
+		// its lease and was refused.
+		await run("memory-release", async () => {
+			if (owner.parentSessionId) return;
+			const { memoryPort } = await import("./turn-box-memory-port");
+			await memoryPort(
+				turn,
+				{ op: "releaseVm", vm: owner.providerRef ?? null, scrub: true },
+				{ machines: deps.machines },
+			);
+		});
 		if (input.publish)
 			await run("publish", () =>
 				publishCommitted(turn, owner, input.items, deps),
