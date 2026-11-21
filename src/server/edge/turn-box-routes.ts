@@ -492,7 +492,11 @@ export async function routeTurnBoxEdge(
 					"content-encoding": "gzip",
 					"cache-control": "no-store",
 				},
-			});
+				// The body is already gzip: without "manual" the Workers runtime
+				// compresses it again for the content-encoding header, and the
+				// box, decoding one layer, reads gzip bytes as JSON.
+				encodeBody: "manual",
+			} as ResponseInit);
 		}
 		if (path === TURN_BOX_PATHS.reserve) {
 			const input = reserveRequest.safeParse(body);
