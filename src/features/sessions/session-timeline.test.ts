@@ -480,6 +480,54 @@ const spawn: SessionItem = {
 	status: "completed",
 };
 
+describe("helper launch notices", () => {
+	const launch = (
+		id: string,
+		status: "completed" | "failed" = "completed",
+	) => ({
+		...spawn,
+		id: SessionItemId(id),
+		status,
+		input: JSON.stringify({ role: "writer", title: id }),
+	});
+
+	it("folds adjacent notices on first render without folding assistant text, single starts, or failures", () => {
+		const html = render(
+			[
+				user("ask"),
+				answer("progress", "I split the parser and formatter work."),
+				launch("Fix parser"),
+				launch("Fix formatter"),
+				answer("update", "Both changes are underway."),
+				launch("Add tests"),
+				launch("Failed launch", "failed"),
+			],
+			"running",
+		);
+		expect(html.match(/class="helper-launches"/g)).toHaveLength(1);
+		expect(html).toMatch(
+			/I split the parser and formatter work\.[\s\S]*2 helpers started<\/summary><\/details>[\s\S]*Both changes are underway/,
+		);
+		expect(html).not.toContain("Fix formatter");
+		expect(html).toContain("Add tests");
+		expect(html).toContain("Failed launch");
+		expect(html).toContain('data-kind="agentCall" data-status="failed"');
+	});
+
+	it("retains each original launch row inside the disclosure", () => {
+		const html = renderTimeline(
+			[user("ask"), launch("Fix parser"), launch("Fix formatter")],
+			"running",
+		);
+		expect(html).toMatch(
+			/2 helpers started[\s\S]*Fix parser[\s\S]*Fix formatter/,
+		);
+		expect(
+			html.match(/data-kind="agentCall" data-status="completed"/g),
+		).toHaveLength(2);
+	});
+});
+
 /** The "Worked" groups' HTML (nested <details> included), and what shows outside them. */
 function split(html: string) {
 	let worked = "";

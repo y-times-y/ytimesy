@@ -353,12 +353,28 @@ export function SessionTimeline({
 
 	// Each row of the list, in order; the list mounts only those near the view.
 	const entries: TranscriptEntry[] = [];
-	const add = (entry: Omit<TranscriptEntry, "follows">) =>
+	const launchNotices: Omit<TranscriptEntry, "follows">[] = [];
+	const append = (entry: Omit<TranscriptEntry, "follows">) =>
 		entries.push({ ...entry, follows: entries.at(-1)?.kind });
+	const flushLaunches = () => {
+		const entry = launchNoticeEntry(launchNotices.splice(0));
+		if (entry) append(entry);
+	};
+	const add = (entry: Omit<TranscriptEntry, "follows">) => {
+		flushLaunches();
+		append(entry);
+	};
+	const queueLaunch = (entry: Omit<TranscriptEntry, "follows">) =>
+		launchNotices.push(entry);
+	const addHelperStart = (task: AgentTaskActivity) => {
+		const addStart = task.status === "failed" ? add : queueLaunch;
+		addStart(helperStartEntry(task, stableHelperLines));
+	};
 	for (const row of rows) {
 		const rowId = row.kind === "item" ? row.item.id : row.id;
+		const addRow = isLaunchNotice(row) ? queueLaunch : add;
 		if (!startsHelper(row))
-			add({
+			addRow({
 				key:
 					rowKeys.get(row) ??
 					(row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`),
@@ -433,14 +449,14 @@ export function SessionTimeline({
 		for (const { task } of helperMarks.filter((mark) =>
 			rowHas(row, mark.start),
 		))
-			add(helperStartEntry(task, stableHelperLines));
+			addHelperStart(task);
 		for (const { task } of helperMarks.filter((mark) =>
 			rowHas(row, mark.finish),
 		))
 			add(helperFinishEntry(task, stableHelperLines));
 	}
 	for (const { task } of helperMarks.filter((mark) => !mark.start))
-		add(helperStartEntry(task, stableHelperLines));
+		addHelperStart(task);
 	for (const { task } of helperMarks.filter((mark) => mark.finish === null))
 		add(helperFinishEntry(task, stableHelperLines));
 	if (showTurnWorking(items, turnStatus))
@@ -514,6 +530,7 @@ export function SessionTimeline({
 			estimate: 220,
 			content: trailing,
 		});
+	flushLaunches();
 
 	return (
 		<TimelineProviders
@@ -650,6 +667,43 @@ function sentMessageId(items: readonly SessionItem[]) {
 
 /** The row above a chat's loaded turns while it holds older ones (px, styled to match). */
 const OLDER_ROW_HEIGHT = 28;
+
+function isLaunchNotice(row: TimelineRow) {
+	if (row.kind !== "item" || row.item.kind !== "dynamicToolCall") return false;
+	if (row.item.tool !== "agent" || row.item.status !== "completed")
+		return false;
+	const call = agentCall(row.item);
+	return !!call && !call.explore && !call.report;
+}
+
+function launchNoticeEntry(
+	notices: readonly Omit<TranscriptEntry, "follows">[],
+): Omit<TranscriptEntry, "follows"> | undefined {
+	const first = notices[0];
+	if (!first || notices.length === 1) return first;
+	return {
+		key: first.key,
+		kind: "helper-launches",
+		estimate: 26,
+		content: (
+			<LazyDetails className="helper-launches">
+				<summary className="helper-line">
+					<ChevronRight
+						size={14}
+						strokeWidth={1.5}
+						className="session-activity-chevron"
+					/>
+					{`${notices.length} helpers started`}
+				</summary>
+				<div>
+					{notices.map((notice) => (
+						<div key={notice.key}>{notice.content}</div>
+					))}
+				</div>
+			</LazyDetails>
+		),
+	};
+}
 
 function helperStartEntry(
 	task: AgentTaskActivity,
