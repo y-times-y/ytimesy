@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { builtinModules } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -12,8 +13,21 @@ import { build } from "esbuild";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const TURN_BOX_BUNDLE = resolve(root, ".ytimesy/turn-box.mjs");
 
+/** run_code's QuickJS WebAssembly, carried inside the program (the box has no node_modules). */
+function quickjsWasmBase64() {
+	const entry = createRequire(resolve(root, "package.json")).resolve(
+		"@jitl/quickjs-wasmfile-release-sync",
+	);
+	return readFileSync(
+		resolve(dirname(entry), "emscripten-module.wasm"),
+	).toString("base64");
+}
+
 export async function buildTurnBox(): Promise<string> {
 	const result = await build({
+		define: {
+			__TURN_BOX_QUICKJS_WASM__: JSON.stringify(quickjsWasmBase64()),
+		},
 		entryPoints: [resolve(root, "src/server/jobs/box-runner.ts")],
 		bundle: true,
 		write: false,

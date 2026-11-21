@@ -6,6 +6,7 @@ import { MAX_WORKFLOW_MODEL_STEPS } from "#/domain/model-workflow";
 import { configuredTurnExecutor } from "#/domain/turn-executor";
 import type { ApiTurn } from "../adapters/api-turns";
 import type { GuestExec } from "../claude-box-tools/identity-machines";
+import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
 import { registerRemoteCommandReceipts } from "../services/remote-command-receipts";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
@@ -52,6 +53,9 @@ const DEFAULT_POLL_MS = 5_000;
  * The dependencies are required: the box supplies edge-backed ones
  * (`edgeTurnDeps`), a test supplies fakes.
  */
+/** Set by scripts/build-turn-box.ts: run_code's QuickJS WebAssembly, base64. */
+declare const __TURN_BOX_QUICKJS_WASM__: string | undefined;
+
 export async function runBoxTurn(
 	machines: WorkspaceMachines,
 	claimed: ApiTurn,
@@ -400,6 +404,12 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
+	// run_code's sandbox: its WebAssembly is inside the program
+	// (scripts/build-turn-box.ts); the box has no node_modules to read it from.
+	if (typeof __TURN_BOX_QUICKJS_WASM__ === "string") {
+		const bytes = Buffer.from(__TURN_BOX_QUICKJS_WASM__, "base64");
+		provideCodeModeWasmModule(() => WebAssembly.compile(bytes));
+	}
 	await runTurnRunnerBox();
 	// The runner's own timers are unref'd (so tests and embedders can exit);
 	// as the box's process this one keeps it alive, and logs its memory so a
