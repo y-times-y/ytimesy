@@ -1516,7 +1516,11 @@ export function SessionLauncher({
 					secretActions={
 						selectedProject
 							? {
-									disabled: busy || turnStatus === "running",
+									// Saving a value starts no turn, and the answer queues behind a
+									// running one, so a running turn must not lock the card: the
+									// request ends the turn, but the status can lag or the turn can
+									// have been re-run.
+									disabled: busy,
 									onSave: async ({ name, value, kind }) => {
 										await saveProjectSecret({
 											data: {
