@@ -11,6 +11,7 @@ import { runApiTurn } from "./api-turn";
 import { assertTurnBoxHoldsNoSecrets } from "./box-secrets-guard";
 import {
 	TurnBoxEdgeClient,
+	TurnBoxIdentityRejected,
 	TurnBoxLeaseLost,
 	type TurnBoxTurnSession,
 } from "./turn-box-client";
@@ -327,8 +328,12 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 				revoked = true;
 				console.error("This turn runner box was revoked; no new turns.");
 			}
-		} catch {
-			console.warn("Box registration deferred.");
+		} catch (error) {
+			console.warn(
+				error instanceof TurnBoxIdentityRejected
+					? error.message
+					: "Box registration deferred.",
+			);
 		}
 	};
 	await register();

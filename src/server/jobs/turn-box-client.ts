@@ -157,6 +157,14 @@ function nonce() {
 	).join("");
 }
 
+export class TurnBoxIdentityRejected extends Error {
+	constructor() {
+		super(
+			"Edge rejected the runner identity (HTTP 401); check expiry and signing key.",
+		);
+	}
+}
+
 export class TurnBoxEdgeClient {
 	constructor(private readonly options: ClientOptions) {}
 
@@ -188,6 +196,7 @@ export class TurnBoxEdgeClient {
 		);
 		await response.body?.cancel().catch(() => undefined);
 		if (response.status === 403) return false;
+		if (response.status === 401) throw new TurnBoxIdentityRejected();
 		if (!response.ok) throw new Error("Box registration failed.");
 		return true;
 	}

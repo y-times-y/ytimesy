@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
+import { TURN_BOX_IDENTITY_TTL_MS } from "#/domain/turn-box-grant";
 import { TURN_BOX_REQUEST_BUDGET } from "#/domain/turn-box-protocol";
 import { fakeEdge } from "../edge/turn-box-fake-edge";
 import { answerTurnBoxSocketMessage } from "../edge/turn-box-socket";
 import {
 	type BoxSocket,
 	TurnBoxEdgeClient,
+	TurnBoxIdentityRejected,
 	TurnBoxLeaseLost,
 } from "./turn-box-client";
 
@@ -75,6 +77,17 @@ async function setup() {
 }
 
 describe("turn box client against the edge", () => {
+	it("distinguishes an expired identity from a deferred registration", async () => {
+		const { client, tick } = await setup();
+		const registration = { capacity: 2, running: 0 };
+		tick(TURN_BOX_IDENTITY_TTL_MS - 1);
+		await expect(client.register(registration)).resolves.toBe(true);
+		tick(1);
+		await expect(client.register(registration)).rejects.toThrow(
+			TurnBoxIdentityRejected,
+		);
+	});
+
 	it("claims a turn and runs the loop's writes through the grant, no secret needed", async () => {
 		const { client, edge, requests } = await setup();
 		expect(await client.register({ capacity: 2, running: 0 })).toBe(true);
