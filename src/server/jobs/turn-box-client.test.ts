@@ -109,6 +109,41 @@ describe("turn box client against the edge", () => {
 		await expect(client.claim()).rejects.toThrow("Turn claim failed (403).");
 	});
 
+	it("checkpoints a history over the edge's body limit (sent gzipped), and the next step runs on the route a failover saved", async () => {
+		const { client, edge } = await setup();
+		expect(await client.register({ capacity: 2, running: 0 })).toBe(true);
+		const session = await client.claim();
+		const adapters = session?.adapters();
+		// ~9 MB of items as JSON, over the 8 MB body limit uncompressed.
+		const items = Array.from({ length: 3000 }, (_, index) => ({
+			id: `i${index}`,
+			kind: "agentMessage",
+			text: `step ${index} `.repeat(300),
+		}));
+		expect(JSON.stringify(items).length).toBeGreaterThan(8 * 1024 * 1024);
+		const failover = { route: { modelId: "m2" }, switches: 1 } as never;
+		await adapters?.checkpointApiTurn(
+			null,
+			[{ role: "user", content: "hi" }],
+			items as never,
+			failover,
+		);
+		expect(edge.row.items).toHaveLength(3000);
+		expect(session?.turn.failover).toEqual(failover);
+	});
+
+	it("a checkpoint the edge refuses fails the step instead of passing silently", async () => {
+		const { client, edge } = await setup();
+		expect(await client.register({ capacity: 2, running: 0 })).toBe(true);
+		const session = await client.claim();
+		edge.ops.checkpoint = async () => {
+			throw new Error("down");
+		};
+		await expect(
+			session?.adapters().checkpointApiTurn(null, [], [] as never),
+		).rejects.toThrow("Turn box checkpoint failed");
+	});
+
 	it("claims a turn and runs the loop's writes through the grant, no secret needed", async () => {
 		const { client, edge, requests } = await setup();
 		expect(await client.register({ capacity: 2, running: 0 })).toBe(true);

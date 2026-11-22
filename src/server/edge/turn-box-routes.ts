@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { ApiTurnCancelled } from "../../domain/api-turn-failure";
-import { readBoundedRequestBody } from "../../domain/bounded-request-body";
+import {
+	readBoundedRequestBody,
+	readBoundedRequestBytes,
+} from "../../domain/bounded-request-body";
 import {
 	issueTurnBoxGrant,
 	issueTurnBoxIdentity,
@@ -30,6 +33,7 @@ import {
 	TURN_BOX_API_PREFIX,
 	TURN_BOX_MAX_BODY_BYTES,
 	TURN_BOX_MAX_HISTORY_BYTES,
+	TURN_BOX_MAX_INFLATED_BYTES,
 	TURN_BOX_PATHS,
 	TurnBoxPortForbidden,
 	type TurnBoxTurnIdentity,
@@ -602,10 +606,31 @@ export function versionOf(turn: ApiTurn) {
 	return typeof value === "string" ? value : "0";
 }
 
-/** The JSON body, `{}` when empty, or undefined when it is over the limit. */
+/**
+ * The JSON body, `{}` when empty, or undefined when it is over the limit. A
+ * box gzips a large one (a long chat's history): the compressed body is held
+ * to the usual limit and what it inflates to, to a larger one.
+ */
 async function readJson(request: Request): Promise<unknown> {
 	try {
-		const text = await readBoundedRequestBody(request, TURN_BOX_MAX_BODY_BYTES);
+		const text =
+			request.headers.get("content-encoding") === "gzip"
+				? new TextDecoder("utf-8", { fatal: true }).decode(
+						await readBoundedRequestBytes(
+							{
+								body: new Blob([
+									(await readBoundedRequestBytes(
+										request,
+										TURN_BOX_MAX_BODY_BYTES,
+									)) as BlobPart,
+								])
+									.stream()
+									.pipeThrough(new DecompressionStream("gzip")),
+							},
+							TURN_BOX_MAX_INFLATED_BYTES,
+						),
+					)
+				: await readBoundedRequestBody(request, TURN_BOX_MAX_BODY_BYTES);
 		return text ? JSON.parse(text) : {};
 	} catch (error) {
 		return error instanceof SyntaxError ? null : undefined;

@@ -547,12 +547,33 @@ describe("model failover on a box", () => {
 	it("a route that keeps failing switches to the edge's planned fallback and the turn completes there", async () => {
 		const s = await scenario({ model: [{ text: "unused" }] });
 		Object.assign(s.owner, { listedModelId: "c1:m1" });
+		// The connection serves both models; the fallback is its m2.
+		(s.edge.state.ports as Record<string, unknown>).modelConnection =
+			async () => ({
+				id: "c1",
+				provider: "compatible",
+				label: "x",
+				baseUrl: "https://llm.test/v1",
+				models: [
+					{ id: "m1", label: "m1" },
+					{ id: "m2", label: "m2" },
+				],
+				revision: "rev-1",
+			});
 		let calls = 0;
 		const plans: unknown[] = [];
-		// The route refuses (a provider rate limit) until the edge plans a switch.
-		(s.edge.deps as { upstream: unknown }).upstream = async () => {
+		// The chosen model (m1) refuses (a provider rate limit); only the
+		// fallback (m2) answers, so the next step must really run on it.
+		const models: string[] = [];
+		(s.edge.deps as { upstream: unknown }).upstream = async (
+			_input: unknown,
+			init?: RequestInit,
+		) => {
 			calls += 1;
-			if (!plans.length)
+			const body = init?.body ? await new Response(init.body).text() : "{}";
+			const model = String((JSON.parse(body) as { model?: string }).model);
+			models.push(model);
+			if (model !== "m2")
 				return Response.json(
 					{ error: { type: "rate_limit_error", message: "slow down" } },
 					{ status: 400 },
@@ -590,6 +611,7 @@ describe("model failover on a box", () => {
 		expect(plans).toEqual([
 			{ reason: "rate-limited", child: false, allowCustom: false },
 		]);
+		expect(models).toEqual(["m1", "m2"]);
 		expect(calls).toBe(2);
 		const result = JSON.stringify(s.edge.row.items);
 		expect(result).toContain("Answered on the fallback.");

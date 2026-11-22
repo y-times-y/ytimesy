@@ -734,3 +734,11 @@ measured concurrency.
   (`authorizeTurnBoxModel`) serves the turn's failover route from then on.
   Without it a Y² turn on a spent Grok plan failed instead of moving to the
   next model (2026-11-22).
+- **Long chats and a failover's route across steps.** A box gzips a request
+  body over 256 KB (`content-encoding: gzip`); the edge holds the compressed
+  body to 8 MB and inflates it to at most 64 MB. A checkpoint or finalize the
+  edge refuses now fails the step: a Y² chat's 8.3 MB history was once refused
+  (413) on every checkpoint and the box carried on, and since its failover was
+  never saved each step started on the spent route again (a loop, stopped by
+  hand on 2026-11-22). The box also keeps the failover it checkpoints on its
+  own turn identity, so the next step runs on the fallback route.

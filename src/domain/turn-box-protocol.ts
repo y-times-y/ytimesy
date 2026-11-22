@@ -34,6 +34,10 @@ export const TURN_BOX_PATHS = {
 
 /** Largest JSON body an endpoint accepts (history is the bulk of it). */
 export const TURN_BOX_MAX_BODY_BYTES = 8 * 1024 * 1024;
+/** A box gzips a request body larger than this (a long chat's history). */
+export const TURN_BOX_GZIP_ABOVE_BYTES = 256 * 1024;
+/** Largest body the edge inflates a gzipped request to. */
+export const TURN_BOX_MAX_INFLATED_BYTES = 64 * 1024 * 1024;
 /** Largest history the edge returns; a bigger turn must be compacted first. */
 export const TURN_BOX_MAX_HISTORY_BYTES = 8 * 1024 * 1024;
 /** Progress is sent at most this often (a WebSocket message bills 1/20 request). */

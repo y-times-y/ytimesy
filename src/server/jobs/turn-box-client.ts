@@ -1,3 +1,4 @@
+import { gzipSync } from "node:zlib";
 import type { ModelMessage } from "ai";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
 import { LatestCoalescer } from "#/domain/latest-coalescer";
@@ -12,6 +13,7 @@ import {
 	portResponse,
 	registerResponse,
 	renewResponse,
+	TURN_BOX_GZIP_ABOVE_BYTES,
 	TURN_BOX_PATHS,
 	TURN_BOX_PROGRESS_EVERY_MS,
 	type TurnBoxEdgeSocketMessage,
@@ -258,7 +260,8 @@ export class TurnBoxTurnSession {
 
 	constructor(
 		private readonly options: ClientOptions,
-		readonly turn: TurnBoxTurnIdentity,
+		/** The claimed turn; its failover follows this box's own checkpoints. */
+		public turn: TurnBoxTurnIdentity,
 		grant: string,
 	) {
 		this.grantToken = grant;
@@ -303,6 +306,10 @@ export class TurnBoxTurnSession {
 	}
 
 	private async post(path: string, body: unknown) {
+		const json = JSON.stringify(body);
+		// A long chat's history can pass the edge's body limit as JSON; sent
+		// gzipped (the edge inflates it with its own, larger, limit).
+		const gzipped = json.length > TURN_BOX_GZIP_ABOVE_BYTES;
 		const response = await (this.options.fetch ?? fetch)(
 			new URL(path, this.options.edgeUrl).href,
 			{
@@ -310,8 +317,9 @@ export class TurnBoxTurnSession {
 				headers: {
 					authorization: `Bearer ${this.grantToken}`,
 					"content-type": "application/json",
+					...(gzipped ? { "content-encoding": "gzip" } : {}),
 				},
-				body: JSON.stringify(body),
+				body: gzipped ? new Uint8Array(gzipSync(json)) : json,
 			},
 		);
 		if (response.status === 409) {
@@ -462,6 +470,12 @@ export class TurnBoxTurnSession {
 			items,
 			failover,
 		});
+		// A checkpoint the edge did not store is a failed step, never ignored
+		// (a long chat's history over the limit was once lost silently).
+		if (!response.ok)
+			throw new Error(`Turn box checkpoint failed (${response.status}).`);
+		// The next step runs on the route this checkpoint moved the turn to.
+		if (failover !== undefined) this.turn = { ...this.turn, failover };
 		const body = (await response.json().catch(() => ({}))) as {
 			renewed?: boolean;
 		};
@@ -499,6 +513,8 @@ export class TurnBoxTurnSession {
 			messages,
 			...(this.publishAfterFinalize ? { publish: true } : {}),
 		});
+		if (!response.ok)
+			throw new Error(`Turn box finalize failed (${response.status}).`);
 		const body = (await response.json()) as { state?: typeof state };
 		this.socket?.close();
 		return body.state ?? null;
