@@ -1,3 +1,4 @@
+import type { ClaudeRunnerBox } from "#/domain/claude-runner";
 import type {
 	agentSessionMetadataForOwner,
 	descendantTokenUsageItemsForOwner,
@@ -64,6 +65,7 @@ import type { noteCrewWaiting } from "../adapters/y-squared-crew-client";
 import type { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import type { ApiModelAccess } from "../services/api-agent-runtime";
 import type { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
+import type { ClaudeCodeTurnHost } from "../services/claude-code-turn";
 import type { ensureConversationCodePoint } from "../services/conversation-recovery";
 import type { MachineGitStep } from "../services/machine-git";
 import type { McpConnection } from "../services/mcp-tools";
@@ -238,6 +240,18 @@ export interface TurnPorts {
 	}) => MachineGitStep | null;
 	/** Set on a box: a canvas's highest saved revision, read by the edge (canvas-revisions.ts). */
 	readonly savedCanvasRevision?: (title: string) => Promise<number>;
+	/**
+	 * A Claude Code turn on a turn runner box: the runner the edge chose for
+	 * it and the step's way through the edge (turn-box-claude-port.ts). Absent
+	 * in the chat's Durable Object.
+	 */
+	readonly claudeBox?: {
+		readonly runner: (facts: {
+			readonly reader: boolean;
+			readonly ySquared: boolean;
+		}) => Promise<ClaudeRunnerBox | null>;
+		readonly host: ClaudeCodeTurnHost;
+	};
 	readonly remoteTool?: (
 		name: string,
 		input: unknown,

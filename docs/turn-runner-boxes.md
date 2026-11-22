@@ -747,3 +747,38 @@ measured concurrency.
   now renews it when 10 s have passed. Before, only a step's own heartbeat
   renewed it, and only after 10 s inside the step, so a helper whose steps
   were all shorter let it lapse and was stopped mid-turn (2026-11-22).
+
+## Claude Code on a box (2026-11-22)
+
+Measured before the move: Claude Code turns were ~85% of the chat objects'
+billed duration (three Claude chats: ~160k of 189k awake-seconds in 48 h, at
+almost no CPU). The object stayed awake holding the run's MCP requests while
+tools ran and awaiting the runner while Claude worked. Now a root chat's
+Claude Code turn can run its step on a turn box, per user:
+`YTIMESY_BOX_CLAUDE_USERS` (ids or `*`; helpers and side chats stay in the
+object).
+
+- **The box holds no secret.** The edge's `claude` port
+  (`turn-box-claude-port.ts`) chooses the chat's runner (and pins it in the
+  chat's object, `claudeRunnerPlacement`), signs every `/exec`, `/write`,
+  `/read` for it with the runner key (only a configured runner or the chat's
+  pinned one), mints the run's grant (marked `relay: "box"`), and reads/writes
+  the chat's Claude session record, transcripts and plan status. A reader
+  chat never gets a runner whatever the box says.
+- **MCP relay** (`claude-relay.ts`): the run's CLI calls
+  `/claude-code/mcp` as before. For a box grant the edge Worker holds the
+  request (stateless, no duration) and opens a hibernatable socket to the
+  chat's object; the object stores the call and pushes it over the box's own
+  turn socket (`claude-call`), resending until the box acks. The box queues it
+  in its local bridge and takes it at once; its `claude-reply` goes back to
+  the call's socket. The box publishes the run's tool list (`claude-tools`)
+  for `tools/list`. The box client reopens its socket while a Claude step
+  listens, and replays answers written while it was down.
+- **No feed, no park on a box:** polls wait on the runner for new output (up
+  to 20 s, at most one a second while Claude streams), so a quiet run costs
+  one edge request per ~20 s and the object nothing.
+- Deploy order: edge first (it accepts the new socket messages), then the
+  box bundle, then the switch.
+- Tests: `claude-relay.test.ts`, `turn-box-claude-port.test.ts`,
+  `box-claude-turn-e2e.test.ts` (whole turn through the real routes and relay,
+  including a socket dropped before the call).

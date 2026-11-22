@@ -165,7 +165,14 @@ export type ClaudeCodeStepInput = {
 	readonly messages: readonly ModelMessage[];
 	/** The edge's public origin (the git proxy's), which the VM reaches. */
 	readonly edgeOrigin: string;
-	readonly grantSecret: string;
+	/** Signs the run's grant here; or `issueGrant` mints it elsewhere (a turn box asks the edge). */
+	readonly grantSecret?: string;
+	readonly issueGrant?: () => Promise<string>;
+	/**
+	 * A poll may wait on the machine up to this long for new output (a turn
+	 * box, whose every poll is a request through the edge); 0: answers at once.
+	 */
+	readonly pollWaitMs?: number;
 	/** A read-only helper: the CLI runs as the reader user, without write tools. */
 	readonly reader: boolean;
 	/**
@@ -267,6 +274,13 @@ const lastTranscriptSaves = new Map<string, number>();
 const WRITE_CHUNK = 36 * 1024;
 const POLL_MIN_MS = 500;
 const POLL_MAX_MS = 2_000;
+/** The least time between a waiting poll's start and the next one's. */
+const WAITING_POLL_SPACING_MS = 1_000;
+
+function requiredGrantSecret(secret: string | undefined) {
+	if (!secret) throw new Error("The run's grant cannot be signed here.");
+	return secret;
+}
 const BUSY_GRACE_MS = 30_000;
 /** A poll needs at least this long to be worth sending (else the step yields). */
 const MIN_POLL_BUDGET_MS = 3_000;
@@ -285,10 +299,19 @@ const UNREADABLE_POLL_PAUSE_MS = 1_500;
  */
 export const CLAUDE_CODE_POLL_SCRIPT = `import json,os,sys,time
 d,commit,limit=sys.argv[1],int(sys.argv[2]),int(sys.argv[3])
+wait=float(sys.argv[4]) if len(sys.argv)>4 else 0
 try: off=int(open(os.path.join(d,'offset')).read().strip() or 0)
 except FileNotFoundError: off=0
 if commit>off:
     t=os.path.join(d,'offset.tmp'); open(t,'w').write(str(commit)); os.replace(t,os.path.join(d,'offset')); off=commit
+until=time.time()+min(wait,25)
+while limit>0 and time.time()<until and not os.path.exists(os.path.join(d,'status')):
+    try:
+        with open(os.path.join(d,'out'),'rb') as f:
+            f.seek(off)
+            if b'\\n' in f.read(1<<16): break
+    except FileNotFoundError: pass
+    time.sleep(0.2)
 try: status=open(os.path.join(d,'status')).read().strip() or None
 except FileNotFoundError: status=None
 out=os.path.join(d,'out'); lines=[]; nxt=off
@@ -653,8 +676,13 @@ async function claudeCodeStep(
 			}
 			return yieldStep();
 		}
+		const pollStartedAt = now();
+		// A waiting poll returns at the first new line, the exit or its wait.
+		const pollWaitS = input.pollWaitMs
+			? Math.max(0, Math.min(input.pollWaitMs, pollBudget - 5_000)) / 1000
+			: 0;
 		const poll = await shell(
-			`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} ${READ_LIMIT}`,
+			`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} ${READ_LIMIT}${pollWaitS > 0 ? ` ${pollWaitS.toFixed(1)}` : ""}`,
 			Math.max(MIN_POLL_BUDGET_MS, pollBudget),
 		).catch((error: unknown) => {
 			// A deploy or isolate reset cut this object's own request: the step
@@ -774,7 +802,14 @@ async function claudeCodeStep(
 			input.requestPause?.(CLAUDE_STEP_PAUSE_MS);
 			return yieldStep();
 		}
-		if (lines.some(Boolean)) wait = POLL_MIN_MS;
+		if (input.pollWaitMs) {
+			// The poll itself waited for output: while the run streams, at
+			// most one poll a second; a quiet one asks again at once.
+			if (lines.some(Boolean))
+				await sleep(
+					Math.max(0, WAITING_POLL_SPACING_MS - (now() - pollStartedAt)),
+				);
+		} else if (lines.some(Boolean)) wait = POLL_MIN_MS;
 		else {
 			await sleep(wait);
 			wait = Math.min(POLL_MAX_MS, wait * 2);
@@ -1123,11 +1158,13 @@ async function launchRun(
 		input.reader
 			? turnSessionId
 			: (turnSessionId ?? restoredSession(input, home)),
-		issueClaudeCodeGrant(input.grantSecret, {
-			userId: input.userId,
-			sessionId: input.sessionId,
-			turnId: input.turnId,
-		}),
+		input.issueGrant
+			? input.issueGrant()
+			: issueClaudeCodeGrant(requiredGrantSecret(input.grantSecret), {
+					userId: input.userId,
+					sessionId: input.sessionId,
+					turnId: input.turnId,
+				}),
 	]);
 	if (sdk === "pending") return { pending: true };
 	const prompt = claudeCodePrompt(input.messages, Boolean(resumeId));

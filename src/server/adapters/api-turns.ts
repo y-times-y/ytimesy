@@ -241,7 +241,13 @@ export async function enqueueApiTurn(input: {
 	// Codex and Grok subscription turns run on a box too (the edge holds
 	// their tokens, docs/turn-runner-boxes.md "Subscription routes"); Claude
 	// Code has its own runner path.
-	let eligibleForBox = !isClaudeCodeRevision(input.revision);
+	// Claude Code's own path moves to the boxes per user
+	// (YTIMESY_BOX_CLAUDE_USERS, docs/turn-runner-boxes.md "Claude Code on a
+	// box"), root chats only.
+	const claudeCode = isClaudeCodeRevision(input.revision);
+	const claudeBoxUsers = boxTurnUsers(process.env.YTIMESY_BOX_CLAUDE_USERS);
+	let eligibleForBox =
+		!claudeCode || claudeBoxUsers.has("*") || claudeBoxUsers.has(input.userId);
 	// Only read when the user may use boxes at all (flag off: no extra query,
 	// the Durable Object path is exactly as before). A routing read that fails
 	// keeps the turn in its object.
@@ -269,6 +275,7 @@ export async function enqueueApiTurn(input: {
 			: true;
 		eligibleForBox =
 			!!facts &&
+			!(claudeCode && facts.child) &&
 			boxTurnBlock({ ...facts, evaluation, leadFusion }, process.env) === null;
 	}
 	const chosenExecutor = chooseTurnExecutor({

@@ -74,6 +74,22 @@ async function waitFor(
 	return true;
 }
 
+/**
+ * Calls `listener` whenever a call waits in the turn's queue, until the
+ * returned function runs: a step on a turn box takes calls as they come
+ * instead of between its (long) polls.
+ */
+export function onClaudeCodeCallQueued(turnId: string, listener: () => void) {
+	const entry = bridge(turnId);
+	const wrapped = () => {
+		if (entry.queue.length > 0) listener();
+	};
+	entry.listeners.add(wrapped);
+	return () => {
+		entry.listeners.delete(wrapped);
+	};
+}
+
 /** The step offers its tools (plain data, so any invocation may read them). */
 export function publishClaudeCodeTools(
 	turnId: string,
@@ -109,12 +125,15 @@ export async function claudeCodeBridgeTools(
  */
 export const CLAUDE_CODE_INBOX_CALL = "\u0000inbox";
 
+/** How long a tool call may wait for its answer. */
+export const CLAUDE_CODE_CALL_TIMEOUT_MS = 60 * 60_000;
+
 /** Queues one call for the running step and waits for its answer. */
 export function requestClaudeCodeCall(
 	turnId: string,
 	name: string,
 	args: Record<string, unknown>,
-	timeoutMs = 60 * 60_000,
+	timeoutMs = CLAUDE_CODE_CALL_TIMEOUT_MS,
 	/** A call the step took gets this much longer before it times out. */
 	startedGraceMs = 0,
 	invocationId?: string,

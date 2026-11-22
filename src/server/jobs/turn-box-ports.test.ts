@@ -295,6 +295,8 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 						"helperMemory",
 						// Failover: box-turn-e2e.test.ts ("model failover on a box").
 						"planFailover",
+						// Claude Code on a box: turn-box-claude-port.test.ts and box-claude-turn-e2e.test.ts.
+						"claude",
 					].includes(op),
 			),
 		).toEqual([]);

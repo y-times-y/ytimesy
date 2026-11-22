@@ -58,6 +58,9 @@ export async function answerTurnBoxSocketMessage(
 	const turn = await ops.loadOwned(grant);
 	if (!turn) return { reply: [{ t: "lease-lost" }], close: false };
 	const seq = parsed.data.seq;
+	// Claude relay messages are the chat object's own (claude-relay.ts).
+	if (parsed.data.t !== "renew" && parsed.data.t !== "progress")
+		return { reply: [], close: false };
 	if (parsed.data.t === "renew") {
 		if (!(await ops.boxActive(attachment.boxId)))
 			return { reply: [{ t: "lease-lost" }], close: true };

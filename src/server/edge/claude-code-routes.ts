@@ -4,7 +4,10 @@ import {
 	presentedClaudeCodeGrant,
 	verifyClaudeCodeGrant,
 } from "../../domain/claude-code-grant";
-import { handleMcpMessage } from "../../domain/claude-code-mcp";
+import {
+	handleMcpMessage,
+	type McpToolDefinition,
+} from "../../domain/claude-code-mcp";
 import {
 	CLAUDE_CODE_PROXY_PREFIX,
 	proxyClaudeCode,
@@ -24,10 +27,16 @@ import {
 import { withDatabaseScope } from "../adapters/database-scope";
 import { queuedMessageMaybeSent } from "../adapters/peer-inbox-observation";
 import {
+	CLAUDE_CODE_CALL_TIMEOUT_MS,
 	CLAUDE_CODE_INBOX_CALL,
 	claudeCodeBridgeTools,
 	requestClaudeCodeCall,
 } from "../services/claude-code-bridge";
+import {
+	relayClaudeCall,
+	relayedClaudeTools,
+	relaysToBox,
+} from "./claude-relay";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 
@@ -112,10 +121,20 @@ export async function routeClaudeCodeEdge(
 			presentedClaudeCodeGrant(request.headers),
 		);
 		if (!grant) return new Response(null, { status: 401 });
-		return env.MODEL_CONVERSATIONS.getByName(
+		const chat = env.MODEL_CONVERSATIONS.getByName(
 			modelConversationName(grant),
 			durableObjectLocation(),
-		).fetch(
+		);
+		// A turn on a box: this request holds the call, the box runs it.
+		if (relaysToBox(grant))
+			return answerRelayedClaudeCodeMcp(
+				request,
+				chat,
+				() => chat.claudeRelayTools(grant.turnId),
+				request.headers.get("authorization") ??
+					`Bearer ${presentedClaudeCodeGrant(request.headers) ?? ""}`,
+			);
+		return chat.fetch(
 			new Request(`https://chat.internal${CLAUDE_CODE_MCP_PATH}`, {
 				method: request.method,
 				headers: {
@@ -161,6 +180,33 @@ export async function routeClaudeCodeEdge(
 }
 
 /**
+ * Inside the chat's Durable Object: the grant of a relayed call's socket
+ * (claude-relay.ts), checked against this chat and marked for a box.
+ */
+export async function verifiedClaudeRelayGrant(
+	request: Request,
+	env: EdgeExecutorEnvironment,
+	expectedName: (name: string) => boolean,
+): Promise<ClaudeCodeGrant | Response> {
+	if (!claudeSubscriptionEnabled()) return new Response(null, { status: 404 });
+	const secrets = claudeCodeSecrets.safeParse(env);
+	if (!secrets.success) return new Response(null, { status: 503 });
+	if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
+		return new Response(null, { status: 426 });
+	const grant = await verifyClaudeCodeGrant(
+		secrets.data.GIT_PROXY_SECRET,
+		presentedClaudeCodeGrant(request.headers),
+	);
+	if (
+		!grant ||
+		!relaysToBox(grant) ||
+		!expectedName(modelConversationName(grant))
+	)
+		return new Response(null, { status: 401 });
+	return grant;
+}
+
+/**
  * Inside the chat's Durable Object: the grant of a feed upgrade, checked
  * again against this chat, or the response refusing it.
  */
@@ -184,6 +230,68 @@ export async function verifiedClaudeFeedGrant(
 	return grant;
 }
 
+/** The JSON-RPC message of an MCP POST, or the response refusing it. */
+async function mcpRequestMessage(
+	request: Request,
+): Promise<{ message: unknown } | Response> {
+	// No server-sent stream and no session to end: plain JSON per POST.
+	if (request.method !== "POST")
+		return new Response(null, { status: 405, headers: { allow: "POST" } });
+	const text = await request.text();
+	if (text.length > MAX_MCP_BODY) return new Response(null, { status: 413 });
+	try {
+		return { message: JSON.parse(text) };
+	} catch {
+		return Response.json(
+			{
+				jsonrpc: "2.0",
+				id: null,
+				error: { code: -32700, message: "Parse error." },
+			},
+			{ status: 400 },
+		);
+	}
+}
+
+/**
+ * In the edge Worker: one MCP message for a turn whose step runs on a box
+ * (claude-relay.ts). Calls are held here while the box runs them; the
+ * chat's object only passes them on.
+ */
+export async function answerRelayedClaudeCodeMcp(
+	request: Request,
+	chat: { fetch(request: Request): Promise<Response> },
+	listedTools: () => Promise<readonly McpToolDefinition[] | null>,
+	grantHeader: string,
+): Promise<Response> {
+	const parsed = await mcpRequestMessage(request);
+	if (parsed instanceof Response) return parsed;
+	const reply = await handleMcpMessage(parsed.message, {
+		tools: () => relayedClaudeTools(listedTools),
+		call: (name, args, invocationId) =>
+			relayClaudeCall(chat, grantHeader, {
+				name,
+				args,
+				...(invocationId === undefined ? {} : { invocationId }),
+				timeoutMs: CLAUDE_CODE_CALL_TIMEOUT_MS,
+				graceMs: 0,
+			}),
+		// The box knows whether the user sent a message meanwhile.
+		inbox: async () => {
+			const reply = await relayClaudeCall(chat, grantHeader, {
+				name: CLAUDE_CODE_INBOX_CALL,
+				args: {},
+				timeoutMs: 20_000,
+				graceMs: 120_000,
+			});
+			return reply.isError ? "" : reply.text;
+		},
+	});
+	return reply.body === undefined
+		? new Response(null, { status: reply.status })
+		: Response.json(reply.body, { status: reply.status });
+}
+
 /**
  * Inside the chat's Durable Object: one MCP message for the turn the grant
  * names. Tools run in the turn's step (claude-code-bridge.ts).
@@ -202,25 +310,9 @@ export async function answerClaudeCodeMcp(
 	);
 	if (!grant || !expectedName(modelConversationName(grant)))
 		return new Response(null, { status: 401 });
-	// No server-sent stream and no session to end: plain JSON per POST.
-	if (request.method !== "POST")
-		return new Response(null, { status: 405, headers: { allow: "POST" } });
-	const text = await request.text();
-	if (text.length > MAX_MCP_BODY) return new Response(null, { status: 413 });
-	let message: unknown;
-	try {
-		message = JSON.parse(text);
-	} catch {
-		return Response.json(
-			{
-				jsonrpc: "2.0",
-				id: null,
-				error: { code: -32700, message: "Parse error." },
-			},
-			{ status: 400 },
-		);
-	}
-	const reply = await handleMcpMessage(message, {
+	const parsed = await mcpRequestMessage(request);
+	if (parsed instanceof Response) return parsed;
+	const reply = await handleMcpMessage(parsed.message, {
 		tools: async () => (await claudeCodeBridgeTools(grant.turnId)) ?? [],
 		call: (name, args, invocationId) =>
 			requestClaudeCodeCall(

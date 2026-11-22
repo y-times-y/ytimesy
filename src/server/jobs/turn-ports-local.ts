@@ -162,5 +162,7 @@ export const localTurnPorts: TurnPorts = {
 	// The failover plan reads the database here.
 	planFailover: undefined,
 	helperStepDeps: undefined,
+	// Claude Code runs its own way here (runner keys, grant secret, bridge).
+	claudeBox: undefined,
 	helperReportsAtSettle: undefined,
 };

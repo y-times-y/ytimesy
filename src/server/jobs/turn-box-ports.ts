@@ -45,7 +45,6 @@ export const BOX_PORTS_UNAVAILABLE = [
 	"recordTurnBoxToolIdentity",
 	"clearTurnBoxToolIdentity",
 	"pinnedClaudeRunner",
-	"claudeSubscriptionStatus",
 	// Harness evaluation runs stay in Durable Objects.
 	"evaluationRunForTask",
 	"assertEvaluationActive",
@@ -399,6 +398,7 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		subagentToolDeps: boxSubagentToolDeps(call),
 		savedCanvasRevision: (title) => call<number>("canvasRevision", { title }),
 		machineGit: () => boxMachineGit(call),
+		claudeBox: boxClaudeHost(session, call),
 		ySquaredToolDeps: boxYSquaredToolDeps(call),
 		planFailover: (input) => call("planFailover", input),
 		helperStepDeps: {
@@ -527,7 +527,9 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		recordTurnBoxToolIdentity: unavailable("recordTurnBoxToolIdentity"),
 		clearTurnBoxToolIdentity: unavailable("clearTurnBoxToolIdentity"),
 		pinnedClaudeRunner: unavailable("pinnedClaudeRunner"),
-		claudeSubscriptionStatus: unavailable("claudeSubscriptionStatus"),
+		// A Claude Code turn on a box: the plan's status, read by the edge.
+		claudeSubscriptionStatus: (async () =>
+			call("claude", { op: "subscription" })) as never,
 		// Codex subscription turns run on a box (the edge holds the tokens):
 		// the sign-in check is asked once per turn, and there is no catalog
 		// to warm here (the edge reads it when the model is chosen).
@@ -896,6 +898,74 @@ export async function boxHelperMemory(
 				items: [...items],
 			}).catch(() => null);
 			return found ?? unchanged;
+		},
+	};
+}
+
+/**
+ * A Claude Code turn's step on this box (docs/turn-runner-boxes.md, "Claude
+ * Code on a box"): every runner command, the run's grant and the chat's
+ * Claude session go through the edge's `claude` port; the run's MCP calls
+ * come over the turn's socket.
+ */
+function boxClaudeHost(
+	session: TurnBoxTurnSession,
+	call: <T>(op: BoxPortOp, args: unknown) => Promise<T>,
+): NonNullable<TurnPorts["claudeBox"]> {
+	const claude = <T>(args: BoxPortArgs<"claude">) => call<T>("claude", args);
+	return {
+		runner: async (facts) => {
+			const chosen = await claude<{ baseUrl: string } | null>({
+				op: "runner",
+				...facts,
+			});
+			return chosen ? { baseUrl: chosen.baseUrl } : null;
+		},
+		host: {
+			edgeOrigin: session.edgeOrigin(),
+			machine: (runner) => ({
+				shell: (command, timeoutMs) =>
+					claude<{ exitCode: number; stdout: string; stderr: string }>({
+						op: "exec",
+						baseUrl: runner.baseUrl,
+						command,
+						timeoutMs: Math.min(timeoutMs, 15 * 60_000),
+					}),
+				writeFile: async (path, contents) => {
+					await claude({
+						op: "write",
+						baseUrl: runner.baseUrl,
+						path,
+						contents,
+					});
+				},
+				readFile: async (path) =>
+					(
+						await claude<{ contents: string | null }>({
+							op: "read",
+							baseUrl: runner.baseUrl,
+							path,
+						})
+					).contents,
+			}),
+			diskShare: (runner) =>
+				claude<number | null>({ op: "disk", baseUrl: runner.baseUrl }).catch(
+					() => null,
+				),
+			issueGrant: () => claude<string>({ op: "grant" }),
+			store: {
+				readSession: () => claude({ op: "sessionRead" }),
+				saveSession: async (record) => {
+					await claude({ op: "sessionSave", record });
+				},
+				uploadTranscript: (claudeSessionId, text) =>
+					claude<string>({ op: "transcriptUpload", claudeSessionId, text }),
+				downloadTranscript: (path) =>
+					claude<string>({ op: "transcriptDownload", path }),
+				subscriptionStatus: () => claude({ op: "subscription" }),
+			},
+			relay: (handler) => session.claudeRelay(handler),
+			publishTools: (definitions) => session.publishClaudeTools(definitions),
 		},
 	};
 }

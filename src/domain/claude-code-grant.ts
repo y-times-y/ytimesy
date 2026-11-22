@@ -23,6 +23,8 @@ const payloadSchema = z
 		t: z.uuid(),
 		e: z.number().int().positive(),
 		n: z.string().regex(/^[a-f0-9]{16}$/),
+		/** The turn runs on a turn runner box: its MCP calls relay to the box. */
+		b: z.literal(1).optional(),
 	})
 	.strict();
 
@@ -31,6 +33,12 @@ export type ClaudeCodeGrant = {
 	readonly sessionId: string;
 	readonly turnId: string;
 	readonly expiresAt: number;
+	/**
+	 * The turn's step runs on a turn runner box (docs/turn-runner-boxes.md):
+	 * the edge relays the run's MCP calls to it instead of answering them in
+	 * the chat's object.
+	 */
+	readonly relay?: "box";
 };
 
 const encoder = new TextEncoder();
@@ -91,6 +99,7 @@ export async function issueClaudeCodeGrant(
 		s: input.sessionId,
 		t: input.turnId,
 		e: input.expiresAt ?? now + CLAUDE_CODE_GRANT_TTL_MS,
+		...(input.relay === "box" ? { b: 1 } : {}),
 		n: Array.from(crypto.getRandomValues(new Uint8Array(8)), (value) =>
 			value.toString(16).padStart(2, "0"),
 		).join(""),
@@ -140,6 +149,7 @@ export async function verifyClaudeCodeGrant(
 		sessionId: parsed.s,
 		turnId: parsed.t,
 		expiresAt: parsed.e,
+		...(parsed.b === 1 ? { relay: "box" as const } : {}),
 	};
 }
 

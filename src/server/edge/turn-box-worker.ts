@@ -56,7 +56,18 @@ function routeTurnBox(
 		publicKey: config.publicKey,
 		privateKey: config.privateKey,
 		boxUsers: config.boxUsers,
-		ops: createTurnBoxEdgeOps(scope, { machines: () => vm.machines }),
+		ops: createTurnBoxEdgeOps(scope, {
+			machines: () => vm.machines,
+			// A Claude Code turn's runner stays the one its chat is pinned to.
+			claudePlacement: (turn, candidate) =>
+				env.MODEL_CONVERSATIONS.getByName(
+					modelConversationName({
+						userId: turn.user_id,
+						sessionId: turn.session_id,
+					}),
+					durableObjectLocation(),
+				).claudeRunnerPlacement(candidate),
+		}),
 		vm,
 		bundle: turnBoxBundleFromR2,
 		...(enrollment

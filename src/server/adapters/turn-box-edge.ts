@@ -9,6 +9,7 @@ import type { TurnBoxEdgeOps } from "../edge/turn-box-routes";
 import { connectionApiKey } from "../services/model-connections";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { modelConcurrencyLimits } from "./agent-capacity";
+import type { ApiTurn } from "./api-turns";
 import {
 	apiTurnCancelRequested,
 	apiTurnLeaseFreshSql,
@@ -43,7 +44,13 @@ import {
  */
 export function createTurnBoxEdgeOps(
 	scope: <T>(run: () => Promise<T>) => Promise<T>,
-	options: { readonly machines?: () => WorkspaceMachines } = {},
+	options: {
+		readonly machines?: () => WorkspaceMachines;
+		readonly claudePlacement?: (
+			turn: ApiTurn,
+			candidate: string,
+		) => Promise<string>;
+	} = {},
 ): TurnBoxEdgeOps {
 	return {
 		boxActive: (boxId) => scope(() => turnRunnerBoxActive(boxId)),
@@ -126,6 +133,9 @@ export function createTurnBoxEdgeOps(
 			scope(() =>
 				turnBoxPort(turn, op, args as BoxPortArgs<typeof op>, {
 					machines: options.machines,
+					...(options.claudePlacement
+						? { claudePlacement: options.claudePlacement }
+						: {}),
 				}),
 			),
 	};

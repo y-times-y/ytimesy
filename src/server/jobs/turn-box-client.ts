@@ -1,6 +1,7 @@
 import { gzipSync } from "node:zlib";
 import type { ModelMessage } from "ai";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
+import type { McpCallResult } from "#/domain/claude-code-mcp";
 import { LatestCoalescer } from "#/domain/latest-coalescer";
 import type { TurnFailoverColumn } from "#/domain/model-failover";
 import type { SessionItem } from "#/domain/session-item";
@@ -25,6 +26,12 @@ import {
 	subscriptionErrorOf,
 } from "#/domain/turn-box-subscription";
 import { TurnPortUnavailable } from "./turn-ports";
+
+/** A relayed Claude Code MCP call as the edge pushes it. */
+export type ClaudeRelayFrame = Extract<
+	TurnBoxEdgeSocketMessage,
+	{ t: "claude-call" }
+>;
 
 /**
  * A turn runner box's client of the edge's thin-client API
@@ -263,6 +270,16 @@ export class TurnBoxTurnSession {
 	private readonly progressSender: LatestCoalescer<readonly SessionItem[]>;
 	/** Called once when Stop reaches the box (socket push, or a heartbeat/write refusal). */
 	onCancel?: () => void;
+	/** A Claude Code turn's relayed MCP calls (claude-relay.ts): who runs them. */
+	private claudeHandler:
+		| ((call: ClaudeRelayFrame) => Promise<McpCallResult>)
+		| null = null;
+	private readonly claudeSeen = new Set<string>();
+	/** Relay frames written while the socket was down; sent once it is back. */
+	private claudeBacklog: string[] = [];
+	private claudeTools: string | null = null;
+	private finished = false;
+	private reconnecting = false;
 
 	constructor(
 		private readonly options: ClientOptions,
@@ -365,8 +382,11 @@ export class TurnBoxTurnSession {
 				if (this.socket === socket) this.socket = null;
 				for (const done of this.waiting.values()) done(false);
 				this.waiting.clear();
+				// A Claude Code turn hears its tool calls only over the socket.
+				if (this.claudeHandler) this.reconnectSoon();
 			});
 			this.socket = socket;
+			this.flushClaudeBacklog();
 			return true;
 		} catch {
 			return false;
@@ -378,6 +398,10 @@ export class TurnBoxTurnSession {
 		try {
 			message = edgeSocketMessage.parse(JSON.parse(data));
 		} catch {
+			return;
+		}
+		if (message.t === "claude-call") {
+			this.claudeCall(message);
 			return;
 		}
 		if (message.t === "cancel") this.markCancelled();
@@ -502,6 +526,104 @@ export class TurnBoxTurnSession {
 		return this.clock() - this.renewedAt < ms;
 	}
 
+	/** The edge's public origin (what a Claude runner's CLI reaches it at). */
+	edgeOrigin() {
+		return new URL(this.options.edgeUrl).origin;
+	}
+
+	/**
+	 * Runs the Claude Code run's relayed MCP calls with `handler` from now on
+	 * (claude-relay.ts); the returned function stops it. The socket is kept
+	 * open (reopened when it drops) while a handler is set.
+	 */
+	claudeRelay(
+		handler: (call: ClaudeRelayFrame) => Promise<McpCallResult>,
+	): () => void {
+		this.claudeHandler = handler;
+		if (!this.socket) this.reconnectSoon(0);
+		return () => {
+			if (this.claudeHandler === handler) this.claudeHandler = null;
+		};
+	}
+
+	/** The run's MCP tools, which the edge lists to it (sent again after a reconnect). */
+	publishClaudeTools(definitions: readonly unknown[]) {
+		this.claudeTools = JSON.stringify({
+			t: "claude-tools",
+			seq: ++this.seq,
+			definitions,
+		});
+		this.sendClaudeFrame(this.claudeTools, false);
+	}
+
+	private claudeCall(call: ClaudeRelayFrame) {
+		const handler = this.claudeHandler;
+		// Not taken: the edge sends it again once a step listens.
+		if (!handler) return;
+		this.sendClaudeFrame(
+			JSON.stringify({ t: "claude-ack", seq: ++this.seq, ids: [call.id] }),
+			false,
+		);
+		if (this.claudeSeen.has(call.id)) return;
+		this.claudeSeen.add(call.id);
+		void handler(call)
+			.catch(
+				(error: unknown): McpCallResult => ({
+					text:
+						error instanceof Error ? error.message : "The tool call failed.",
+					isError: true,
+				}),
+			)
+			.then((reply) =>
+				this.sendClaudeFrame(
+					JSON.stringify({
+						t: "claude-reply",
+						seq: ++this.seq,
+						id: call.id,
+						reply,
+					}),
+					true,
+				),
+			);
+	}
+
+	/** Sends a relay frame now, or (`keep`) after the socket is back. */
+	private sendClaudeFrame(text: string, keep: boolean) {
+		if (this.socket) {
+			try {
+				this.socket.send(text);
+				return;
+			} catch {}
+		}
+		if (keep && this.claudeBacklog.length < 500) this.claudeBacklog.push(text);
+	}
+
+	private flushClaudeBacklog() {
+		if (this.claudeTools) this.sendClaudeFrame(this.claudeTools, false);
+		const backlog = this.claudeBacklog;
+		this.claudeBacklog = [];
+		for (const text of backlog) this.sendClaudeFrame(text, true);
+	}
+
+	private reconnectSoon(delayMs = 1_000) {
+		if (this.reconnecting || this.finished || this.lost || this.cancelled)
+			return;
+		this.reconnecting = true;
+		const attempt = (wait: number) =>
+			setTimeout(async () => {
+				if (this.finished || this.lost || !this.claudeHandler) {
+					this.reconnecting = false;
+					return;
+				}
+				if (this.socket || (await this.openSocket())) {
+					this.reconnecting = false;
+					return;
+				}
+				attempt(Math.min(10_000, Math.max(1_000, wait * 2)));
+			}, wait);
+		attempt(delayMs);
+	}
+
 	/** What this box last checkpointed (null before the first): the turn's history without a request. */
 	savedHistory() {
 		return this.saved;
@@ -513,6 +635,7 @@ export class TurnBoxTurnSession {
 		messages?: readonly ModelMessage[],
 	) {
 		this.progressSender.close();
+		this.finished = true;
 		const response = await this.post(TURN_BOX_PATHS.finalize, {
 			state,
 			items,

@@ -55,6 +55,11 @@ import { noteCrewWaiting } from "./y-squared-crew-client";
 export type TurnBoxPortDeps = {
 	/** The edge's account-key machines (Freestyle); read only by the ops that act on the chat's VM. */
 	readonly machines?: () => WorkspaceMachines;
+	/** The chat's pinned Claude runner (its Durable Object), for Claude Code turns on a box. */
+	readonly claudePlacement?: (
+		turn: ApiTurn,
+		candidate: string,
+	) => Promise<string>;
 };
 
 export async function turnBoxPort<Op extends BoxPortOp>(
@@ -310,6 +315,12 @@ async function handle(
 			return (await import("./turn-box-helper-port")).helperStepPort(
 				turn,
 				call.args,
+			);
+		case "claude":
+			return (await import("./turn-box-claude-port")).claudePort(
+				turn,
+				call.args,
+				deps.claudePlacement ? { placement: deps.claudePlacement } : {},
 			);
 		case "machineGit":
 			return (await import("./turn-box-machine-git-port")).machineGitPort(

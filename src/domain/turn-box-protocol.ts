@@ -181,6 +181,29 @@ export const boxSocketMessage = z.discriminatedUnion("t", [
 	/** Coalesced progress: the turn's full item list (the latest replaces older ones). */
 	z.object({ t: z.literal("progress"), seq: z.number().int(), items }),
 	z.object({ t: z.literal("renew"), seq: z.number().int() }),
+	/** A Claude Code turn's MCP tools, for the edge to list to the run (claude-relay.ts). */
+	z.object({
+		t: z.literal("claude-tools"),
+		seq: z.number().int(),
+		definitions: z.array(z.unknown()).max(1000),
+	}),
+	/** The relayed calls the box has taken (it runs each once). */
+	z.object({
+		t: z.literal("claude-ack"),
+		seq: z.number().int(),
+		ids: z.array(z.string().min(1).max(64)).max(200),
+	}),
+	/** A relayed call's answer. */
+	z.object({
+		t: z.literal("claude-reply"),
+		seq: z.number().int(),
+		id: z.string().min(1).max(64),
+		reply: z.object({
+			text: z.string(),
+			isError: z.boolean(),
+			content: z.array(z.unknown()).max(1000).optional(),
+		}),
+	}),
 ]);
 export type TurnBoxSocketMessage = z.infer<typeof boxSocketMessage>;
 export const edgeSocketMessage = z.discriminatedUnion("t", [
@@ -192,6 +215,19 @@ export const edgeSocketMessage = z.discriminatedUnion("t", [
 	}),
 	z.object({ t: z.literal("cancel") }),
 	z.object({ t: z.literal("lease-lost") }),
+	/**
+	 * One of the Claude Code run's MCP calls, relayed by the edge to the box
+	 * running the turn (claude-relay.ts); sent again until the box acks it.
+	 */
+	z.object({
+		t: z.literal("claude-call"),
+		id: z.string().min(1).max(64),
+		name: z.string().min(1).max(256),
+		args: z.record(z.string(), z.unknown()),
+		invocationId: z.string().max(256).optional(),
+		timeoutMs: z.number().int().positive(),
+		graceMs: z.number().int().nonnegative(),
+	}),
 ]);
 export type TurnBoxEdgeSocketMessage = z.infer<typeof edgeSocketMessage>;
 
@@ -460,6 +496,63 @@ export const boxPortArgs = {
 	mcpListing: z.object({}),
 	/** One MCP tool call, made by the edge on one of the turn's own servers. */
 	mcpCall: z.object({ server: portText, tool: portText, input: z.unknown() }),
+	/**
+	 * A Claude Code turn on a box (turn-box-claude-port.ts): its runner box
+	 * (chosen and signed for by the edge), the run's grant, the chat's Claude
+	 * session record and transcripts, and the plan's status.
+	 */
+	claude: z.discriminatedUnion("op", [
+		z.object({
+			op: z.literal("runner"),
+			reader: z.boolean(),
+			ySquared: z.boolean(),
+		}),
+		z.object({
+			op: z.literal("exec"),
+			baseUrl: portText,
+			command: z
+				.string()
+				.min(1)
+				.max(256 * 1024),
+			timeoutMs: z
+				.number()
+				.int()
+				.positive()
+				.max(15 * 60_000),
+		}),
+		z.object({
+			op: z.literal("write"),
+			baseUrl: portText,
+			path: z.string().min(1).max(4096),
+			contents: z.string().max(TURN_BOX_MAX_INFLATED_BYTES),
+		}),
+		z.object({
+			op: z.literal("read"),
+			baseUrl: portText,
+			path: z.string().min(1).max(4096),
+		}),
+		z.object({ op: z.literal("disk"), baseUrl: portText }),
+		z.object({ op: z.literal("grant") }),
+		z.object({ op: z.literal("sessionRead") }),
+		z.object({
+			op: z.literal("sessionSave"),
+			record: z.object({
+				claudeSessionId: portText,
+				transcriptPath: z.string().max(4096).nullable(),
+				cwd: z.string().min(1).max(4096),
+			}),
+		}),
+		z.object({
+			op: z.literal("transcriptUpload"),
+			claudeSessionId: portText,
+			text: z.string().max(TURN_BOX_MAX_INFLATED_BYTES),
+		}),
+		z.object({
+			op: z.literal("transcriptDownload"),
+			path: z.string().min(1).max(4096),
+		}),
+		z.object({ op: z.literal("subscription") }),
+	]),
 } as const;
 export type BoxPortOp = keyof typeof boxPortArgs;
 export const boxPortOps = Object.keys(boxPortArgs) as BoxPortOp[];

@@ -625,7 +625,7 @@ async function runApiTurnAttempt(
 	 * Code turns with box tools on ask; the sweep covers the rest. Never throws.
 	 */
 	const releaseBoxTools = () =>
-		stopClaudeCodeRun && claudeBoxToolsEnabled(process.env)
+		stopClaudeCodeRun && !ports.claudeBox && claudeBoxToolsEnabled(process.env)
 			? releaseClaudeBoxToolIdentity({
 					machines: unscopedMachines,
 					store: boxToolStore,
@@ -1102,22 +1102,35 @@ async function runApiTurnAttempt(
 			// ChatGPT's Codex endpoint accepts the same hosted search as the OpenAI API.
 			webSearch = nativeWebSearchTools("openai");
 		} else if (claudeCode) {
-			if (!claudeSubscriptionEnabled())
+			// A turn box has no such flag: the edge that routed it here checks it.
+			if (!claudeSubscriptionEnabled() && !ports.claudeBox)
 				throw new Error("Claude Code is not available.");
-			if (!step)
+			// A turn box runs it through the edge (turn-box-claude-port.ts).
+			const claudeBox = ports.claudeBox;
+			if (!step && !claudeBox)
 				throw new Error("Claude Code chats run on the durable executor only.");
 			// An earlier step's CLI may still run on the chat's machine.
 			const claudeCodeOwner = owner;
-			const candidate = claudeRunnerFor({
-				env: process.env,
-				userId: turn.user_id,
-				sessionId: owner.id,
+			const runnerFacts = {
 				reader: isReaderRole(owner.agentRole) || sideReadOnly,
 				ySquared: Boolean(ySquared),
-			});
+			};
+			// On a box the edge chooses (and pins) the runner and signs for it.
+			const candidate = claudeBox
+				? await claudeBox.runner(runnerFacts)
+				: claudeRunnerFor({
+						env: process.env,
+						userId: turn.user_id,
+						sessionId: owner.id,
+						...runnerFacts,
+					});
 			// Y² has no machine for the CLI: only a runner box can host it.
 			if (ySquared && !candidate) throw new ClaudeRunnerRequired();
-			activeClaudeRunner = candidate ? pinnedClaudeRunner(candidate) : null;
+			activeClaudeRunner = candidate
+				? claudeBox
+					? candidate
+					: pinnedClaudeRunner(candidate)
+				: null;
 			stopClaudeCodeRun = () =>
 				Promise.all([
 					stopClaudeCodeTurnRun({
@@ -1129,6 +1142,7 @@ async function runApiTurnAttempt(
 								: null),
 						turnId: turn.id,
 						runner: activeClaudeRunner,
+						...(claudeBox ? { machine: claudeBox.host.machine } : {}),
 					}),
 					// The stopped run's box loses its grant with it.
 					releaseBoxTools(),
@@ -2914,6 +2928,7 @@ async function runApiTurnAttempt(
 				// when the VM redacts them itself (both checked per grant).
 				const offerBoxTools = Boolean(
 					claudeRunner &&
+						!ports.claudeBox &&
 						!ySquared &&
 						surface.lean &&
 						!reader &&
@@ -2946,6 +2961,7 @@ async function runApiTurnAttempt(
 						: undefined;
 				const claudeResult = await timed("turn:claudeCode", () =>
 					runClaudeCodeTurnStep({
+						...(ports.claudeBox ? { host: ports.claudeBox.host } : {}),
 						// Y² has no machine: the CLI runs on the runner box alone,
 						// with Y²'s own prompt and only its tools.
 						...(ySquared

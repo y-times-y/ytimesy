@@ -10,6 +10,7 @@ import {
 } from "../../domain/background-exit-wake";
 import { backgroundJob } from "../../domain/background-job";
 import { readBoundedRequestBody } from "../../domain/bounded-request-body";
+import type { McpCallResult } from "../../domain/claude-code-mcp";
 import {
 	CLAUDE_CODE_FEED_PATH,
 	CLAUDE_FEED_MAX_MESSAGE,
@@ -58,7 +59,10 @@ import {
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
 import type { SessionItem, SessionTurnStatus } from "../../domain/session-item";
-import { TURN_BOX_PATHS } from "../../domain/turn-box-protocol";
+import {
+	boxSocketMessage,
+	TURN_BOX_PATHS,
+} from "../../domain/turn-box-protocol";
 import {
 	parseHubNote,
 	settledHubTurnStatus,
@@ -153,8 +157,17 @@ import {
 	isClaudeCodeEdgePath,
 	routeClaudeCodeEdge,
 	verifiedClaudeFeedGrant,
+	verifiedClaudeRelayGrant,
 } from "./claude-code-routes";
 import { SqliteClaudeFeed } from "./claude-feed-storage";
+import {
+	CLAUDE_RELAY_CALL_PATH,
+	CLAUDE_RELAY_CALL_TAG,
+	ClaudeRelay,
+	claudeRelayCallTag,
+	isClaudeRelayBoxMessage,
+	relayCallMessage,
+} from "./claude-relay";
 import { SqliteClaudeVmQuiet } from "./claude-vm-quiet-storage";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import { durableObjectLocation } from "./durable-object-location";
@@ -293,6 +306,8 @@ type FeedAttachment = {
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private readonly steps: SqliteConversationSteps;
 	private readonly claudeFeed: SqliteClaudeFeed;
+	/** Claude Code turns on a box: their MCP calls pass through here (claude-relay.ts). */
+	private readonly claudeRelay: ClaudeRelay;
 	/** The Claude Code turn's VM quiet, for pausing it while parked. */
 	private readonly vmQuiet: SqliteClaudeVmQuiet;
 	/** A feed step waiting for lines (claude-feed.ts); called when lines or the exit arrive. */
@@ -1752,6 +1767,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			leaseId: grant.leaseId,
 			boxId: grant.boxId,
 		} satisfies TurnBoxSocketAttachment);
+		// A reconnected box gets the Claude calls it has not taken yet.
+		this.claudeRelay.deliver(grant.turnId, true);
 		return new Response(null, {
 			status: 101,
 			webSocket: client,
@@ -1764,6 +1781,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		const attachment =
 			socket.deserializeAttachment() as TurnBoxSocketAttachment | null;
 		if (!attachment) return socket.close(1008, "unknown turn");
+		// A Claude Code turn's relay messages need no database: they only pass
+		// calls and answers between the box and the calls' edge requests.
+		const relayed = this.claudeRelayBoxMessage(attachment.turnId, message);
+		this.claudeRelay.deliver(attachment.turnId);
+		if (relayed) return;
 		const { reply, close } = await answerTurnBoxSocketMessage(
 			attachment,
 			message,
@@ -1773,6 +1795,92 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		);
 		for (const item of reply) socket.send(JSON.stringify(item));
 		if (close) socket.close(1008, "refused");
+	}
+	/** A box's Claude relay message (true when it was one). */
+	private claudeRelayBoxMessage(turnId: string, message: string | ArrayBuffer) {
+		if (typeof message !== "string" || !message.startsWith('{"t":"claude-'))
+			return false;
+		const parsed = boxSocketMessage.safeParse(
+			(() => {
+				try {
+					return JSON.parse(message);
+				} catch {
+					return null;
+				}
+			})(),
+		);
+		if (!parsed.success || !isClaudeRelayBoxMessage(parsed.data)) return false;
+		const data = parsed.data;
+		if (data.t === "claude-tools")
+			this.claudeRelay.tools(turnId, data.definitions);
+		else if (data.t === "claude-ack") this.claudeRelay.ack(data.ids);
+		else if (data.t === "claude-reply")
+			this.claudeRelay.reply(data.id, data.reply as McpCallResult);
+		return true;
+	}
+	/** A relayed Claude Code call's edge request: one hibernatable socket per call. */
+	private async acceptClaudeRelayCall(request: Request) {
+		if (this.purged) return new Response(null, { status: 410 });
+		const id = new URL(request.url).searchParams.get("id") ?? "";
+		if (!/^[0-9a-f-]{36}$/.test(id)) return new Response(null, { status: 400 });
+		const grant = await verifiedClaudeRelayGrant(request, this.env, (name) =>
+			this.identityNameIs(name),
+		);
+		if (grant instanceof Response) return grant;
+		const { client, server } = socketPair();
+		this.ctx.acceptWebSocket(server as unknown as WebSocket, [
+			CLAUDE_RELAY_CALL_TAG,
+			claudeRelayCallTag(id),
+		]);
+		server.serializeAttachment({ turnId: grant.turnId, id });
+		return new Response(null, {
+			status: 101,
+			webSocket: client,
+		} as ResponseInit);
+	}
+	private identityNameIs(name: string) {
+		return (
+			this.ctx.storage.sql
+				.exec<{ name: string }>("select name from conversation_identity")
+				.toArray()[0]?.name === name
+		);
+	}
+	private isClaudeRelayCall(socket: WebSocket) {
+		try {
+			return this.ctx.getTags(socket).includes(CLAUDE_RELAY_CALL_TAG);
+		} catch {
+			return false;
+		}
+	}
+	private claudeRelayCallMessage(
+		socket: WebSocket,
+		message: string | ArrayBuffer,
+	) {
+		const attachment = socket.deserializeAttachment() as {
+			turnId: string;
+			id: string;
+		} | null;
+		if (!attachment || typeof message !== "string")
+			return socket.close(1008, "refused");
+		let parsed: ReturnType<typeof relayCallMessage.safeParse>;
+		try {
+			parsed = relayCallMessage.safeParse(JSON.parse(message));
+		} catch {
+			return socket.close(1008, "refused");
+		}
+		if (!parsed.success) return socket.close(1008, "refused");
+		this.claudeRelay.call(attachment.turnId, attachment.id, parsed.data);
+	}
+	/**
+	 * The tools a box published for its Claude Code turn (worker RPC, after
+	 * the worker checked the run's grant for this chat).
+	 */
+	claudeRelayTools(turnId: string) {
+		return this.claudeRelay.listedTools(turnId);
+	}
+	/** The chat's pinned Claude runner for a box's turn (worker RPC; claude-runner-placement.ts). */
+	claudeRunnerPlacement(candidate: string) {
+		return new ClaudeRunnerPlacement(this.ctx.storage.sql).assign(candidate);
 	}
 	private isTurnBoxSocket(socket: WebSocket) {
 		try {
@@ -1794,6 +1902,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (path === CLAUDE_CODE_FEED_PATH) return this.acceptClaudeFeed(request);
 		if (path === TURN_BOX_PATHS.socket)
 			return this.acceptTurnBoxSocket(request);
+		if (path === CLAUDE_RELAY_CALL_PATH)
+			return this.acceptClaudeRelayCall(request);
 		// The VM's Claude Code asking for ytimesy's tools; the turn's step runs them.
 		if (path === CLAUDE_CODE_MCP_PATH) {
 			if (this.purged) return new Response(null, { status: 410 });
@@ -1905,6 +2015,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		this.usage.record({ wsMsgs: 1 });
 		if (this.isTurnBoxSocket(socket))
 			return this.turnBoxSocketMessage(socket, message);
+		if (this.isClaudeRelayCall(socket))
+			return this.claudeRelayCallMessage(socket, message);
 		if (this.isClaudeFeed(socket))
 			return this.claudeFeedMessage(socket, message);
 		this.room.webSocketMessage(socket, message);
@@ -1922,6 +2034,17 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			} catch {}
 			return;
 		}
+		// A relayed call's edge request ended: a call not yet taken is dropped.
+		if (this.isClaudeRelayCall(socket)) {
+			const attachment = socket.deserializeAttachment() as {
+				id?: string;
+			} | null;
+			if (attachment?.id) this.claudeRelay.callClosed(attachment.id);
+			try {
+				socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
+			} catch {}
+			return;
+		}
 		// A feed's runner reconnects on its own; the feed's state stays.
 		if (this.isClaudeFeed(socket)) {
 			try {
@@ -1933,7 +2056,12 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		this.syncClaudeFeeds();
 	}
 	webSocketError(socket: WebSocket, error: unknown) {
-		if (this.isClaudeFeed(socket) || this.isTurnBoxSocket(socket)) return;
+		if (
+			this.isClaudeFeed(socket) ||
+			this.isTurnBoxSocket(socket) ||
+			this.isClaudeRelayCall(socket)
+		)
+			return;
 		this.room.webSocketError(socket, error);
 	}
 
@@ -1947,6 +2075,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		);
 		this.steps = new SqliteConversationSteps(ctx.storage.sql);
 		this.claudeFeed = new SqliteClaudeFeed(ctx.storage.sql);
+		this.claudeRelay = new ClaudeRelay(ctx.storage.sql, {
+			box: (turnId) =>
+				ctx
+					.getWebSockets(turnId)
+					.filter((socket) => this.isTurnBoxSocket(socket)),
+			call: (id) => ctx.getWebSockets(claudeRelayCallTag(id)),
+		});
 		this.vmQuiet = new SqliteClaudeVmQuiet(ctx.storage.sql);
 		// A newer snapshot may list a sent message (or no longer): the runner hears it.
 		this.room.onAdopted(() => this.syncClaudeFeeds());
