@@ -151,6 +151,15 @@ describe("a helper's report when its box turn settles", () => {
 				deps,
 			),
 		).toBeNull();
+		// A side chat is its own conversation: it never reports to Main.
+		expect(
+			await settleHelperReport(
+				turn,
+				{ ...(helper as object), agentBudget: { sideChat: true } } as never,
+				{ state: "completed", items },
+				deps,
+			),
+		).toBeNull();
 		expect(
 			await settleHelperReport(
 				turn,

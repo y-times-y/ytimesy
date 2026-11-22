@@ -543,6 +543,69 @@ describe("the super agent (Y²) and helpers on a box", () => {
 	}, 60_000);
 });
 
+describe("a side chat on a box", () => {
+	for (const parentRunning of [false, true])
+		it(`runs on the parent's checkout and reads Main's state through the edge (Main ${parentRunning ? "running: read-only" : "idle"})`, async () => {
+			const PARENT = "44444444-4444-4444-8444-444444444444";
+			// A real shell as the VM: a shared writer's commands run wrapped.
+			const dir = mkdtempSync(join(tmpdir(), "box-side-"));
+			for (const sub of ["repo", "home", "shim"]) mkdirSync(join(dir, sub));
+			writeFileSync(join(dir, "shim", "sudo"), "#!/bin/sh\nexit 1\n", {
+				mode: 0o755,
+			});
+			writeFileSync(join(dir, "repo", "README.md"), "# x\n");
+			const s = await scenario({
+				model: [{ text: "Answered in the side chat." }],
+				commit: { publish: false },
+				shell: dir,
+			});
+			Object.assign(s.owner, {
+				parentSessionId: PARENT,
+				agentRole: "writer",
+				agentBudget: {
+					sideChat: true,
+					steps: 10_000,
+					minutes: 1440,
+					tokens: 5_000_000,
+				},
+				taskPlacement: "shared",
+				taskAccess: "read_write",
+				listedModelId: "c1:m1",
+			});
+			const ports = s.edge.state.ports as Record<string, unknown>;
+			const own = ports.sessionMetadata as (a: {
+				sessionId: string;
+			}) => unknown;
+			const asked: string[] = [];
+			ports.sessionMetadata = async (a: { sessionId: string }) => {
+				asked.push(a.sessionId);
+				return a.sessionId === PARENT
+					? {
+							...s.owner,
+							id: PARENT,
+							parentSessionId: null,
+							agentRole: null,
+							agentBudget: null,
+							turnStatus: parentRunning ? "running" : "idle",
+						}
+					: own(a);
+			};
+			ports.helperMemory = async () => false;
+			await s.run();
+			expect(s.edge.row.state).toBe("completed");
+			expect(dbCalls.stacks).toEqual([]);
+			expect(s.reads).toEqual([]);
+			// Main's state decides read-only; it is read through the edge.
+			expect(asked).toContain(PARENT);
+			// A side chat is not a helper: no step budget, no report to Main.
+			expect(s.edge.calls).not.toContain("port:helperStep");
+			expect(s.edge.calls).not.toContain("port:saveTaskResult");
+			expect(JSON.stringify(s.edge.row.items)).toContain(
+				"Answered in the side chat.",
+			);
+		}, 60_000);
+});
+
 describe("model failover on a box", () => {
 	it("a route that keeps failing switches to the edge's planned fallback and the turn completes there", async () => {
 		const s = await scenario({ model: [{ text: "unused" }] });
