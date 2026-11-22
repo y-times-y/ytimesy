@@ -1,4 +1,5 @@
 import { isXaiDirectEndpoint } from "#/domain/model-connection";
+import { turnFailover } from "#/domain/model-failover";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import type { TurnBoxGrant } from "#/domain/turn-box-grant";
 import type { TurnBoxModelAuthorization } from "#/domain/turn-box-model-proxy";
@@ -144,17 +145,28 @@ export async function authorizeTurnBoxModel(
 	grant: TurnBoxGrant,
 	scope: <T>(run: () => Promise<T>) => Promise<T> = (run) => run(),
 ): Promise<TurnBoxModelAuthorization> {
-	const row = (
+	const turnRow = (
 		await database().query<{
 			connection_id: string | null;
 			connection_revision: string;
+			failover: unknown;
 		}>(
-			`select connection_id, connection_revision from api_turn where id=$1 and lease_id=$2 and user_id=$3 and session_id=$4
+			`select connection_id, connection_revision, failover from api_turn where id=$1 and lease_id=$2 and user_id=$3 and session_id=$4
 			 and state='running' and not cancel_requested and ${apiTurnLeaseFreshSql()}`,
 			[grant.turnId, grant.leaseId, grant.userId, grant.sessionId],
 		)
 	).rows[0];
-	if (!row) return { kind: "refused", status: 401 };
+	if (!turnRow) return { kind: "refused", status: 401 };
+	// After a failover the turn runs on its fallback route (the box saved it
+	// with its checkpoint), as in the Durable Object. Always one of this
+	// user's own connections: loadModelConnection is scoped to the user.
+	const switched = turnFailover(turnRow.failover)?.route;
+	const row = switched
+		? {
+				connection_id: switched.connectionId,
+				connection_revision: switched.connectionRevision,
+			}
+		: turnRow;
 	if (!row.connection_id) {
 		// The ChatGPT Codex plan: no connection row, a revision that says so.
 		if (!subscriptionTurnSettings(row.connection_revision))

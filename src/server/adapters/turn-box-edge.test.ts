@@ -92,6 +92,31 @@ describe("authorizeTurnBoxModel: which route a turn is", () => {
 		expect(scopes).toBe(1);
 	});
 
+	it("follows the turn's failover route: a Grok turn switched to the Codex plan is served as Codex", async () => {
+		mocks.rows = [
+			{
+				connection_id: "g1",
+				connection_revision: "r",
+				failover: {
+					route: {
+						connectionId: null,
+						connectionRevision: subscriptionTurnRevision("high"),
+						modelId: "gpt-6.2-sol",
+					},
+					label: { model: "GPT-6.2-Sol", connection: "Codex" },
+					tried: ["g1|grok-4.7"],
+					triedLabels: ["Grok 4.7"],
+					switches: 1,
+				},
+			},
+		];
+		expect(await authorizeTurnBoxModel(grant, scope)).toMatchObject({
+			kind: "ok",
+			connectionKind: "subscription",
+			subscription: "codex",
+		});
+	});
+
 	it("refuses a turn with neither a connection nor the plan's revision", async () => {
 		mocks.rows = [{ connection_id: null, connection_revision: "rev" }];
 		expect(await authorizeTurnBoxModel(grant, scope)).toEqual({

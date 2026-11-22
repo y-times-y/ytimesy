@@ -3692,24 +3692,31 @@ async function runApiTurnAttempt(
 		if (!abort.signal.aborted) await stopClaudeCodeRun?.();
 		let paused: ModelSwitchItem | undefined;
 		let exhausted = "";
-		// Failover to another connection plans from the database and is not
-		// served on a turn runner box (docs/turn-runner-boxes.md): a box turn
-		// whose route fails ends with the failure's own message.
+		// Failover to another connection plans from the database: on a turn
+		// runner box the edge makes the plan from the turn's own row
+		// (planFailover port), and the edge's model gateway follows the
+		// switched route the box checkpoints.
 		if (
 			reason &&
 			failoverScope &&
 			!abort.signal.aborted &&
-			!ports.modelAccess
+			(!ports.modelAccess || ports.planFailover)
 		) {
 			const scope = failoverScope;
 			try {
-				const plan = await planModelFailover({
-					turn,
-					reason,
-					evaluation: scope.evaluation,
-					child: scope.child,
-					allowCustom: !step,
-				});
+				const plan = ports.planFailover
+					? await ports.planFailover({
+							reason,
+							child: scope.child,
+							allowCustom: !step,
+						})
+					: await planModelFailover({
+							turn,
+							reason,
+							evaluation: scope.evaluation,
+							child: scope.child,
+							allowCustom: !step,
+						});
 				const { decision } = plan;
 				const analytics = (
 					outcome: "switched" | "asked" | "exhausted",

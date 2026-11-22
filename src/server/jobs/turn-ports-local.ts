@@ -159,6 +159,8 @@ export const localTurnPorts: TurnPorts = {
 	machineGit: undefined,
 	// The Y² tools, a helper's step guard and its report read the database here.
 	ySquaredToolDeps: undefined,
+	// The failover plan reads the database here.
+	planFailover: undefined,
 	helperStepDeps: undefined,
 	helperReportsAtSettle: undefined,
 };

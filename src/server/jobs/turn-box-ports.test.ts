@@ -261,6 +261,8 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 						"ySquared",
 						"helperStep",
 						"helperMemory",
+						// Failover: box-turn-e2e.test.ts ("model failover on a box").
+						"planFailover",
 					].includes(op),
 			),
 		).toEqual([]);

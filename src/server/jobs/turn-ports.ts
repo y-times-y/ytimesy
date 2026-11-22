@@ -67,6 +67,7 @@ import type { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
 import type { ensureConversationCodePoint } from "../services/conversation-recovery";
 import type { MachineGitStep } from "../services/machine-git";
 import type { McpConnection } from "../services/mcp-tools";
+import type { FailoverPlan } from "../services/model-failover";
 import type { recordCloudProjectReport } from "../services/project-knowledge";
 import type {
 	loadAgentProjectSecrets,
@@ -211,6 +212,15 @@ export interface TurnPorts {
 	 * (turn-box-y-squared-port.ts). Unset in the Durable Object.
 	 */
 	readonly ySquaredToolDeps?: Partial<YSquaredToolDeps>;
+	/**
+	 * Set on a box: the failover plan, made by the edge from the turn's own
+	 * row (model-failover.ts reads the user's connections and preferences).
+	 */
+	readonly planFailover?: (input: {
+		readonly reason: string;
+		readonly child: boolean;
+		readonly allowCustom: boolean;
+	}) => Promise<FailoverPlan>;
 	/** Set on a box: a helper's step count and its helpers' token use (guardSubagentStep's deps). */
 	readonly helperStepDeps?: {
 		readonly recordStep: typeof recordSubagentStep;

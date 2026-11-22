@@ -283,6 +283,16 @@ async function handle(
 				call.args,
 				{ ...(deps.machines ? { machines: deps.machines } : {}) },
 			);
+		case "planFailover": {
+			const { planModelFailover } = await import("../services/model-failover");
+			return planModelFailover({
+				turn,
+				reason: call.args.reason as never,
+				evaluation: false,
+				child: call.args.child,
+				allowCustom: call.args.allowCustom,
+			});
+		}
 		case "ySquared":
 			// Loaded on first use: the super agent's tools pull in the send path.
 			return (await import("./turn-box-y-squared-port")).ySquaredPort(

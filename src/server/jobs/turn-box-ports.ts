@@ -382,6 +382,7 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		savedCanvasRevision: (title) => call<number>("canvasRevision", { title }),
 		machineGit: () => boxMachineGit(call),
 		ySquaredToolDeps: boxYSquaredToolDeps(call),
+		planFailover: (input) => call("planFailover", input),
 		helperStepDeps: {
 			recordStep: async () =>
 				call<{ steps: number; budget: never }>("helperStep", {

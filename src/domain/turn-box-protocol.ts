@@ -415,6 +415,12 @@ export const boxPortArgs = {
 	}),
 	/** The highest revision a canvas with this title has in the turn's chat. */
 	canvasRevision: z.object({ title: z.string().min(1).max(200) }),
+	/** The next route after this turn's route failed (planModelFailover on the turn's own row). */
+	planFailover: z.object({
+		reason: z.string().min(1).max(64),
+		child: z.boolean(),
+		allowCustom: z.boolean(),
+	}),
 	/** One of the super agent's tool operations (turn-box-y-squared-port.ts). */
 	ySquared: z.object({
 		dep: z.enum(Y_SQUARED_PORT_DEPS),

@@ -685,8 +685,7 @@ offered tool list, so a new tool fails it until it is checked here.
   account holds runtime secrets run on a box (the VM redacts its own output),
   without changing the Claude runner's `YTIMESY_CLAUDE_BOX_TOOLS_SECRETS`.
 
-Still not on a box: failover to another connection mid-turn (a failing
-route ends the turn with its own message) and the @mention note
+Still not on a box: the @mention note
 (`withMentionNote` reads sessions; it degrades to no note).
 
 - **Plain git on the VM.** The edge holds the git proxy's signing secret, so
@@ -728,3 +727,10 @@ measured concurrency.
   and the git-token release now serve helper chats too.
 - **Still in Durable Objects:** side chats, lead mode fusion, evaluation runs,
   Claude Code turns (their loop is the CLI on the Claude runner).
+- **Model failover** works on a box: a failing route asks the edge for the
+  plan (`planFailover` port: `planModelFailover` on the turn's own row, with
+  the user's connections and preferences), the box checkpoints the switch as
+  the Durable Object does, and the edge's model gateway
+  (`authorizeTurnBoxModel`) serves the turn's failover route from then on.
+  Without it a Y² turn on a spent Grok plan failed instead of moving to the
+  next model (2026-11-22).

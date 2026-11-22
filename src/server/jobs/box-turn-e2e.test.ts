@@ -543,6 +543,60 @@ describe("the super agent (Y²) and helpers on a box", () => {
 	}, 60_000);
 });
 
+describe("model failover on a box", () => {
+	it("a route that keeps failing switches to the edge's planned fallback and the turn completes there", async () => {
+		const s = await scenario({ model: [{ text: "unused" }] });
+		Object.assign(s.owner, { listedModelId: "c1:m1" });
+		let calls = 0;
+		const plans: unknown[] = [];
+		// The route refuses (a provider rate limit) until the edge plans a switch.
+		(s.edge.deps as { upstream: unknown }).upstream = async () => {
+			calls += 1;
+			if (!plans.length)
+				return Response.json(
+					{ error: { type: "rate_limit_error", message: "slow down" } },
+					{ status: 400 },
+				);
+			return sse({ text: "Answered on the fallback." });
+		};
+		(s.edge.state.ports as Record<string, unknown>).planFailover = async (
+			input: unknown,
+		) => {
+			plans.push(input);
+			const route = {
+				connectionId: "c1",
+				connectionRevision: "rev-1",
+				modelId: "m1",
+			};
+			return {
+				decision: {
+					kind: "switch",
+					candidate: {
+						route: { ...route, modelId: "m2" },
+						connectionKey: "c1",
+						connectionLabel: "Backup",
+						modelLabel: "M2",
+						paid: false,
+						sameModel: false,
+					},
+				},
+				failing: { route, label: { model: "M1", connection: "Main" } },
+				previous: null,
+			};
+		};
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+		expect(dbCalls.stacks).toEqual([]);
+		expect(plans).toEqual([
+			{ reason: "rate-limited", child: false, allowCustom: false },
+		]);
+		expect(calls).toBe(2);
+		const result = JSON.stringify(s.edge.row.items);
+		expect(result).toContain("Answered on the fallback.");
+		expect(result).toContain("modelSwitch");
+	}, 60_000);
+});
+
 describe("MCP servers from a box (listed and called by the edge)", () => {
 	it("offers the edge's MCP tools and sends the call there", async () => {
 		const name = mcpToolName("docs", "search");
