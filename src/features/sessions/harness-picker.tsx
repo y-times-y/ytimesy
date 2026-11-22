@@ -311,15 +311,11 @@ export function HarnessPicker({
 					setFavorites(readModelFavorites());
 					setSearch("");
 					setDetail(null);
-					// On a phone the card sits under the list, folded: open it
-					// when it carries the reasoning slider.
-					setDetailExpanded(
-						Boolean(
-							model?.reasoning &&
-								model.reasoning.levels.length > 1 &&
-								onReasoningIdChange,
-						),
-					);
+					// On a phone the card sits under the list, always folded: open,
+					// its slider took half the sheet and left one model row to
+					// pick from. The folded row shows the reasoning level; a tap
+					// opens it.
+					setDetailExpanded(false);
 					// Open on the section the chosen model belongs to: Codex,
 					// Claude Code, the Grok plan, or its provider's API keys.
 					const view = pickerViewFor(harnessId, modelId, connections.data);

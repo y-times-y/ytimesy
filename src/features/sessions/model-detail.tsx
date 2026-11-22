@@ -314,11 +314,13 @@ export function ModelDetailCard({
 				<ModelProviderLogo provider={spec.logo} size={16} />
 				<span className="model-detail-name">{spec.label}</span>
 				<span className="model-detail-summary">
-					{price?.kind === "price"
-						? price.short
-						: price?.kind === "plan"
-							? INCLUDED_IN_PLAN
-							: ""}
+					{reasoning && reasoning.levels.length > 1
+						? `${reasoningLevelLabel((level ?? reasoning.levels[0])?.id ?? "")} reasoning`
+						: price?.kind === "price"
+							? price.short
+							: price?.kind === "plan"
+								? INCLUDED_IN_PLAN
+								: ""}
 				</span>
 			</button>
 			<div className="model-detail-body">

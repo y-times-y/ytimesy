@@ -79,6 +79,8 @@ export interface TurnBoxEdgeOps {
 	 * chat; null otherwise.
 	 */
 	loadOwned(grant: TurnBoxGrant): Promise<ApiTurn | null>;
+	/** loadOwned without the messages and items (a socket's renewal and progress). */
+	loadOwnedIdentity?(grant: TurnBoxGrant): Promise<ApiTurn | null>;
 	renew(turn: ApiTurn): Promise<boolean>;
 	checkpoint(
 		turn: ApiTurn,

@@ -126,6 +126,37 @@ describe("the chat object's Claude relay", () => {
 		expect(box.sent).toEqual([]);
 	});
 
+	it("keeps an answer whose call's socket was gone, for the call's request to reconnect for", () => {
+		const { store, boxes, calls } = relay();
+		const box = new Socket();
+		boxes.set("t1", [box]);
+		store.call("t1", "c1", CALL);
+		store.ack(["c1"]);
+		// The edge request's socket closed (the object restarted) and the box answered.
+		store.reply("c1", { text: "done", isError: false }, "t1");
+		// It reconnects with the same call: the kept answer, not a second run.
+		const caller = new Socket();
+		calls.set(claudeRelayCallTag("c1"), [caller]);
+		store.call("t1", "c1", CALL);
+		expect(caller.frames()).toEqual([
+			{ t: "reply", reply: { text: "done", isError: false } },
+		]);
+		expect(box.sent).toHaveLength(1);
+	});
+
+	it("keeps an answer even when the call's row was already dropped", () => {
+		const { store, calls } = relay();
+		store.call("t1", "c1", CALL);
+		store.callClosed("c1");
+		store.reply("c1", { text: "late", isError: false }, "t1");
+		const caller = new Socket();
+		calls.set(claudeRelayCallTag("c1"), [caller]);
+		store.call("t1", "c1", CALL);
+		expect(caller.frames()).toEqual([
+			{ t: "reply", reply: { text: "late", isError: false } },
+		]);
+	});
+
 	it("only sends a turn's calls to that turn's box", () => {
 		const { store, boxes } = relay();
 		const other = new Socket();
@@ -232,6 +263,38 @@ describe("a relayed call, from the edge request to the box and back", () => {
 		expect(seen[0]?.headers.get("upgrade")).toBe("websocket");
 		store.reply(String(frame?.id), { text: "1 line", isError: false });
 		await expect(answer).resolves.toEqual({ text: "1 line", isError: false });
+	});
+
+	it("opens the call's socket again when it closes before the answer, for the same call", async () => {
+		const ids: string[] = [];
+		const chat = {
+			fetch: async (request: Request) => {
+				const id = new URL(request.url).searchParams.get("id") ?? "";
+				ids.push(id);
+				const pair = socketPair();
+				pair.object.addEventListener("message", () => {
+					// The first socket drops; the second gets the answer.
+					if (ids.length === 1) pair.object.close();
+					else
+						pair.object.send(
+							JSON.stringify({
+								t: "reply",
+								reply: { text: "ok", isError: false },
+							}),
+						);
+				});
+				return { status: 101, webSocket: pair.worker } as unknown as Response;
+			},
+		};
+		const answer = await relayClaudeCall(
+			chat,
+			"Bearer grant",
+			{ name: "read", args: {}, timeoutMs: 60_000, graceMs: 0 },
+			async () => {},
+		);
+		expect(answer).toEqual({ text: "ok", isError: false });
+		expect(ids).toHaveLength(2);
+		expect(ids[0]).toBe(ids[1]);
 	});
 
 	it("answers an error the run can act on when the object refuses the call", async () => {

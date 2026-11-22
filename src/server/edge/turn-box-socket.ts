@@ -29,7 +29,8 @@ export type TurnBoxSocketAttachment = Pick<
 export type TurnBoxSocketOps = Pick<
 	TurnBoxEdgeOps,
 	"loadOwned" | "renew" | "progress" | "cancelRequested" | "boxActive"
->;
+> &
+	Pick<TurnBoxEdgeOps, "loadOwnedIdentity">;
 
 /** The reply for one message from the box; `close` when it is malformed. */
 export async function answerTurnBoxSocketMessage(
@@ -55,7 +56,8 @@ export async function answerTurnBoxSocketMessage(
 			? { t: "cancel" }
 			: { t: "lease-lost" };
 	// The same first check as every HTTP endpoint: running under this lease.
-	const turn = await ops.loadOwned(grant);
+	// Identity only: a long chat's full row is megabytes, twice a second.
+	const turn = await (ops.loadOwnedIdentity ?? ops.loadOwned)(grant);
 	if (!turn) return { reply: [{ t: "lease-lost" }], close: false };
 	const seq = parsed.data.seq;
 	// Claude relay messages are the chat object's own (claude-relay.ts).

@@ -67,6 +67,14 @@ describe("model detail card", () => {
 		expect(html).toContain('aria-valuetext="Medium"');
 		expect(html).toContain('aria-valuenow="1"');
 	});
+	it("folded (a phone), names the reasoning level so it shows without opening", () => {
+		const html = card(priced, {
+			expanded: false,
+			reasoning: { levels, valueId: "high", onChange: () => {} },
+		});
+		expect(html).toContain('class="model-detail-summary">High reasoning<');
+		expect(html).toContain('aria-expanded="false"');
+	});
 	it("labels a favorite and exposes the expand state", () => {
 		const html = card(priced, { favorite: true, expanded: false });
 		expect(html).toContain("In favorites");

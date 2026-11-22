@@ -1360,6 +1360,22 @@ export async function readRunningApiTurn(
 	return result.rows[0] ?? null;
 }
 
+/**
+ * The running turn's identity only (no messages or items): what a box
+ * socket's renewal and progress need. A long chat's full row is megabytes,
+ * and progress arrives twice a second.
+ */
+export async function readRunningApiTurnIdentity(
+	turnId: string,
+	leaseId: string,
+): Promise<ApiTurn | null> {
+	const result = await database().query<ApiTurn>(
+		`select ${CLAIM_IDENTITY_COLUMNS} from api_turn where id=$1 and lease_id=$2 and state='running'`,
+		[turnId, leaseId],
+	);
+	return result.rows[0] ?? null;
+}
+
 /** How many times a box-run turn is handed to another box after its box stopped heartbeating. */
 export const MAX_BOX_TURN_TAKEOVERS = 3;
 

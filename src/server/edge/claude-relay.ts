@@ -78,6 +78,10 @@ export class ClaudeRelay {
 		sql.exec(
 			"create table if not exists claude_relay_tools(turn_id text primary key,definitions text not null,at integer not null)",
 		);
+		// An answer that came while its call's socket was gone (2026-11-22).
+		try {
+			sql.exec("alter table claude_relay_call add column reply text");
+		} catch {}
 	}
 
 	/** A call arrived on its edge socket: kept and sent to the box. */
@@ -95,6 +99,18 @@ export class ClaudeRelay {
 			JSON.stringify({ t: "claude-call", id, ...call }),
 			at,
 		);
+		// The same call again (its edge request reconnected): an answer kept
+		// meanwhile goes to it now; one still running is waited for.
+		const kept = this.sql
+			.exec(
+				"select reply from claude_relay_call where id=? and reply is not null",
+				id,
+			)
+			.toArray()[0] as { reply: string } | undefined;
+		if (kept) {
+			this.reply(id, JSON.parse(kept.reply) as McpCallResult);
+			return;
+		}
 		this.deliver(turnId, true);
 	}
 
@@ -138,15 +154,28 @@ export class ClaudeRelay {
 			this.sql.exec("update claude_relay_call set acked=1 where id=?", id);
 	}
 
-	/** The box's answer, to the call's socket if it is still open. */
-	reply(id: string, reply: McpCallResult) {
-		this.sql.exec("delete from claude_relay_call where id=?", id);
+	/**
+	 * The box's answer, to the call's socket; kept for the call's edge
+	 * request to reconnect for when that socket is gone.
+	 */
+	reply(id: string, reply: McpCallResult, turnId = "") {
 		const text = JSON.stringify({ t: "reply", reply });
+		let sent = false;
 		for (const socket of this.sockets.call(id)) {
 			try {
 				socket.send(text);
+				sent = true;
 			} catch {}
 		}
+		if (sent) this.sql.exec("delete from claude_relay_call where id=?", id);
+		else
+			this.sql.exec(
+				"insert into claude_relay_call(id,turn_id,message,acked,created_at,reply) values(?,?,'{}',1,?,?) on conflict(id) do update set reply=excluded.reply,acked=1",
+				id,
+				turnId,
+				this.now(),
+				JSON.stringify(reply),
+			);
 	}
 
 	tools(turnId: string, definitions: readonly unknown[]) {
@@ -196,8 +225,34 @@ export async function relayClaudeCall(
 	chat: ChatStub,
 	grantHeader: string,
 	call: ClaudeRelayCall,
+	pause: (ms: number) => Promise<void> = (ms) =>
+		new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<McpCallResult> {
 	const id = crypto.randomUUID();
+	// A socket that closes before the answer (the object restarted, a
+	// network blip) is opened again for the same call: the object runs it
+	// once and keeps an answer that came meanwhile.
+	for (let attempt = 0; ; attempt++) {
+		const answer = await relayClaudeCallOnce(chat, grantHeader, call, id);
+		if (answer !== "closed") return answer;
+		if (attempt >= RELAY_RECONNECTS)
+			return {
+				text: "The turn's runner went away before this tool answered. Its outcome is unknown; inspect workspace state before retrying.",
+				isError: true,
+			};
+		await pause(500 * (attempt + 1));
+	}
+}
+
+/** How often a relayed call's socket is opened again before the call is given up. */
+const RELAY_RECONNECTS = 4;
+
+async function relayClaudeCallOnce(
+	chat: ChatStub,
+	grantHeader: string,
+	call: ClaudeRelayCall,
+	id: string,
+): Promise<McpCallResult | "closed"> {
 	const response = await chat.fetch(
 		new Request(
 			`https://chat.internal${CLAUDE_RELAY_CALL_PATH}?id=${encodeURIComponent(id)}`,
@@ -214,9 +269,9 @@ export async function relayClaudeCall(
 	socket.accept();
 	// Past the box's own timeout and grace (it answers those itself).
 	const limitMs = call.timeoutMs + call.graceMs + 60_000;
-	return new Promise<McpCallResult>((resolve) => {
+	return new Promise<McpCallResult | "closed">((resolve) => {
 		let done = false;
-		const finish = (result: McpCallResult) => {
+		const finish = (result: McpCallResult | "closed") => {
 			if (done) return;
 			done = true;
 			clearTimeout(timer);
@@ -241,12 +296,7 @@ export async function relayClaudeCall(
 				if (parsed.success) finish(parsed.data.reply as McpCallResult);
 			} catch {}
 		});
-		socket.addEventListener("close", () =>
-			finish({
-				text: "The turn's runner went away before this tool answered. Its outcome is unknown; inspect workspace state before retrying.",
-				isError: true,
-			}),
-		);
+		socket.addEventListener("close", () => finish("closed"));
 		socket.send(
 			JSON.stringify({ t: "call", ...call } satisfies RelayCallMessage),
 		);

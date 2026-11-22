@@ -19,6 +19,7 @@ import {
 	handClaimedApiTurnToObject,
 	publishApiTurnProgress,
 	readRunningApiTurn,
+	readRunningApiTurnIdentity,
 	releaseClaimedApiTurn,
 	renewApiTurn,
 } from "./api-turns";
@@ -90,6 +91,19 @@ export function createTurnBoxEdgeOps(
 		loadOwned: (grant) =>
 			scope(async () => {
 				const turn = await readRunningApiTurn(grant.turnId, grant.leaseId);
+				return turn &&
+					turn.lease_id === grant.leaseId &&
+					turn.user_id === grant.userId &&
+					turn.session_id === grant.sessionId
+					? turn
+					: null;
+			}),
+		loadOwnedIdentity: (grant) =>
+			scope(async () => {
+				const turn = await readRunningApiTurnIdentity(
+					grant.turnId,
+					grant.leaseId,
+				);
 				return turn &&
 					turn.lease_id === grant.leaseId &&
 					turn.user_id === grant.userId &&

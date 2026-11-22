@@ -274,7 +274,8 @@ export class TurnBoxTurnSession {
 	private claudeHandler:
 		| ((call: ClaudeRelayFrame) => Promise<McpCallResult>)
 		| null = null;
-	private readonly claudeSeen = new Set<string>();
+	/** Each relayed call taken: its answer once it has one (sent again if asked again). */
+	private readonly claudeSeen = new Map<string, string | null>();
 	/** Relay frames written while the socket was down; sent once it is back. */
 	private claudeBacklog: string[] = [];
 	private claudeTools: string | null = null;
@@ -564,8 +565,13 @@ export class TurnBoxTurnSession {
 			JSON.stringify({ t: "claude-ack", seq: ++this.seq, ids: [call.id] }),
 			false,
 		);
-		if (this.claudeSeen.has(call.id)) return;
-		this.claudeSeen.add(call.id);
+		if (this.claudeSeen.has(call.id)) {
+			// Asked again (its edge request reconnected): the answer, if any.
+			const answered = this.claudeSeen.get(call.id);
+			if (answered) this.sendClaudeFrame(answered, true);
+			return;
+		}
+		this.claudeSeen.set(call.id, null);
 		void handler(call)
 			.catch(
 				(error: unknown): McpCallResult => ({
@@ -574,17 +580,16 @@ export class TurnBoxTurnSession {
 					isError: true,
 				}),
 			)
-			.then((reply) =>
-				this.sendClaudeFrame(
-					JSON.stringify({
-						t: "claude-reply",
-						seq: ++this.seq,
-						id: call.id,
-						reply,
-					}),
-					true,
-				),
-			);
+			.then((reply) => {
+				const frame = JSON.stringify({
+					t: "claude-reply",
+					seq: ++this.seq,
+					id: call.id,
+					reply,
+				});
+				this.claudeSeen.set(call.id, frame);
+				this.sendClaudeFrame(frame, true);
+			});
 	}
 
 	/** Sends a relay frame now, or (`keep`) after the socket is back. */

@@ -1815,7 +1815,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			this.claudeRelay.tools(turnId, data.definitions);
 		else if (data.t === "claude-ack") this.claudeRelay.ack(data.ids);
 		else if (data.t === "claude-reply")
-			this.claudeRelay.reply(data.id, data.reply as McpCallResult);
+			this.claudeRelay.reply(data.id, data.reply as McpCallResult, turnId);
 		return true;
 	}
 	/** A relayed Claude Code call's edge request: one hibernatable socket per call. */
