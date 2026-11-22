@@ -108,6 +108,8 @@ export function usageNotice(
 	},
 	label: (ms: number) => string = usageResetLabel,
 ): UsageWarning | null {
+	// Only a real answer: an error or a half-read value has no windows.
+	if (!Array.isArray(usage?.windows)) return null;
 	return (
 		usageWarning(usage.windows, label) ??
 		autoResetNotice(usage.autoResets ?? [], label)
