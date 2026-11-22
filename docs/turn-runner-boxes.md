@@ -782,3 +782,13 @@ object).
 - Tests: `claude-relay.test.ts`, `turn-box-claude-port.test.ts`,
   `box-claude-turn-e2e.test.ts` (whole turn through the real routes and relay,
   including a socket dropped before the call).
+- **Hand-off to the object** (`handToObject`, 2026-11-22): a claimed turn
+  whose history is over 8 MB (`TURN_BOX_HANDOFF_HISTORY_BYTES`; the box limit
+  is 16 MB), or whose VM cannot redact the account's runtime secrets itself
+  (a fresh VM: its first turn), is queued again for its chat's Durable Object
+  instead of failing: the edge releases the box's coordination lease, queues
+  the turn, then sets its executor (an admitted turn's executor is
+  immutable), and the admission sweep starts it. The box hears lease-lost.
+- Live (2026-11-22): a Claude Sonnet turn ran on a box with one relayed
+  `bash` call; a fresh-VM chat was handed off and completed in its object.
+  Switch: `YTIMESY_BOX_CLAUDE_USERS=*`.
