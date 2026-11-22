@@ -29,6 +29,10 @@ async function vmEdge(
 		allowSecrets?: boolean;
 		admit?: Awaited<ReturnType<TurnBoxVmOps["admit"]>>;
 		vm?: string;
+		/** The edge can hand a turn back to its chat's object. */
+		handOff?: boolean;
+		/** The VM cannot redact secrets itself (its probe finds no filter). */
+		noRedaction?: boolean;
 	} = {},
 ) {
 	const keys = await generateTurnBoxKeyPair();
@@ -44,6 +48,7 @@ async function vmEdge(
 		requests: [] as string[],
 		responses: [] as string[],
 		prepared: 0,
+		handedOff: [] as string[],
 	};
 	const machines = {
 		// The account key is in scope here, as in the real machines.
@@ -56,7 +61,7 @@ async function vmEdge(
 					{
 						exitCode: 0,
 						stdout: "",
-						stderr: "\nytimesy-vm-redaction:0\n",
+						stderr: options.noRedaction ? "" : "\nytimesy-vm-redaction:0\n",
 					},
 		keepAwakeForBackground: async () => {
 			state.ops.push("keepAwake");
@@ -130,6 +135,13 @@ async function vmEdge(
 			holds(grant) ? TURN : null,
 		cancelRequested: async () => state.cancel,
 		finalize: async () => "completed" as const,
+		...(options.handOff
+			? {
+					handToObject: async (turnId: string) => {
+						state.handedOff.push(turnId);
+					},
+				}
+			: {}),
 	} as unknown as TurnBoxEdgeOps;
 	const replay = new TurnBoxReplayGuard();
 	const fetchEdge = async (
@@ -309,6 +321,31 @@ describe("vm/* endpoints", () => {
 		);
 		expect(granted.status).toBe(200);
 		expect(granted.body.grant.redactOnVm).toBe(true);
+	});
+
+	it("hands a turn its box cannot run safely (secrets the VM cannot redact) to its chat's object", async () => {
+		const off = await vmEdge({ secrets: true, handOff: true });
+		const handed = await off.fetchEdge(
+			TURN_BOX_VM_PATHS.ensure,
+			await off.grant(),
+		);
+		expect(handed.status).toBe(409);
+		expect(handed.body).toEqual({ error: "lease-lost" });
+		expect(off.state.handedOff).toEqual([TURN.id]);
+		expect(off.state.minted).toEqual([]);
+
+		const blind = await vmEdge({
+			secrets: true,
+			allowSecrets: true,
+			noRedaction: true,
+			handOff: true,
+		});
+		const refused = await blind.fetchEdge(
+			TURN_BOX_VM_PATHS.ensure,
+			await blind.grant(),
+		);
+		expect(refused.status).toBe(409);
+		expect(blind.state.handedOff).toEqual([TURN.id]);
 	});
 
 	it("is refused by admission before the VM starts or an identity is minted", async () => {

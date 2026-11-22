@@ -75,6 +75,8 @@ export type TurnBoxVmRouteDeps = {
 		boxActive(boxId: string): Promise<boolean>;
 		loadOwned(grant: TurnBoxGrant): Promise<ApiTurn | null>;
 		cancelRequested(turn: ApiTurn): Promise<boolean>;
+		/** Queues the turn again for its chat's Durable Object (turn-box-routes.ts). */
+		handToObject?(turnId: string, leaseId: string): Promise<void>;
 	};
 	readonly vm: TurnBoxVmOps;
 	readonly log?: (message: string, detail: Record<string, unknown>) => void;
@@ -204,7 +206,19 @@ async function ensure(
 	// as the Linux user that owns the env file), so tools stay off the box
 	// unless the owner allows it, as for the Claude runner.
 	const secrets = await vm.hasRuntimeSecrets(turn);
-	if (secrets && !vm.allowRuntimeSecrets()) return refuse("secrets", 403);
+	// A turn a box cannot run safely here goes to its chat's object, which
+	// redacts at the edge: the box hears its lease is gone and lets go.
+	const handOff = async (reason: string) => {
+		if (!deps.ops.handToObject || !turn.lease_id) return null;
+		console.info("Turn handed from a box to its chat's object.", {
+			turnId: turn.id,
+			reason,
+		});
+		await deps.ops.handToObject(turn.id, turn.lease_id);
+		return refuse("lease-lost", 409);
+	};
+	if (secrets && !vm.allowRuntimeSecrets())
+		return (await handOff("secrets")) ?? refuse("secrets", 403);
 	const admitted = await vm.admit(turn);
 	if (!admitted.ok)
 		return refuse("admission", 429, {
@@ -229,7 +243,11 @@ async function ensure(
 		store,
 		redactOnVm: secrets,
 	});
-	if (!granted) return refuse("unavailable", 503, { reason: "no-grant" });
+	if (!granted)
+		return (
+			(secrets ? await handOff("no-redaction") : null) ??
+			refuse("unavailable", 503, { reason: "no-grant" })
+		);
 	return reply(
 		vmEnsureResponse.parse({
 			vm: granted.vmId,
