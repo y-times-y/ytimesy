@@ -72,7 +72,7 @@ export interface TurnBoxEdgeOps {
 	 * A claimed turn too long for a box goes back to the queue for its chat's
 	 * Durable Object (its admission sweep starts it).
 	 */
-	handToObject?(turnId: string, leaseId: string): Promise<void>;
+	handToObject?(turn: ApiTurn): Promise<void>;
 	/**
 	 * The turn the grant names while it is running under the grant's lease
 	 * (id, lease_id, state='running'), and only if it is the grant's user's
@@ -350,7 +350,7 @@ export async function routeTurnBoxEdge(
 				console.info("Turn too long for a box; handed to its chat's object.", {
 					turnId: turn.id,
 				});
-				await deps.ops.handToObject(turn.id, leaseId).catch(() => undefined);
+				await deps.ops.handToObject(turn).catch(() => undefined);
 				return new Response(null, { status: 204 });
 			}
 			const grant = await issueTurnBoxGrant(

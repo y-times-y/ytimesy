@@ -25,6 +25,7 @@ import {
 import { reserveApiTokens } from "./api-usage-budget";
 import { CODEX_BACKEND } from "./codex-subscription-runtime";
 import { subscriptionFetch } from "./codex-subscription-transport";
+import { coordinateConversationTurn } from "./conversation-turn-control";
 import { database } from "./database";
 import { loadModelConnection } from "./model-connections";
 import { afterBoxTurnSettled } from "./turn-box-edge-work";
@@ -66,9 +67,21 @@ export function createTurnBoxEdgeOps(
 					"node",
 				);
 			}),
-		handToObject: (turnId, leaseId) =>
+		handToObject: (turn) =>
 			scope(async () => {
-				await handClaimedApiTurnToObject(turnId, leaseId);
+				const leaseId = turn.lease_id;
+				if (!leaseId) return;
+				// The box may hold the chat's coordination lease for this turn:
+				// let it go, or the object refuses the turn as already running.
+				await coordinateConversationTurn("release", {
+					userId: turn.user_id,
+					sessionId: turn.session_id,
+					turnId: turn.id,
+					leaseId,
+				}).catch(() => {
+					console.warn("Coordination release before a hand-off failed.");
+				});
+				await handClaimedApiTurnToObject(turn.id, leaseId);
 			}),
 		releaseClaim: (turnId, leaseId) =>
 			scope(async () => {

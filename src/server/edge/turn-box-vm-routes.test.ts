@@ -137,8 +137,8 @@ async function vmEdge(
 		finalize: async () => "completed" as const,
 		...(options.handOff
 			? {
-					handToObject: async (turnId: string) => {
-						state.handedOff.push(turnId);
+					handToObject: async (turn: { id: string }) => {
+						state.handedOff.push(turn.id);
 					},
 				}
 			: {}),

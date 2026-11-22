@@ -76,7 +76,7 @@ export type TurnBoxVmRouteDeps = {
 		loadOwned(grant: TurnBoxGrant): Promise<ApiTurn | null>;
 		cancelRequested(turn: ApiTurn): Promise<boolean>;
 		/** Queues the turn again for its chat's Durable Object (turn-box-routes.ts). */
-		handToObject?(turnId: string, leaseId: string): Promise<void>;
+		handToObject?(turn: ApiTurn): Promise<void>;
 	};
 	readonly vm: TurnBoxVmOps;
 	readonly log?: (message: string, detail: Record<string, unknown>) => void;
@@ -214,7 +214,7 @@ async function ensure(
 			turnId: turn.id,
 			reason,
 		});
-		await deps.ops.handToObject(turn.id, turn.lease_id);
+		await deps.ops.handToObject(turn);
 		return refuse("lease-lost", 409);
 	};
 	if (secrets && !vm.allowRuntimeSecrets())
