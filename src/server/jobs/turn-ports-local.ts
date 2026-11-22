@@ -157,4 +157,8 @@ export const localTurnPorts: TurnPorts = {
 	savedCanvasRevision: undefined,
 	// Git is set up here, with the proxy's secret.
 	machineGit: undefined,
+	// The Y² tools, a helper's step guard and its report read the database here.
+	ySquaredToolDeps: undefined,
+	helperStepDeps: undefined,
+	helperReportsAtSettle: undefined,
 };

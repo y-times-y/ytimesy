@@ -101,7 +101,8 @@ describe("turn box routing: Y² and the turn-box secrets switch", () => {
 		expect(boxTurnBlock({ ...none, leadFusion: true }, {})).toBe("lead-fusion");
 	});
 	it("keeps a Y² chat off the boxes", () => {
-		expect(boxTurnBlock({ ...none, ySquared: true }, {})).toBe("y-squared");
+		// Y² runs on a box: its tools go through the edge.
+		expect(boxTurnBlock({ ...none, ySquared: true }, {})).toBeNull();
 	});
 	it("lets runtime-secret chats on with YTIMESY_TURN_BOX_SECRETS=1 alone", () => {
 		const secrets = { ...none, hasRuntimeSecrets: true };

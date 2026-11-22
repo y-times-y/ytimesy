@@ -92,7 +92,6 @@ export async function afterBoxTurnSettled(
 		});
 		// The step's git proxy token, likewise.
 		await run("machine-git-release", async () => {
-			if (owner.parentSessionId) return;
 			const { machineGitPort } = await import("./turn-box-machine-git-port");
 			await machineGitPort(
 				turn,
@@ -104,6 +103,27 @@ export async function afterBoxTurnSettled(
 			await run("publish", () =>
 				publishCommitted(turn, owner, input.items, deps),
 			);
+		// A helper's report to its parent (runApiTurn writes it after
+		// finalize, where a box's port calls are no longer lease-checked).
+		await run("helper-report", async () => {
+			if (!owner.parentSessionId) return;
+			const { settleHelperReport } = await import("./turn-box-helper-port");
+			await settleHelperReport(turn, owner, input, {
+				machines: deps.machines,
+				// Harness variant y=on (or a Y project): a writer under the root
+				// has its patch applied to the thread's checkout.
+				applyToThread: async () => {
+					const { harnessVariantForUser } = await import("./dev-eval-users");
+					if ((await harnessVariantForUser(turn.user_id)).y === "on")
+						return true;
+					if (!owner.projectId) return false;
+					const { projectYMode } = await import("./y-mode");
+					return Boolean(
+						(await projectYMode(turn.user_id, owner.projectId))?.enabled,
+					);
+				},
+			});
+		});
 		if (input.state !== "completed") return;
 		// The memory save hook (runApiTurn's memory.afterTurn): after finalize
 		// the box's own port calls are no longer lease-checked, so it is here.

@@ -679,9 +679,9 @@ offered tool list, so a new tool fails it until it is checked here.
   through the box), describing one (checked against values only the edge
   holds), asking for a push approval, saving the environment setup. Push
   cards answered meanwhile are claimed through `pushNotices`.
-- **Routing**: Y² chats (their tools read the database by name) and lead
-  mode fusion stay in Durable Objects, as do helper chats, evaluation runs and
-  Claude Code. `YTIMESY_TURN_BOX_SECRETS=1` lets chats whose project or
+- **Routing**: lead mode fusion, side chats (children without a role),
+  evaluation runs and Claude Code stay in Durable Objects. Y² chats and
+  helpers with a role run on boxes (next section). `YTIMESY_TURN_BOX_SECRETS=1` lets chats whose project or
   account holds runtime secrets run on a box (the VM redacts its own output),
   without changing the Claude runner's `YTIMESY_CLAUDE_BOX_TOOLS_SECRETS`.
 
@@ -706,3 +706,25 @@ route ends the turn with its own message) and the @mention note
 turns. A `t4g.small` is ~20% cheaper but the Claude runner boxes are x86
 (pinned x64 Claude binary), so ARM needs a test box first. Size the fleet from
 measured concurrency.
+
+## The super agent and helpers on a box (2026-11-22)
+
+- **Y²** (`ySquared` port, `turn-box-y-squared-port.ts`): the box runs the Y²
+  tools; their Deps (thread list, metadata, outcome, canvas, attachment
+  download, send, stop and the project crew's list, thread, reconcile,
+  sent-note and schedule) are port calls. The edge serves them only when the
+  turn's chat is its project's Y² chat; every user is the turn's, every
+  project the chat's, a named thread must be a root chat of that project and
+  not Y² itself, a send or stop uses that thread's harness and the edge's
+  machines, a schedule is always this Y² chat's.
+- **Helpers with a role** run their own turns on boxes. Each step's budget
+  count and their helpers' token use are the `helperStep` port; their
+  read-only memory (`search_memory`, `read_memory`, the recall parts) is the
+  `helperMemory` port, built on the edge in every request. Their report to
+  the parent comes after finalize, so the edge writes it when the turn settles
+  (`settleHelperReport`: final words or failure, a writer's patch moved with
+  the edge's machines, the task result saved and its event queued); the box
+  skips that block (`helperReportsAtSettle`). Plain git, the server-run tools
+  and the git-token release now serve helper chats too.
+- **Still in Durable Objects:** side chats, lead mode fusion, evaluation runs,
+  Claude Code turns (their loop is the CLI on the Claude runner).

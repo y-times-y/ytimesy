@@ -62,16 +62,14 @@ describe("machine git port: the edge sets git up on the turn's own VM", () => {
 		expect(s.prepared).toEqual(["vm-own"]);
 	});
 
-	it("refuses another VM, and a helper chat", async () => {
+	it("refuses another VM; a helper chat gets git on its own VM", async () => {
 		await expect(
 			setup().call({ op: "prepareVm", vm: "vm-other" }),
 		).rejects.toBeInstanceOf(TurnBoxPortForbidden);
-		await expect(
-			setup({ parentSessionId: "root" }).call({
-				op: "prepareVm",
-				vm: "vm-own",
-			}),
-		).rejects.toBeInstanceOf(TurnBoxPortForbidden);
+		const helper = setup({ parentSessionId: "root" });
+		expect(await helper.call({ op: "prepareVm", vm: "vm-own" })).toEqual({
+			tokens: ["git-tok"],
+		});
 	});
 
 	it("release removes the token from the VM and revokes the chat's tokens, whichever request minted them", async () => {

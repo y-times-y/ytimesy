@@ -257,6 +257,10 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 						"canvasRevision",
 						// Plain git on the VM: turn-box-machine-git-port.test.ts.
 						"machineGit",
+						// Y² and helpers: turn-box-y-squared-port.test.ts, turn-box-helper-port.test.ts, box-turn-e2e.test.ts.
+						"ySquared",
+						"helperStep",
+						"helperMemory",
 					].includes(op),
 			),
 		).toEqual([]);

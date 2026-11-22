@@ -38,7 +38,6 @@ export async function machineGitPort(
 		turn.session_id,
 	);
 	if (!chat) throw new TurnBoxPortForbidden("session");
-	if (chat.parentSessionId) throw new TurnBoxPortForbidden("git:helper");
 	const tokens = deps.tokens ?? machineGitTokens;
 	const owner = { userId: turn.user_id, id: chat.id };
 	/** The chat's own VM, never one the box names. */

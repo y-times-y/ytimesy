@@ -61,8 +61,7 @@ export async function remoteToolPort(
 		turn.user_id,
 		turn.session_id,
 	);
-	if (!chat?.projectId || chat.parentSessionId)
-		throw new TurnBoxPortForbidden("tool:chat");
+	if (!chat?.projectId) throw new TurnBoxPortForbidden("tool:chat");
 	const projectId = chat.projectId;
 	const vm = () => {
 		if (!deps.machines || !chat.providerRef)

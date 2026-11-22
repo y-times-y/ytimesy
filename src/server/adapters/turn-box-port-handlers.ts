@@ -283,6 +283,24 @@ async function handle(
 				call.args,
 				{ ...(deps.machines ? { machines: deps.machines } : {}) },
 			);
+		case "ySquared":
+			// Loaded on first use: the super agent's tools pull in the send path.
+			return (await import("./turn-box-y-squared-port")).ySquaredPort(
+				turn,
+				call.args.dep,
+				call.args.args,
+				{ ...(deps.machines ? { machines: deps.machines } : {}) },
+			);
+		case "helperMemory":
+			return (await import("./turn-box-helper-port")).helperMemoryPort(
+				turn,
+				call.args,
+			);
+		case "helperStep":
+			return (await import("./turn-box-helper-port")).helperStepPort(
+				turn,
+				call.args,
+			);
 		case "machineGit":
 			return (await import("./turn-box-machine-git-port")).machineGitPort(
 				turn,

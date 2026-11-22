@@ -217,6 +217,27 @@ export const SUBAGENT_PORT_DEPS = [
 ] as const;
 export type SubagentPortDep = (typeof SUBAGENT_PORT_DEPS)[number];
 
+/**
+ * The super agent's (Y²) operations a box's Y² tools reach through the edge
+ * (`ySquared` port, turn-box-y-squared-port.ts): the members of the tools'
+ * Deps that read the database, the project's crew or another thread.
+ */
+export const Y_SQUARED_PORT_DEPS = [
+	"list",
+	"metadata",
+	"outcome",
+	"canvas",
+	"download",
+	"send",
+	"stop",
+	"crewList",
+	"crewThread",
+	"crewReconcile",
+	"crewNoteY2Sent",
+	"crewSchedule",
+] as const;
+export type YSquaredPortDep = (typeof Y_SQUARED_PORT_DEPS)[number];
+
 const portText = z.string().min(1).max(512);
 const portKey = z.string().min(1).max(256);
 const optionalText = portText.nullable();
@@ -394,6 +415,25 @@ export const boxPortArgs = {
 	}),
 	/** The highest revision a canvas with this title has in the turn's chat. */
 	canvasRevision: z.object({ title: z.string().min(1).max(200) }),
+	/** One of the super agent's tool operations (turn-box-y-squared-port.ts). */
+	ySquared: z.object({
+		dep: z.enum(Y_SQUARED_PORT_DEPS),
+		args: z.array(z.unknown()).max(8),
+	}),
+	/** A helper's step count and its own helpers' token use (guardSubagentStep). */
+	helperStep: z.object({ op: z.enum(["record", "descendantUsage"]) }),
+	/**
+	 * A helper's read-only memory (subagentMemory), run by the edge: whether
+	 * there is any, one of its two read tools, or the parts its request gets.
+	 */
+	helperMemory: z.object({
+		op: z.enum(["available", "tool", "attach"]),
+		wording: portText.optional(),
+		tool: z.enum(["search_memory", "read_memory"]).optional(),
+		input: z.unknown().optional(),
+		messages: messages.optional(),
+		items: items.optional(),
+	}),
 	/** Push cards of this chat answered meanwhile, claimed once (gitPushRequests.claimUnnoticed). */
 	pushNotices: z.object({}),
 	/** The turn's MCP tools as data (names, descriptions, input schemas); credentials stay on the edge. */

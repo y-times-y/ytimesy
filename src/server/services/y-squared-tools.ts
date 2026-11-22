@@ -86,6 +86,7 @@ import {
 } from "./queued-user-messages";
 import type { WorkspaceMachines } from "./workspace-machines";
 
+export type YSquaredToolDeps = Deps;
 type Deps = {
 	readonly list: typeof listSidebarAgentSessions;
 	/** The project's crew (one Durable Object request); null where there is none (local development). */
@@ -146,6 +147,9 @@ const defaultDeps: Deps = {
 		return { turnStatus: view.turnStatus };
 	},
 };
+
+/** The product's deps, for the edge's side of the `ySquared` port. */
+export const ySquaredToolDefaultDeps = defaultDeps;
 
 type Sidebar = Awaited<ReturnType<typeof listSidebarAgentSessions>>[number];
 

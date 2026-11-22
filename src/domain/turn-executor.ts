@@ -46,9 +46,8 @@ export function chooseTurnExecutor(input: {
  * (docs/turn-runner-boxes.md, "Routing"). Decided when the turn is queued,
  * from facts read about its chat; null means the box may run it.
  *
- * - `subagent`: a helper chat (reader, writer, checker, Y-squared worker)
- *   shares its parent's machine and reports through the parent: the box's
- *   workspace port and the edge's post-settle work serve root chats only.
+ * - `subagent`: a child chat without a role (a side chat); helpers with a
+ *   role run on boxes.
  * - `evaluation`: harness evaluation runs stay in Durable Objects.
  * - `runtime-secrets`: the project (or the user's account) holds a
  *   runtime-kind secret. `vm/ensure` answers 403 `secrets` for those unless
@@ -56,14 +55,15 @@ export function chooseTurnExecutor(input: {
  *   YTIMESY_CLAUDE_BOX_TOOLS_SECRETS=1); then the VM redacts its own output.
  * - `lead-fusion`: harness variant lead=fusion; its sidekick's round, state
  *   and retirement are not served to a box.
- * - `y-squared`: a project's Y² chat; its tools read the database by name
- *   (y-squared-tools.ts), which a box cannot.
+ *
+ * A project's Y² chat and helpers with a role run on boxes (their tools and
+ * reports go through the edge: turn-box-y-squared-port.ts,
+ * turn-box-helper-port.ts).
  */
 export type BoxTurnBlock =
 	| "subagent"
 	| "evaluation"
 	| "runtime-secrets"
-	| "y-squared"
 	| "lead-fusion";
 
 /** Whether turn boxes may run chats whose project or account holds runtime secrets. */
@@ -93,7 +93,6 @@ export function boxTurnBlock(
 ): BoxTurnBlock | null {
 	if (facts.subagent) return "subagent";
 	if (facts.evaluation) return "evaluation";
-	if (facts.ySquared) return "y-squared";
 	if (facts.leadFusion) return "lead-fusion";
 	if (facts.hasRuntimeSecrets && !turnBoxSecretsAllowed(env))
 		return "runtime-secrets";

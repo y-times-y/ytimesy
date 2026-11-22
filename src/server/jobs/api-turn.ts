@@ -2120,6 +2120,8 @@ async function runApiTurnAttempt(
 						turnId: turn.id,
 						// To see which canvas revisions Y² already shows (show_canvas).
 						items: () => items,
+						// On a box: its reads and sends go through the edge.
+						...(ports.ySquaredToolDeps ? { deps: ports.ySquaredToolDeps } : {}),
 					}),
 				}
 			: yAgent
@@ -2546,6 +2548,7 @@ async function runApiTurnAttempt(
 						session: owner,
 						items,
 						messages: history,
+						...(ports.helperStepDeps ? { deps: ports.helperStepDeps } : {}),
 						onFinalStep: () => {
 							checkerFinal = true;
 						},
@@ -3424,7 +3427,12 @@ async function runApiTurnAttempt(
 				"Completed turn saved, but its project report needs recovery.",
 			);
 		});
-		if (owner.parentSessionId && !isSideChat(owner)) {
+		// On a box the edge writes and delivers it when the turn settles.
+		if (
+			owner.parentSessionId &&
+			!isSideChat(owner) &&
+			!ports.helperReportsAtSettle
+		) {
 			const finalText = items
 				.slice(lastUser + 1)
 				.filter((item) => item.kind === "agentMessage")
@@ -3866,7 +3874,11 @@ async function runApiTurnAttempt(
 				fusionLead,
 				saved === "cancelled" ? "Main was stopped" : "Main's turn failed",
 			).catch(() => {});
-		if (saved === "failed" && !sideConversation) {
+		if (
+			saved === "failed" &&
+			!sideConversation &&
+			!ports.helperReportsAtSettle
+		) {
 			// A subagent still reports: what it said so far and, for a writer,
 			// the partial patch (its work in progress is committed for it).
 			const summary = subagentSession

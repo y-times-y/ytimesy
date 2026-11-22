@@ -253,7 +253,13 @@ async function scenario(input: {
 			}
 			if (command.includes("ytimesy-project-cwd"))
 				return { stdout: "/home/ubuntu/repo", stderr: "", statusCode: 0 };
-			if (command.startsWith("python3 -c"))
+			// A reader helper's commands run wrapped (as the reader user, base64).
+			if (
+				command.startsWith("python3 -c") ||
+				command.includes(
+					Buffer.from("python3 -c").toString("base64").slice(0, 12),
+				)
+			)
 				return { stdout: PACKET, stderr: "", statusCode: 0 };
 			return { stdout: "ok\n", stderr: "", statusCode: 0 };
 		};
@@ -445,6 +451,95 @@ describe("helpers from a box (the subagent port)", () => {
 		const result = JSON.stringify(s.edge.row.items);
 		expect(result).toContain("The name is demo.");
 		console.log("E2E helper", deps.join(" "));
+	}, 60_000);
+});
+
+describe("the super agent (Y²) and helpers on a box", () => {
+	it("a Y² turn lists and messages threads through the edge, never the database", async () => {
+		const THREAD = "33333333-3333-4333-8333-333333333333";
+		const s = await scenario({
+			model: [
+				{ tool: "threads", input: {} },
+				{ tool: "message_thread", input: { id: THREAD, text: "hi" } },
+				{ text: "Done." },
+			],
+		});
+		Object.assign(s.owner, { listedModelId: "c1:m1" });
+		const ports = s.edge.state.ports as Record<string, unknown>;
+		ports.projectYMode = async () => ({
+			enabled: true,
+			ySquaredId: s.owner.id,
+		});
+		const deps: string[] = [];
+		ports.ySquared = async (a: { dep: string; args: unknown[] }) => {
+			deps.push(a.dep);
+			if (a.dep === "crewList")
+				return {
+					reconciled: true,
+					rows: [
+						{
+							sessionId: THREAD,
+							title: "Fix login",
+							state: "working",
+							waitingOn: null,
+							prUrl: null,
+							lastReply: null,
+							lastRequest: "fix it",
+							updatedAt: 1,
+							createdAt: 1,
+							lastActiveAt: 1,
+							workingSince: 1,
+						},
+					],
+				};
+			if (a.dep === "metadata")
+				return {
+					...s.owner,
+					id: a.args[1],
+					parentSessionId: null,
+					agentRole: null,
+					title: "Fix login",
+					turnStatus: "idle",
+				};
+			if (a.dep === "send") return { turnStatus: "running" };
+			return null;
+		};
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+		expect(dbCalls.stacks).toEqual([]);
+		expect(s.reads).toEqual([]);
+		expect(deps).toEqual(["crewList", "metadata", "crewNoteY2Sent", "send"]);
+		const result = JSON.stringify(s.edge.row.items);
+		expect(result).toContain("Fix login");
+		expect(result).toContain("its turn started");
+	}, 60_000);
+
+	it("a helper's own turn counts its steps through the edge and leaves its report to the edge's settle", async () => {
+		const s = await scenario({
+			model: [{ text: "Report: two files." }],
+		});
+		Object.assign(s.owner, {
+			parentSessionId: "44444444-4444-4444-8444-444444444444",
+			agentRole: "researcher",
+			taskState: "running",
+			taskAccess: "read_only",
+			taskPlacement: "shared",
+			listedModelId: "c1:m1",
+		});
+		const ports = s.edge.state.ports as Record<string, unknown>;
+		const steps: string[] = [];
+		ports.helperStep = async (a: { op: string }) => {
+			steps.push(a.op);
+			return a.op === "record" ? { steps: 1, budget: null } : [];
+		};
+		ports.helperMemory = async () => false;
+		await s.run();
+		expect(s.edge.row.state).toBe("completed");
+		expect(dbCalls.stacks).toEqual([]);
+		expect(s.reads).toEqual([]);
+		expect(steps).toContain("record");
+		// Written after finalize by the edge (turn-box-edge-work.ts), not by the box.
+		expect(s.edge.calls).not.toContain("port:saveTaskResult");
 	}, 60_000);
 });
 

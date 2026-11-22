@@ -1,4 +1,7 @@
-import type { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
+import type {
+	agentSessionMetadataForOwner,
+	descendantTokenUsageItemsForOwner,
+} from "../adapters/agent-sessions";
 import type { completedLifecycleContinuations } from "../adapters/agent-task-command-receipts";
 import type {
 	releaseHeldAgentTaskEvents,
@@ -50,7 +53,10 @@ import type {
 	saveSessionDerivedValue,
 } from "../adapters/prepared-checkout";
 import type { injectServerPeerMessages } from "../adapters/server-peer-inbox";
-import type { subagentAncestors } from "../adapters/subagents";
+import type {
+	recordSubagentStep,
+	subagentAncestors,
+} from "../adapters/subagents";
 import type { readVerificationBaseline } from "../adapters/turn-verification";
 import type { noteUserHub } from "../adapters/user-hub-notes";
 import type { projectYMode } from "../adapters/y-mode";
@@ -74,6 +80,7 @@ import type { startQueuedUserTurn } from "../services/queued-user-messages";
 import type { SubagentToolDeps } from "../services/subagent-tools";
 import type { commitSessionTurn } from "../services/turn-commit";
 import type { subagentMemory, turnMemory } from "../services/turn-memory";
+import type { YSquaredToolDeps } from "../services/y-squared-tools";
 import type { enqueueAgentTaskEvent } from "./queue";
 
 /**
@@ -199,6 +206,22 @@ export interface TurnPorts {
 	 * proxy's secret (turn-box-machine-git-port.ts). Unset in the Durable
 	 * Object, which sets git up itself (machine-git.ts).
 	 */
+	/**
+	 * Set on a box: the super agent's (Y²) tool operations through the edge
+	 * (turn-box-y-squared-port.ts). Unset in the Durable Object.
+	 */
+	readonly ySquaredToolDeps?: Partial<YSquaredToolDeps>;
+	/** Set on a box: a helper's step count and its helpers' token use (guardSubagentStep's deps). */
+	readonly helperStepDeps?: {
+		readonly recordStep: typeof recordSubagentStep;
+		readonly descendantUsage: typeof descendantTokenUsageItemsForOwner;
+	};
+	/**
+	 * Set on a box: a helper's report to its parent is written by the edge
+	 * when the turn settles (turn-box-edge-work.ts): it comes after finalize,
+	 * where the box's port calls are no longer lease-checked.
+	 */
+	readonly helperReportsAtSettle?: boolean;
 	readonly machineGit?: (owner: {
 		userId: string;
 		id: string;

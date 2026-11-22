@@ -11,15 +11,18 @@ import type {
 	BoxPortArgs,
 	BoxPortOp,
 	SubagentPortDep,
+	YSquaredPortDep,
 } from "#/domain/turn-box-protocol";
 import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
 import type { CodexSelection } from "../adapters/codex-subscription-runtime";
+import type { YSquaredCrewClient } from "../adapters/y-squared-crew-client";
 import type { MachineGitStep } from "../services/machine-git";
 import type { McpCatalogEntry } from "../services/mcp-tools";
 import type { RemoteCommandReceipts } from "../services/remote-command-receipts";
 import type { SubagentToolDeps } from "../services/subagent-tools";
-import type { TurnMemory } from "../services/turn-memory";
+import type { SubagentMemory, TurnMemory } from "../services/turn-memory";
+import type { YSquaredToolDeps } from "../services/y-squared-tools";
 import type { TurnBoxTurnSession } from "./turn-box-client";
 import { type TurnPorts, TurnPortUnavailable } from "./turn-ports";
 
@@ -378,6 +381,16 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		subagentToolDeps: boxSubagentToolDeps(call),
 		savedCanvasRevision: (title) => call<number>("canvasRevision", { title }),
 		machineGit: () => boxMachineGit(call),
+		ySquaredToolDeps: boxYSquaredToolDeps(call),
+		helperStepDeps: {
+			recordStep: async () =>
+				call<{ steps: number; budget: never }>("helperStep", {
+					op: "record",
+				}),
+			descendantUsage: async () =>
+				call<never[]>("helperStep", { op: "descendantUsage" }),
+		},
+		helperReportsAtSettle: true,
 		remoteTool: (name, input, cwd) =>
 			call("remoteTool", { tool: name, input, ...(cwd ? { cwd } : {}) }),
 		// The edge lists the turn's MCP tools once and makes each call.
@@ -426,7 +439,15 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 			ownSession(owner.id);
 			return boxTurnMemory(call, options);
 		}) as unknown as TurnPorts["turnMemory"],
-		subagentMemory: async () => null,
+		// A helper's read-only memory: run by the edge (helperMemory port).
+		subagentMemory: (async (
+			owner: { readonly id: string; readonly userId: string },
+			options: { readonly wording?: string } = {},
+		) => {
+			ownUser(owner.userId);
+			ownSession(owner.id);
+			return boxHelperMemory(call, options);
+		}) as unknown as TurnPorts["subagentMemory"],
 		// Push cards answered meanwhile: claimed through the edge, once each.
 		withPushResultNotices: (async (input: never) => {
 			const { withPushResultNotices } = await import(
@@ -765,6 +786,97 @@ export function boxMachineGit(
 				op: "releaseVm",
 				vm: workspace?.vm ?? null,
 			}).catch(() => undefined);
+		},
+	};
+}
+
+/**
+ * The super agent's (Y²) tool operations on a box (docs/turn-runner-boxes.md,
+ * "The super agent and helpers on a box"): the tools run here; each read,
+ * crew call, send or stop is one `ySquared` port call, checked by the edge
+ * against this turn's own Y² chat and project. Machines are never sent (the
+ * edge uses its own); `now` stays local.
+ */
+export function boxYSquaredToolDeps(
+	call: <T>(op: BoxPortOp, args: unknown) => Promise<T>,
+): Partial<YSquaredToolDeps> {
+	const dep = <T>(name: YSquaredPortDep, ...args: unknown[]) =>
+		call<T>("ySquared", { dep: name, args });
+	const crew: YSquaredCrewClient = {
+		list: () => dep("crewList"),
+		thread: (sessionId) => dep("crewThread", sessionId),
+		reconcile: async (rows) => {
+			await dep("crewReconcile", [...rows]);
+		},
+		noteY2Sent: async (sessionId) => {
+			await dep("crewNoteY2Sent", sessionId);
+		},
+		noteWaiting: async () => undefined,
+		schedule: (input, _target) => dep("crewSchedule", input),
+	};
+	return {
+		list: (userId, projectId) => dep("list", userId, projectId),
+		metadata: (userId, sessionId) => dep("metadata", userId, sessionId),
+		outcome: (userId, sessionId) => dep("outcome", userId, sessionId),
+		canvas: (userId, sessionId, title) =>
+			dep("canvas", userId, sessionId, title),
+		download: (userId, sessionId, id) => dep("download", userId, sessionId, id),
+		send: (_machines, scope, input) => dep("send", scope, input),
+		stop: (_machines, scope) => dep("stop", scope),
+		// A crew answers through the edge; one that is missing there answers null.
+		crew: () => crew,
+	};
+}
+
+/**
+ * A helper's read-only memory on a box: the edge says whether there is any,
+ * runs its two read tools and gives the parts the current request gets.
+ * Never fails a turn: a failed call reads as no memory, no hits.
+ */
+export async function boxHelperMemory(
+	call: <T>(op: BoxPortOp, args: unknown) => Promise<T>,
+	options: { readonly wording?: string },
+): Promise<SubagentMemory | null> {
+	const base = options.wording ? { wording: options.wording } : {};
+	const available = await call<boolean>("helperMemory", {
+		...base,
+		op: "available",
+	}).catch(() => false);
+	if (!available) return null;
+	// The tools' names, descriptions and schemas; their work is the edge's.
+	const { memoryReadTools } = await import("../services/memory-read-tools");
+	const shapes = memoryReadTools(() => ({}), {
+		search: "search_memory",
+		read: "read_memory",
+	});
+	const tools: ToolSet = Object.fromEntries(
+		Object.entries(shapes).map(([name, shape]) => [
+			name,
+			{
+				...shape,
+				execute: async (input: unknown) =>
+					call<string>("helperMemory", {
+						...base,
+						op: "tool",
+						tool: name,
+						input,
+					}).catch(() => "Memory is unavailable right now."),
+			},
+		]),
+	);
+	return {
+		tools,
+		attach: async (messages, items) => {
+			const unchanged = { messages, recall: null };
+			const found = await call<Awaited<
+				ReturnType<SubagentMemory["attach"]>
+			> | null>("helperMemory", {
+				...base,
+				op: "attach",
+				messages,
+				items: [...items],
+			}).catch(() => null);
+			return found ?? unchanged;
 		},
 	};
 }
