@@ -654,6 +654,10 @@ export class TurnBoxTurnSession {
 		const response = await this.post(TURN_BOX_PATHS.history, {
 			version: this.historyCache?.version,
 		});
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => undefined);
+			throw new Error(`Turn box history failed (${response.status}).`);
+		}
 		const body = historyResponse.parse(await response.json());
 		if (body.notModified && this.historyCache) return this.historyCache;
 		if (body.notModified) throw new Error("History cache lost.");

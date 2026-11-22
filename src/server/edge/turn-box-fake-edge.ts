@@ -80,6 +80,10 @@ export async function fakeEdge(
 			calls.push("claim");
 			return queue.shift() ?? null;
 		},
+		handToObject: async () => {
+			calls.push("handToObject");
+			row.state = "queued";
+		},
 		releaseClaim: async () => {
 			calls.push("release");
 		},

@@ -39,7 +39,13 @@ export const TURN_BOX_GZIP_ABOVE_BYTES = 256 * 1024;
 /** Largest body the edge inflates a gzipped request to. */
 export const TURN_BOX_MAX_INFLATED_BYTES = 64 * 1024 * 1024;
 /** Largest history the edge returns; a bigger turn must be compacted first. */
-export const TURN_BOX_MAX_HISTORY_BYTES = 8 * 1024 * 1024;
+export const TURN_BOX_MAX_HISTORY_BYTES = 16 * 1024 * 1024;
+/**
+ * A turn claimed with more history than this runs in its chat's Durable
+ * Object instead: it can still grow during the turn within the limit above
+ * (a long Y² chat once had 8.5 MB and failed on a box).
+ */
+export const TURN_BOX_HANDOFF_HISTORY_BYTES = 8 * 1024 * 1024;
 /** Progress is sent at most this often (a WebSocket message bills 1/20 request). */
 export const TURN_BOX_PROGRESS_EVERY_MS = 500;
 /** The lease heartbeat rides the socket (or HTTP) this often; the lease lasts 45 s. */

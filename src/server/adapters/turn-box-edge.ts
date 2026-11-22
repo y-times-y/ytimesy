@@ -16,6 +16,7 @@ import {
 	checkpointApiTurn,
 	claimApiTurn,
 	finalizeApiTurn,
+	handClaimedApiTurnToObject,
 	publishApiTurnProgress,
 	readRunningApiTurn,
 	releaseClaimedApiTurn,
@@ -64,6 +65,10 @@ export function createTurnBoxEdgeOps(
 					limits.fleet,
 					"node",
 				);
+			}),
+		handToObject: (turnId, leaseId) =>
+			scope(async () => {
+				await handClaimedApiTurnToObject(turnId, leaseId);
 			}),
 		releaseClaim: (turnId, leaseId) =>
 			scope(async () => {

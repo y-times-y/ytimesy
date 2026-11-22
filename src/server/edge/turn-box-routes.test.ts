@@ -5,7 +5,11 @@ import {
 	TURN_BOX_IDENTITY_TTL_MS,
 	verifyTurnBoxIdentity,
 } from "../../domain/turn-box-grant";
-import { TURN_BOX_PATHS } from "../../domain/turn-box-protocol";
+import {
+	TURN_BOX_HANDOFF_HISTORY_BYTES,
+	TURN_BOX_MAX_HISTORY_BYTES,
+	TURN_BOX_PATHS,
+} from "../../domain/turn-box-protocol";
 import { FAKE_TURN, fakeEdge } from "./turn-box-fake-edge";
 import { turnBoxEdgeConfig } from "./turn-box-routes";
 import { answerTurnBoxSocketMessage } from "./turn-box-socket";
@@ -227,7 +231,7 @@ describe("turn box edge: lease and user checks", () => {
 		).json();
 		expect(cached).toEqual({ notModified: true, version: body.version });
 		edge.row.messages = [
-			{ role: "user", content: "x".repeat(9 * 1024 * 1024) },
+			{ role: "user", content: "x".repeat(TURN_BOX_MAX_HISTORY_BYTES + 1) },
 		] as never;
 		expect((await post(edge, TURN_BOX_PATHS.history, grant)).status).toBe(413);
 	});
@@ -387,6 +391,16 @@ describe("turn box edge: claim and identity", () => {
 		edge.queue.push({ ...edge.row });
 		expect((await claim(edge)).status).toBe(204);
 		expect(edge.calls).toContain("release");
+	});
+
+	it("hands a turn with a history too long for a box to its chat's object", async () => {
+		const edge = await fakeEdge();
+		edge.row.messages = [
+			{ role: "user", content: "x".repeat(TURN_BOX_HANDOFF_HISTORY_BYTES) },
+		];
+		edge.queue.push({ ...edge.row });
+		expect((await claim(edge)).status).toBe(204);
+		expect(edge.calls).toContain("handToObject");
 	});
 
 	it("revoking a box stops its renewals and model requests", async () => {

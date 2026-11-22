@@ -32,6 +32,7 @@ import {
 	reserveRequest,
 	TURN_BOX_API_PREFIX,
 	TURN_BOX_CLAIM_RECHECK_MS,
+	TURN_BOX_HANDOFF_HISTORY_BYTES,
 	TURN_BOX_MAX_BODY_BYTES,
 	TURN_BOX_MAX_HISTORY_BYTES,
 	TURN_BOX_MAX_INFLATED_BYTES,
@@ -67,6 +68,11 @@ export interface TurnBoxEdgeOps {
 	): Promise<boolean>;
 	claim(perUserLimit?: number): Promise<ApiTurn | null>;
 	releaseClaim(turnId: string, leaseId: string): Promise<void>;
+	/**
+	 * A claimed turn too long for a box goes back to the queue for its chat's
+	 * Durable Object (its admission sweep starts it).
+	 */
+	handToObject?(turnId: string, leaseId: string): Promise<void>;
 	/**
 	 * The turn the grant names while it is running under the grant's lease
 	 * (id, lease_id, state='running'), and only if it is the grant's user's
@@ -332,6 +338,19 @@ export async function routeTurnBoxEdge(
 				// Not enabled for this user: back to the queue, not a stranded turn.
 				if (leaseId)
 					await deps.ops.releaseClaim(turn.id, leaseId).catch(() => undefined);
+				return new Response(null, { status: 204 });
+			}
+			// A chat whose history is near what a box may be sent runs in its
+			// object instead (which holds it already), never stranded on a box.
+			if (
+				deps.ops.handToObject &&
+				JSON.stringify({ m: turn.messages ?? [], i: turn.items ?? [] }).length >
+					TURN_BOX_HANDOFF_HISTORY_BYTES
+			) {
+				console.info("Turn too long for a box; handed to its chat's object.", {
+					turnId: turn.id,
+				});
+				await deps.ops.handToObject(turn.id, leaseId).catch(() => undefined);
 				return new Response(null, { status: 204 });
 			}
 			const grant = await issueTurnBoxGrant(

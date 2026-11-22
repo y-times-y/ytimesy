@@ -1175,6 +1175,22 @@ export async function releaseClaimedApiTurn(
 	return (result.rowCount ?? 0) > 0;
 }
 
+/**
+ * A turn a box claimed but should not run (too long for a box): queued again
+ * for its chat's Durable Object, whose admission sweep starts it.
+ */
+export async function handClaimedApiTurnToObject(
+	turnId: string,
+	leaseId: string,
+) {
+	const result = await database().query(
+		`update api_turn set state='queued',lease_id=null,executor='durable-object',updated_at=now()
+		 where id=$1 and lease_id=$2 and state='running' and executor='node'`,
+		[turnId, leaseId],
+	);
+	return (result.rowCount ?? 0) > 0;
+}
+
 /** Turn ids whose budget notice this isolate already wrote or found, so repeated admission passes ask the database nothing. */
 const budgetNoticed = new Set<string>();
 
