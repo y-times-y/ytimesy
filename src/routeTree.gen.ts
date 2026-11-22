@@ -15,6 +15,7 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as TrainingRouteImport } from './routes/training'
 import { Route as ApiAccountRouteImport } from './routes/api/account'
+import { Route as ApiClientErrorRouteImport } from './routes/api/client-error'
 import { Route as ApiProjectsRouteImport } from './routes/api/projects'
 import { Route as ApiVersionRouteImport } from './routes/api/version'
 import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
@@ -83,6 +84,11 @@ const TrainingRoute = TrainingRouteImport.update({
 const ApiAccountRoute = ApiAccountRouteImport.update({
   id: '/api/account',
   path: '/api/account',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiClientErrorRoute = ApiClientErrorRouteImport.update({
+  id: '/api/client-error',
+  path: '/api/client-error',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiProjectsRoute = ApiProjectsRouteImport.update({
@@ -295,6 +301,7 @@ export interface FileRoutesByFullPath {
   '/terms': typeof TermsRoute
   '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
+  '/api/client-error': typeof ApiClientErrorRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/version': typeof ApiVersionRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -342,6 +349,7 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
+  '/api/client-error': typeof ApiClientErrorRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/version': typeof ApiVersionRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -390,6 +398,7 @@ export interface FileRoutesById {
   '/terms': typeof TermsRoute
   '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
+  '/api/client-error': typeof ApiClientErrorRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/version': typeof ApiVersionRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -439,6 +448,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/training'
     | '/api/account'
+    | '/api/client-error'
     | '/api/projects'
     | '/api/version'
     | '/api/workspaces'
@@ -486,6 +496,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/training'
     | '/api/account'
+    | '/api/client-error'
     | '/api/projects'
     | '/api/version'
     | '/api/workspaces'
@@ -533,6 +544,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/training'
     | '/api/account'
+    | '/api/client-error'
     | '/api/projects'
     | '/api/version'
     | '/api/workspaces'
@@ -581,6 +593,7 @@ export interface RootRouteChildren {
   TermsRoute: typeof TermsRoute
   TrainingRoute: typeof TrainingRoute
   ApiAccountRoute: typeof ApiAccountRoute
+  ApiClientErrorRoute: typeof ApiClientErrorRoute
   ApiProjectsRoute: typeof ApiProjectsRouteWithChildren
   ApiVersionRoute: typeof ApiVersionRoute
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
@@ -661,6 +674,13 @@ declare module '@tanstack/react-router' {
       path: '/api/account'
       fullPath: '/api/account'
       preLoaderRoute: typeof ApiAccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/client-error': {
+      id: '/api/client-error'
+      path: '/api/client-error'
+      fullPath: '/api/client-error'
+      preLoaderRoute: typeof ApiClientErrorRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/projects': {
@@ -973,6 +993,7 @@ const rootRouteChildren: RootRouteChildren = {
   TermsRoute: TermsRoute,
   TrainingRoute: TrainingRoute,
   ApiAccountRoute: ApiAccountRoute,
+  ApiClientErrorRoute: ApiClientErrorRoute,
   ApiProjectsRoute: ApiProjectsRouteWithChildren,
   ApiVersionRoute: ApiVersionRoute,
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
@@ -1014,12 +1035,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}
