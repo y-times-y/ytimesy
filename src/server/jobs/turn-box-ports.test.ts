@@ -42,6 +42,38 @@ async function setup() {
 }
 
 describe("boxTurnPorts over the edge's port endpoint", () => {
+	it("a later step's acquire renews the chat's coordination lease once 10 s have passed (short steps once let it lapse)", async () => {
+		const { ports, served } = await setup();
+		const seen = served("coordinateTurn", true);
+		const control = {
+			userId: USER,
+			sessionId: SESSION,
+			turnId: TURN,
+			leaseId: "l",
+		};
+		let now = Date.parse("2026-11-22T04:48:00Z");
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+		try {
+			expect(await ports.coordinateConversationTurn("acquire", control)).toBe(
+				true,
+			);
+			now += 7_000;
+			expect(await ports.coordinateConversationTurn("acquire", control)).toBe(
+				true,
+			);
+			now += 7_000;
+			expect(await ports.coordinateConversationTurn("acquire", control)).toBe(
+				true,
+			);
+			expect(seen.mock.calls.map(([args]) => args)).toEqual([
+				{ action: "acquire" },
+				{ action: "renew" },
+			]);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
 	it("serves each read and write through one lease-checked endpoint, never sending the user or turn", async () => {
 		const { ports, served, requests } = await setup();
 		const cases: [string, () => Promise<unknown>, unknown, unknown][] = [

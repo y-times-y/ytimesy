@@ -742,3 +742,8 @@ measured concurrency.
   never saved each step started on the spent route again (a loop, stopped by
   hand on 2026-11-22). The box also keeps the failover it checkpoints on its
   own turn identity, so the next step runs on the fallback route.
+- **The chat's coordination lease across short steps.** A box acquires the
+  chat room's 30 s coordination lease once per turn; a later step's acquire
+  now renews it when 10 s have passed. Before, only a step's own heartbeat
+  renewed it, and only after 10 s inside the step, so a helper whose steps
+  were all shorter let it lapse and was stopped mid-turn (2026-11-22).

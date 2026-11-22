@@ -104,6 +104,8 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		return loading;
 	};
 	let coordinated = false;
+	/** When this box last acquired or renewed the chat's coordination lease. */
+	let coordinationRefreshedAt = 0;
 	let inboxEmptyAt = Number.NEGATIVE_INFINITY;
 	let savedDirectory: string | undefined;
 	const sdk = session.modelSdkSettings();
@@ -134,13 +136,29 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		// is 30 s), a release once at the end.
 		coordinateConversationTurn: async (action) => {
 			if (action === "acquire") {
-				if (coordinated) return true;
+				// A later step of the same turn holds the lease already; it is
+				// refreshed here (the room's lease lasts 30 s, and a step's own
+				// renewal only starts after 10 s, so steps shorter than that
+				// once let it lapse mid-turn: a helper was stopped, 2026-11-22).
+				if (coordinated) {
+					if (Date.now() - coordinationRefreshedAt < 10_000) return true;
+					const held = await call<boolean>("coordinateTurn", {
+						action: "renew",
+					});
+					coordinated = held !== false;
+					if (coordinated) coordinationRefreshedAt = Date.now();
+					return held;
+				}
 				const held = await call<boolean>("coordinateTurn", { action });
 				coordinated = held !== false;
+				if (coordinated) coordinationRefreshedAt = Date.now();
 				return held;
 			}
 			if (action === "release") coordinated = false;
-			return call("coordinateTurn", { action });
+			const answer = await call<boolean>("coordinateTurn", { action });
+			if (action === "renew" && answer !== false)
+				coordinationRefreshedAt = Date.now();
+			return answer;
 		},
 
 		agentSessionMetadataForOwner: async (userId, sessionId) => {
