@@ -81,7 +81,17 @@ export const registerResponse = z.object({
 });
 export const claimRequest = z.object({
 	perUserLimit: z.number().int().min(1).max(64).optional(),
+	/**
+	 * A long poll: with nothing queued the edge keeps looking (every
+	 * TURN_BOX_CLAIM_RECHECK_MS) for up to this long before answering 204, so
+	 * an idle box makes one Worker request per wait instead of one per poll.
+	 */
+	waitMs: z.number().int().min(0).max(25_000).optional(),
 });
+/** How often a long-polled claim looks at the queue again. */
+export const TURN_BOX_CLAIM_RECHECK_MS = 2_000;
+/** The longest a box asks the edge to hold an empty claim. */
+export const TURN_BOX_CLAIM_WAIT_MS = 20_000;
 export const claimResponse = z.object({
 	turn: turnIdentity,
 	grant: z.string(),

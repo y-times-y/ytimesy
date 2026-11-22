@@ -155,6 +155,8 @@ export async function fakeEdge(
 		replay: new TurnBoxReplayGuard(),
 		forwardSocket: async () => new Response(null, { status: 204 }),
 		upstream: upstream as unknown as typeof fetch,
+		// A long-polled claim looks again at once here (no real waiting in tests).
+		sleep: async () => undefined,
 		...(options.bundle ? { bundle: options.bundle } : {}),
 		...(options.enroll ? { enroll: options.enroll } : {}),
 		now: () => state.now,

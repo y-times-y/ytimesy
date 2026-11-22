@@ -286,6 +286,40 @@ describe("turn box edge: claim and identity", () => {
 		expect((await claim(edge, "0123456789abcdef")).status).toBe(204);
 	});
 
+	it("holds an empty claim open as a long poll: a turn queued during the wait is handed over, an empty wait answers 204", async () => {
+		const longPoll = (
+			edge: Awaited<ReturnType<typeof fakeEdge>>,
+			nonce: string,
+		) =>
+			edge.fetchEdge("https://edge.test/box/v1/claim", {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${edge.identity}`,
+					"x-ytimesy-nonce": nonce,
+					"x-ytimesy-ts": String(edge.state.now),
+				},
+				body: JSON.stringify({ waitMs: 20_000 }),
+			});
+		const edge = await fakeEdge();
+		let pauses = 0;
+		(edge.deps as { sleep?: unknown }).sleep = async () => {
+			pauses += 1;
+			// A turn is queued while the box's claim waits.
+			if (pauses === 3) edge.queue.push({ ...edge.row });
+		};
+		const found = await longPoll(edge, "1111111111111111");
+		expect(found.status).toBe(200);
+		expect((await asBody(found)).turn?.id).toBe(FAKE_TURN.id);
+		expect(pauses).toBe(3);
+		// Nothing queued: it looks every 2 s for the 20 s, then answers 204.
+		pauses = 0;
+		(edge.deps as { sleep?: unknown }).sleep = async () => {
+			pauses += 1;
+		};
+		expect((await longPoll(edge, "2222222222222222")).status).toBe(204);
+		expect(pauses).toBe(10);
+	});
+
 	it("refuses a forged identity, a stale timestamp and a revoked box", async () => {
 		const edge = await fakeEdge();
 		expect((await claim(edge, "aaaaaaaaaaaaaaaa", "ytbi1.x.y")).status).toBe(

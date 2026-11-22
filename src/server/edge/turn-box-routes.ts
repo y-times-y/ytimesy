@@ -31,6 +31,7 @@ import {
 	registerRequest,
 	reserveRequest,
 	TURN_BOX_API_PREFIX,
+	TURN_BOX_CLAIM_RECHECK_MS,
 	TURN_BOX_MAX_BODY_BYTES,
 	TURN_BOX_MAX_HISTORY_BYTES,
 	TURN_BOX_MAX_INFLATED_BYTES,
@@ -134,6 +135,8 @@ export type TurnBoxEdgeDeps = {
 	/** The box program to download (a short-lived link and its checksum); absent: none is served. */
 	readonly bundle?: () => Promise<TurnBoxBundle | null>;
 	readonly upstream?: typeof fetch;
+	/** Test hook: the pause between a long-polled claim's looks at the queue. */
+	readonly sleep?: (ms: number) => Promise<void>;
 	readonly now?: () => number;
 	readonly log?: (message: string, detail: Record<string, unknown>) => void;
 };
@@ -310,7 +313,16 @@ export async function routeTurnBoxEdge(
 				return refuse("unauthorized", 401);
 			if (!(await deps.ops.boxActive(identity.boxId)))
 				return refuse("forbidden", 403);
-			const turn = await deps.ops.claim(input.data.perUserLimit);
+			let turn = await deps.ops.claim(input.data.perUserLimit);
+			// A long poll: look again until something is queued or the wait ends.
+			const waits = Math.floor(
+				(input.data.waitMs ?? 0) / TURN_BOX_CLAIM_RECHECK_MS,
+			);
+			for (let wait = 0; !turn && wait < waits; wait++) {
+				await (deps.sleep ?? sleepFor)(TURN_BOX_CLAIM_RECHECK_MS);
+				if (request.signal?.aborted) break;
+				turn = await deps.ops.claim(input.data.perUserLimit);
+			}
 			if (!turn) return new Response(null, { status: 204 });
 			const leaseId = turn.lease_id;
 			if (
@@ -636,3 +648,6 @@ async function readJson(request: Request): Promise<unknown> {
 		return error instanceof SyntaxError ? null : undefined;
 	}
 }
+
+const sleepFor = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));

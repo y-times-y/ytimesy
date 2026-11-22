@@ -691,7 +691,9 @@ export function WorkspaceHome({
 			queryKey: pullRequestsKey(repository.repositoryId, "open"),
 			queryFn: () => pullRequestsRequest(repository, "open"),
 			staleTime: 60_000,
-			refetchInterval: 120_000,
+			// The sidebar's waiting-on-you counts: a visible tab refreshes them
+			// every 5 min (and on focus); an idle tab costs 2 requests per 5 min.
+			refetchInterval: 300_000,
 		})),
 	});
 	const workIssues = useQueries({
@@ -699,7 +701,9 @@ export function WorkspaceHome({
 			queryKey: issuesKey(repository.repositoryId, "open"),
 			queryFn: () => issuesRequest(repository, "open"),
 			staleTime: 60_000,
-			refetchInterval: 120_000,
+			// The sidebar's waiting-on-you counts: a visible tab refreshes them
+			// every 5 min (and on focus); an idle tab costs 2 requests per 5 min.
+			refetchInterval: 300_000,
 		})),
 	});
 	const waitingOnYou = {

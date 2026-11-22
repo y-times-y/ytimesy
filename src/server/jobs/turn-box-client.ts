@@ -217,11 +217,17 @@ export class TurnBoxEdgeClient {
 	}
 
 	/** Claims one queued turn; null when there is none. */
-	async claim(perUserLimit?: number): Promise<TurnBoxTurnSession | null> {
+	async claim(
+		perUserLimit?: number,
+		waitMs?: number,
+	): Promise<TurnBoxTurnSession | null> {
 		const response = await this.call(
 			TURN_BOX_PATHS.claim,
 			this.identity,
-			perUserLimit ? { perUserLimit } : {},
+			{
+				...(perUserLimit ? { perUserLimit } : {}),
+				...(waitMs ? { waitMs } : {}),
+			},
 			{
 				"x-ytimesy-nonce": (this.options.randomNonce ?? nonce)(),
 				"x-ytimesy-ts": String((this.options.now ?? Date.now)()),

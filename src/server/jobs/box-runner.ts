@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
 import { MAX_WORKFLOW_MODEL_STEPS } from "#/domain/model-workflow";
+import { TURN_BOX_CLAIM_WAIT_MS } from "#/domain/turn-box-protocol";
 import { configuredTurnExecutor } from "#/domain/turn-executor";
 import type { ApiTurn } from "../adapters/api-turns";
 import type { GuestExec } from "../claude-box-tools/identity-machines";
@@ -42,7 +43,8 @@ import type { TurnPorts } from "./turn-ports";
 
 /** A step that throws is run again this many times before the turn is failed. */
 export const MAX_BOX_STEP_RETRIES = 3;
-const REGISTER_EVERY_MS = 10_000;
+// Within the edge's 45 s liveness window twice over (turn-runner-boxes.ts).
+const REGISTER_EVERY_MS = 20_000;
 const DEFAULT_POLL_MS = 5_000;
 
 /**
@@ -278,7 +280,10 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 	const dispatcher = new TurnDispatcher({
 		concurrency: capacity,
 		// Claimed through the edge (identity + nonce), never from a database.
-		claim: async () => (revoked ? null : client.claim()),
+		// A long poll: the edge holds an empty claim open (TURN_BOX_CLAIM_WAIT_MS),
+		// so an idle box costs one Worker request per wait, not per poll.
+		claim: async () =>
+			revoked ? null : client.claim(undefined, TURN_BOX_CLAIM_WAIT_MS),
 		run: async (session) => {
 			running++;
 			// The box's ports, with the workspace the edge's vm/ensure prepared.
