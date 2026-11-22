@@ -1183,12 +1183,35 @@ export async function handClaimedApiTurnToObject(
 	turnId: string,
 	leaseId: string,
 ) {
-	const result = await database().query(
-		`update api_turn set state='queued',lease_id=null,executor='durable-object',updated_at=now()
-		 where id=$1 and lease_id=$2 and state='running' and executor='node'`,
-		[turnId, leaseId],
-	);
-	return (result.rowCount ?? 0) > 0;
+	// Two statements, one transaction: an admitted turn's executor is
+	// immutable (api_turn_executor_immutable), so it is queued first.
+	const client = await database().connect();
+	let discard = false;
+	try {
+		await client.query("begin");
+		const queued = await client.query(
+			`update api_turn set state='queued',lease_id=null,updated_at=now()
+			 where id=$1 and lease_id=$2 and state='running' and executor='node'`,
+			[turnId, leaseId],
+		);
+		if (!queued.rowCount) {
+			await client.query("rollback");
+			return false;
+		}
+		await client.query(
+			`update api_turn set executor='durable-object' where id=$1 and state='queued'`,
+			[turnId],
+		);
+		await client.query("commit");
+		return true;
+	} catch (error) {
+		await client.query("rollback").catch(() => {
+			discard = true;
+		});
+		throw error;
+	} finally {
+		client.release(discard);
+	}
 }
 
 /** Turn ids whose budget notice this isolate already wrote or found, so repeated admission passes ask the database nothing. */
