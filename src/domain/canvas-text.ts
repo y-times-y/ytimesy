@@ -11,6 +11,11 @@
 export const CANVAS_DESCRIPTION_LIMIT = 300;
 /** Most characters of outline one `read_canvas` call returns. */
 export const CANVAS_READ_PAGE = 12_000;
+/** Characters of HTML source one `read_canvas` call returns by default, and at most. */
+export const CANVAS_SOURCE_PAGE = 8_000;
+export const CANVAS_SOURCE_PAGE_LIMIT = 20_000;
+/** A data: URI at least this long is shown as a placeholder in a source page. */
+const DATA_URI_SHOWN = 120;
 
 const ENTITIES: Record<string, string> = {
 	amp: "&",
@@ -165,6 +170,57 @@ export function canvasDescription(
 	}
 	const text = parts.join(" · ");
 	return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
+}
+
+export type CanvasSourcePage = {
+	/** The source from `offset` to `end`, long data: URIs as placeholders. */
+	readonly text: string;
+	/** Where this page starts and ends in the document, in characters. */
+	readonly offset: number;
+	readonly end: number;
+	/** The document's length in characters. */
+	readonly total: number;
+};
+
+/**
+ * A bounded window of the document's HTML source, for when its text outline
+ * is not enough (a selector, a style, a script). Offsets count characters of
+ * the real document; every data: URI of DATA_URI_SHOWN characters or more
+ * that overlaps the window is replaced by `[data:<type>, N characters]`, so
+ * no base64 reaches the model, even one cut by the window's edge.
+ */
+export function canvasSourcePage(
+	html: string,
+	offset = 0,
+	limit: number = CANVAS_SOURCE_PAGE,
+): CanvasSourcePage {
+	const total = html.length;
+	const start = Math.min(Math.max(0, Math.floor(offset) || 0), total);
+	const size = Math.min(
+		Math.max(1, Math.floor(limit) || CANVAS_SOURCE_PAGE),
+		CANVAS_SOURCE_PAGE_LIMIT,
+	);
+	const end = Math.min(start + size, total);
+	let text = "";
+	let at = start;
+	const uris = new RegExp(`data:[^\\s"'()<>]{${DATA_URI_SHOWN - 5},}`, "gi");
+	for (const match of html.matchAll(uris)) {
+		const from = match.index;
+		const to = from + match[0].length;
+		if (to <= start) continue;
+		if (from >= end) break;
+		text += html.slice(at, Math.max(at, from));
+		const type = /^data:([^;,]{0,60})/i.exec(match[0])?.[1] || "data";
+		text += `[data:${type}, ${match[0].length} characters]`;
+		at = Math.max(at, to);
+	}
+	if (at < end) text += html.slice(at, end);
+	return {
+		text,
+		offset: start,
+		end: Math.max(end, Math.min(at, total)),
+		total,
+	};
 }
 
 export type CanvasPage = {

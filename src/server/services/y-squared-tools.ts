@@ -16,6 +16,7 @@ import {
 	canvasOutline,
 	canvasOutlinePage,
 	canvasSizeKb,
+	canvasSourcePage,
 } from "#/domain/canvas-text";
 import {
 	attachmentSizeLabel,
@@ -73,7 +74,10 @@ import {
 	agentSessionMetadataForOwner,
 	listSidebarAgentSessions,
 } from "../adapters/agent-sessions";
-import { latestCanvasForOwner } from "../adapters/canvas-read";
+import {
+	CANVAS_FEEDBACK_LIMIT,
+	latestCanvasForOwner,
+} from "../adapters/canvas-read";
 import { downloadMessageAttachment } from "../adapters/checkpoints/storage";
 import { threadOutcomeForOwner } from "../adapters/thread-outcome";
 import {
@@ -343,18 +347,36 @@ export function ySquaredTools(input: {
 		[Y_SQUARED_READ_CANVAS_TOOL]: tool({
 			description: Y_SQUARED_READ_CANVAS_DESCRIPTION,
 			inputSchema: readCanvasInput,
-			execute: async ({ id, title, part }) => {
+			execute: async ({ id, title, part, offset, limit }) => {
 				const chat = await ownThread(id);
 				if (!chat) return noThread;
 				const name = canvasTitle(title);
 				const found = await deps.canvas(input.userId, chat.id, name);
 				if (!found) return noCanvas(chat.title, name);
-				// Never more than a canvas may hold; only text leaves this function.
+				// Never more than a canvas may hold; only bounded text leaves this
+				// function: a page of the outline, or a window of the source.
 				const html = found.html.slice(0, CANVAS_HTML_LIMIT);
+				const about = `Canvas "${found.title}" of "${chat.title}": revision ${found.revision}, ${canvasSizeKb(found.html.length)} KB${canvasHasImages(html) ? ", has images" : ""}${found.path ? `, file ${found.path}` : ""}`;
+				if (offset !== undefined || limit !== undefined) {
+					const source = canvasSourcePage(html, offset ?? 0, limit);
+					return [
+						`${about}; HTML source characters ${source.offset}–${source.end} of ${source.total}.`,
+						staleNote(found),
+						source.text || "(nothing at this offset)",
+						source.end < source.total
+							? `[More: call ${Y_SQUARED_READ_CANVAS_TOOL} with offset ${source.end}.]`
+							: "",
+					]
+						.filter(Boolean)
+						.join("\n");
+				}
 				const page = canvasOutlinePage(canvasOutline(html), part ?? 1);
 				return [
-					`Canvas "${found.title}" of "${chat.title}": revision ${found.revision}, ${canvasSizeKb(found.html.length)} KB${canvasHasImages(html) ? ", has images" : ""}; part ${page.part} of ${page.parts}.`,
+					`${about}; part ${page.part} of ${page.parts}.`,
 					staleNote(found),
+					found.feedback && page.part === 1
+						? `The person's newest feedback on it:\n${found.feedback.slice(0, CANVAS_FEEDBACK_LIMIT)}\n---`
+						: "",
 					page.text || "(no visible text)",
 					page.part < page.parts
 						? `[More: call ${Y_SQUARED_READ_CANVAS_TOOL} with part ${page.part + 1}.]`
@@ -401,7 +423,7 @@ export function ySquaredTools(input: {
 				const shown = output as CanvasToolResult;
 				return {
 					type: "text",
-					value: `${canvasConfirmation(shown.title, shown.revision)} It is thread ${shown.ownerThreadId}'s canvas: the person can preview it and pin notes here; feedback on it goes back to that thread.`,
+					value: `${canvasConfirmation(shown)} It is thread ${shown.ownerThreadId}'s canvas: the person can preview it and pin notes here; feedback on it goes back to that thread.`,
 				};
 			},
 		}),

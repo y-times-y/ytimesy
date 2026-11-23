@@ -70,6 +70,34 @@ it("reads ONE item: the latest revision of the title, whole, with its id", async
 	expect(holder.query).toHaveBeenCalledTimes(1);
 });
 
+it("carries the chat's newest feedback message on that canvas, bounded, and none for another title", async () => {
+	const id = await chat([
+		canvas("c1", "Thread art", 1, "<h1>one</h1>"),
+		{
+			kind: "userMessage",
+			id: "u1",
+			text: 'Canvas feedback on "Thread art" (revision 1), 1 note:\n\n1. Old note',
+		},
+		{
+			kind: "userMessage",
+			id: "u2",
+			text: `Canvas feedback on "Thread art" (revision 1), 1 note:\n\n1. Bigger title ${"z".repeat(10_000)}`,
+		},
+		{
+			kind: "userMessage",
+			id: "u3",
+			text: 'Canvas feedback on "Thread art v2" (revision 1), 1 note:',
+		},
+		canvas("c9", "Other", 1, "<h1>other</h1>"),
+	]);
+	const found = await latestCanvasForOwner("alice", id, "Thread art");
+	expect(found?.feedback).toContain("1. Bigger title");
+	expect(found?.feedback?.length).toBe(4_000);
+	expect(
+		(await latestCanvasForOwner("alice", id, "Other"))?.feedback,
+	).toBeUndefined();
+});
+
 it("takes the highest revision number, not the last row", async () => {
 	const id = await chat([
 		canvas("c3", "Thread art", 3, "<h1>three</h1>"),

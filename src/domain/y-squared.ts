@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SHOW_CANVAS_TOOL } from "./canvas";
+import { CANVAS_SOURCE_PAGE, CANVAS_SOURCE_PAGE_LIMIT } from "./canvas-text";
 import { isClaudeCodeRoute } from "./claude-code-route";
 import type { SessionItem } from "./session-item";
 import type { ChatWaitingOn } from "./sidebar-chats";
@@ -94,7 +95,7 @@ export const Y_SQUARED_TITLE_LIMIT = 120;
 export const Y_SQUARED_THREAD_DESCRIPTION =
 	"One thread's details and what it produced: its status, times, last request, pull request, and its FULL final reply (a very long one shows its start and end), any questions it asked the person, a plan it proposed, and the canvases it showed. Read this when a thread finished or needs the person, then tell the person the substance. Pass the id from the threads list.";
 export const Y_SQUARED_READ_CANVAS_DESCRIPTION =
-	"Read what one canvas of a thread says, as text: its headings, paragraphs, lists and tables, with [image: alt] and [svg: title] where pictures are, for the latest revision (the result names the revision and the document's size). At most 12,000 characters per call; a longer canvas has more parts: pass part 2, 3, … for the rest. Never returns the HTML or image data. Pass the thread's id and the canvas's title from the thread tool.";
+	"Read one canvas of a thread (its latest revision) as text, never the whole document. The result names the revision, the document's size and its file, then the person's newest feedback on it (the notes they pinned and sent, if any), then its outline: headings, paragraphs, lists and tables, with [image: alt] and [svg: title] where pictures are. At most 12,000 characters of outline per call; a longer canvas has more parts: pass part 2, 3, … for the rest. Only if you need the HTML itself (a selector, a style), pass offset (and limit, default 8,000, at most 20,000 characters) to read that window of the source instead; long data: URIs come as placeholders. Pass the thread's id and the canvas's title from the thread tool.";
 export const Y_SQUARED_SHOW_CANVAS_DESCRIPTION =
 	"Show the latest revision of one canvas of a thread in THIS chat, so the person sees it, steps between revisions and pins notes on it here instead of opening the thread. Pass the thread's id and the canvas's title from the thread tool. You read only a short confirmation, never the document. Call it again after the thread publishes a new revision of the same title.";
 export const readCanvasInput = z.object({
@@ -106,7 +107,24 @@ export const readCanvasInput = z.object({
 		.min(1)
 		.max(100)
 		.optional()
-		.describe("Which part of a long canvas (from 1); default 1"),
+		.describe("Which part of a long canvas's outline (from 1); default 1"),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.optional()
+		.describe(
+			"Read the HTML source from this character (from 0) instead of the outline",
+		),
+	limit: z
+		.number()
+		.int()
+		.min(1)
+		.max(CANVAS_SOURCE_PAGE_LIMIT)
+		.optional()
+		.describe(
+			`Characters of HTML source to read with offset; default ${CANVAS_SOURCE_PAGE.toLocaleString("en-US")}`,
+		),
 });
 export const showCanvasInput = z.object({
 	id: z.string().min(1).max(64).describe("The thread's id"),
@@ -198,7 +216,7 @@ export function ySquaredInstructions() {
 		`- Answer terse commands tersely and act: "merge X", "hold Y" -> \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (mode "interrupt" to stop the running turn first, else the default) or \`${Y_SQUARED_STOP_THREAD_TOOL}\`, then confirm in one line. Ask the person only for a real decision or blocker.`,
 		"- The Overview beside this chat lists every thread (needs you, in progress, pull requests) without you: point to it, never repeat its content.",
 		`- The person should never have to open a thread to learn what it did. When a thread finished or needs the person, call \`${Y_SQUARED_THREAD_TOOL}\` for it (the wake only names it) and report the SUBSTANCE: the outcome in a sentence or two (what it found or built, the key numbers, the pull request link, any canvas it showed), then the decision the person must make, if there is one, as a question they can answer in a word. Never say only "finished" or "open the thread to read it": you can read its full final reply. A very long reply shows its start and end: summarise its most important findings first and offer to go deeper on a part; if you need a detail you cannot see, ask the thread with \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` and report when it answers. Link the thread only as a pointer for the full text.`,
-		`- Canvases: \`${Y_SQUARED_THREAD_TOOL}\` lists each canvas a thread showed (title, latest revision, size, a short description). To know what one says, call \`${Y_SQUARED_READ_CANVAS_TOOL}\` (id, title; pass part for a long one): you get its text, never its HTML. To let the person see it, call \`${Y_SQUARED_SHOW_CANVAS_TOOL}\` (id, title): it appears in THIS chat with the thread's revision number, and the person previews, compares and pins notes on it here. Do it when the person asks to see it or when a thread's canvas is the thing to look at; never paste or describe the HTML.`,
+		`- Canvases: \`${Y_SQUARED_THREAD_TOOL}\` lists each canvas a thread showed (title, latest revision, size, a short description). To know what one says, call \`${Y_SQUARED_READ_CANVAS_TOOL}\` (id, title; pass part for a long one): you get the person's newest feedback on it and its text outline; only if you need the HTML itself, pass offset (and limit) for a bounded window of the source. To let the person see it, call \`${Y_SQUARED_SHOW_CANVAS_TOOL}\` (id, title): it appears in THIS chat with the thread's revision number, and the person previews, compares and pins notes on it here. Do it when the person asks to see it or when a thread's canvas is the thing to look at; never paste or describe the HTML.`,
 		`- Feedback on a canvas: a message starting 'Canvas feedback on "<title>" (revision N) [thread:<id>]' is the person's notes on a canvas that thread <id> owns. Do not apply it yourself and do not summarise it away: send it to THAT thread with \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (mode "steer" if the thread is working, else the default, which starts an idle thread), forwarding the person's notes verbatim with their element selectors, the title and the revision, and asking the thread to publish the next revision with the SAME canvas title. Say in one line that you sent it, then end your turn: you wake when the thread settles. On that wake, if the thread showed a new revision of a canvas you displayed, call \`${Y_SQUARED_SHOW_CANVAS_TOOL}\` again with the same title so the new revision appears here, and tell the person what changed in one or two lines. A feedback message without a [thread:<id>] marker names no owner: ask which thread it belongs to only if the \`${Y_SQUARED_THREADS_TOOL}\` titles do not make it clear.`,
 		"- Report in at most 100 words (about 100 for each thread you report on), substance first.",
 		`- For "which thread did X", "which was last used" or "which thread created Y": answer from each thread's created, last active, last request and last reply in \`${Y_SQUARED_THREADS_TOOL}\`, and name that thread as a link. If none fits, say so and name the closest.`,

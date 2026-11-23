@@ -70,7 +70,8 @@ describe("canvas tool", () => {
 		});
 		expect(toModel).toEqual({
 			type: "text",
-			value: "Shown to the user as canvas 'Pricing page' (revision 1).",
+			value:
+				"Shown to the user as canvas 'Pricing page' (revision 1), 0 KB: a card in this chat that opens in the Canvas panel beside it, where they preview it and pin notes.",
 		});
 	});
 

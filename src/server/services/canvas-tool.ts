@@ -30,11 +30,13 @@ Rules:
 - Never type or copy base64, binary or other long encoded data into html by hand: one wrong character shows a broken image. Build such a document with a script that reads the real files and writes the .html, check that it renders, then pass path.
 - Design for a dark or light background deliberately, make it responsive, give elements meaningful text and ids (notes point at them), and use realistic content instead of lorem ipsum.
 - The user sees the canvas, not your HTML: do not paste the HTML into your reply; say what to look at and what to decide.
+- The result is a short confirmation (title, revision, size, where the user sees it), never the document back.
 At most ${CANVAS_HTML_LIMIT.toLocaleString("en-US")} characters.`;
 
 /**
  * The canvas tool (src/domain/canvas.ts). The chat's item is made from its
- * result (applyApiProgress); the model reads only a short confirmation.
+ * result (applyApiProgress); the model reads only a short confirmation
+ * (toModelOutput), in the API harness and over MCP (mcp-tool-call.ts) alike.
  */
 export function canvasTools(input: {
 	/** The chat's items now, to number revisions. */
@@ -109,7 +111,7 @@ export function canvasTools(input: {
 				const shown = output as CanvasToolResult;
 				return {
 					type: "text",
-					value: canvasConfirmation(shown.title, shown.revision),
+					value: canvasConfirmation(shown),
 				};
 			},
 		}),
