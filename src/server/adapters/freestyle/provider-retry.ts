@@ -120,3 +120,30 @@ export function isWorkersRuntimeBlip(error: unknown, depth = 0): boolean {
 	if (error instanceof Error && RUNTIME_BLIP.test(error.message)) return true;
 	return isWorkersRuntimeBlip(record.cause, depth + 1);
 }
+
+/**
+ * A connection the platform cut under a running step, not a failure of the
+ * work: the Workers runtime's "Network connection lost." (a deploy cutting
+ * a Durable Object's outbound call about a second before resetting it), or,
+ * on a turn box, Node's reset of a request to the edge (ECONNRESET, "fetch
+ * failed", "socket hang up", "other side closed") while the edge restarts
+ * for a deploy. The step resumes from its checkpoint, bounded by the
+ * executor's own retry limit. 2026-11-23: two turns failed this way right at
+ * deploys (21:03:36 "machine couldn't start" on a box, 21:16:48 a Claude
+ * turn's "model request failed").
+ */
+const CUT_CONNECTION =
+	/network connection lost|ECONNRESET|socket hang up|other side closed|^fetch failed$/i;
+
+export function isCutConnection(error: unknown, depth = 0): boolean {
+	if (depth > 5 || !error || typeof error !== "object") return false;
+	const record = error as {
+		code?: unknown;
+		cause?: unknown;
+		message?: unknown;
+	};
+	if (record.code === "ECONNRESET") return true;
+	if (typeof record.message === "string" && CUT_CONNECTION.test(record.message))
+		return true;
+	return isCutConnection(record.cause, depth + 1);
+}

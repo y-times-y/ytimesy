@@ -101,6 +101,27 @@ describe("messages sent while a Claude Code run works", () => {
 });
 
 describe("leavesClaudeCodeRunning", () => {
+	it("lets Claude Code keep running when a deploy cut the step's connection first (2026-11-23)", () => {
+		expect(
+			leavesClaudeCodeRunning([
+				new Error("Network connection lost."),
+				undefined,
+			]),
+		).toBe(true);
+		const reset = Object.assign(new Error("read ECONNRESET"), {
+			code: "ECONNRESET",
+		});
+		expect(
+			leavesClaudeCodeRunning([
+				new TypeError("fetch failed", { cause: reset }),
+				undefined,
+			]),
+		).toBe(true);
+		expect(leavesClaudeCodeRunning([new Error("Model run cancelled")])).toBe(
+			false,
+		);
+	});
+
 	it("lets Claude Code keep running when a deploy reset the Durable Object", () => {
 		const reset = new Error(
 			"Durable Object reset because its code was updated.",
