@@ -100,7 +100,10 @@ import {
 	probeCodexEgress,
 	withCodexSubscriptionEgress,
 } from "../adapters/codex-subscription-transport";
-import { withConversationProgressWake } from "../adapters/conversation-progress-wake";
+import {
+	wakeConversationProgress,
+	withConversationProgressWake,
+} from "../adapters/conversation-progress-wake";
 import { storeTurnMessages } from "../adapters/conversation-recovery";
 import { withConversationTurnCoordinator } from "../adapters/conversation-turn-control";
 import { readChatCrewScope } from "../adapters/crew-facts";
@@ -421,6 +424,15 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (input.turnStatus === "running" || !this.crewScope())
 			await this.resolveCrewScope(input);
 		this.noteTurnStatus(input, input.turnStatus, input.items);
+		// The turn started or settled in Postgres just before this call: the
+		// open pages hear it now, not at the next sweep.
+		await this.relayToViewers(input, () =>
+			withDatabaseScope(
+				this.env.HYPERDRIVE.connectionString,
+				() => wakeConversationProgress(),
+				null,
+			),
+		).catch(() => {});
 		return true;
 	}
 	/** This chat's own title, read with its crew scope (not stored): a start note's title before the transcript has a message. */
@@ -462,6 +474,42 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			});
 		}
 	}
+	/** Updates for this chat go straight to its room, with no HTTP hop. */
+	private withLocalPublisher<T>(
+		scope: { userId: string; sessionId: string },
+		run: () => Promise<T>,
+	) {
+		return withConversationPublisher(async (update) => {
+			if (
+				update.userId !== scope.userId ||
+				update.sessionId !== scope.sessionId
+			)
+				return false;
+			const response = await this.room.publish(update);
+			// A delta the room cannot merge: the publisher sends the full snapshot.
+			if (response.status === 409) return "resync";
+			return response.status === 204;
+		}, run);
+	}
+	/**
+	 * Runs a box turn's write so that, while someone watches the chat, the
+	 * newest saved snapshot goes to its open pages as soon as the write lands:
+	 * the same relay the chat's own loop runs after each progress write
+	 * (wakeConversationProgress). Without a viewer the write is all there is;
+	 * a page that opens later is seeded from Postgres.
+	 */
+	private relayToViewers<T>(
+		scope: { userId: string; sessionId: string },
+		run: () => Promise<T>,
+	) {
+		if (!this.room.watched()) return run();
+		return this.withLocalPublisher(scope, () =>
+			withConversationProgressWake(
+				() => relayConversationDeliveriesOnce(scope.sessionId),
+				run,
+			),
+		);
+	}
 	private withLocalConversation<T>(
 		scope: { userId: string; sessionId: string },
 		run: () => Promise<T>,
@@ -482,30 +530,18 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				return true;
 			},
 			() =>
-				withConversationPublisher(
-					async (update) => {
-						if (
-							update.userId !== scope.userId ||
-							update.sessionId !== scope.sessionId
-						)
-							return false;
-						const response = await this.room.publish(update);
-						// A delta the room cannot merge: the publisher sends the full snapshot.
-						if (response.status === 409) return "resync";
-						return response.status === 204;
-					},
-					() =>
-						withCodexSubscriptionEgress(
-							(input, options) => this.env.CODEX_EGRESS.fetch(input, options),
-							() =>
-								withClaudeRunnerPlacement(
-									(candidate) =>
-										new ClaudeRunnerPlacement(this.ctx.storage.sql).assign(
-											candidate,
-										),
-									() => withEdgeModelEndpoints(run),
-								),
-						),
+				this.withLocalPublisher(scope, () =>
+					withCodexSubscriptionEgress(
+						(input, options) => this.env.CODEX_EGRESS.fetch(input, options),
+						() =>
+							withClaudeRunnerPlacement(
+								(candidate) =>
+									new ClaudeRunnerPlacement(this.ctx.storage.sql).assign(
+										candidate,
+									),
+								() => withEdgeModelEndpoints(run),
+							),
+					),
 				),
 		);
 	}
@@ -1842,12 +1878,14 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		const relayed = this.claudeRelayBoxMessage(attachment.turnId, message);
 		this.claudeRelay.deliver(attachment.turnId);
 		if (relayed) return;
-		const { reply, close } = await answerTurnBoxSocketMessage(
-			attachment,
-			message,
-			createTurnBoxEdgeOps(
-				turnBoxRequestScope(this.env.HYPERDRIVE.connectionString, (job) =>
-					startBackgroundJob(this.env, job).then(() => undefined),
+		const { reply, close } = await this.relayToViewers(attachment, () =>
+			answerTurnBoxSocketMessage(
+				attachment,
+				message,
+				createTurnBoxEdgeOps(
+					turnBoxRequestScope(this.env.HYPERDRIVE.connectionString, (job) =>
+						startBackgroundJob(this.env, job).then(() => undefined),
+					),
 				),
 			),
 		);
