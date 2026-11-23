@@ -15,6 +15,8 @@ import {
 	MachineUsageLimitReached,
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
+	TURN_NOT_STARTED,
+	TURN_NOT_STARTED_MESSAGE,
 	visibleErrorMessage,
 	Y_SQUARED_NO_WORKSPACE,
 } from "./api-turn-failure";
@@ -691,4 +693,16 @@ it("says what happened when a Y² turn reached for a workspace, not that the pro
 			cause: `Error: ${Y_SQUARED_NO_WORKSPACE}`,
 		}),
 	).toContain("Y² reached for a workspace");
+});
+
+it("tells a turn that could not take its chat's lease nothing ran, and to send again", () => {
+	const message = apiTurnFailureMessage(
+		"coordination",
+		new Error(TURN_NOT_STARTED),
+	);
+	expect(message).toBe(TURN_NOT_STARTED_MESSAGE);
+	expect(message).toContain("Nothing ran");
+	expect(apiTurnFailureMessage("coordination", new Error("other"))).toContain(
+		"could not confirm",
+	);
 });

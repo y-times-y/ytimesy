@@ -26,7 +26,20 @@ export const TURN_COORDINATION_LEASE_MS = 30_000;
  */
 export const RETIRED_TURN_MS = 70_000;
 
-export type TurnControlAction = "acquire" | "renew" | "release" | "cancel";
+/**
+ * "handoff" lets the room go of a turn that is being moved to another
+ * executor under a new lease (a box handing a turn to the chat's object): the
+ * room forgets the turn without retiring it, so the new executor can acquire
+ * the same turn. "release" retires the turn for RETIRED_TURN_MS; a hand-off
+ * that released instead made the object's acquire wait out its whole window
+ * (35 s of a 70 s retirement) and fail the turn.
+ */
+export type TurnControlAction =
+	| "acquire"
+	| "renew"
+	| "release"
+	| "handoff"
+	| "cancel";
 type CoordinationFailureReason =
 	| { kind: "http"; status: number }
 	| { kind: "transport"; category: "timeout" | "network" };

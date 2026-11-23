@@ -603,12 +603,19 @@ export class ConversationRoom {
 					return new Response(null, { status: 409 });
 			} else if (
 				!same ||
-				(current?.cancelled && action !== "release" && action !== "cancel") ||
+				(current?.cancelled &&
+					action !== "release" &&
+					action !== "handoff" &&
+					action !== "cancel") ||
 				(action === "renew" && current.expiresAt <= Date.now())
 			) {
 				return new Response(null, { status: 409 });
 			}
-			if (action === "release") {
+			if (action === "handoff") {
+				// Not retired: the turn goes on under another executor's new lease.
+				await storage.delete("active-turn");
+				await this.schedule(null);
+			} else if (action === "release") {
 				retired[input.turnId] = Date.now() + RETIRED_TURN_MS;
 				await storage.put("retired-turns", retired);
 				await storage.delete("active-turn");
@@ -744,7 +751,7 @@ export default {
 };
 
 /** Turn coordination paths of a chat's room; other /turn/* paths are not the room's. */
-const ROOM_TURN_PATH = /^\/turn\/(acquire|renew|release|cancel)$/;
+const ROOM_TURN_PATH = /^\/turn\/(acquire|renew|release|handoff|cancel)$/;
 
 /**
  * Whether a path is the chat room's (snapshots, the stream, purge and turn

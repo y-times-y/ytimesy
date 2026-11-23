@@ -97,7 +97,9 @@ export function createTurnBoxEdgeOps(
 				if (!leaseId) return;
 				// The box may hold the chat's coordination lease for this turn:
 				// let it go, or the object refuses the turn as already running.
-				await coordinateConversationTurn("release", {
+				// A hand-off, not a release: a released turn is retired for 70 s
+				// and the object's acquire of it would be refused until then.
+				await coordinateConversationTurn("handoff", {
 					userId: turn.user_id,
 					sessionId: turn.session_id,
 					turnId: turn.id,
