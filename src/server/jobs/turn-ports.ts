@@ -270,3 +270,17 @@ export class TurnPortUnavailable extends Error {
 		this.name = "TurnPortUnavailable";
 	}
 }
+
+/**
+ * The edge answered a box's port call with an error status (not one of the
+ * typed refusals): a 5xx or 429 is the edge or the chat's object restarting.
+ */
+export class TurnPortFailed extends Error {
+	constructor(
+		readonly port: string,
+		readonly status: number,
+	) {
+		super(`Turn port ${port} failed (${status}).`);
+		this.name = "TurnPortFailed";
+	}
+}
