@@ -1,9 +1,11 @@
 import { isXaiDirectEndpoint } from "#/domain/model-connection";
 import { turnFailover } from "#/domain/model-failover";
+import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import type { TurnBoxGrant } from "#/domain/turn-box-grant";
 import type { TurnBoxModelAuthorization } from "#/domain/turn-box-model-proxy";
 import type { BoxPortArgs } from "#/domain/turn-box-protocol";
+import { settledHubTurnStatus } from "#/domain/user-hub";
 import { xaiSubscriptionFetch } from "../auth/xai-subscription";
 import type { TurnBoxEdgeOps } from "../edge/turn-box-routes";
 import { connectionApiKey } from "../services/model-connections";
@@ -53,9 +55,30 @@ export function createTurnBoxEdgeOps(
 			turn: ApiTurn,
 			candidate: string,
 		) => Promise<string>;
+		/** Tells the chat's object a box turn started or settled (its crew and hub notes). */
+		readonly noteChat?: (
+			turn: ApiTurn,
+			turnStatus: SessionTurnStatus,
+			items: readonly SessionItem[],
+		) => Promise<unknown>;
 	} = {},
 ): TurnBoxEdgeOps {
+	const noteChat = (
+		turn: ApiTurn,
+		turnStatus: SessionTurnStatus,
+		items: readonly SessionItem[],
+	) =>
+		options.noteChat
+			? options.noteChat(turn, turnStatus, items).catch(() => {
+					console.warn("The chat was not told of its box turn.", {
+						turnStatus,
+					});
+				})
+			: Promise.resolve();
 	return {
+		noteStarted: async (turn) => {
+			await noteChat(turn, "running", turn.items ?? []);
+		},
 		boxActive: (boxId) => scope(() => turnRunnerBoxActive(boxId)),
 		register: (boxId, input) =>
 			scope(() => registerTurnRunnerBox({ id: boxId, ...input })),
@@ -128,6 +151,9 @@ export function createTurnBoxEdgeOps(
 					input.items,
 					input.messages,
 				);
+				// What the chat's own loop tells Y² and the open tabs when a turn ends.
+				if (saved)
+					await noteChat(turn, settledHubTurnStatus(saved), input.items);
 				// What the Durable Object's turn does after it is settled and needs
 				// the account key (the push, the queued message): the edge does it.
 				const machines = options.machines;

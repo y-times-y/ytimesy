@@ -418,6 +418,23 @@ describe("turn box edge: claim and identity", () => {
 		expect(edge.calls).toContain("release");
 	});
 
+	it("tells the chat's object a claimed turn started (Y² hears box turns)", async () => {
+		const edge = await fakeEdge();
+		edge.queue.push({ ...edge.row });
+		expect((await claim(edge)).status).toBe(200);
+		expect(edge.calls).toContain("noteStarted");
+	});
+
+	it("does not tell it of a turn handed back to the object (the object's loop does)", async () => {
+		const edge = await fakeEdge();
+		edge.row.messages = [
+			{ role: "user", content: "x".repeat(TURN_BOX_HANDOFF_HISTORY_BYTES) },
+		];
+		edge.queue.push({ ...edge.row });
+		await claim(edge);
+		expect(edge.calls).not.toContain("noteStarted");
+	});
+
 	it("hands a turn with a history too long for a box to its chat's object", async () => {
 		const edge = await fakeEdge();
 		edge.row.messages = [

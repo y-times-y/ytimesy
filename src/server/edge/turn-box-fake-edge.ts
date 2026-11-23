@@ -80,6 +80,9 @@ export async function fakeEdge(
 			calls.push("claim");
 			return queue.shift() ?? null;
 		},
+		noteStarted: async () => {
+			calls.push("noteStarted");
+		},
 		handToObject: async () => {
 			calls.push("handToObject");
 			row.state = "queued";

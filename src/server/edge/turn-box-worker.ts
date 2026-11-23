@@ -67,6 +67,21 @@ function routeTurnBox(
 					}),
 					durableObjectLocation(),
 				).claudeRunnerPlacement(candidate),
+			noteChat: (turn, turnStatus, items) =>
+				env.MODEL_CONVERSATIONS.getByName(
+					modelConversationName({
+						userId: turn.user_id,
+						sessionId: turn.session_id,
+					}),
+					durableObjectLocation(),
+				).noteBoxTurn({
+					userId: turn.user_id,
+					sessionId: turn.session_id,
+					turnId: turn.id,
+					leaseId: turn.lease_id ?? "",
+					turnStatus,
+					items: items as never,
+				}),
 		}),
 		vm,
 		bundle: turnBoxBundleFromR2,

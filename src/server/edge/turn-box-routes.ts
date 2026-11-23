@@ -73,6 +73,8 @@ export interface TurnBoxEdgeOps {
 	 * Durable Object (its admission sweep starts it).
 	 */
 	handToObject?(turn: ApiTurn): Promise<void>;
+	/** Tells the chat's object a turn started on a box (Y² and the user's hub hear it). */
+	noteStarted?(turn: ApiTurn): Promise<void>;
 	/**
 	 * The turn the grant names while it is running under the grant's lease
 	 * (id, lease_id, state='running'), and only if it is the grant's user's
@@ -370,6 +372,7 @@ export async function routeTurnBoxEdge(
 				now(),
 			);
 			const verified = await verifyTurnBoxGrant(deps.publicKey, grant, now());
+			await deps.ops.noteStarted?.(turn).catch(() => undefined);
 			return json({
 				turn: identityOf(turn, leaseId),
 				grant,

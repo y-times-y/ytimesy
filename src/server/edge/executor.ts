@@ -398,6 +398,29 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if ("yEnabled" in scope) this.rememberCrewScope(scope);
 		return true;
 	}
+	/**
+	 * A turn that runs on a turn box (its loop is not here) tells the crew and
+	 * the user's hub what this object's own loop would: when it starts and how
+	 * it settled (worker RPC from the edge's claim and finalize). Without it
+	 * Y² heard nothing of any chat once turns moved to boxes.
+	 */
+	async noteBoxTurn(input: {
+		userId: string;
+		sessionId: string;
+		turnId: string;
+		leaseId: string;
+		turnStatus: SessionTurnStatus;
+		items: readonly SessionItem[];
+	}) {
+		if (!this.bindIdentity(input)) return false;
+		if (!this.crewScope() && input.turnStatus === "running")
+			await this.resolveCrewScope({
+				turnId: input.turnId,
+				leaseId: input.leaseId,
+			});
+		this.noteTurnStatus(input, input.turnStatus, input.items);
+		return true;
+	}
 	private readonly crewScopes = new SqliteCrewScope(this.ctx.storage.sql);
 	private crewScope() {
 		return this.crewScopes.read();
@@ -535,8 +558,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private noteTurnStatus(
 		scope: { userId: string; sessionId: string },
 		turnStatus: SessionTurnStatus,
+		items?: readonly SessionItem[],
 	) {
-		this.noteCrew(scope, turnStatus);
+		this.noteCrew(scope, turnStatus, items);
 		if (!userHubEnabledFor(process.env.YTIMESY_USER_HUB_USERS, scope.userId))
 			return;
 		const warn = (error: unknown) =>
@@ -563,6 +587,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private noteCrew(
 		scope: { userId: string; sessionId: string },
 		turnStatus: SessionTurnStatus,
+		/** The turn's items when it ran elsewhere (a box); else this object's copy. */
+		fromBox?: readonly SessionItem[],
 	) {
 		try {
 			const crew = this.crewScope();
@@ -590,10 +616,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				canvas: null,
 				title: "",
 			};
-			let items: SessionItem[] = [];
-			try {
-				items = this.history.chatCopy()?.items ?? [];
-			} catch {}
+			let items: SessionItem[] = fromBox ? [...fromBox] : [];
+			if (!fromBox)
+				try {
+					items = this.history.chatCopy()?.items ?? [];
+				} catch {}
 			if (turnStatus !== "running")
 				derived = crewFromSettledItems(items, turnStatus);
 			// The request the turn began with: the crew tells Y² when the person
