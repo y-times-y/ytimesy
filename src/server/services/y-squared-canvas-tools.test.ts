@@ -149,6 +149,72 @@ describe("read_canvas", () => {
 		);
 	});
 
+	it("puts the person's newest feedback before the outline, on the first part only", async () => {
+		const f = fixture({
+			"Thread art": read({
+				feedback:
+					'Canvas feedback on "Thread art" (revision 2), 1 note:\n\n1. Bigger cat',
+				path: "art/canvas.html",
+			}),
+		});
+		const text = (await call(f.tools, "read_canvas", {
+			id: "t1",
+			title: "Thread art",
+		})) as string;
+		expect(text).toContain("file art/canvas.html");
+		expect(text).toContain("The person's newest feedback on it:");
+		expect(text.indexOf("1. Bigger cat")).toBeLessThan(
+			text.indexOf("# Thread art"),
+		);
+	});
+
+	it("reads a bounded window of the HTML source with offset and limit, base64 as placeholders", async () => {
+		// The production canvas that failed: 432 KB, mostly inline screenshots.
+		const big = `<!doctype html><style>.crop{width:330px}</style><h1>Sidebar</h1>${Array.from(
+			{ length: 6 },
+			(_, i) =>
+				`<figure id="shot-${i}"><img alt="Shot ${i}" src="data:image/png;base64,${"Q".repeat(70_000)}"></figure>`,
+		).join("")}<script>done()</script>`;
+		const f = fixture({ "Thread art": read({ html: big }) });
+		const first = (await call(f.tools, "read_canvas", {
+			id: "t1",
+			title: "Thread art",
+			offset: 0,
+		})) as string;
+		expect(first).toContain("HTML source characters 0–");
+		expect(first).toContain(".crop{width:330px}");
+		expect(first).toContain('id="shot-0"');
+		expect(first).toContain("[data:image/png, 70022 characters]");
+		expect(first).not.toContain("QQQQ");
+		expect(first).toMatch(/\[More: call read_canvas with offset \d+\.\]/);
+		expect(first.length).toBeLessThan(9_000);
+		// A window that starts inside a data: URI still shows no base64.
+		const inside = (await call(f.tools, "read_canvas", {
+			id: "t1",
+			title: "Thread art",
+			offset: 30_000,
+			limit: 20_000,
+		})) as string;
+		expect(inside).not.toContain("QQQQ");
+		expect(inside.length).toBeLessThan(21_000);
+		// Paging by the given offsets reaches the end.
+		let offset = 0;
+		let last = "";
+		for (let calls = 0; calls < 50; calls++) {
+			last = (await call(f.tools, "read_canvas", {
+				id: "t1",
+				title: "Thread art",
+				offset,
+				limit: 20_000,
+			})) as string;
+			expect(last.length).toBeLessThan(21_000);
+			const next = /with offset (\d+)\./.exec(last)?.[1];
+			if (!next) break;
+			offset = Number(next);
+		}
+		expect(last).toContain("<script>done()</script>");
+	});
+
 	it("reads at most CANVAS_HTML_LIMIT characters of a document", async () => {
 		const huge = `<p>head</p>${"<p>x</p>".repeat(CANVAS_HTML_LIMIT)}<p>TAIL-END</p>`;
 		const f = fixture({ "Thread art": read({ html: huge }) });
@@ -178,6 +244,8 @@ describe("show_canvas", () => {
 		});
 		const confirmation = await modelText(f.tools, "show_canvas", out);
 		expect(confirmation).toContain("canvas 'Thread art' (revision 2)");
+		expect(confirmation).toMatch(/\d+(\.\d)? KB/);
+		expect(confirmation).toContain("Canvas panel");
 		expect(confirmation).not.toContain("<");
 		expect(confirmation).not.toContain("base64");
 		expect(confirmation.length).toBeLessThan(300);

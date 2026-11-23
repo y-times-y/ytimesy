@@ -130,7 +130,7 @@ describe("Y² surface", () => {
 		expect(text).toContain("SAME canvas title");
 		expect(text).toContain("call `show_canvas` again with the same title");
 		expect(text).toContain("`read_canvas`");
-		expect(text).toContain("never its HTML");
+		expect(text).toContain("a bounded window of the source");
 	});
 
 	it("tells Y² to read the threads before answering and never to work", () => {

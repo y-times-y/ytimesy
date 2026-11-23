@@ -265,7 +265,14 @@ export function canvasInstructions(toolName: string = CANVAS_TOOL): string {
 	return `Canvas: design with the user, don't describe. When ${toolName} is offered, use it to iterate on a design together: UI mockups, layout and visual options, flows, and comparisons (before/after, screenshots or options side by side). For exploration, put two or three labelled options (A/B/C) side by side in one canvas, with data-ytimesy-prompt buttons such as "Go with option B", and ask the user to pick or annotate. The user can pin notes on elements and send them as a "Canvas feedback on …" message: apply every note, then call ${toolName} again with the same title for the next revision (never a new title for the same design). Charts and diagrams are a secondary use. The user sees it beside the chat, so your reply only says what changed and what to look at.`;
 }
 
-/** The model's short confirmation; the HTML itself is not sent back. */
-export function canvasConfirmation(title: string, revision: number): string {
-	return `Shown to the user as canvas '${title}' (revision ${revision}).`;
+/**
+ * The model's short confirmation of a shown canvas: its title, revision,
+ * size and source file, and where the user sees it. Never the HTML: a
+ * canvas can be hundreds of KB, and the model wrote or chose it already.
+ */
+export function canvasConfirmation(
+	shown: Pick<CanvasToolResult, "title" | "revision" | "html" | "path">,
+): string {
+	const kb = Math.round((shown.html.length / 1024) * 10) / 10;
+	return `Shown to the user as canvas '${shown.title}' (revision ${shown.revision}), ${kb} KB${shown.path ? ` from ${shown.path}` : ""}: a card in this chat that opens in the Canvas panel beside it, where they preview it and pin notes.`;
 }

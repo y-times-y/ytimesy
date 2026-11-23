@@ -32,23 +32,58 @@ export async function mcpToolDefinitions(
 }
 
 /**
- * What the tool's own model conversion says the model should see: text and
- * image blocks, so a screenshot reaches Claude as pixels instead of its
- * base64 written out as text. Other shapes use the plain text reply.
+ * What the tool's own model conversion (toModelOutput) says the model should
+ * see, as an MCP reply: exactly what the API harness's model reads from the
+ * same call. Text and json become text, error-text and error-json an error,
+ * and content with an image its text and image blocks (a screenshot reaches
+ * Claude as pixels, not its base64 written out). Undefined when the tool has
+ * no conversion or gives a shape not handled here; the raw result is used then.
+ * Without this a tool whose raw result carries a payload for the chat (the
+ * canvas's whole HTML) would send it all to Claude.
  */
-export async function modelContentBlocks(
+export async function modelReply(
 	definition: Tool,
 	options: { toolCallId: string; input: unknown; output: unknown },
-): Promise<McpContentBlock[] | undefined> {
+): Promise<McpCallResult | undefined> {
 	if (!definition.toModelOutput) return undefined;
 	const converted = (await definition.toModelOutput(options as never)) as {
 		type?: string;
 		value?: unknown;
-	};
-	if (converted?.type !== "content" || !Array.isArray(converted.value))
-		return undefined;
+	} | null;
+	switch (converted?.type) {
+		case "text":
+		case "error-text":
+			return typeof converted.value === "string"
+				? { text: converted.value, isError: converted.type === "error-text" }
+				: undefined;
+		case "json":
+		case "error-json":
+			return {
+				text: outputText(converted.value ?? null),
+				isError: converted.type === "error-json",
+			};
+		case "content": {
+			const blocks = contentBlocks(converted.value);
+			if (!blocks) return undefined;
+			return blocks.some((block) => block.type === "image")
+				? { text: "", isError: false, content: blocks }
+				: {
+						text: blocks
+							.map((block) => (block.type === "text" ? block.text : ""))
+							.join("\n"),
+						isError: false,
+					};
+		}
+		default:
+			return undefined;
+	}
+}
+
+/** A content conversion's text and image parts as MCP blocks. */
+function contentBlocks(value: unknown): McpContentBlock[] | undefined {
+	if (!Array.isArray(value)) return undefined;
 	const blocks: McpContentBlock[] = [];
-	for (const part of converted.value as Record<string, unknown>[]) {
+	for (const part of value as Record<string, unknown>[]) {
 		if (part.type === "text" && typeof part.text === "string")
 			blocks.push({ type: "text", text: part.text });
 		else if (
@@ -65,7 +100,7 @@ export async function modelContentBlocks(
 				});
 		}
 	}
-	return blocks.some((block) => block.type === "image") ? blocks : undefined;
+	return blocks;
 }
 
 function outputText(output: unknown) {
@@ -79,9 +114,10 @@ function outputText(output: unknown) {
 
 /**
  * Validates the arguments like a model's call, runs the tool, and builds the
- * MCP reply: text, or text and image blocks when the tool's model output has
- * images. A tool reporting `blocked: true` failed. Throws when the arguments
- * are invalid or the tool throws; the caller reports that as an error reply.
+ * MCP reply from the tool's model output (modelReply), or its raw result
+ * when it has none. A tool reporting `blocked: true` failed. Throws when the
+ * arguments are invalid or the tool throws; the caller reports that as an
+ * error reply.
  */
 export async function runToolForMcp(
 	definition: Tool,
@@ -108,9 +144,9 @@ export async function runToolForMcp(
 		throw new Error(`${name} streams and cannot run here.`);
 	const failed =
 		(output as { blocked?: unknown } | null | undefined)?.blocked === true;
-	const content = failed
+	const shown = failed
 		? undefined
-		: await modelContentBlocks(definition, {
+		: await modelReply(definition, {
 				toolCallId: options.toolCallId,
 				input,
 				output,
@@ -118,10 +154,6 @@ export async function runToolForMcp(
 	return {
 		output,
 		failed,
-		reply: {
-			text: content ? "" : outputText(output),
-			isError: failed,
-			...(content ? { content } : {}),
-		},
+		reply: shown ?? { text: outputText(output), isError: failed },
 	};
 }
