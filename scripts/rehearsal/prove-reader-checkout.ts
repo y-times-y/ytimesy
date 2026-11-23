@@ -55,7 +55,7 @@ const CHECKS: [string, string, boolean][] = [
 	["cannot read through a link", `cat ${CHECKOUT}/leak`, false],
 	["cannot read ~/.ssh", `cat ${HOME}/.ssh/id_rsa`, false],
 	["cannot read ~/.git-credentials", `cat ${HOME}/.git-credentials`, false],
-	["cannot read agent.env", "cat /tmp/ytimesy-secrets/agent.env", false],
+	["cannot read agent.env", "cat /var/tmp/ytimesy-secrets/agent.env", false],
 	["cannot list the home", `ls ${HOME}`, false],
 ];
 
@@ -63,7 +63,7 @@ const CHECKS: [string, string, boolean][] = [
 async function scenario(label: string, umask: string, acl: boolean) {
 	sh(
 		"root",
-		`rm -rf ${CHECKOUT} ${HOME}/.ssh /tmp/ytimesy-detached /tmp/ytimesy-agents /tmp/ytimesy-sessions /tmp/ytimesy-secrets
+		`rm -rf ${CHECKOUT} ${HOME}/.ssh /tmp/ytimesy-detached /tmp/ytimesy-agents /tmp/ytimesy-sessions /var/tmp/ytimesy-secrets
 if ${acl}; then [ -e /usr/bin/setfacl ] || mv /usr/bin/setfacl.off /usr/bin/setfacl; else [ -e /usr/bin/setfacl.off ] || mv /usr/bin/setfacl /usr/bin/setfacl.off; fi`,
 	);
 	forgetPreparedReaders();
@@ -87,7 +87,7 @@ git add -A; git -c user.email=a@b.invalid -c user.name=a commit -qm init`,
 	if (setup.exitCode) throw new Error(`setup failed: ${setup.stdout}`);
 	sh(
 		"ubuntu",
-		`echo ${CHECKOUT} > /tmp/ytimesy-project-cwd; (umask 077; mkdir -p /tmp/ytimesy-secrets; echo S=1 > /tmp/ytimesy-secrets/agent.env)`,
+		`echo ${CHECKOUT} > /tmp/ytimesy-project-cwd; (umask 077; mkdir -p /var/tmp/ytimesy-secrets; echo S=1 > /var/tmp/ytimesy-secrets/agent.env)`,
 	);
 	const sessionId = `proof-${id}`;
 	const reader = readerWorkspaceMachines(base, {

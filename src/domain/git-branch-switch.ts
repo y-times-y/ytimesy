@@ -1,3 +1,4 @@
+import { clearStaleGitIndexLock } from "./git-stale-lock";
 import { posixShellQuoted as quote } from "./posix-command";
 
 /** Preserve local branch histories; never carry dirty edits into a different branch. */
@@ -9,7 +10,8 @@ export function switchBrokeredBranchCommand(
 ) {
 	const dest = quote(directory);
 	const target = quote(branch);
-	return `test -z "$(git -C ${dest} status --porcelain)" || { echo 'Commit or stash uncommitted changes before switching branches.' >&2; exit 1; }
+	return `${clearStaleGitIndexLock(directory)}
+test -z "$(git -C ${dest} status --porcelain)" || { echo 'Commit or stash uncommitted changes before switching branches.' >&2; exit 1; }
 if git -C ${dest} show-ref --verify --quiet ${quote(`refs/heads/${branch}`)}; then
   git -C ${dest} -c core.hooksPath=/dev/null checkout ${target}
 else
@@ -42,9 +44,12 @@ export function fetchedBranchCommand(input: {
 	const dest = quote(input.directory);
 	const git = `git -C ${dest}`;
 	const start = input.pinnedRevision ?? "FETCH_HEAD";
-	const pinned = input.pinnedRevision
-		? `${git} cat-file -e ${quote(`${input.pinnedRevision}^{commit}`)} || { echo 'The pinned commit is not in the fetched branch.' >&2; exit 1; }\n`
-		: "";
+	// A stale lock first, then the pinned commit's presence.
+	const prelude = `${clearStaleGitIndexLock(input.directory)}\n${
+		input.pinnedRevision
+			? `${git} cat-file -e ${quote(`${input.pinnedRevision}^{commit}`)} || { echo 'The pinned commit is not in the fetched branch.' >&2; exit 1; }\n`
+			: ""
+	}`;
 	const working = quote(input.workingBranch);
 	const origin = quote(input.originUrl);
 	// A fetch by URL moves no remote-tracking ref. The changes panel diffs
@@ -52,17 +57,17 @@ export function fetchedBranchCommand(input: {
 	// an older snapshot counted every newer upstream commit as the chat's own.
 	const tracking = `${git} update-ref ${quote(`refs/remotes/origin/${input.branch}`)} FETCH_HEAD`;
 	if (input.mode === "clone")
-		return `${pinned}${tracking}
+		return `${prelude}${tracking}
 ${git} -c core.hooksPath=/dev/null checkout -b ${working} ${start}
 ${git} remote add origin ${origin}
 ${git} update-ref refs/ytimesy/base ${start}`;
 	if (input.mode === "switch")
-		return `${pinned}${tracking}
+		return `${prelude}${tracking}
 ${switchBrokeredBranchCommand(input.directory, input.workingBranch, start)}
 ${git} update-ref refs/ytimesy/base ${start}`;
 	// The chat's base moves with a fast-forward only while the checkout has
 	// nothing of its own: its HEAD was its base and now is the fetched commit.
-	return `${pinned}${tracking}
+	return `${prelude}${tracking}
 before=$(${git} rev-parse HEAD)
 previous_base=$(${git} rev-parse -q --verify refs/ytimesy/base || true)
 ${git} -c core.hooksPath=/dev/null merge --ff-only ${start}

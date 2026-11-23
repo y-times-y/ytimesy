@@ -390,6 +390,9 @@ export function writerPatchExclusion(
 	named: string,
 ): "scratch" | "binary" | "large" | null {
 	const name = file.path.split("/").at(-1) ?? file.path;
+	// A node_modules entry itself (a symlink agents link into worktrees, or a
+	// file) never travels, even when the brief mentions node_modules.
+	if (name === "node_modules") return "scratch";
 	if (named.includes(file.path) || (name.length >= 3 && named.includes(name)))
 		return null;
 	if (

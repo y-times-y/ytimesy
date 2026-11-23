@@ -36,8 +36,9 @@ describe("scrubAgentSecrets", () => {
 		expect(SCRUB_WORKSPACE_SECRETS).toContain(SCRUB_AGENT_SECRETS);
 		expect(SCRUB_WORKSPACE_SECRETS).toContain(SCRUB_MEMORY_CREDENTIAL);
 		expect(SCRUB_WORKSPACE_SECRETS).toContain(SCRUB_MACHINE_GIT_CREDENTIAL);
-		expect(SCRUB_AGENT_SECRETS).toBe(
-			`rm -rf ${AGENT_SECRETS_DIRECTORY} && test ! -e ${AGENT_SECRETS_DIRECTORY}`,
+		expect(SCRUB_AGENT_SECRETS).toContain(`rm -rf ${AGENT_SECRETS_DIRECTORY} `);
+		expect(SCRUB_AGENT_SECRETS).toContain(
+			`test ! -e ${AGENT_SECRETS_DIRECTORY}`,
 		);
 	});
 
