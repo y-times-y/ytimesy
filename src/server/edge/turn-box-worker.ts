@@ -10,6 +10,7 @@ import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-tran
 import { withDatabaseScope } from "../adapters/database-scope";
 import { createTurnBoxEdgeOps } from "../adapters/turn-box-edge";
 import { createTurnBoxVmOps } from "../adapters/turn-box-vm-edge";
+import { admitQueuedTurns } from "./background-jobs";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { turnBoxBundleFromR2 } from "./turn-box-bundle";
@@ -67,6 +68,7 @@ function routeTurnBox(
 					}),
 					durableObjectLocation(),
 				).claudeRunnerPlacement(candidate),
+			admit: () => scope(() => admitQueuedTurns(env)),
 			noteChat: (turn, turnStatus, items) =>
 				env.MODEL_CONVERSATIONS.getByName(
 					modelConversationName({

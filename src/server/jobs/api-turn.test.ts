@@ -2068,7 +2068,7 @@ it("waits for a code restore's brief hold on the chat instead of failing the tur
 	}
 });
 
-it("gives up acquiring a chat that stays held past one lease period", async () => {
+it("gives up acquiring a chat that stays held past a whole retirement and lease, and says nothing ran", async () => {
 	vi.useFakeTimers();
 	try {
 		vi.mocked(coordinateConversationTurn).mockImplementation(
@@ -2076,8 +2076,30 @@ it("gives up acquiring a chat that stays held past one lease period", async () =
 		);
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
 		await vi.advanceTimersByTimeAsync(40_000);
+		expect(mocks.finalize).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(70_000);
 		expect(await run).toBe("failed");
 		expect(mocks.runtime).not.toHaveBeenCalled();
+		expect(JSON.stringify(mocks.finalize.mock.calls[0]?.[2])).toContain(
+			"Nothing ran and nothing was lost",
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("gives up after one lease period on a later step, whose lease is gone", async () => {
+	vi.useFakeTimers();
+	try {
+		vi.mocked(coordinateConversationTurn).mockImplementation(
+			async (action) => action !== "acquire",
+		);
+		const run = runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 2,
+			signal: new AbortController().signal,
+		});
+		await vi.advanceTimersByTimeAsync(40_000);
+		expect(await run).toBe("failed");
 	} finally {
 		vi.useRealTimers();
 	}
@@ -3687,5 +3709,81 @@ describe("goal mode (the model starts it)", () => {
 			"completed",
 		);
 		expect(calls).toBe(2);
+	});
+});
+
+describe("a turn that cannot take its chat's lease at once (2026-11-23)", () => {
+	const items = () =>
+		JSON.stringify(mocks.finalize.mock.calls.map((call) => call[2]));
+	// A model call that answers at once (other tests leave their own).
+	beforeEach(() => {
+		mocks.runtime.mockReset().mockResolvedValue(undefined);
+	});
+
+	it("waits past a retirement on its first step, then runs", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			const grantedAt = Date.now() + 75_000;
+			vi.mocked(coordinateConversationTurn).mockImplementation(
+				async (action) => action !== "acquire" || Date.now() >= grantedAt,
+			);
+			const run = runApiTurn({} as WorkspaceMachines, childTurn);
+			await vi.advanceTimersByTimeAsync(80_000);
+			await run;
+			expect(mocks.runtime).toHaveBeenCalledOnce();
+			expect(items()).not.toContain("did not start");
+			expect(items()).not.toContain("could not confirm");
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
+	});
+
+	it("rides out the chat's coordinator restarting before the turn starts", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			let attempts = 0;
+			vi.mocked(coordinateConversationTurn).mockImplementation(
+				async (action) => {
+					if (action === "acquire" && ++attempts <= 3)
+						throw new CoordinationFailure(
+							"acquire",
+							{ kind: "http", status: 503 },
+							1,
+						);
+					return true;
+				},
+			);
+			const run = runApiTurn({} as WorkspaceMachines, childTurn);
+			await vi.advanceTimersByTimeAsync(10_000);
+			await run;
+			expect(mocks.runtime).toHaveBeenCalledOnce();
+			expect(items()).not.toContain("did not start");
+			expect(items()).not.toContain("could not confirm");
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
+	});
+
+	it("ends as stopped, not as an error, when it is stopped while waiting", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			vi.mocked(coordinateConversationTurn).mockImplementation(
+				async (action) => action !== "acquire",
+			);
+			mocks.cancelRequested.mockResolvedValue(true);
+			const run = runApiTurn({} as WorkspaceMachines, childTurn);
+			await vi.advanceTimersByTimeAsync(110_000);
+			expect(await run).toBe("cancelled");
+			expect(mocks.runtime).not.toHaveBeenCalled();
+			expect(items()).not.toContain('"kind":"error"');
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
 	});
 });

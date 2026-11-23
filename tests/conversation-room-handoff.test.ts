@@ -39,16 +39,13 @@ it("lets the chat's object acquire a turn a box handed over, under its new lease
 	expect((await control(conversation, "renew", objectLease)).status).toBe(204);
 });
 
-it("still refuses the box's old lease after a hand-off, and a lapsed release stays retired", async () => {
+it("still refuses the box's old lease after a hand-off", async () => {
 	const conversation = room();
 	await control(conversation, "acquire", boxLease);
 	await control(conversation, "handoff", boxLease);
 	await control(conversation, "acquire", objectLease);
 	expect((await control(conversation, "renew", boxLease)).status).toBe(409);
-	const other = room();
-	await control(other, "acquire", boxLease);
-	await control(other, "release", boxLease);
-	expect((await control(other, "acquire", objectLease)).status).toBe(409);
+	expect((await control(conversation, "acquire", boxLease)).status).toBe(409);
 });
 
 it("refuses a hand-off from a lease that does not hold the turn", async () => {
@@ -58,4 +55,50 @@ it("refuses a hand-off from a lease that does not hold the turn", async () => {
 		409,
 	);
 	expect((await control(conversation, "renew", boxLease)).status).toBe(204);
+});
+
+function roomWithState() {
+	const state = durableObjectState();
+	return {
+		conversation: new ConversationRoom(state.ctx as never, async () => {}),
+		storage: state.ctx.storage,
+	};
+}
+
+// A box died: the room's lease lapsed and its alarm retired it; Postgres
+// requeued the turn after 45 s and another box claimed it under a new lease.
+// Retiring the turn ID refused that box until 70 s after the lapse.
+it("lets a new owner take a turn whose earlier lease lapsed, and keeps the lapsed lease out", async () => {
+	const { conversation, storage } = roomWithState();
+	expect((await control(conversation, "acquire", boxLease)).status).toBe(204);
+	const held = await storage.get<{ expiresAt: number }>("active-turn");
+	await storage.put("active-turn", { ...held, expiresAt: Date.now() - 1 });
+	await conversation.alarm();
+	expect((await control(conversation, "acquire", boxLease)).status).toBe(409);
+	expect((await control(conversation, "acquire", objectLease)).status).toBe(
+		204,
+	);
+});
+
+it("lets a new owner take a turn another lease finished (released)", async () => {
+	const { conversation } = roomWithState();
+	await control(conversation, "acquire", boxLease);
+	await control(conversation, "release", boxLease);
+	expect((await control(conversation, "acquire", boxLease)).status).toBe(409);
+	expect((await control(conversation, "acquire", objectLease)).status).toBe(
+		204,
+	);
+});
+
+it("still honours a retirement written by the earlier code (turn ID only) until it expires", async () => {
+	const { conversation, storage } = roomWithState();
+	await storage.put("identity", { userId: "u", sessionId });
+	await storage.put("retired-turns", { [turnId]: Date.now() + 60_000 });
+	expect((await control(conversation, "acquire", objectLease)).status).toBe(
+		409,
+	);
+	await storage.put("retired-turns", { [turnId]: Date.now() - 1 });
+	expect((await control(conversation, "acquire", objectLease)).status).toBe(
+		204,
+	);
 });

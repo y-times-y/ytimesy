@@ -27,6 +27,29 @@ export const TURN_COORDINATION_LEASE_MS = 30_000;
 export const RETIRED_TURN_MS = 70_000;
 
 /**
+ * A retirement names the turn's lease, not just the turn. Every claim in
+ * Postgres gives a turn a new random lease and every write checks it, so a
+ * retired lease can never write again once the turn is claimed anew; the
+ * turn's next owner (a box taking over a dead box's turn, the chat's object
+ * taking a turn a box handed over, an admission after a requeue) acquires
+ * under its own lease. Retiring the turn ID itself refused every such owner
+ * for 70 s and failed the turn ("could not confirm this turn's ownership",
+ * 2026-11-23). Entries written before this change are keyed by the turn ID
+ * alone; they are still honoured and expire within RETIRED_TURN_MS.
+ */
+export function retiredLeaseKey(turn: { turnId: string; leaseId: string }) {
+	return `${turn.turnId}:${turn.leaseId}`;
+}
+
+/**
+ * How long a turn that has not started waits for its chat's lease: past a
+ * whole retirement and lease (legacy turn-ID retirements, or a holder whose
+ * release was lost), so no owner the room can still free is refused.
+ */
+export const TURN_START_WAIT_MS =
+	RETIRED_TURN_MS + TURN_COORDINATION_LEASE_MS + 5_000;
+
+/**
  * "handoff" lets the room go of a turn that is being moved to another
  * executor under a new lease (a box handing a turn to the chat's object): the
  * room forgets the turn without retiring it, so the new executor can acquire
