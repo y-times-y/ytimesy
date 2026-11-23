@@ -68,11 +68,7 @@ import {
 	settledHubTurnStatus,
 	userHubEnabledFor,
 } from "../../domain/user-hub";
-import {
-	crewFromSettledItems,
-	crewProjectFor,
-	crewRequestFromStartItems,
-} from "../../domain/y-squared-crew";
+import { crewNoteFromItems, crewProjectFor } from "../../domain/y-squared-crew";
 import { BUILD_ID } from "../../lib/build-id";
 import { socketPair } from "../../realtime/socket-upgrade";
 import {
@@ -106,6 +102,7 @@ import {
 import { withConversationProgressWake } from "../adapters/conversation-progress-wake";
 import { storeTurnMessages } from "../adapters/conversation-recovery";
 import { withConversationTurnCoordinator } from "../adapters/conversation-turn-control";
+import { readChatCrewScope } from "../adapters/crew-facts";
 import { database } from "../adapters/database";
 import { withDatabaseScope } from "../adapters/database-scope";
 import { registerAuthEmailBinding } from "../adapters/email";
@@ -277,8 +274,10 @@ async function resolveModelConversation(step: WorkflowStep) {
 		ySquaredId: string | null;
 	}>(
 		`select t.user_id as "userId",t.session_id as "sessionId",
-		   s.project_id as "projectId",p.y_enabled as "yEnabled",
-		   case when p.y_enabled then (select y.id from agent_session y
+		   s.project_id as "projectId",
+		   -- Helper chats are not threads: they never join the crew.
+		   (p.y_enabled and s.parent_session_id is null) as "yEnabled",
+		   case when p.y_enabled and s.parent_session_id is null then (select y.id from agent_session y
 		     where y.user_id=s.user_id and y.project_id=s.project_id
 		       and y.chat_role='y2' and y.archived_at is null limit 1) end as "ySquaredId"
 		 from api_turn t join agent_session s on s.id=t.session_id and s.user_id=t.user_id
@@ -414,14 +413,17 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		items: readonly SessionItem[];
 	}) {
 		if (!this.bindIdentity(input)) return false;
-		if (!this.crewScope() && input.turnStatus === "running")
-			await this.resolveCrewScope({
-				turnId: input.turnId,
-				leaseId: input.leaseId,
-			});
+		// Read by the chat at each start (the Y switch is refreshed per turn, as
+		// for this object's own turns), and at a settle that has none: a box
+		// turn's notes (or one a sweep failed) are often this chat's first word
+		// to its crew.
+		if (input.turnStatus === "running" || !this.crewScope())
+			await this.resolveCrewScope(input);
 		this.noteTurnStatus(input, input.turnStatus, input.items);
 		return true;
 	}
+	/** This chat's own title, read with its crew scope (not stored): a start note's title before the transcript has a message. */
+	private chatTitle: string | null = null;
 	private readonly crewScopes = new SqliteCrewScope(this.ctx.storage.sql);
 	private crewScope() {
 		return this.crewScopes.read();
@@ -437,16 +439,22 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	 * Turns are started with a bare identity (budget admission, /turn-start),
 	 * and their steps run here in process, never through the step route that
 	 * carries the Y switch: without this read the crew scope was never stored
-	 * and no thread ever told its crew anything.
+	 * and no thread ever told its crew anything. Read by the chat, never by the
+	 * turn: the turn's lookup matched durable-object leases only, so a box
+	 * turn's note (and a first turn a box claimed and handed back) found no
+	 * scope and the crew never heard of that thread (crew-facts.ts).
 	 */
-	private async resolveCrewScope(turn: WorkflowTurn) {
+	private async resolveCrewScope(scope: { userId: string; sessionId: string }) {
 		try {
 			const resolved = await withDatabaseScope(
 				this.env.HYPERDRIVE.connectionString,
-				() => resolveModelConversation({ ...turn, index: 1 }),
+				() => readChatCrewScope(scope.userId, scope.sessionId),
 				null,
 			);
-			if (resolved) this.rememberCrewScope(resolved);
+			if (resolved) {
+				this.rememberCrewScope(resolved);
+				this.chatTitle = resolved.title;
+			}
 		} catch (error) {
 			console.warn("Crew scope was not resolved.", {
 				cause: stepFailureCause(error),
@@ -528,7 +536,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			}
 		}
 		// The caller's scope carries no Y switch: read it once per turn start.
-		if (!("yEnabled" in scope)) await this.resolveCrewScope(turn);
+		if (!("yEnabled" in scope)) await this.resolveCrewScope(scope);
 		const active = this.activeTurn();
 		if (active?.turnId === turn.turnId) return active.leaseId === turn.leaseId;
 		if (active) {
@@ -608,30 +616,14 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				);
 				return;
 			}
-			let derived: ReturnType<typeof crewFromSettledItems> = {
-				state: "working",
-				waitingOn: null,
-				prUrl: null,
-				lastReply: null,
-				lastRequest: null,
-				canvas: null,
-				title: "",
-			};
 			let items: SessionItem[] = fromBox ? [...fromBox] : [];
 			if (!fromBox)
 				try {
 					items = this.history.chatCopy()?.items ?? [];
 				} catch {}
-			if (turnStatus !== "running")
-				derived = crewFromSettledItems(items, turnStatus);
-			// The request the turn began with: the crew tells Y² when the person
-			// sent it to the thread directly. It rides the start note (no extra
-			// request).
-			else
-				derived = {
-					...derived,
-					lastRequest: crewRequestFromStartItems(items),
-				};
+			// Every note names the thread (the start note too) and carries the
+			// request the turn began with (no extra request).
+			const derived = crewNoteFromItems(items, turnStatus, this.chatTitle);
 			console.log(
 				`crew.note ${JSON.stringify({
 					session: scope.sessionId.slice(0, 8),
@@ -1032,6 +1024,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (ended) takeClaudeTurnQuiet(ended.turnId);
 		this.vmQuiet.write(null);
 		this.ctx.storage.sql.exec("delete from turn_loop");
+		// A turn whose start found no crew scope still settles to its crew.
+		if (ended && !this.crewScope()) await this.resolveCrewScope(ended);
 		const next = this.queue.take();
 		if (next) {
 			await this.refreshWaiting([next]);

@@ -1,3 +1,4 @@
+import type { ThreadProgress } from "../adapters/crew-facts";
 import type { SqliteYSquaredCrew } from "./y-squared-crew-store";
 
 /**
@@ -20,8 +21,30 @@ export async function runCrewAlarm(input: {
 	) => Promise<boolean>;
 	setAlarm: (at: number) => Promise<void>;
 	log: (line: string) => void;
+	/**
+	 * The real progress of threads whose stall clock ran out (one Postgres
+	 * read, only then). Absent (local development) or failing: the signal
+	 * keeps the crew's own clock, as before.
+	 */
+	progress?: (
+		userId: string,
+		sessionIds: readonly string[],
+	) => Promise<readonly ThreadProgress[]>;
 }) {
 	const { store, now } = input;
+	const checks = input.progress ? store.progressChecks(now) : [];
+	const owner = store.target()?.userId;
+	if (checks.length && owner && input.progress)
+		try {
+			store.applyProgress(checks, await input.progress(owner, checks), now);
+		} catch (error) {
+			input.log(
+				`crew.progress ${JSON.stringify({
+					checked: checks.length,
+					error: error instanceof Error ? error.message.slice(0, 200) : "error",
+				})}`,
+			);
+		}
 	const decided = store.takeWake(now);
 	const log = (extra: Record<string, unknown>) =>
 		input.log(

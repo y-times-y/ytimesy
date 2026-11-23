@@ -630,3 +630,69 @@ describe("ySquaredTools: which thread did what, and when", () => {
 		);
 	});
 });
+
+describe("a thread Y² just started can be found and linked", () => {
+	const created = {
+		id: "t-new",
+		projectId: "p",
+		title: "Add health",
+		harness: "api",
+		listedModelId: "m-y2",
+		parentSessionId: null,
+		agentRole: null,
+		turnStatus: "running",
+		createdAt: "2026-11-12T11:59:00Z",
+		updatedAt: "2026-11-12T11:59:30Z",
+	};
+	function startFixture() {
+		const crew = store();
+		const tools = ySquaredTools({
+			userId: "u",
+			projectId: "p",
+			selfId: "y2",
+			machines: {} as never,
+			modelId: "m-y2",
+			harnessId: "api",
+			turnId: "turn-1",
+			deps: {
+				now: () => NOW,
+				metadata: (async (_user: string, id: string) =>
+					id === created.id ? created : null) as never,
+				send: (async () => ({
+					turnStatus: "running",
+					sessionId: created.id,
+				})) as never,
+				outcome: (async () => null) as never,
+				// The crew has not heard of the new thread yet.
+				crew: () =>
+					({
+						list: async () => crew.list(),
+						thread: async (id: string) => crew.thread(id),
+						reconcile: async () => undefined,
+						noteY2Sent: async () => undefined,
+					}) as never,
+			},
+		});
+		return { tools };
+	}
+
+	it("start_thread names the new thread's id", async () => {
+		const { tools } = startFixture();
+		expect(
+			await run(tools, "start_thread", {
+				title: "Add health",
+				brief: "Add GET /health.",
+			}),
+		).toMatch(/^Started "Add health" \(id t-new\)/);
+	});
+
+	it("thread reads a thread the crew has not noted yet from its own row", async () => {
+		const { tools } = startFixture();
+		const text = await run(tools, "thread", { id: "t-new" });
+		expect(text).toContain('"Add health" (id t-new)');
+		expect(text).toContain("Status: working");
+		expect(await run(tools, "thread", { id: "nope" })).toBe(
+			"No such thread in this project.",
+		);
+	});
+});

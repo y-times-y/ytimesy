@@ -1,3 +1,5 @@
+import { modelConversationName } from "../../domain/model-conversation-routing";
+import { deliverTurnSettleNotesDirectly } from "../adapters/turn-settle-notes";
 import { deliverUserHubNotesDirectly } from "../adapters/user-hub-notes";
 import { deliverYSquaredCrewDirectly } from "../adapters/y-squared-crew-client";
 import { durableObjectLocation } from "./durable-object-location";
@@ -9,6 +11,22 @@ export function registerUserHubNotes(env: EdgeExecutorEnvironment) {
 		env.USER_HUBS.getByName(userId, durableObjectLocation()).noteSignals(
 			topics,
 		),
+	);
+	// A turn the lease sweep failed: its chat's object tells the crew and the
+	// hub, as it does for a box turn (noteBoxTurn; no items: what the turn
+	// last showed stays as the crew has it).
+	deliverTurnSettleNotesDirectly((note) =>
+		env.MODEL_CONVERSATIONS.getByName(
+			modelConversationName(note),
+			durableObjectLocation(),
+		).noteBoxTurn({
+			userId: note.userId,
+			sessionId: note.sessionId,
+			turnId: note.turnId,
+			leaseId: "",
+			turnStatus: note.turnStatus,
+			items: [],
+		}),
 	);
 	// Y²'s tools read a project's crew through its Durable Object.
 	deliverYSquaredCrewDirectly((projectId) => {

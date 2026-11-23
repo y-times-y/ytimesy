@@ -73,6 +73,7 @@ import {
 	rebaseAfterWrite,
 } from "./turn-items-storage";
 import { boxRoutingFacts, turnRunnerBoxAlive } from "./turn-runner-boxes";
+import { noteTurnsSettledElsewhere } from "./turn-settle-notes";
 import { startQueuedTurnsDirectly } from "./turn-start";
 import { claudeCodeYSquaredAvailable, isActiveYSquaredChat } from "./y-mode";
 
@@ -1266,6 +1267,7 @@ export async function cancelWaitingApiTurn(turnId: string, leaseId: string) {
 /** The settled turn plus the session fields its analytics event is categorized by. */
 type SettledTurnRow = {
 	turn_id: string;
+	session_id: string;
 	state: "completed" | "failed" | "cancelled";
 	started_at: Date | string | null;
 	user_id: string;
@@ -1274,7 +1276,7 @@ type SettledTurnRow = {
 	task_access: string | null;
 };
 const SETTLED_TURN_COLUMNS =
-	"saved.id as turn_id,saved.state,saved.created_at as started_at,s.user_id,s.harness,s.parent_session_id,s.task_access";
+	"saved.id as turn_id,saved.session_id,saved.state,saved.created_at as started_at,s.user_id,s.harness,s.parent_session_id,s.task_access";
 
 function captureSettledTurns(rows: readonly SettledTurnRow[]) {
 	const endedAt = new Date();
@@ -1408,6 +1410,16 @@ export async function expireApiTurnLeases() {
 	 task_state=case when parent_session_id is null then task_state else 'failed' end,updated_at=now()
 	 from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`);
 	captureSettledTurns(result.rows ?? []);
+	// No executor is left to tell the chat (its object or box stopped): the
+	// crew and the user's hub would show these turns working for good.
+	await noteTurnsSettledElsewhere(
+		(result.rows ?? []).map((row) => ({
+			userId: row.user_id,
+			sessionId: row.session_id,
+			turnId: row.turn_id,
+			turnStatus: "failed" as const,
+		})),
+	);
 	/** How many turns were abandoned, for the owner's alert. */
 	return result.rows?.length ?? 0;
 }

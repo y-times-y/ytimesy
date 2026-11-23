@@ -15,6 +15,7 @@ import {
 	Y_SQUARED_PROACTIVE_WAKES_PER_DAY,
 	Y_SQUARED_SCHEDULE_LIMIT,
 } from "../../domain/y-squared-proactive";
+import type { ThreadProgress } from "../adapters/crew-facts";
 import { runCrewAlarm } from "./crew-alarm";
 import { SqliteYSquaredCrew } from "./y-squared-crew-store";
 
@@ -51,7 +52,13 @@ const note = (over: Partial<CrewNote> = {}): CrewNote => ({
 });
 
 /** The crew as the platform runs it: a store and its one alarm slot. */
-function world() {
+function world(
+	/** What the threads' turns really did (Postgres), at alarm time `now`. */
+	progress?: (
+		now: number,
+		sessionIds: readonly string[],
+	) => readonly ThreadProgress[],
+) {
 	const store = new SqliteYSquaredCrew(sql() as never);
 	let alarm: number | null = null;
 	let now = T0;
@@ -104,6 +111,12 @@ function world() {
 				alarm = at2;
 			},
 			log: () => undefined,
+			...(progress
+				? {
+						progress: async (_user: string, ids: readonly string[]) =>
+							progress(now, ids),
+					}
+				: {}),
 		});
 	};
 	return {
@@ -349,6 +362,57 @@ describe("stall signals", () => {
 		const turns = w.y2.turns.length;
 		expect(w.alarm()).toBeNull();
 		expect(w.y2.turns).toHaveLength(turns);
+	});
+
+	const running = (
+		sessionId: string,
+		progressAt: number | null,
+	): ThreadProgress => ({
+		sessionId,
+		active: true,
+		queued: false,
+		progressAt,
+		turnStatus: "running",
+	});
+
+	it("a long tool call or Claude run whose turn keeps renewing is never called stuck", async () => {
+		// The box renews the turn's lease every few seconds while one tool
+		// call runs for hours: the crew heard nothing after the start note.
+		const w = world((now, ids) => ids.map((id) => running(id, now - 5_000)));
+		w.note1(note(), T0);
+		await runUntil(w, T0 + 3 * HOUR);
+		expect(w.y2.turns.some((t) => t.includes("may be stuck"))).toBe(false);
+		// It is checked again later, not given up on.
+		expect(w.alarm()).not.toBeNull();
+	});
+
+	it("a turn with no progress for the stall window is told, with how long it was quiet", async () => {
+		const w = world((_now, ids) => ids.map((id) => running(id, T0 + 5 * MIN)));
+		w.note1(note(), T0);
+		await runUntil(w, T0 + 2 * HOUR);
+		const nudges = w.y2.turns.filter((t) => t.includes("may be stuck"));
+		expect(nudges).toHaveLength(1);
+		expect(nudges[0]).toContain("has worked 65 min");
+		expect(nudges[0]).toContain("shown no progress");
+		expect(nudges[0]).toContain("for 60 min");
+	});
+
+	it("a thread whose turn already ended is settled, not called stuck", async () => {
+		// Its settle note was lost (a sweep failed the turn): no turn runs.
+		const w = world((_now, ids) =>
+			ids.map((sessionId) => ({
+				sessionId,
+				active: false,
+				queued: false,
+				progressAt: null,
+				turnStatus: "failed",
+			})),
+		);
+		w.note1(note(), T0);
+		await runUntil(w, T0 + 2 * HOUR);
+		expect(w.y2.turns.some((t) => t.includes("may be stuck"))).toBe(false);
+		expect(w.y2.turns.some((t) => t.includes('"Audit" failed'))).toBe(true);
+		expect(w.store.thread("t1")?.state).toBe("failed");
 	});
 
 	it("a lost settle note (working > 6 h) arms no stall alarm", () => {

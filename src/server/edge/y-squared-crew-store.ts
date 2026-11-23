@@ -14,6 +14,7 @@ import {
 	type CrewWaitingHint,
 	type CrewWakeEvent,
 	crewNoteMatters,
+	crewTitle,
 	crewWakeBody,
 	crewWakeDelayMs,
 	crewWakeDueAt,
@@ -33,6 +34,8 @@ import {
 	type ScheduleView,
 	type StallRow,
 	type StallSignal,
+	stallAfterMs,
+	stallClockFrom,
 	stallDueAt,
 	stallSignals,
 	Y_SQUARED_DAY_MS,
@@ -132,12 +135,15 @@ export class SqliteYSquaredCrew {
 				"alter table crew add column start_wake_at integer not null default 0",
 			);
 		// Stall signals: a moving average of this thread's turn durations, the
-		// working run already nudged, and the waiting reminders already sent.
+		// working run already nudged, the waiting reminders already sent, and
+		// the last real progress its running turn showed (checked in Postgres
+		// when a stall comes due; 0: not checked this run).
 		for (const column of [
 			"typical_work_ms",
 			"stall_nudged_for",
 			"reminded_at",
 			"remind_n",
+			"progress_at",
 		])
 			if (!columns.has(column))
 				sql.exec(
@@ -337,7 +343,8 @@ export class SqliteYSquaredCrew {
 				note.sessionId,
 			)
 			.toArray()[0];
-		const title = existing?.title || note.title;
+		// A row never stays untitled while its note or its request names it.
+		const title = existing?.title || note.title || crewTitle(note.lastRequest);
 		const reply = note.lastReply?.slice(0, CREW_REPLY_LIMIT) ?? null;
 		const request = note.lastRequest?.slice(0, CREW_REQUEST_LIMIT) || null;
 		const unchanged =
@@ -363,6 +370,7 @@ export class SqliteYSquaredCrew {
 				 last_request=coalesce(excluded.last_request,crew.last_request),
 				 updated_at=excluded.updated_at,last_active_at=excluded.last_active_at,
 				 reminded_at=0,remind_n=0,
+				 progress_at=case when excluded.state='working' and crew.state='working' then crew.progress_at else 0 end,
 				 working_since=case when excluded.state='working'
 				  then coalesce(case when crew.state='working' then crew.working_since end,excluded.working_since)
 				  else null end`,
@@ -585,8 +593,9 @@ export class SqliteYSquaredCrew {
 				stall_nudged_for: number;
 				reminded_at: number;
 				remind_n: number;
+				progress_at: number;
 			}>(
-				"select session_id,title,state,working_since,updated_at,typical_work_ms,stall_nudged_for,reminded_at,remind_n from crew where state in ('working','waiting','failed')",
+				"select session_id,title,state,working_since,updated_at,typical_work_ms,stall_nudged_for,reminded_at,remind_n,progress_at from crew where state in ('working','waiting','failed')",
 			)
 			.toArray()
 			.map((row) => ({
@@ -599,7 +608,90 @@ export class SqliteYSquaredCrew {
 				stallNudgedFor: row.stall_nudged_for,
 				remindedAt: row.reminded_at,
 				remindCount: row.remind_n,
+				progressAt: row.progress_at,
 			}));
+	}
+
+	/**
+	 * Working threads whose stall clock ran out, to check against their turns'
+	 * real progress before Y² is told they may be stuck (stall signals came from
+	 * the start note alone, so a long tool call or a Claude run on a box read as
+	 * stuck). Rows past the 6-hour mark are included: those never get a signal,
+	 * and the check settles the ones whose settle note was lost.
+	 */
+	progressChecks(now: number, limit = 20): string[] {
+		if (this.wakeRow().stall_nudges !== 1) return [];
+		return this.stallRows()
+			.filter(
+				(row) =>
+					row.state === "working" &&
+					row.workingSince !== null &&
+					row.stallNudgedFor !== row.workingSince &&
+					now - stallClockFrom(row) >= stallAfterMs(row.typicalWorkMs),
+			)
+			.slice(0, limit)
+			.map((row) => row.sessionId);
+	}
+
+	/**
+	 * What the checked threads' turns really did. A running turn that renewed
+	 * its lease or wrote progress moves its stall clock to then; one waiting
+	 * in the queue is not stuck either. A thread with no queued or running
+	 * turn lost its settle note: its row settles now (finished, or failed as
+	 * the chat says) and Y² hears that instead of "it may be stuck". A thread
+	 * that no longer exists is dropped. Runs at the alarm, before `takeWake`,
+	 * which then decides the signals and the next alarm from these rows.
+	 */
+	applyProgress(
+		checked: readonly string[],
+		facts: readonly {
+			readonly sessionId: string;
+			readonly active: boolean;
+			readonly queued: boolean;
+			readonly progressAt: number | null;
+			readonly turnStatus: string | null;
+		}[],
+		now: number,
+	): void {
+		const bySession = new Map(facts.map((fact) => [fact.sessionId, fact]));
+		const wake = this.wakeRow();
+		for (const sessionId of checked) {
+			const fact = bySession.get(sessionId);
+			if (!fact) {
+				this.sql.exec("delete from crew where session_id=?", sessionId);
+				continue;
+			}
+			// Running (or a turn this crew cannot see, such as a chat the
+			// Postgres row still calls running): progress, or now while queued.
+			if (fact.active || fact.turnStatus === "running") {
+				const at =
+					fact.queued || fact.progressAt === null
+						? now
+						: Math.min(now, fact.progressAt);
+				this.sql.exec(
+					"update crew set progress_at=max(progress_at,?) where session_id=? and state='working'",
+					at,
+					sessionId,
+				);
+				continue;
+			}
+			const row = this.thread(sessionId);
+			if (row?.state !== "working" || !wake.user_id) continue;
+			this.noteThread(
+				{
+					sessionId,
+					title: row.title,
+					state: fact.turnStatus === "failed" ? "failed" : "finished",
+					waitingOn: null,
+					prUrl: row.prUrl,
+					lastReply: null,
+					userId: wake.user_id,
+					projectId: "",
+					ySquaredId: wake.y2_session_id,
+				},
+				now,
+			);
+		}
 	}
 
 	/** After a wake went out the alarm may need to move to the next schedule or signal. */
