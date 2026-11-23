@@ -16,6 +16,7 @@ import {
 	type ActiveConversationTurn,
 	conversationPurgeSchema,
 	RETIRED_TURN_MS,
+	retiredLeaseKey,
 	TURN_COORDINATION_LEASE_MS,
 	turnControlSchema,
 } from "../domain/conversation-turn-control";
@@ -593,7 +594,11 @@ export class ConversationRoom {
 			const same =
 				current?.turnId === input.turnId && current?.leaseId === input.leaseId;
 			if (action === "acquire") {
-				if (retired[input.turnId] || Object.keys(retired).length >= 256)
+				if (
+					retired[retiredLeaseKey(input)] ||
+					retired[input.turnId] ||
+					Object.keys(retired).length >= 256
+				)
 					return new Response(null, { status: 409 });
 				if (
 					current &&
@@ -616,13 +621,13 @@ export class ConversationRoom {
 				await storage.delete("active-turn");
 				await this.schedule(null);
 			} else if (action === "release") {
-				retired[input.turnId] = Date.now() + RETIRED_TURN_MS;
+				retired[retiredLeaseKey(input)] = Date.now() + RETIRED_TURN_MS;
 				await storage.put("retired-turns", retired);
 				await storage.delete("active-turn");
 				await this.schedule(null);
 			} else {
 				if (current && !same)
-					retired[current.turnId] = Date.now() + RETIRED_TURN_MS;
+					retired[retiredLeaseKey(current)] = Date.now() + RETIRED_TURN_MS;
 				await storage.put("retired-turns", retired);
 				const next: ActiveConversationTurn = {
 					...input,
@@ -652,6 +657,7 @@ export class ConversationRoom {
 			}
 			const retired =
 				(await storage.get<Record<string, number>>("retired-turns")) ?? {};
+			// Only the legacy turn-ID entry can refuse a rotated lease.
 			delete retired[input.turnId];
 			await storage.put("retired-turns", retired);
 			const identity = await storage.get<{ userId: string; sessionId: string }>(
@@ -722,7 +728,7 @@ export class ConversationRoom {
 					(await storage.get<Record<string, number>>("retired-turns")) ?? {};
 				for (const [id, expiry] of Object.entries(retired))
 					if (expiry <= Date.now()) delete retired[id];
-				retired[turn.turnId] = Date.now() + RETIRED_TURN_MS;
+				retired[retiredLeaseKey(turn)] = Date.now() + RETIRED_TURN_MS;
 				await storage.put("retired-turns", retired);
 				await storage.delete("active-turn");
 			} else await this.schedule(turn.expiresAt);

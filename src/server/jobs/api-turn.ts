@@ -41,6 +41,7 @@ import { type ClaudeRunnerBox, claudeRunnerFor } from "#/domain/claude-runner";
 import {
 	CoordinationFailure,
 	TURN_COORDINATION_LEASE_MS,
+	TURN_START_WAIT_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
 import { isDevelopmentEnvironment } from "#/domain/development-environment";
@@ -322,15 +323,36 @@ import type { TurnPorts } from "./turn-ports";
  * of failing: a code restore holds the lease until just before it commits, and
  * a hold whose release failed lapses within one lease period. A turn that was
  * stopped meanwhile ends the wait through its heartbeat's abort.
+ *
+ * A turn's first step under its lease has run nothing yet, so it waits longer
+ * (TURN_START_WAIT_MS: past any retirement the room may still hold) and rides
+ * out the chat's coordinator restarting (a deploy) instead of failing: until
+ * it holds the lease, failing it only shows the person an error for nothing.
+ * A later step re-acquires a lease it held; refused, that lease is gone.
  */
 async function acquireConversationTurn(
 	control: TurnControl,
 	signal: AbortSignal,
 	coordinateConversationTurn: TurnPorts["coordinateConversationTurn"],
+	starting: boolean,
 ) {
-	const deadline = Date.now() + TURN_COORDINATION_LEASE_MS + 5_000;
+	const deadline =
+		Date.now() +
+		(starting ? TURN_START_WAIT_MS : TURN_COORDINATION_LEASE_MS + 5_000);
 	for (;;) {
-		if (await coordinateConversationTurn("acquire", control)) return true;
+		try {
+			if (await coordinateConversationTurn("acquire", control)) return true;
+		} catch (error) {
+			if (
+				!starting ||
+				!(error instanceof CoordinationFailure && error.retryable) ||
+				Date.now() >= deadline
+			)
+				throw error;
+			console.warn("The chat's coordinator did not answer; waiting.", {
+				...apiTurnFailureClassification(error),
+			});
+		}
 		if (signal.aborted || Date.now() >= deadline) return false;
 		await new Promise<void>((resolve) => {
 			const timer = setTimeout(done, 1000);
@@ -983,10 +1005,15 @@ async function runApiTurnAttempt(
 					control,
 					abort.signal,
 					coordinateConversationTurn,
+					!continued && (!step || step.index === 1),
 				),
 			))
-		)
+		) {
+			// Stopped before it started: it ends as stopped, not as an error.
+			if (await apiTurnCancelRequested(turn).catch(() => false))
+				abort.abort(new ApiTurnCancelled());
 			throw new Error(TURN_NOT_STARTED);
+		}
 		coordinated = true;
 		timing?.mark("leaseAcquired");
 		failureStage = "connection";

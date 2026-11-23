@@ -789,6 +789,20 @@ object).
   instead of failing: the edge releases the box's coordination lease, queues
   the turn, then sets its executor (an admitted turn's executor is
   immutable), and the admission sweep starts it. The box hears lease-lost.
+- **The chat's lock across a change of owner** (2026-11-23): the hand-off lets
+  the chat's coordination lease go with `handoff`, which does not retire the
+  turn, and then runs an admission at once (the turn no longer waits up to a
+  minute for the sweep). The room retires a released or lapsed lease by
+  turn *and lease* (`retiredLeaseKey`): every claim gives the turn a new
+  lease that Postgres checks on every write, so the turn's next owner (the
+  object after a hand-off, a box after a takeover) is never refused for its
+  predecessor. Retiring the turn ID refused them for 70 s; the object's
+  35 s acquire gave up and the chat showed "could not confirm this turn's
+  ownership" (chats 3b8ac257 and f4c33192, a new chat's first turn). A
+  turn's first step waits up to `TURN_START_WAIT_MS` (105 s) for the lease,
+  rides out the coordinator restarting, and ends as stopped (not failed)
+  when Stop came meanwhile. Tests: `tests/conversation-room-handoff.test.ts`,
+  `api-turn.test.ts` ("a turn that cannot take its chat's lease at once").
 - Live (2026-11-22): a Claude Sonnet turn ran on a box with one relayed
   `bash` call; a fresh-VM chat was handed off and completed in its object.
   Switch: `YTIMESY_BOX_CLAUDE_USERS=*`.

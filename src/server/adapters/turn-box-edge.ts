@@ -55,6 +55,12 @@ export function createTurnBoxEdgeOps(
 			turn: ApiTurn,
 			candidate: string,
 		) => Promise<string>;
+		/**
+		 * Starts queued chat turns in their objects now (the admission the
+		 * minute's sweep runs): a turn handed to its object does not wait for
+		 * that sweep, up to a minute with the chat showing nothing.
+		 */
+		readonly admit?: () => Promise<void>;
 		/** Tells the chat's object a box turn started or settled (its crew and hub notes). */
 		readonly noteChat?: (
 			turn: ApiTurn,
@@ -107,7 +113,12 @@ export function createTurnBoxEdgeOps(
 				}).catch(() => {
 					console.warn("Coordination release before a hand-off failed.");
 				});
-				await handClaimedApiTurnToObject(turn.id, leaseId);
+				if (!(await handClaimedApiTurnToObject(turn.id, leaseId))) return;
+				await options.admit?.().catch(() => {
+					console.warn(
+						"A handed-over turn waits for the admission sweep; starting it now failed.",
+					);
+				});
 			}),
 		releaseClaim: (turnId, leaseId) =>
 			scope(async () => {
