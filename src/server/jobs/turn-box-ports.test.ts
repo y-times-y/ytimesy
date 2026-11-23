@@ -3,7 +3,11 @@ import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { boxPortOps, TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import { fakeEdge } from "../edge/turn-box-fake-edge";
 import { TurnBoxEdgeClient, TurnBoxLeaseLost } from "./turn-box-client";
-import { BOX_PORTS_UNAVAILABLE, boxTurnPorts } from "./turn-box-ports";
+import {
+	BOX_PORTS_UNAVAILABLE,
+	boxTurnPorts,
+	COORDINATION_PORT_TIMEOUT_MS,
+} from "./turn-box-ports";
 import { TurnPortUnavailable } from "./turn-ports";
 import { localTurnPorts } from "./turn-ports-local";
 
@@ -43,6 +47,29 @@ async function setup() {
 }
 
 describe("boxTurnPorts over the edge's port endpoint", () => {
+	it("gives up a lock call that hangs, as a retryable failure, well inside the 30 s lease", async () => {
+		const { ports, edge } = await setup();
+		(edge.state.ports as Record<string, unknown>).coordinateTurn = () =>
+			new Promise(() => {});
+		vi.useFakeTimers();
+		try {
+			const call = ports
+				.coordinateConversationTurn("renew", {
+					userId: USER,
+					sessionId: SESSION,
+					turnId: TURN,
+					leaseId: "l",
+				})
+				.catch((error: unknown) => error);
+			await vi.advanceTimersByTimeAsync(COORDINATION_PORT_TIMEOUT_MS + 1);
+			const failure = await call;
+			expect(failure).toBeInstanceOf(CoordinationFailure);
+			expect((failure as CoordinationFailure).retryable).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("reports an edge error on the chat's lock as a retryable coordination failure (2026-11-21: a box turn failed on its 503)", async () => {
 		const { ports, edge } = await setup();
 		(edge.state.ports as Record<string, unknown>).coordinateTurn = () => {
