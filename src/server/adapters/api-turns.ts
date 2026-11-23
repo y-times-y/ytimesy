@@ -1215,6 +1215,36 @@ export async function handClaimedApiTurnToObject(
 	}
 }
 
+/**
+ * A running object turn whose row still holds the whole transcript (queued
+ * for a box, then handed to its chat's object) keeps only `{"from": <id>}`
+ * instead, so the object's steps load, write and mirror only the turn's own
+ * items. A box keeps the whole array, so the hand-off cannot set it when the
+ * turn is queued (Y² chat, 2026-11-23: a 9 MB transcript in every step
+ * reset the object for memory 38 times an hour).
+ *
+ * Only when the row's array is exactly the chat's transcript: the new shape
+ * then rebuilds the very same history, so no item is lost or changed. The
+ * marker is the chat's last turn start, by position, whose id is not
+ * repeated after it (activeTurnHistory anchors on the last row with that
+ * id). Fenced by the lease; null leaves the row as it was.
+ */
+export async function keepTurnItemsInChat(turnId: string, leaseId: string) {
+	const result = await database().query<{ from: string; version: string }>(
+		`with marker as (select i.session_id,i.item_id,i.position from api_turn a join agent_session_item i on i.session_id=a.session_id
+		 where a.id=$1 and i.starts_turn and i.item_id is not null order by i.position desc limit 1)
+		 update api_turn t set items=jsonb_build_object('from',m.item_id),updated_at=now()
+		 from marker m, agent_session s
+		 where t.id=$1 and t.lease_id=$2 and t.state='running' and t.executor='durable-object'
+		 and jsonb_typeof(t.items)='array' and s.id=t.session_id and s.items=t.items
+		 and not exists(select 1 from agent_session_item k
+		  where k.session_id=m.session_id and k.item_id=m.item_id and k.position>m.position)
+		 returning m.item_id as "from",t.updated_at::text as version`,
+		[turnId, leaseId],
+	);
+	return result.rows[0] ?? null;
+}
+
 /** Turn ids whose budget notice this isolate already wrote or found, so repeated admission passes ask the database nothing. */
 const budgetNoticed = new Set<string>();
 

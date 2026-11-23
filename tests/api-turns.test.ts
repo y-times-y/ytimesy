@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { claudeCodeTurnRevision } from "../src/domain/claude-code-route";
 import { SessionItemId } from "../src/domain/ids";
 import { subscriptionTurnRevision } from "../src/domain/subscription-turn";
@@ -13,9 +21,12 @@ import {
 	expireApiTurnLeases,
 	finalizeApiTurn,
 	finishApiTurn,
+	handClaimedApiTurnToObject,
+	keepTurnItemsInChat,
 	previousTurnHistory,
 	previousTurnMessages,
 	publishApiTurnProgress,
+	readRunningApiTurn,
 	releaseClaimedApiTurn,
 	renewApiTurn,
 	renewParkedClaudeTurn,
@@ -1899,4 +1910,240 @@ it("a normal Claude Code chat's send makes no Y² query of its own", async () =>
 	expect(
 		fault.sql.filter((sql) => /from agent_session s\s+join project/.test(sql)),
 	).toEqual([]);
+});
+
+describe("a box's turn handed to its chat's object on a large chat", () => {
+	// Varied, non-ASCII items the size of a long Y² chat's (scaled down).
+	const archived = Array.from({ length: 3_000 }, (_, index) => ({
+		kind: index % 3 ? "agentMessage" : "dynamicToolCall",
+		id: `archive-${index}`,
+		text: `Y² ⁣ note ${index} ${"päyload ".repeat(60)}`,
+		nested: { index, list: [index, `${index}`, null, true] },
+	}));
+	const start = {
+		kind: "userMessage",
+		id: "work-1",
+		text: "⁣ytimesy-child-event:y2:1\nSomething changed",
+	};
+	/** Each stored item as Postgres renders it: the bytes a later read gets back. */
+	const storedTexts = async () =>
+		(
+			await db.query<{ text: string }>(
+				"select e::text as text from agent_session s, jsonb_array_elements(s.items) with ordinality x(e,o) where s.id=$1 order by o",
+				[sessionId],
+			)
+		).rows.map((row) => row.text);
+	/** Queued for a box (the whole transcript on its row), then handed to the chat's object and claimed there. */
+	async function handedTurn(appendItems: unknown[]) {
+		await db.query("update agent_session set items=$2::jsonb where id=$1", [
+			sessionId,
+			JSON.stringify(archived),
+		]);
+		await enqueueApiTurn({
+			sessionId,
+			userId: "alice",
+			connectionId,
+			revision,
+			modelId: "test-model",
+			routeId: `api/${connectionId}/test-model`,
+			messages: [{ role: "user", content: "test" }],
+			items: [],
+			appendItems: appendItems as never,
+		});
+		const onBox = await claimApiTurn(2, undefined, "node");
+		if (!onBox?.lease_id) throw new Error("Missing box lease");
+		expect(Array.isArray(onBox.items)).toBe(true);
+		expect(await handClaimedApiTurnToObject(onBox.id, onBox.lease_id)).toBe(
+			true,
+		);
+		const claimed = await claimApiTurn(2, undefined, "durable-object");
+		if (!claimed?.lease_id) throw new Error("Missing object lease");
+		return claimed;
+	}
+
+	it("keeps only its own items on the turn and never changes or loses an earlier item through progress, checkpoint, finish and the next turn", async () => {
+		const { activeTurnHistory } = await import(
+			"../src/server/adapters/active-turn-history"
+		);
+		const { withTurnHistoryMirror } = await import(
+			"../src/server/adapters/turn-history-mirror"
+		);
+		const { TurnHistoryCache } = await import(
+			"../src/server/edge/turn-history-cache"
+		);
+		const { durableObjectState } = await import(
+			"./support/durable-object-state"
+		);
+		const claimed = await handedTurn([start]);
+		const before = await storedTexts();
+		const transcriptBytes = before.reduce((sum, text) => sum + text.length, 0);
+		expect(transcriptBytes).toBeGreaterThan(1_500_000);
+
+		const kept = await keepTurnItemsInChat(claimed.id, claimed.lease_id ?? "");
+		expect(kept?.from).toBe("work-1");
+		const row = (
+			await db.query<{ items: unknown }>(
+				"select items from api_turn where id=$1",
+				[claimed.id],
+			)
+		).rows[0];
+		expect(row.items).toEqual({ from: "work-1" });
+		// Converting changed no item of the chat.
+		expect(await storedTexts()).toEqual(before);
+		// A second claim finds nothing to convert.
+		expect(
+			await keepTurnItemsInChat(claimed.id, claimed.lease_id ?? ""),
+		).toBeNull();
+
+		const loaded = await activeTurnHistory(
+			claimed.id,
+			claimed.lease_id ?? "",
+			"work-1",
+		);
+		if (!loaded) throw new Error("Missing active history");
+		expect(loaded.items).toEqual([start]);
+		const full = await readRunningApiTurn(claimed.id, claimed.lease_id ?? "");
+		if (!full) throw new Error("Missing running turn");
+		const turn = {
+			...full,
+			messages: loaded.messages,
+			items: loaded.items,
+			items_from: "work-1",
+		};
+		// What the chat's object keeps locally, fed by every write's mirror.
+		const cache = new TurnHistoryCache(
+			durableObjectState().ctx.storage.sql as never,
+		);
+		// As the object's claim does: the loaded history at the row's version.
+		cache.write(
+			turn.id,
+			kept?.version ?? "",
+			{ messages: loaded.messages, items: loaded.items },
+			undefined,
+			loaded.items_rev,
+		);
+		const reply = { kind: "agentMessage", id: "reply-1", text: "wörking" };
+		const tool = { kind: "dynamicToolCall", id: "tool-1", text: "ran" };
+		const final = { kind: "agentMessage", id: "final-1", text: "done ²" };
+		const sentBytes: number[] = [];
+		await withTurnHistoryMirror(
+			(...written) => cache.write(...written),
+			async () => {
+				sentBytes.push(
+					await publishApiTurnProgress(turn, [start, reply] as never),
+				);
+				await checkpointApiTurn(turn, loaded.messages, [
+					start,
+					reply,
+					tool,
+				] as never);
+				expect(
+					await finalizeApiTurn(turn, "completed", [
+						start,
+						reply,
+						tool,
+						final,
+					] as never),
+				).toBe("completed");
+			},
+		);
+		// A progress write sent the turn's items, not the chat.
+		expect(Math.max(...sentBytes)).toBeLessThan(2_000);
+		const after = await storedTexts();
+		expect(after.slice(0, archived.length)).toEqual(
+			before.slice(0, archived.length),
+		);
+		expect(
+			after.slice(archived.length).map((text) => JSON.parse(text).id),
+		).toEqual(["work-1", "reply-1", "tool-1", "final-1"]);
+		// The copy kept for the next turn holds only this turn's items.
+		cache.keepChatCopy();
+		expect(cache.chatCopy()?.items.map((item) => item.id)).toEqual([
+			"work-1",
+			"reply-1",
+			"tool-1",
+			"final-1",
+		]);
+
+		// The next turn, queued for the object directly, keeps the chat whole too.
+		vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
+		await enqueueApiTurn({
+			sessionId,
+			userId: "alice",
+			connectionId,
+			revision,
+			modelId: "test-model",
+			routeId: `api/${connectionId}/test-model`,
+			messages: [{ role: "user", content: "again" }],
+			items: [],
+			appendItems: [
+				{ kind: "userMessage", id: "work-2", text: "again" },
+			] as never,
+		});
+		const next = await claimApiTurn(2, undefined, "durable-object");
+		if (!next?.lease_id) throw new Error("Missing next lease");
+		const nextLoaded = await activeTurnHistory(
+			next.id,
+			next.lease_id,
+			"work-2",
+		);
+		expect(nextLoaded?.items.map((item) => item.id)).toEqual(["work-2"]);
+		const nextFull = await readRunningApiTurn(next.id, next.lease_id);
+		if (!nextFull || !nextLoaded) throw new Error("Missing next turn");
+		await finalizeApiTurn(
+			{ ...nextFull, items: nextLoaded.items, items_from: "work-2" },
+			"completed",
+			[
+				...nextLoaded.items,
+				{ kind: "agentMessage", id: "final-2", text: "ok" },
+			] as never,
+		);
+		const last = await storedTexts();
+		expect(last.slice(0, after.length)).toEqual(after);
+		expect(last.slice(after.length).map((text) => JSON.parse(text).id)).toEqual(
+			["work-2", "final-2"],
+		);
+	});
+
+	it("leaves the whole array in place when the chat changed since the turn's last write, or the lease is not the holder's", async () => {
+		const claimed = await handedTurn([start]);
+		expect(await keepTurnItemsInChat(claimed.id, randomUUID())).toBeNull();
+		// Something else wrote the chat: the row is no longer its exact copy.
+		await db.query(
+			"update agent_session set items=items||$2::jsonb where id=$1",
+			[
+				sessionId,
+				JSON.stringify([{ kind: "agentMessage", id: "late", text: "x" }]),
+			],
+		);
+		expect(
+			await keepTurnItemsInChat(claimed.id, claimed.lease_id ?? ""),
+		).toBeNull();
+		const row = (
+			await db.query<{ shape: string }>(
+				"select jsonb_typeof(items) as shape from api_turn where id=$1",
+				[claimed.id],
+			)
+		).rows[0];
+		expect(row.shape).toBe("array");
+	});
+
+	it("leaves a chat with no turn start, or whose start's id repeats later, in the whole shape", async () => {
+		const claimed = await handedTurn([
+			{ kind: "agentMessage", id: "no-start", text: "wake" },
+		]);
+		expect(
+			await keepTurnItemsInChat(claimed.id, claimed.lease_id ?? ""),
+		).toBeNull();
+		await db.exec(
+			"truncate api_turn cascade; update agent_session set turn_status='idle'",
+		);
+		const again = await handedTurn([
+			start,
+			{ kind: "agentMessage", id: "work-1", text: "same id" },
+		]);
+		expect(
+			await keepTurnItemsInChat(again.id, again.lease_id ?? ""),
+		).toBeNull();
+	});
 });

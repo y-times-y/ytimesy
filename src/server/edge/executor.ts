@@ -82,6 +82,7 @@ import {
 	abandonApiTurn,
 	apiTurnLeaseFreshSql,
 	cancelWaitingApiTurn,
+	keepTurnItemsInChat,
 	otherRunningTurnOnMachine,
 	refreshWaitingApiTurns,
 	renewParkedClaudeTurn,
@@ -1301,6 +1302,35 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		}
 	}
 	/**
+	 * A turn row still holding the whole transcript (a box's turn handed here)
+	 * moves to the chat-items shape first, so this step loads, writes and
+	 * mirrors only the turn's own items, not the chat's megabytes
+	 * (keepTurnItemsInChat). Best effort: when it cannot, the step runs on
+	 * the whole array as before.
+	 */
+	private async keepItemsInChat(
+		row: { id: string; items_from: string | null; version: string },
+		leaseId: string,
+	) {
+		try {
+			const kept = await keepTurnItemsInChat(row.id, leaseId);
+			console.info(
+				JSON.stringify({
+					event: "turn.items_kept_in_chat",
+					turnId: row.id,
+					kept: kept !== null,
+				}),
+			);
+			if (!kept) return;
+			row.items_from = kept.from;
+			row.version = kept.version;
+		} catch (error) {
+			console.warn("Turn items stay whole on the turn row this step.", {
+				cause: stepFailureCause(error),
+			});
+		}
+	}
+	/**
 	 * Runs after Postgres committed the write: a local storage failure must not
 	 * fail the step, it only costs the next step a read from Postgres.
 	 */
@@ -1355,6 +1385,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			await database().query<
 				Omit<ApiTurn, "messages" | "items" | "items_from"> & {
 					items_from: string | null;
+					items_whole?: boolean;
 					fresh: boolean;
 					cancel_requested: boolean;
 					past_deadline?: boolean;
@@ -1364,6 +1395,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			>(
 				`select t.id,t.session_id,t.user_id,t.connection_id,t.connection_revision,t.model_id,t.settings,t.failover,
 			 t.state,t.lease_id,t.cancel_requested,t.updated_at::text as version,t.items->>'from' as items_from,
+			 jsonb_typeof(t.items)='array' as items_whole,
 			 (extract(epoch from t.created_at)*1000)::float8 as queued_at_ms,
 			 ${apiTurnLeaseFreshSql("t")} as fresh,
 			 ${turnPastDeadlineSql("t")} as past_deadline,
@@ -1394,6 +1426,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			);
 			row.cancel_requested = true;
 		}
+		if (row.items_from === null && row.items_whole)
+			await this.keepItemsInChat(row, leaseId);
 		let history = this.cachedTurnHistory(row.id, row.version, row.items_from);
 		const loadedFromDatabase = !history;
 		if (!history) {
@@ -1425,7 +1459,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			history,
 			loadedFromDatabase ? "database" : "cache",
 		);
-		const { items_from: itemsFrom, ...identity } = row;
+		const { items_from: itemsFrom, items_whole: _whole, ...identity } = row;
 		const turn = {
 			...identity,
 			...history,
