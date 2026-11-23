@@ -531,3 +531,98 @@ it.each([false, true])(
 		expect(mocks.query).toHaveBeenCalledTimes(5);
 	},
 );
+
+it("moves a handed-over turn's whole transcript off its row, so the step holds and mirrors only the turn's items", async () => {
+	// A Y² chat's turn queued for a box and handed here: its row holds the
+	// whole transcript (megabytes), the shape the object used to load whole.
+	const archived = Array.from({ length: 3_000 }, (_, index) => ({
+		kind: "dynamicToolCall",
+		id: `archive-${index}`,
+		text: "tool output ".repeat(100),
+	}));
+	const start = { kind: "userMessage", id: "work-1", text: "changed" };
+	const transcriptChars = JSON.stringify([...archived, start]).length;
+	const loaded = [{ role: "user", content: "hi" }];
+	mocks.query.mockImplementation(async (query: string) => {
+		const sql = String(query);
+		if (sql.includes("jsonb_build_object('from'"))
+			return { rowCount: 1, rows: [{ from: "work-1", version: "v2" }] };
+		if (sql.trimStart().startsWith("select t.id"))
+			return {
+				rowCount: 1,
+				rows: [
+					{
+						id: turn.turnId,
+						session_id: scope.sessionId,
+						user_id: scope.userId,
+						state: "running",
+						fresh: true,
+						legacy: false,
+						cancel_requested: false,
+						items_from: null,
+						items_whole: true,
+						version: "v1",
+					},
+				],
+			};
+		if (sql.trimStart().startsWith("with base as"))
+			return {
+				rowCount: 1,
+				rows: [
+					{
+						messages: loaded,
+						messages_after: null,
+						items: [start],
+						items_rev: "1",
+					},
+				],
+			};
+		if (sql.trimStart().startsWith("select t.messages,"))
+			return {
+				rowCount: 1,
+				rows: [
+					{ messages: loaded, items: [...archived, start], items_rev: "1" },
+				],
+			};
+		return { rowCount: 0, rows: [] };
+	});
+	const stepItems: unknown[][] = [];
+	mocks.step.mockImplementation(
+		async (step, _machines, receipts, _signal, resume) => {
+			const claim = await receipts.claim(step, resume);
+			if (claim.kind !== "claimed") return "unavailable";
+			stepItems.push(claim.turn.items);
+			await receipts.complete(step, "continue");
+			return "continue";
+		},
+	);
+	const { object, state, sql } = conversation();
+	await object.startTurn(scope, turn);
+	await state.ctx.storage.put("identity", scope);
+	// Every whole-transcript serialization the step makes.
+	const stringify = JSON.stringify;
+	const large: number[] = [];
+	const spy = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+		const text = stringify(...(args as Parameters<typeof stringify>));
+		if (typeof text === "string" && text.length > transcriptChars / 4)
+			large.push(text.length);
+		return text;
+	});
+	try {
+		await object.alarm();
+	} finally {
+		spy.mockRestore();
+	}
+	expect(stepItems).toEqual([[start]]);
+	expect(large).toEqual([]);
+	// The chat's local copy holds the turn's items, not the transcript.
+	const mirrored = sql
+		.exec("select coalesce(sum(length(data)),0) as chars from turn_item_page")
+		.toArray()[0] as { chars: number };
+	expect(mirrored.chars).toBeLessThan(1_000);
+	expect(
+		mocks.query.mock.calls.some(([query]) =>
+			String(query).trimStart().startsWith("select t.messages,"),
+		),
+	).toBe(false);
+});
