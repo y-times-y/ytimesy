@@ -6187,3 +6187,27 @@ details.environment-build[open] > summary .session-activity-chevron {
 body:has([data-new-version]) .usage-warning-banner {
 	bottom: 72px;
 }
+/* The Threads header's project filter: a quiet select beside the + . */
+.sidebar-thread-filter {
+	max-width: 110px;
+	min-width: 0;
+	height: 22px;
+	margin: 0 2px 0 0;
+	padding: 0 2px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--list-text-muted);
+	font: inherit;
+	font-size: 11px;
+	text-overflow: ellipsis;
+}
+.sidebar-thread-filter:hover,
+.sidebar-thread-filter:focus-visible {
+	background: #ffffff14;
+	color: #f2f2f2;
+}
+.sidebar-thread-filter option {
+	background: #1b1b1b;
+	color: #f2f2f2;
+}
