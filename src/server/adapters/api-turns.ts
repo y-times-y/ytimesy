@@ -276,7 +276,16 @@ export async function enqueueApiTurn(input: {
 		eligibleForBox =
 			!!facts &&
 			!(claudeCode && facts.child) &&
-			boxTurnBlock({ ...facts, evaluation, leadFusion }, process.env) === null;
+			boxTurnBlock(
+				{
+					...facts,
+					// Only Claude Code's box path hands a fresh machine's turn back.
+					freshMachine: claudeCode && facts.freshMachine,
+					evaluation,
+					leadFusion,
+				},
+				process.env,
+			) === null;
 	}
 	const chosenExecutor = chooseTurnExecutor({
 		configured: configuredExecutor,
