@@ -56,12 +56,20 @@ export const TURN_START_WAIT_MS =
  * the same turn. "release" retires the turn for RETIRED_TURN_MS; a hand-off
  * that released instead made the object's acquire wait out its whole window
  * (35 s of a 70 s retirement) and fail the turn.
+ *
+ * "resume" takes the lease back for a running turn whose room lease lapsed
+ * (its renewals were late: a box's port call hung, the room restarted) while
+ * Postgres still confirms the turn owns its lease, not cancelled: the caller
+ * renews Postgres first. Refused while another lease holds the room or the
+ * turn was stopped. Without it such a turn was stopped mid-work ("Run
+ * stopped. Conversation coordination lease was lost", 2026-11-23).
  */
 export type TurnControlAction =
 	| "acquire"
 	| "renew"
 	| "release"
 	| "handoff"
+	| "resume"
 	| "cancel";
 type CoordinationFailureReason =
 	| { kind: "http"; status: number }

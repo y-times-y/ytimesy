@@ -102,3 +102,24 @@ it("still honours a retirement written by the earlier code (turn ID only) until 
 		204,
 	);
 });
+
+// A running turn's renewals came late (a box's port call hung) and the
+// room's lease lapsed; the turn still owns its lease in Postgres
+// ("Run stopped. Conversation coordination lease was lost", 2026-11-23).
+it("lets a running turn take back its lapsed lease, but never from a live holder or after a Stop", async () => {
+	const { conversation, storage } = roomWithState();
+	await control(conversation, "acquire", boxLease);
+	const held = await storage.get<{ expiresAt: number }>("active-turn");
+	await storage.put("active-turn", { ...held, expiresAt: Date.now() - 1 });
+	await conversation.alarm();
+	expect((await control(conversation, "renew", boxLease)).status).toBe(409);
+	expect((await control(conversation, "resume", boxLease)).status).toBe(204);
+	expect((await control(conversation, "renew", boxLease)).status).toBe(204);
+	// Another owner holds it: no resume.
+	await control(conversation, "handoff", boxLease);
+	await control(conversation, "acquire", objectLease);
+	expect((await control(conversation, "resume", boxLease)).status).toBe(409);
+	// Stopped: no resume.
+	await control(conversation, "cancel", objectLease);
+	expect((await control(conversation, "resume", objectLease)).status).toBe(409);
+});

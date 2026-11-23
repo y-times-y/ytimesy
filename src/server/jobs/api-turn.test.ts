@@ -999,8 +999,10 @@ it("rides out a coordination renewal that fails while the chat's object restarts
 it("stops a writer on lease conflict without retrying inference or publication", async () => {
 	vi.useFakeTimers();
 	try {
+		// Another lease holds the chat: the room refuses the renewal and the
+		// take-back alike.
 		vi.mocked(coordinateConversationTurn).mockImplementation(
-			async (action) => action !== "renew",
+			async (action) => action !== "renew" && action !== "resume",
 		);
 		mocks.runtime.mockImplementation(async (input) => {
 			await input.tools.workspace();
@@ -1022,6 +1024,48 @@ it("stops a writer on lease conflict without retrying inference or publication",
 		).toHaveLength(1);
 	} finally {
 		vi.useRealTimers();
+	}
+});
+
+it("takes back a lapsed chat lease it still owns instead of stopping mid-work (2026-11-23)", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	vi.useFakeTimers();
+	try {
+		const actions: string[] = [];
+		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
+			actions.push(action);
+			return action !== "renew" || actions.includes("resume");
+		});
+		// Stopped while the model call still runs (cleanup after it is not).
+		let aborted = false;
+		mocks.runtime.mockImplementation(async (input) => {
+			let finished = false;
+			await new Promise<void>((resolve) => {
+				input.signal.addEventListener(
+					"abort",
+					() => {
+						if (!finished) aborted = true;
+						resolve();
+					},
+					{ once: true },
+				);
+				setTimeout(() => {
+					finished = true;
+					resolve();
+				}, 25_000);
+			});
+		});
+		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		await vi.advanceTimersByTimeAsync(26_000);
+		await run;
+		expect(actions).toContain("resume");
+		expect(aborted).toBe(false);
+		expect(
+			JSON.stringify(mocks.finalize.mock.calls.map((call) => call[2])),
+		).not.toContain("lease was lost");
+	} finally {
+		vi.useRealTimers();
+		warn.mockRestore();
 	}
 });
 

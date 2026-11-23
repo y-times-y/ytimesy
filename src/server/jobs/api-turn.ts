@@ -853,6 +853,27 @@ async function runApiTurnAttempt(
 	/** The database heartbeat's last success; the lease holds 45 s past it. */
 	let lastDatabaseRenewal = Date.now();
 	let evaluation: EvaluationRun | null = null;
+	/**
+	 * The room let this turn's lease lapse (renewals came late: a box's port
+	 * call hung, the room restarted) though the turn is still running here.
+	 * If Postgres, which fences every write, still confirms this lease and no
+	 * Stop, the turn takes the room back instead of being stopped mid-work;
+	 * the room refuses while another lease holds it or the turn was stopped.
+	 */
+	const resumeLapsedLease = async () => {
+		if (turnSettled || abort.signal.aborted) return false;
+		try {
+			if (!(await renewApiTurn(turn))) return false;
+			const resumed = await coordinateConversationTurn("resume", control);
+			if (resumed)
+				console.warn("The chat's lease had lapsed; this turn took it back.", {
+					turnId: turn.id,
+				});
+			return resumed;
+		} catch {
+			return false;
+		}
+	};
 	const heartbeat = setInterval(() => {
 		const guardHeartbeat = (stage: string, operation: Promise<void>) =>
 			operation.catch((error: unknown) => {
@@ -910,8 +931,8 @@ async function runApiTurnAttempt(
 			coordinationHeartbeatBusy = true;
 			coordinationHeartbeatPending = guardHeartbeat(
 				"coordination-renewal",
-				coordinateConversationTurn("renew", control).then((alive) => {
-					if (!alive)
+				coordinateConversationTurn("renew", control).then(async (alive) => {
+					if (!alive && !(await resumeLapsedLease()))
 						abort.abort(new Error("Conversation coordination lease was lost."));
 					else lastCoordinationRenewal = Date.now();
 				}),

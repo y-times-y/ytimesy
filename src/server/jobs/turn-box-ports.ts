@@ -68,6 +68,8 @@ export type BoxTurnPorts = TurnPorts & {
 };
 
 const ANALYTICS_BATCH = 20;
+/** A port call on the chat's lock gives up after this, well inside its 30 s lease. */
+export const COORDINATION_PORT_TIMEOUT_MS = 8_000;
 /** The edge confirmed the lease this recently (a renewal, or a checkpoint's own): no renewal request. */
 const RENEW_SKIP_MS = 5_000;
 /** An empty peer inbox is read again after this long. */
@@ -123,8 +125,26 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 	 * failed on "Turn port coordinateTurn failed (503)").
 	 */
 	const coordinateTurn = async (action: TurnControlAction) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			return await call<boolean>("coordinateTurn", { action });
+			// Bounded: a renewal that hangs held the heartbeat's next renewals
+			// back until the room's 30 s lease lapsed and the turn was stopped.
+			return await Promise.race([
+				call<boolean>("coordinateTurn", { action }),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(
+						() =>
+							reject(
+								new CoordinationFailure(
+									action,
+									{ kind: "transport", category: "timeout" },
+									1,
+								),
+							),
+						COORDINATION_PORT_TIMEOUT_MS,
+					);
+				}),
+			]);
 		} catch (error) {
 			if (
 				error instanceof TurnPortFailed &&
@@ -142,6 +162,8 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 					1,
 				);
 			throw error;
+		} finally {
+			clearTimeout(timer);
 		}
 	};
 	const sdk = session.modelSdkSettings();
