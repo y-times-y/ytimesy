@@ -53,6 +53,7 @@ import {
 	type CrewRow,
 	type CrewState,
 	crewDigest,
+	crewTitle,
 } from "#/domain/y-squared-crew";
 import {
 	findAttachment,
@@ -113,7 +114,12 @@ type Deps = {
 		]
 			? Rest
 			: never
-	) => Promise<{ readonly turnStatus: string; readonly failed?: string }>;
+	) => Promise<{
+		readonly turnStatus: string;
+		readonly failed?: string;
+		/** The chat the message went to (a new thread's id); absent from an older edge. */
+		readonly sessionId?: string | null;
+	}>;
 	/** The Stop button's path. */
 	readonly stop: (
 		machines: WorkspaceMachines,
@@ -141,6 +147,7 @@ const defaultDeps: Deps = {
 		);
 		return {
 			turnStatus: view.turnStatus,
+			sessionId: view.agentSessionId,
 			...(view.connection.status === "failed"
 				? { failed: view.connection.message }
 				: {}),
@@ -156,6 +163,41 @@ const defaultDeps: Deps = {
 export const ySquaredToolDefaultDeps = defaultDeps;
 
 type Sidebar = Awaited<ReturnType<typeof listSidebarAgentSessions>>[number];
+
+/**
+ * A thread the crew has not noted yet (started a moment ago, or queued behind
+ * the budget): its own metadata row, so Y² can open it by the id
+ * `start_thread` gave. Before, `thread` said "No such thread" until the
+ * thread's first note reached the crew.
+ */
+function rowFromMetadata(chat: {
+	readonly id: string;
+	readonly title: string;
+	readonly turnStatus: string;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}): CrewRow {
+	const updatedAt = Date.parse(chat.updatedAt) || 0;
+	const state: CrewState =
+		chat.turnStatus === "running"
+			? "working"
+			: chat.turnStatus === "failed"
+				? "failed"
+				: "finished";
+	return {
+		sessionId: chat.id,
+		title: crewTitle(chat.title),
+		state,
+		waitingOn: null,
+		prUrl: null,
+		lastReply: null,
+		lastRequest: null,
+		updatedAt,
+		createdAt: Date.parse(chat.createdAt) || 0,
+		lastActiveAt: updatedAt,
+		workingSince: state === "working" ? updatedAt : null,
+	};
+}
 
 /** A sidebar row as a crew row: metadata only, no transcript. */
 function rowFromSidebar(chat: Sidebar): CrewRow {
@@ -310,9 +352,12 @@ export function ySquaredTools(input: {
 			}),
 			execute: async ({ id }) => {
 				const crew = deps.crew(input.projectId);
-				const row = crew
+				const noted = crew
 					? await crew.thread(id)
 					: (await fromSidebar()).find((entry) => entry.sessionId === id);
+				// Not noted yet (just started, queued): the thread's own row.
+				const unnoted = noted ? null : await ownThread(id).catch(() => null);
+				const row = noted ?? (unnoted ? rowFromMetadata(unnoted) : null);
 				if (!row || row.sessionId === input.selfId)
 					return "No such thread in this project.";
 				const now = deps.now();
@@ -507,9 +552,11 @@ export function ySquaredTools(input: {
 					},
 				);
 				if (sent.failed) return `Not started: ${sent.failed}`;
+				// Its id, so Y² can open, message or link the thread at once.
+				const named = `"${crewTitle(title) || title}"${sent.sessionId ? ` (id ${sent.sessionId})` : ""}`;
 				return sent.turnStatus === "running"
-					? `Started "${title}". You wake when it finishes or needs the person.`
-					: `Queued "${title}" behind the budget/concurrency limit; it starts by itself when there is room. You wake when it finishes or needs the person.`;
+					? `Started ${named}. You wake when it finishes or needs the person.`
+					: `Queued ${named} behind the budget/concurrency limit; it starts by itself when there is room. You wake when it finishes or needs the person.`;
 			},
 		}),
 		[Y_SQUARED_MESSAGE_THREAD_TOOL]: tool({

@@ -13,6 +13,7 @@ import {
 	scheduleInput,
 } from "../../domain/y-squared-proactive";
 import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
+import { readThreadProgress } from "../adapters/crew-facts";
 import { withDatabaseScope } from "../adapters/database-scope";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
@@ -134,6 +135,13 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 			enqueue: (target, at, body) => this.enqueueWake(target, at, body),
 			setAlarm: (at) => this.ctx.storage.setAlarm(at),
 			log: (line) => console.log(line),
+			// Before "it may be stuck": what the threads' turns really did.
+			progress: (userId, sessionIds) =>
+				withDatabaseScope(
+					this.env.HYPERDRIVE.connectionString,
+					() => readThreadProgress(userId, sessionIds),
+					null,
+				),
 		});
 	}
 

@@ -807,6 +807,24 @@ object).
   `bash` call; a fresh-VM chat was handed off and completed in its object.
   Switch: `YTIMESY_BOX_CLAUDE_USERS=*`.
 
+## Thread status from box turns (2026-11-23)
+
+The edge tells the chat's object when a box turn starts (claim) and settles
+(finalize), `noteBoxTurn`, so the crew (Y²) and the user's hub hear it. Two
+gaps kept threads "working" there:
+
+- The object read its crew scope through the turn's durable-object lease, so
+  for a box turn it found none and sent nothing (logged `crew.note …
+  skipped: "no-scope"`). It now reads it by the chat
+  (`readChatCrewScope`), at each box start and at any settle with none.
+- A turn the lease sweep fails (`expireApiTurnLeases`: a box out of
+  takeovers, a dead object) settled in Postgres only. The sweep now tells
+  the chat's object (`noteTurnsSettledElsewhere`), which sends the notes.
+
+The crew's stall signal reads the turn's real progress (last checkpoint or
+progress write, last renewal) before calling a thread stuck (docs/y.md,
+"Stall / follow-up signals").
+
 ## Deploying while turns run (2026-11-23)
 
 - **Edge and web deploys** restart chat objects (each moves to the new code

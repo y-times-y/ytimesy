@@ -1,4 +1,9 @@
-import type { SessionItem, SessionTurnStatus } from "./session-item";
+import {
+	type SessionItem,
+	type SessionTurnStatus,
+	sessionTitleFromText,
+	UNTITLED_SESSION_TITLE,
+} from "./session-item";
 import { type ChatWaitingOn, chatWaitingOn } from "./sidebar-chats";
 import {
 	type ThreadDigest,
@@ -279,9 +284,6 @@ export function crewFromSettledItems(
 	const waiting = chatWaitingOn(items, turnStatus);
 	const facts = threadHistoryFacts(items);
 	const pull = facts.pullRequest?.split(" ")[1] ?? null;
-	const firstRequest = items.find(
-		(item) => item.kind === "userMessage" && !("wake" in item && item.wake),
-	);
 	return {
 		state:
 			turnStatus === "failed" ? "failed" : waiting ? "waiting" : "finished",
@@ -295,9 +297,70 @@ export function crewFromSettledItems(
 		lastRequest: facts.lastRequest
 			? facts.lastRequest.slice(0, CREW_REQUEST_LIMIT)
 			: null,
-		title:
-			firstRequest && "text" in firstRequest ? text(firstRequest.text, 80) : "",
+		title: crewTitleFromItems(items),
 		canvas: crewCanvasLine(items),
+	};
+}
+
+/**
+ * A thread's title as the sidebar shows it (`sessionTitleFromText`: the first
+ * line of its first message, cut at 48 characters), so Y² and the person name
+ * a thread the same way. Empty when there is none (no message yet, an
+ * attachment only), never the "New session" placeholder.
+ */
+export function crewTitle(value: string | null | undefined): string {
+	if (!value?.trim()) return "";
+	const title = sessionTitleFromText(value);
+	return title === UNTITLED_SESSION_TITLE ? "" : title;
+}
+
+/** The title of a chat whose transcript this is: from its first message the person (or Y²) sent, never a wake. */
+export function crewTitleFromItems(items: readonly SessionItem[]): string {
+	const first = items.find(
+		(item) => item.kind === "userMessage" && !("wake" in item && item.wake),
+	);
+	return first && "text" in first ? crewTitle(first.text) : "";
+}
+
+/** A stored title, else one from the request: a row is never shown untitled when it has either. */
+export function crewRowTitle(
+	title: string,
+	lastRequest: string | null | undefined,
+): string {
+	return title || crewTitle(lastRequest);
+}
+
+/**
+ * What a thread's note says, from the transcript its chat object holds (or
+ * the box turn's items). Every note carries a title, the start note too:
+ * before, a start note carried none, so a new thread was "Untitled" to Y²
+ * until its first turn settled, and for good when that note was lost.
+ * `chatTitle` is the chat's own title (read with its crew scope), used when
+ * the transcript has no message yet.
+ */
+export function crewNoteFromItems(
+	items: readonly SessionItem[],
+	turnStatus: SessionTurnStatus,
+	chatTitle?: string | null,
+): ReturnType<typeof crewFromSettledItems> {
+	const derived =
+		turnStatus === "running"
+			? {
+					state: "working" as const,
+					waitingOn: null,
+					prUrl: null,
+					lastReply: null,
+					// The request the turn began with: the crew tells Y² when the
+					// person sent it to the thread directly.
+					lastRequest: crewRequestFromStartItems(items),
+					canvas: null,
+					title: crewTitleFromItems(items),
+				}
+			: crewFromSettledItems(items, turnStatus);
+	return {
+		...derived,
+		title:
+			derived.title || crewTitle(chatTitle) || crewTitle(derived.lastRequest),
 	};
 }
 
@@ -373,7 +436,7 @@ export function crewDigest(row: CrewRow, now: number): ThreadDigest {
 		(row.state === "failed" ? "failed" : null)) as ChatWaitingOn | null;
 	return {
 		id: row.sessionId,
-		title: row.title || "Untitled",
+		title: crewRowTitle(row.title, row.lastRequest) || "Untitled",
 		status: needs ? "needs you" : row.state === "working" ? "working" : "idle",
 		waitingOn: needs && waitingOn ? waitingOnText(waitingOn) : null,
 		workingForMinutes:

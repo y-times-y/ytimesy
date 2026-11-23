@@ -443,7 +443,18 @@ export type StallRow = {
 	readonly stallNudgedFor: number;
 	readonly remindedAt: number;
 	readonly remindCount: number;
+	/**
+	 * The last real progress of its running turn, as read from the turn itself
+	 * (a checkpoint, a progress write or a lease renewal; 0: not read this run).
+	 * The stall clock runs from the later of this and `workingSince`.
+	 */
+	readonly progressAt?: number;
 };
+
+/** When a working row's stall clock started: its start, or its last real progress. */
+export function stallClockFrom(row: StallRow) {
+	return Math.max(row.workingSince ?? 0, row.progressAt ?? 0);
+}
 
 /** How long a working thread may run before it counts as stalled. */
 export function stallAfterMs(typicalWorkMs: number) {
@@ -463,7 +474,7 @@ export function stallDueAt(row: StallRow, now: number): number | null {
 	if (row.state === "working" && row.workingSince !== null) {
 		if (row.stallNudgedFor === row.workingSince) return null;
 		if (now - row.workingSince >= WORKING_MAX_MS) return null;
-		return row.workingSince + stallAfterMs(row.typicalWorkMs);
+		return stallClockFrom(row) + stallAfterMs(row.typicalWorkMs);
 	}
 	if (
 		(row.state === "waiting" || row.state === "failed") &&
@@ -484,6 +495,8 @@ export type StallSignal =
 			readonly workingMs: number;
 			readonly typicalMs: number;
 			readonly workingSince: number;
+			/** How long its turn has shown no progress; absent when that was never read. */
+			readonly quietMs?: number;
 	  }
 	| {
 			readonly kind: "reminder";
@@ -510,6 +523,7 @@ export function stallSignals(
 				workingMs: now - row.workingSince,
 				typicalMs: row.typicalWorkMs,
 				workingSince: row.workingSince,
+				...(row.progressAt ? { quietMs: now - stallClockFrom(row) } : {}),
 			});
 		} else
 			out.push({
@@ -545,7 +559,7 @@ export function proactiveWakeLines(input: {
 		for (const signal of input.signals)
 			lines.push(
 				signal.kind === "stalled"
-					? `- "${signal.title}" has worked ${minutes(signal.workingMs)}${signal.typicalMs ? `, its usual turn is ${minutes(signal.typicalMs)}` : ""}: it may be stuck.`
+					? `- "${signal.title}" has worked ${minutes(signal.workingMs)}${signal.typicalMs ? `, its usual turn is ${minutes(signal.typicalMs)}` : ""}${signal.quietMs !== undefined ? `, and its turn has shown no progress (no model output, tool result or runner heartbeat) for ${minutes(signal.quietMs)}` : ""}: it may be stuck.`
 					: `- "${signal.title}" has been ${signal.failed ? "failed" : "waiting on the person"} for ${minutes(signal.waitingMs)}.`,
 			);
 	}
