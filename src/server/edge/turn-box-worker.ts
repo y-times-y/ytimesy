@@ -7,15 +7,15 @@ import {
 } from "../../domain/turn-box-grant";
 import { TURN_BOX_PATHS } from "../../domain/turn-box-protocol";
 import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
-import { withDatabaseScope } from "../adapters/database-scope";
 import { createTurnBoxEdgeOps } from "../adapters/turn-box-edge";
 import { createTurnBoxVmOps } from "../adapters/turn-box-vm-edge";
-import { admitQueuedTurns } from "./background-jobs";
+import { admitQueuedTurns, startBackgroundJob } from "./background-jobs";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { turnBoxBundleFromR2 } from "./turn-box-bundle";
 import { awsEnrollmentConfig, verifiedInstanceId } from "./turn-box-enroll";
 import { routeTurnBoxEdge, turnBoxEdgeConfig } from "./turn-box-routes";
+import { turnBoxRequestScope } from "./turn-box-scope";
 
 const replay = new TurnBoxReplayGuard();
 const asRecord = (env: EdgeExecutorEnvironment) =>
@@ -34,8 +34,9 @@ export function routeTurnBoxWorker(
 	const config = turnBoxEdgeConfig(asRecord(env));
 	if (config.status !== 200)
 		return new Response(null, { status: config.status });
-	const scope = <T>(run: () => Promise<T>) =>
-		withDatabaseScope(env.HYPERDRIVE.connectionString, run, null);
+	const scope = turnBoxRequestScope(env.HYPERDRIVE.connectionString, (job) =>
+		startBackgroundJob(env, job).then(() => undefined),
+	);
 	const vm = createTurnBoxVmOps(scope, env);
 	// A subscription turn's model request leaves from here (the edge holds
 	// the OAuth tokens): over the same Codex egress the Durable Object uses.
