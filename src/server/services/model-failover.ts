@@ -196,6 +196,7 @@ export async function planModelFailover(input: {
 		enabled: preferences.enabled,
 		evaluation: input.evaluation,
 		child: input.child,
+		reason: input.reason,
 	});
 	const connections =
 		policy === "off" ? [] : await failoverConnections(turn.user_id);

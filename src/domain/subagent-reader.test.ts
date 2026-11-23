@@ -67,7 +67,7 @@ describe("reader Linux user", () => {
 			`sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0700 /tmp/ytimesy-agents/child-1`,
 		);
 		expect(script).toContain('chmod o-rw,o+x "$HOME"');
-		expect(script).toContain("chmod 0700 /tmp/ytimesy-secrets");
+		expect(script).toContain("chmod 0700 /var/tmp/ytimesy-secrets");
 		expect(script).toContain(
 			"find '/home/ubuntu/repo' -type f \\( -name '.env*' -o -name .git-credentials -o -name .netrc \\) -exec chmod o-rwx {} +",
 		);
@@ -312,7 +312,7 @@ describe("reader Linux user", () => {
 			"/tmp/ytimesy-attempts/turn-1/x/run.sh",
 			"/tmp/ytimesy-attempts/turn-1/2/../../../etc/x",
 			"/home/ubuntu/repo/src/a.ts",
-			"/tmp/ytimesy-secrets/agent.env",
+			"/var/tmp/ytimesy-secrets/agent.env",
 			"/tmp/ytimesy-project-cwd",
 			`${scratch}/../child-2/x`,
 			"/tmp/ytimesy-agents/child-2/x",

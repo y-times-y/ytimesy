@@ -138,7 +138,7 @@ describe("read-only subagent machines", () => {
 			reader.writeTextFile(vm, "/home/ubuntu/repo/src/a.ts", "x"),
 		).rejects.toThrow("cannot write");
 		await expect(
-			reader.writeTextFile(vm, "/tmp/ytimesy-secrets/agent.env", "x"),
+			reader.writeTextFile(vm, "/var/tmp/ytimesy-secrets/agent.env", "x"),
 		).rejects.toThrow("cannot write");
 		expect(writes).toEqual([]);
 		await reader.writeTextFile(vm, "/tmp/ytimesy-agents/child-1/notes.md", "x");
@@ -159,12 +159,12 @@ describe("read-only subagent machines", () => {
 			"/home/ubuntu/repo",
 		);
 		expect(
-			await reader.readTextFile(vm, "/tmp/ytimesy-secrets/agent.env"),
+			await reader.readTextFile(vm, "/var/tmp/ytimesy-secrets/agent.env"),
 		).toBe("contents");
 		const read = commands.at(-1) ?? "";
 		expect(read).toContain("sudo -n -u ytimesy-reader");
 		expect(decoded(read).join("\n")).toContain(
-			"cat -- '/tmp/ytimesy-secrets/agent.env'",
+			"cat -- '/var/tmp/ytimesy-secrets/agent.env'",
 		);
 	});
 
@@ -181,13 +181,13 @@ describe("read-only subagent machines", () => {
 			ownedByDefaultUser &&
 			command.includes("ytimesy-reader") &&
 			decoded(command).some((line) =>
-				line.includes("install -d -m 0700 '/tmp/ytimesy-secrets'"),
+				line.includes("install -d -m 0700 '/var/tmp/ytimesy-secrets'"),
 			)
 				? {
 						exitCode: 1,
 						stdout: "",
 						stderr:
-							"chmod: changing permissions of '/tmp/ytimesy-secrets': Operation not permitted",
+							"chmod: changing permissions of '/var/tmp/ytimesy-secrets': Operation not permitted",
 					}
 				: { exitCode: 0, stdout: "contents", stderr: "" },
 		);
@@ -203,7 +203,7 @@ describe("read-only subagent machines", () => {
 		// Were the reader allowed to prepare it, the env file is still not its to write.
 		ownedByDefaultUser = false;
 		await expect(writeAgentProjectSecrets(reader, vm, secrets)).rejects.toThrow(
-			"cannot write /tmp/ytimesy-secrets/agent.env",
+			"cannot write /var/tmp/ytimesy-secrets/agent.env",
 		);
 	});
 
