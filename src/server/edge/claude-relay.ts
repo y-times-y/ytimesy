@@ -229,15 +229,16 @@ export async function relayClaudeCall(
 		new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<McpCallResult> {
 	const id = crypto.randomUUID();
-	// A socket that closes before the answer (the object restarted, a
-	// network blip) is opened again for the same call: the object runs it
-	// once and keeps an answer that came meanwhile.
+	// A socket that closes before the answer, or that the object could not
+	// open (it restarted for a deploy or for memory, a network blip), is
+	// opened again for the same call: the object stores it once by its id,
+	// the box runs each id once, and an answer that came meanwhile is kept.
 	for (let attempt = 0; ; attempt++) {
 		const answer = await relayClaudeCallOnce(chat, grantHeader, call, id);
-		if (answer !== "closed") return answer;
+		if (typeof answer !== "string") return answer;
 		if (attempt >= RELAY_RECONNECTS)
 			return {
-				text: "The turn's runner went away before this tool answered. Its outcome is unknown; inspect workspace state before retrying.",
+				text: `The turn's runner went away before this tool answered (${answer}). Its outcome is unknown; inspect workspace state before retrying.`,
 				isError: true,
 			};
 		await pause(500 * (attempt + 1));
@@ -252,26 +253,38 @@ async function relayClaudeCallOnce(
 	grantHeader: string,
 	call: ClaudeRelayCall,
 	id: string,
-): Promise<McpCallResult | "closed"> {
-	const response = await chat.fetch(
-		new Request(
-			`https://chat.internal${CLAUDE_RELAY_CALL_PATH}?id=${encodeURIComponent(id)}`,
-			{ headers: { upgrade: "websocket", authorization: grantHeader } },
-		),
-	);
+): Promise<McpCallResult | string> {
+	let response: Response;
+	try {
+		response = await chat.fetch(
+			new Request(
+				`https://chat.internal${CLAUDE_RELAY_CALL_PATH}?id=${encodeURIComponent(id)}`,
+				{ headers: { upgrade: "websocket", authorization: grantHeader } },
+			),
+		);
+	} catch (error) {
+		// Before 2026-11-23 this escaped to the Worker's catch-all: an empty
+		// 503, "Error POSTing to endpoint:" in the run.
+		console.warn("Relayed Claude call could not reach the chat object.", {
+			error: error instanceof Error ? error.name : "unknown",
+		});
+		return "the chat's server could not be reached";
+	}
 	const socket = (response as Response & { webSocket?: WebSocket | null })
 		.webSocket;
+	if (response.status >= 500)
+		return `the chat's server answered HTTP ${response.status}`;
 	if (response.status !== 101 || !socket)
 		return {
-			text: "ytimesy could not reach this turn's runner; try the tool again.",
+			text: `ytimesy could not reach this turn's runner: the chat's server refused the call (HTTP ${response.status}).`,
 			isError: true,
 		};
 	socket.accept();
 	// Past the box's own timeout and grace (it answers those itself).
 	const limitMs = call.timeoutMs + call.graceMs + 60_000;
-	return new Promise<McpCallResult | "closed">((resolve) => {
+	return new Promise<McpCallResult | string>((resolve) => {
 		let done = false;
-		const finish = (result: McpCallResult | "closed") => {
+		const finish = (result: McpCallResult | string) => {
 			if (done) return;
 			done = true;
 			clearTimeout(timer);
@@ -296,7 +309,9 @@ async function relayClaudeCallOnce(
 				if (parsed.success) finish(parsed.data.reply as McpCallResult);
 			} catch {}
 		});
-		socket.addEventListener("close", () => finish("closed"));
+		socket.addEventListener("close", () =>
+			finish("its socket to the chat's server closed"),
+		);
 		socket.send(
 			JSON.stringify({ t: "call", ...call } satisfies RelayCallMessage),
 		);

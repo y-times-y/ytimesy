@@ -297,6 +297,56 @@ describe("a relayed call, from the edge request to the box and back", () => {
 		expect(ids[0]).toBe(ids[1]);
 	});
 
+	it("opens the call's socket again when the object resets before it opens, for the same call", async () => {
+		const ids: string[] = [];
+		const chat = {
+			fetch: async (request: Request) => {
+				ids.push(new URL(request.url).searchParams.get("id") ?? "");
+				if (ids.length === 1)
+					throw new Error(
+						"Durable Object's isolate exceeded its memory limit and was reset.",
+					);
+				if (ids.length === 2) return new Response(null, { status: 503 });
+				const pair = socketPair();
+				pair.object.addEventListener("message", () =>
+					pair.object.send(
+						JSON.stringify({
+							t: "reply",
+							reply: { text: "ok", isError: false },
+						}),
+					),
+				);
+				return { status: 101, webSocket: pair.worker } as unknown as Response;
+			},
+		};
+		// Before: the thrown reset escaped (an empty 503 for the run).
+		const answer = await relayClaudeCall(
+			chat,
+			"Bearer grant",
+			{ name: "bash", args: {}, timeoutMs: 60_000, graceMs: 0 },
+			async () => {},
+		);
+		expect(answer).toEqual({ text: "ok", isError: false });
+		expect(new Set(ids).size).toBe(1);
+		expect(ids).toHaveLength(3);
+	});
+
+	it("says which hop failed when the object stays unreachable", async () => {
+		const chat = {
+			fetch: async () => {
+				throw new Error("Durable Object reset because its code was updated.");
+			},
+		};
+		const answer = await relayClaudeCall(
+			chat,
+			"Bearer grant",
+			{ name: "bash", args: {}, timeoutMs: 1_000, graceMs: 0 },
+			async () => {},
+		);
+		expect(answer.isError).toBe(true);
+		expect(answer.text).toContain("chat's server could not be reached");
+	});
+
 	it("answers an error the run can act on when the object refuses the call", async () => {
 		const chat = { fetch: async () => new Response(null, { status: 401 }) };
 		const answer = await relayClaudeCall(chat, "Bearer forged", {

@@ -801,6 +801,15 @@ object).
   (`COORDINATION_HEARTBEAT_GRACE_MS`; the lease is in the object's storage),
   the box's socket falls back to HTTP and reconnects, and a relayed Claude
   call reconnects for the same call (the object keeps an answer meanwhile).
+- **A Claude turn's MCP calls through its chat object** (2026-11-23): an
+  object reset (a deploy, or its isolate out of memory) failed every MCP
+  POST it held, and the edge answered an empty 503, which Claude Code shows
+  as "Error POSTing to endpoint:". The edge (`forwardClaudeCodeMcp`) now
+  sends again, up to 3 times, only what is safe to repeat
+  (`claude-code-mcp-retry.ts`: protocol messages, read-only tools, and
+  `start_thread`/`message_thread` deduped by their send key, but not
+  interrupt). Anything else gets an MCP answer naming the hop and the cause.
+  A relayed call's socket that cannot open is reopened for the same call id.
 - **Box program updates** need no instance refresh: `scripts/publish-turn-box.ts`
   is the deploy. Every registration answers with the published version
   (`latestVersion`, read from the manifest at most once a minute per edge

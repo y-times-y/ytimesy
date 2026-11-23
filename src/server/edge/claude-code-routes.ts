@@ -9,6 +9,10 @@ import {
 	type McpToolDefinition,
 } from "../../domain/claude-code-mcp";
 import {
+	type McpMessageRetry,
+	mcpMessageRetry,
+} from "../../domain/claude-code-mcp-retry";
+import {
 	CLAUDE_CODE_PROXY_PREFIX,
 	proxyClaudeCode,
 } from "../../domain/claude-code-proxy";
@@ -134,17 +138,7 @@ export async function routeClaudeCodeEdge(
 				request.headers.get("authorization") ??
 					`Bearer ${presentedClaudeCodeGrant(request.headers) ?? ""}`,
 			);
-		return chat.fetch(
-			new Request(`https://chat.internal${CLAUDE_CODE_MCP_PATH}`, {
-				method: request.method,
-				headers: {
-					authorization: request.headers.get("authorization") ?? "",
-					"content-type": "application/json",
-				},
-				body: request.method === "POST" ? request.body : null,
-				duplex: "half",
-			} as RequestInit),
-		);
+		return forwardClaudeCodeMcp(request, chat);
 	}
 	const connection = env.HYPERDRIVE.connectionString;
 	return proxyClaudeCode(request, {
@@ -177,6 +171,120 @@ export async function routeClaudeCodeEdge(
 				}
 			: undefined,
 	});
+}
+
+/** Waits before each repeat of a message the chat's object did not answer. */
+const MCP_FORWARD_RETRY_PAUSES_MS = [250, 1_000, 2_500];
+
+/**
+ * In the edge Worker: one MCP message for a turn whose step runs in the
+ * chat's Durable Object, passed to that object. The object resets on a
+ * deploy and when its isolate runs out of memory, failing every request it
+ * holds; the Worker used to answer those with an empty 503, which the run
+ * showed as "Error POSTing to endpoint:" (2026-11-21, 2026-11-23). A
+ * message that is safe to send again (claude-code-mcp-retry.ts) is sent
+ * again a few times; any other failure is answered with what failed.
+ */
+export async function forwardClaudeCodeMcp(
+	request: Request,
+	chat: { fetch(request: Request): Promise<Response> },
+	pause: (ms: number) => Promise<void> = (ms) =>
+		new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<Response> {
+	const authorization = request.headers.get("authorization") ?? "";
+	const body = request.method === "POST" ? await request.text() : null;
+	if (body !== null && body.length > MAX_MCP_BODY)
+		return new Response(null, { status: 413 });
+	let parsed: unknown = null;
+	try {
+		parsed = body === null ? null : JSON.parse(body);
+	} catch {}
+	const retry = mcpMessageRetry(parsed);
+	const send = () =>
+		chat.fetch(
+			new Request(`https://chat.internal${CLAUDE_CODE_MCP_PATH}`, {
+				method: request.method,
+				headers: {
+					authorization,
+					"content-type": "application/json",
+				},
+				body,
+			}),
+		);
+	for (let attempts = 1; ; attempts++) {
+		let failure: string;
+		let errorName: string | undefined;
+		try {
+			const response = await send();
+			if (response.status < 500) return response;
+			failure = `it answered HTTP ${response.status}`;
+			await response.body?.cancel().catch(() => undefined);
+		} catch (error) {
+			failure = chatObjectFailure(error);
+			errorName = error instanceof Error ? error.name : typeof error;
+		}
+		console.warn("Claude Code MCP message to the chat object failed.", {
+			message: retry.label,
+			attempt: attempts,
+			repeatable: retry.repeatable,
+			failure,
+			...(errorName ? { errorName } : {}),
+		});
+		const wait = MCP_FORWARD_RETRY_PAUSES_MS[attempts - 1];
+		if (!retry.repeatable || wait === undefined)
+			return mcpForwardFailure(retry, failure, attempts);
+		await pause(wait);
+	}
+}
+
+/**
+ * Why the chat's object failed a request, in words the run can show. Only
+ * the runtime's own reset and network messages are named: an error the
+ * object threw may carry database or provider details.
+ */
+function chatObjectFailure(error: unknown): string {
+	const text = error instanceof Error ? error.message : String(error);
+	if (/code was updated/i.test(text)) return "it restarted for a deploy";
+	if (/memory limit/i.test(text)) return "it ran out of memory and restarted";
+	if (/overloaded/i.test(text)) return "it was overloaded";
+	if (/network connection lost|disconnected|connection reset/i.test(text))
+		return "the connection to it was lost";
+	return "it failed with an internal error";
+}
+
+/** The answer to a message the chat's object did not answer: never an empty error. */
+function mcpForwardFailure(
+	retry: McpMessageRetry,
+	failure: string,
+	attempts: number,
+): Response {
+	const text = [
+		`ytimesy's edge could not get an answer from this chat's server (its Durable Object) for ${retry.label}: ${failure}${
+			attempts > 1 ? ` (tried ${attempts} times)` : ""
+		}.`,
+		retry.repeatable
+			? "This call is safe to repeat; try it again."
+			: "The call may have run before that; its outcome is unknown. Check its effect before repeating it.",
+	].join(" ");
+	// A notification has no id to answer; its text still reaches the run.
+	if (retry.id === undefined)
+		return new Response(text, {
+			status: 503,
+			headers: { "content-type": "text/plain; charset=utf-8" },
+		});
+	return Response.json(
+		retry.toolCall
+			? {
+					jsonrpc: "2.0",
+					id: retry.id,
+					result: { content: [{ type: "text", text }], isError: true },
+				}
+			: {
+					jsonrpc: "2.0",
+					id: retry.id,
+					error: { code: -32603, message: text },
+				},
+	);
 }
 
 /**
