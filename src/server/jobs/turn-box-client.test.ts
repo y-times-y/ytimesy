@@ -300,6 +300,29 @@ describe("turn box client against the edge", () => {
 		expect(await session.cancelRequested()).toBe(true);
 	});
 
+	it("keeps its grant alive through a step longer than the grant (renewing over HTTP near its end)", async () => {
+		const { client, requests, tick } = await setup();
+		const session = await client.claim();
+		if (!session) throw new Error("no turn");
+		await session.openSocket();
+		const httpRenewals = () =>
+			requests.filter((path) => path.endsWith("/renew")).length;
+		// Early on, renewals go over the socket.
+		for (let minute = 0; minute < 4; minute++) {
+			tick(60_000);
+			expect(await session.renew()).toBe("renewed");
+		}
+		expect(httpRenewals()).toBe(0);
+		// In the grant's last five minutes a renewal goes over HTTP and brings a new grant.
+		for (let minute = 4; minute < 12; minute++) {
+			tick(60_000);
+			expect(await session.renew()).toBe("renewed");
+		}
+		expect(httpRenewals()).toBeGreaterThan(0);
+		// Twelve minutes in, the box's requests are still accepted.
+		await expect(session.history()).resolves.toBeTruthy();
+	});
+
 	it("falls back to HTTP progress when no socket can open", async () => {
 		const edge = await fakeEdge();
 		edge.queue.push({ ...edge.row });

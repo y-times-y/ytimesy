@@ -6,6 +6,10 @@ import { LatestCoalescer } from "#/domain/latest-coalescer";
 import type { TurnFailoverColumn } from "#/domain/model-failover";
 import type { SessionItem } from "#/domain/session-item";
 import {
+	TURN_BOX_GRANT_REFRESH_MS,
+	TURN_BOX_GRANT_TTL_MS,
+} from "#/domain/turn-box-grant";
+import {
 	type BoxPortArgs,
 	type BoxPortOp,
 	claimResponse,
@@ -255,6 +259,8 @@ export class TurnBoxEdgeClient {
 
 export class TurnBoxTurnSession {
 	private grantToken: string;
+	/** When this box got its current grant (a claim's, or a renewal's replacement). */
+	private grantIssuedAt: number;
 	/** Set when the edge committed changes it must still push at finalize. */
 	publishAfterFinalize = false;
 	/** When the edge last confirmed the lease (a renewal, or a checkpoint's piggybacked one). */
@@ -294,6 +300,7 @@ export class TurnBoxTurnSession {
 		grant: string,
 	) {
 		this.grantToken = grant;
+		this.grantIssuedAt = this.clock();
 		this.progressSender = new LatestCoalescer(
 			(items) => this.sendProgress(items),
 			{
@@ -447,7 +454,14 @@ export class TurnBoxTurnSession {
 	/** Lease renewal: over the socket when open, else HTTP. */
 	async renew(): Promise<"renewed" | "cancel" | "lost"> {
 		if (this.cancelled) return "cancel";
-		if (this.socket) {
+		// Only an HTTP renewal replaces the grant (10 min): a socket renewal
+		// keeps the lease but not the grant, and a Claude step of over 10
+		// minutes then had every request refused (Nov 23). Once the grant is
+		// in its refresh window, renew over HTTP.
+		const grantAging =
+			this.clock() - this.grantIssuedAt >=
+			TURN_BOX_GRANT_TTL_MS - TURN_BOX_GRANT_REFRESH_MS;
+		if (this.socket && !grantAging) {
 			const seq = ++this.seq;
 			const acked = await new Promise<boolean>((resolve) => {
 				const timer = setTimeout(() => resolve(false), 10_000);
@@ -469,7 +483,10 @@ export class TurnBoxTurnSession {
 		const response = renewResponse.parse(
 			await (await this.post(TURN_BOX_PATHS.renew, {})).json(),
 		);
-		if (response.grant) this.grantToken = response.grant;
+		if (response.grant) {
+			this.grantToken = response.grant;
+			this.grantIssuedAt = this.clock();
+		}
 		if (response.renewed) {
 			this.renewedAt = this.clock();
 			return "renewed";

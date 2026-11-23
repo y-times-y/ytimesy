@@ -468,7 +468,20 @@ export async function routeTurnBoxEdge(
 				grant.expiresAt - now() < TURN_BOX_GRANT_REFRESH_MS &&
 				deps.replay.consume(`grant:${grant.nonce}`, grant.expiresAt, now())
 			) {
-				const next = await issueTurnBoxGrant(deps.privateKey, grant, now());
+				// A fresh lifetime: passing the old grant whole copied its expiry,
+				// so a "replacement" died with it and every box turn longer than
+				// ten minutes lost its grant (Nov 23).
+				const next = await issueTurnBoxGrant(
+					deps.privateKey,
+					{
+						userId: grant.userId,
+						sessionId: grant.sessionId,
+						turnId: grant.turnId,
+						leaseId: grant.leaseId,
+						boxId: grant.boxId,
+					},
+					now(),
+				);
 				const parsed = await verifyTurnBoxGrant(deps.publicKey, next, now());
 				if (parsed)
 					replacement = { grant: next, grantExpiresAt: parsed.expiresAt };
