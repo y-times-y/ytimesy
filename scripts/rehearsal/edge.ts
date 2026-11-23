@@ -27,7 +27,10 @@ import {
 	claimConversationStep,
 	type StepReceipt,
 } from "../../src/domain/conversation-step-receipts";
-import type { TurnControl } from "../../src/domain/conversation-turn-control";
+import type {
+	TurnControl,
+	TurnControlAction,
+} from "../../src/domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../../src/domain/delivery-auth";
 import type {
 	WorkflowStep,
@@ -206,10 +209,7 @@ export class RehearsalEdge {
 		return new Response(null, { status: 404 });
 	}
 
-	private coordinate(
-		action: "acquire" | "renew" | "release" | "cancel",
-		turn: TurnControl,
-	) {
+	private coordinate(action: TurnControlAction, turn: TurnControl) {
 		const held = this.rooms.get(turn.sessionId);
 		const same =
 			held && held.turnId === turn.turnId && held.leaseId === turn.leaseId;
@@ -221,6 +221,7 @@ export class RehearsalEdge {
 			case "renew":
 				return Boolean(same);
 			case "release":
+			case "handoff":
 				if (same) this.rooms.delete(turn.sessionId);
 				return true;
 			case "cancel":

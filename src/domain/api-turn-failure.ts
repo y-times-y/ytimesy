@@ -1073,6 +1073,12 @@ export class LifecycleHookRefusal extends Error {
 	}
 }
 
+/** Raised when a turn could not take its chat's coordination lease at startup. */
+export const TURN_NOT_STARTED =
+	"The conversation is already running or was stopped.";
+export const TURN_NOT_STARTED_MESSAGE =
+	"This turn did not start: the chat was still busy with its previous turn (or moving this one between servers) for too long. Nothing ran and nothing was lost. Send your message again.";
+
 export function apiTurnFailureMessage(
 	stage: ApiTurnFailureStage,
 	error?: unknown,
@@ -1130,6 +1136,8 @@ export function apiTurnFailureMessage(
 		case "saving":
 			return "The run could not save its latest progress. Check the workspace and connection before retrying.";
 		case "coordination":
+			if (error instanceof Error && error.message === TURN_NOT_STARTED)
+				return TURN_NOT_STARTED_MESSAGE;
 			return "The conversation coordinator could not confirm this turn's ownership or completion. Work is preserved; inspect the latest task state before continuing.";
 		case "commit":
 			return "The model finished, but automatic Git handoff failed. Your edits and local commits remain in the workspace. Check Git status, commit hooks, and GitHub access before continuing.";

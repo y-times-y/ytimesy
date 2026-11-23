@@ -21,6 +21,7 @@ import {
 	isYSquaredNoWorkspace,
 	LifecycleHookRefusal,
 	SafeApiModelFailure,
+	TURN_NOT_STARTED,
 	Y_SQUARED_NO_WORKSPACE,
 	YSquaredClaudeRunnerUnreachable,
 } from "#/domain/api-turn-failure";
@@ -985,7 +986,7 @@ async function runApiTurnAttempt(
 				),
 			))
 		)
-			throw new Error("The conversation is already running or was stopped.");
+			throw new Error(TURN_NOT_STARTED);
 		coordinated = true;
 		timing?.mark("leaseAcquired");
 		failureStage = "connection";

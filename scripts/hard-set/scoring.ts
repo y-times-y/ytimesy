@@ -20,6 +20,7 @@ const INFRA_ERRORS = [
 	/Turn heartbeat or coordination service became unavailable/i,
 	/Conversation coordination lease was lost/i,
 	/conversation coordinator could not confirm this turn's ownership/i,
+	/This turn did not start: the chat was still busy/i,
 	/Selected subscription model is unavailable/i,
 	/usage limit is used up|usage_limit_reached|Codex usage limit/i,
 ];
