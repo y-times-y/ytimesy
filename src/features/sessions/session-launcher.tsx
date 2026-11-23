@@ -465,8 +465,14 @@ export function SessionLauncher({
 		staleTime: 30_000,
 		enabled: branchless,
 	});
+	// Only an answer that says no hides Claude for Y² (and shows the note):
+	// "not loaded yet" (a phone on a slow network) used to show it on every
+	// visit, and a check that failed kept it. A send is still refused by the
+	// server when there really is no runner.
 	const withoutClaudeCode =
-		branchless && !(claudeView.data?.enabled && claudeView.data.ySquaredRunner);
+		branchless &&
+		claudeView.data !== undefined &&
+		!(claudeView.data.enabled && claudeView.data.ySquaredRunner);
 	const models = useMemo(() => {
 		const listed = sessionModelsFromListed(
 			composerListedModels({
