@@ -186,6 +186,7 @@ import {
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { stepFailureCause } from "./step-failure-cause";
 import { isTurnBoxEdgePath } from "./turn-box-routes";
+import { turnBoxRequestScope } from "./turn-box-scope";
 import {
 	answerTurnBoxSocketMessage,
 	pushCancelToTurnBox,
@@ -1816,8 +1817,10 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		const { reply, close } = await answerTurnBoxSocketMessage(
 			attachment,
 			message,
-			createTurnBoxEdgeOps((run) =>
-				withDatabaseScope(this.env.HYPERDRIVE.connectionString, run, null),
+			createTurnBoxEdgeOps(
+				turnBoxRequestScope(this.env.HYPERDRIVE.connectionString, (job) =>
+					startBackgroundJob(this.env, job).then(() => undefined),
+				),
 			),
 		);
 		for (const item of reply) socket.send(JSON.stringify(item));
