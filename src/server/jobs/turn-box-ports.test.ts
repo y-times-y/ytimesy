@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { boxPortOps, TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import { fakeEdge } from "../edge/turn-box-fake-edge";
 import { TurnBoxEdgeClient, TurnBoxLeaseLost } from "./turn-box-client";
@@ -42,6 +43,23 @@ async function setup() {
 }
 
 describe("boxTurnPorts over the edge's port endpoint", () => {
+	it("reports an edge error on the chat's lock as a retryable coordination failure (2026-11-21: a box turn failed on its 503)", async () => {
+		const { ports, edge } = await setup();
+		(edge.state.ports as Record<string, unknown>).coordinateTurn = () => {
+			throw new Error("the chat's object is restarting");
+		};
+		const failure = await ports
+			.coordinateConversationTurn("acquire", {
+				userId: USER,
+				sessionId: SESSION,
+				turnId: TURN,
+				leaseId: "l",
+			})
+			.catch((error: unknown) => error);
+		expect(failure).toBeInstanceOf(CoordinationFailure);
+		expect((failure as CoordinationFailure).retryable).toBe(true);
+	});
+
 	it("a later step's acquire renews the chat's coordination lease once 10 s have passed (short steps once let it lapse)", async () => {
 		const { ports, served } = await setup();
 		const seen = served("coordinateTurn", true);

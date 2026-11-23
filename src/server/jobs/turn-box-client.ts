@@ -29,7 +29,7 @@ import {
 	SUBSCRIPTION_ERROR_HEADER,
 	subscriptionErrorOf,
 } from "#/domain/turn-box-subscription";
-import { TurnPortUnavailable } from "./turn-ports";
+import { TurnPortFailed, TurnPortUnavailable } from "./turn-ports";
 
 /** A relayed Claude Code MCP call as the edge pushes it. */
 export type ClaudeRelayFrame = Extract<
@@ -446,7 +446,7 @@ export class TurnBoxTurnSession {
 		}
 		if (!response.ok) {
 			await response.body?.cancel().catch(() => undefined);
-			throw new Error(`Turn port ${op} failed (${response.status}).`);
+			throw new TurnPortFailed(op, response.status);
 		}
 		return portResponse.parse(await response.json()).result;
 	}

@@ -1,5 +1,9 @@
 import { jsonSchema, type ModelMessage, type ToolSet, tool } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
+import {
+	CoordinationFailure,
+	type TurnControlAction,
+} from "#/domain/conversation-turn-control";
 import { attachedMemory, withMemoryParts } from "#/domain/memory-repo";
 import {
 	type PeerInboxRow,
@@ -24,7 +28,11 @@ import type { SubagentToolDeps } from "../services/subagent-tools";
 import type { SubagentMemory, TurnMemory } from "../services/turn-memory";
 import type { YSquaredToolDeps } from "../services/y-squared-tools";
 import type { TurnBoxTurnSession } from "./turn-box-client";
-import { type TurnPorts, TurnPortUnavailable } from "./turn-ports";
+import {
+	TurnPortFailed,
+	type TurnPorts,
+	TurnPortUnavailable,
+} from "./turn-ports";
 
 /**
  * The turn runner box's `TurnPorts` (docs/turn-runner-boxes.md): every
@@ -107,6 +115,35 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 	let coordinationRefreshedAt = 0;
 	let inboxEmptyAt = Number.NEGATIVE_INFINITY;
 	let savedDirectory: string | undefined;
+	/**
+	 * The chat's lock through the edge. An edge answer of 5xx or 429 (the
+	 * edge or the chat's object restarting for a deploy) is the same
+	 * retryable CoordinationFailure the chat's object reports, so a turn that
+	 * has not started waits it out instead of failing (2026-11-21: a box turn
+	 * failed on "Turn port coordinateTurn failed (503)").
+	 */
+	const coordinateTurn = async (action: TurnControlAction) => {
+		try {
+			return await call<boolean>("coordinateTurn", { action });
+		} catch (error) {
+			if (
+				error instanceof TurnPortFailed &&
+				(error.status === 429 || error.status >= 500)
+			)
+				throw new CoordinationFailure(
+					action,
+					{ kind: "http", status: error.status },
+					1,
+				);
+			if (error instanceof TypeError)
+				throw new CoordinationFailure(
+					action,
+					{ kind: "transport", category: "network" },
+					1,
+				);
+			throw error;
+		}
+	};
 	const sdk = session.modelSdkSettings();
 	const adapters = session.adapters();
 
@@ -141,20 +178,18 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 				// once let it lapse mid-turn: a helper was stopped, 2026-11-22).
 				if (coordinated) {
 					if (Date.now() - coordinationRefreshedAt < 10_000) return true;
-					const held = await call<boolean>("coordinateTurn", {
-						action: "renew",
-					});
+					const held = await coordinateTurn("renew");
 					coordinated = held !== false;
 					if (coordinated) coordinationRefreshedAt = Date.now();
 					return held;
 				}
-				const held = await call<boolean>("coordinateTurn", { action });
+				const held = await coordinateTurn(action);
 				coordinated = held !== false;
 				if (coordinated) coordinationRefreshedAt = Date.now();
 				return held;
 			}
 			if (action === "release") coordinated = false;
-			const answer = await call<boolean>("coordinateTurn", { action });
+			const answer = await coordinateTurn(action);
 			if (action === "renew" && answer !== false)
 				coordinationRefreshedAt = Date.now();
 			return answer;
