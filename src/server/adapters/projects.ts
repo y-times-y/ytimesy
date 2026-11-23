@@ -38,7 +38,11 @@ function projectFromRow(row: Project): Project {
 	return legacy;
 }
 
-/** One statement commits the project and its complete, pre-authorized repository set. */
+/**
+ * One statement commits the project and its complete, pre-authorized
+ * repository set. A new project is a Y project: its Y² (the super agent) is
+ * created beside its first thread (the setup chat) when the sidebar lists it.
+ */
 export async function saveProjectGroup(
 	userId: string,
 	name: string,
@@ -49,8 +53,8 @@ export async function saveProjectGroup(
 	const id = randomUUID();
 	await database().query(
 		`with saved as (
-    insert into project(id,user_id,repository_id,installation_id,full_name,branch,name,repository_set_key)
-    values($1,$2,$3,$4,$5,$6,$7,$9) returning id
+    insert into project(id,user_id,repository_id,installation_id,full_name,branch,name,repository_set_key,y_enabled)
+    values($1,$2,$3,$4,$5,$6,$7,$9,true) returning id
   ) insert into project_repository(project_id,repository_id,installation_id,full_name,branch,position)
     select saved.id,r."repositoryId",r."installationId",r."fullName",r.branch,r.position
     from saved,jsonb_to_recordset($8::jsonb) as r("repositoryId" bigint,"installationId" bigint,"fullName" text,branch text,position integer)`,
