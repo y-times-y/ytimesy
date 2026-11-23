@@ -288,18 +288,21 @@ export async function routeTurnBoxEdge(
 				const { refreshIdentity, ...heartbeat } = input.data;
 				if (!(await deps.ops.register(identity.boxId, heartbeat)))
 					return refuse("forbidden", 403);
-				if (!refreshIdentity) return json({ ok: true });
+				const latest = await latestBoxVersion(deps, now());
+				const extra = latest ? { latestVersion: latest } : {};
+				if (!refreshIdentity) return json({ ok: true, ...extra });
 				const signingTime = now();
 				const remaining = identity.expiresAt - signingTime;
 				if (remaining <= 0) return refuse("unauthorized", 401);
-				if (remaining > TURN_BOX_IDENTITY_REFRESH_MS) return json({ ok: true });
+				if (remaining > TURN_BOX_IDENTITY_REFRESH_MS)
+					return json({ ok: true, ...extra });
 				const replacement = await issueTurnBoxIdentity(
 					deps.privateKey,
 					{ boxId: identity.boxId },
 					signingTime,
 				);
 				return Response.json(
-					{ ok: true, identity: replacement },
+					{ ok: true, identity: replacement, ...extra },
 					{ headers: { "cache-control": "no-store" } },
 				);
 			}
@@ -672,3 +675,27 @@ async function readJson(request: Request): Promise<unknown> {
 
 const sleepFor = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** The published program's version, read at most once a minute per isolate (plain data, no I/O kept). */
+let latestBox: { version: string | null; at: number } | null = null;
+const LATEST_BOX_TTL_MS = 60_000;
+
+async function latestBoxVersion(
+	deps: Pick<TurnBoxEdgeDeps, "bundle">,
+	at: number,
+): Promise<string | null> {
+	if (!deps.bundle) return null;
+	if (latestBox && at - latestBox.at < LATEST_BOX_TTL_MS)
+		return latestBox.version;
+	const version = await deps
+		.bundle()
+		.then((bundle) => bundle?.version ?? null)
+		.catch(() => latestBox?.version ?? null);
+	latestBox = { version, at };
+	return version;
+}
+
+/** Tests only. */
+export function forgetLatestBoxVersionForTests() {
+	latestBox = null;
+}

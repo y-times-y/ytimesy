@@ -838,6 +838,21 @@ async function runApiTurnAttempt(
 				// by every chat at once, Nov 12 00:16 and 00:19) says nothing about
 				// the lease, which holds 45 s past the last success. The next tick
 				// tries again; only a failure that lasts stops the turn.
+				// The same for the chat's coordination lease (30 s, kept in the
+				// chat's object's storage): a deploy moving that object to new
+				// code fails a renewal or two while it restarts, and a turn
+				// running on a box (or any other process) must ride that out.
+				if (
+					stage === "coordination-renewal" &&
+					!isPlatformRestart(error) &&
+					Date.now() - lastCoordinationRenewal < COORDINATION_HEARTBEAT_GRACE_MS
+				) {
+					console.warn("Turn coordination renewal failed; trying again.", {
+						sinceLastRenewalMs: Date.now() - lastCoordinationRenewal,
+						...apiTurnFailureClassification(error),
+					});
+					return;
+				}
 				if (
 					stage === "database-renewal" &&
 					!isPlatformRestart(error) &&
@@ -4247,6 +4262,12 @@ export function untilAborted<T>(
 const PREPARATION_SETTLE_MS = 60_000;
 /** A failing database renewal stops the turn once it has lasted this long: well inside the 45 s lease. */
 const DATABASE_HEARTBEAT_GRACE_MS = 20_000;
+/**
+ * A failing coordination renewal stops the turn once it has lasted this
+ * long: inside the 30 s coordination lease (TURN_COORDINATION_LEASE_MS), so a
+ * renewal that then succeeds still holds it.
+ */
+const COORDINATION_HEARTBEAT_GRACE_MS = 20_000;
 
 /** Waits for `work` to settle, at most `ms` and never past the signal's abort. */
 function settledWithin(

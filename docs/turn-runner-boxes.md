@@ -792,3 +792,20 @@ object).
 - Live (2026-11-22): a Claude Sonnet turn ran on a box with one relayed
   `bash` call; a fresh-VM chat was handed off and completed in its object.
   Switch: `YTIMESY_BOX_CLAUDE_USERS=*`.
+
+## Deploying while turns run (2026-11-23)
+
+- **Edge and web deploys** restart chat objects (each moves to the new code
+  once idle or after a delay). A turn rides that out: a failed coordination
+  renewal is retried for up to 20 s of the 30 s lease
+  (`COORDINATION_HEARTBEAT_GRACE_MS`; the lease is in the object's storage),
+  the box's socket falls back to HTTP and reconnects, and a relayed Claude
+  call reconnects for the same call (the object keeps an answer meanwhile).
+- **Box program updates** need no instance refresh: `scripts/publish-turn-box.ts`
+  is the deploy. Every registration answers with the published version
+  (`latestVersion`, read from the manifest at most once a minute per edge
+  isolate); a box on another version takes no new turns, finishes the ones
+  it holds (and any claim in flight), then exits, and its service starts it
+  again on the published program. Other boxes take new turns meanwhile.
+  An instance refresh (which kills running turns; another box takes them
+  over after 45 s) is only for launch template changes.

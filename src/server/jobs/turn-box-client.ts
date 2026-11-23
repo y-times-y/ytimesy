@@ -178,6 +178,9 @@ export class TurnBoxIdentityRejected extends Error {
 export class TurnBoxEdgeClient {
 	private identity: string;
 
+	/** The program version the edge says is published (from the last registration). */
+	latestVersion: string | null = null;
+
 	constructor(private readonly options: ClientOptions) {
 		this.identity = options.identity;
 	}
@@ -220,6 +223,8 @@ export class TurnBoxEdgeClient {
 		// A delayed response cannot overwrite a replacement we already adopted.
 		if (result.data.identity && this.identity === presented)
 			this.identity = result.data.identity;
+		if (result.data.latestVersion)
+			this.latestVersion = result.data.latestVersion;
 		return true;
 	}
 

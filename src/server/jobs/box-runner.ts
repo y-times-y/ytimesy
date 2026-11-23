@@ -240,7 +240,15 @@ export type TurnRunnerBoxOptions = {
 	readonly signalHandlers?: boolean;
 	/** Called when the edge rejects the box's identity (expired or unknown). */
 	readonly onIdentityRejected?: () => void;
+	/**
+	 * Called once a box on an old program has finished its turns: it exits
+	 * and its service starts it again on the published one (default).
+	 */
+	readonly onUpgradeReady?: () => void;
 };
+
+/** How often a box finishing its turns for an upgrade looks whether it is done. */
+const UPGRADE_CHECK_MS = 5_000;
 
 export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 	const env = options.env ?? process.env;
@@ -277,15 +285,31 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 	);
 	let running = 0;
 	let revoked = false;
+	/**
+	 * A newer program is published: no new turns; once those running have
+	 * finished, the box restarts on it. Deploys never cut a running turn.
+	 */
+	let upgrading = false;
+	let claiming = 0;
 	const dispatcher = new TurnDispatcher({
 		concurrency: capacity,
 		// Claimed through the edge (identity + nonce), never from a database.
 		// A long poll: the edge holds an empty claim open (TURN_BOX_CLAIM_WAIT_MS),
 		// so an idle box costs one Worker request per wait, not per poll.
-		claim: async () =>
-			revoked ? null : client.claim(undefined, TURN_BOX_CLAIM_WAIT_MS),
+		claim: async () => {
+			if (revoked || upgrading) return null;
+			claiming++;
+			try {
+				const claimed = await client.claim(undefined, TURN_BOX_CLAIM_WAIT_MS);
+				// Counted from the claim on, so an upgrade never exits between
+				// a claim and its run.
+				if (claimed) running++;
+				return claimed;
+			} finally {
+				claiming--;
+			}
+		},
 		run: async (session) => {
-			running++;
 			// The box's ports, with the workspace the edge's vm/ensure prepared.
 			const ports = Object.assign(
 				{ ...boxTurnPorts(session) },
@@ -361,6 +385,22 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 				revoked = true;
 				console.error("This turn runner box was revoked; no new turns.");
 			}
+			const latest = client.latestVersion;
+			if (
+				!upgrading &&
+				latest &&
+				env.YTIMESY_BUILD_ID &&
+				latest !== env.YTIMESY_BUILD_ID
+			) {
+				upgrading = true;
+				console.info(
+					"A newer box program is published; finishing turns first.",
+					{
+						running: env.YTIMESY_BUILD_ID,
+						latest,
+					},
+				);
+			}
 		} catch (error) {
 			console.warn(
 				error instanceof TurnBoxIdentityRejected
@@ -379,8 +419,15 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 		}
 	};
 	await register();
+	let upgraded = false;
 	const timers = [
 		setInterval(() => void register(), REGISTER_EVERY_MS),
+		setInterval(() => {
+			if (!upgrading || upgraded || running > 0 || claiming > 0) return;
+			upgraded = true;
+			console.info("Box turns finished; restarting on the new program.");
+			(options.onUpgradeReady ?? (() => process.exit(0)))();
+		}, UPGRADE_CHECK_MS),
 		// Polling the edge costs a Worker request per claim: no database
 		// LISTEN/NOTIFY wake exists for a box.
 		setInterval(() => dispatcher.wake(), pollMs),

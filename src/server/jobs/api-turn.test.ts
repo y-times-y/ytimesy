@@ -914,7 +914,11 @@ it("keeps coordinator failure primary when renewal aborts the provider stream", 
 			throw new Error("private provider stream and credentials");
 		});
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		// One failed renewal is ridden out (a deploy restarting the chat's
+		// object); only failures lasting most of the 30 s lease stop the turn.
 		await vi.advanceTimersByTimeAsync(10_001);
+		expect(mocks.stop).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(20_000);
 		await run;
 		expect(mocks.commit).not.toHaveBeenCalled();
 		expect(mocks.stop).toHaveBeenCalled();
@@ -938,6 +942,54 @@ it("keeps coordinator failure primary when renewal aborts the provider stream", 
 			}),
 		);
 		expect(JSON.stringify(warn.mock.calls)).not.toContain("private provider");
+	} finally {
+		vi.useRealTimers();
+		warn.mockRestore();
+	}
+});
+
+it("rides out a coordination renewal that fails while the chat's object restarts (a deploy)", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	vi.useFakeTimers();
+	try {
+		let renewals = 0;
+		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
+			if (action === "renew" && ++renewals <= 2)
+				throw new CoordinationFailure(
+					"renew",
+					{ kind: "http", status: 503 },
+					3,
+				);
+			return true;
+		});
+		let finish = () => {};
+		let abortedWhileRunning = false;
+		mocks.runtime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			await new Promise<void>((resolve) => {
+				finish = resolve;
+				input.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			abortedWhileRunning = input.signal.aborted;
+			input.signal.throwIfAborted();
+			return { messages: [], outcome: "completed" } as never;
+		});
+		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		await vi.advanceTimersByTimeAsync(15_000);
+		expect(renewals).toBeGreaterThanOrEqual(3);
+		finish();
+		await vi.advanceTimersByTimeAsync(1_000);
+		await run;
+		// The run was never stopped for its coordination lease.
+		expect(abortedWhileRunning).toBe(false);
+		expect(warn).not.toHaveBeenCalledWith(
+			"Turn heartbeat failed",
+			expect.anything(),
+		);
+		expect(warn).toHaveBeenCalledWith(
+			"Turn coordination renewal failed; trying again.",
+			expect.anything(),
+		);
 	} finally {
 		vi.useRealTimers();
 		warn.mockRestore();

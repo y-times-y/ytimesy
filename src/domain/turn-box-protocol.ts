@@ -79,6 +79,11 @@ export const registerRequest = z.object({
 });
 export const registerResponse = z.object({
 	ok: z.literal(true),
+	/**
+	 * The program version published now: a box running another finishes its
+	 * turns, takes no new ones and restarts on it (box-runner.ts).
+	 */
+	latestVersion: z.string().max(128).optional(),
 	identity: z
 		.string()
 		.max(1024)

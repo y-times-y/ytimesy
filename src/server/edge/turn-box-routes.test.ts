@@ -11,7 +11,10 @@ import {
 	TURN_BOX_PATHS,
 } from "../../domain/turn-box-protocol";
 import { FAKE_TURN, fakeEdge } from "./turn-box-fake-edge";
-import { turnBoxEdgeConfig } from "./turn-box-routes";
+import {
+	forgetLatestBoxVersionForTests,
+	turnBoxEdgeConfig,
+} from "./turn-box-routes";
 import { answerTurnBoxSocketMessage } from "./turn-box-socket";
 
 describe("runner identity renewal", () => {
@@ -351,6 +354,28 @@ describe("turn box edge: claim and identity", () => {
 			body: JSON.stringify({ capacity: 2, running: 0 }),
 		});
 		expect(register.status).toBe(403);
+	});
+
+	it("tells a registering box which program is published, so an old one upgrades itself", async () => {
+		forgetLatestBoxVersionForTests();
+		const edge = await fakeEdge({
+			bundle: async () => ({
+				url: "https://r2.test/turn-box/b.mjs.gz?sig",
+				sha256: "b".repeat(64),
+				version: "b-version",
+			}),
+		});
+		const response = await post(edge, TURN_BOX_PATHS.register, edge.identity, {
+			capacity: 1,
+			running: 0,
+			version: "a-version",
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			ok: true,
+			latestVersion: "b-version",
+		});
+		forgetLatestBoxVersionForTests();
 	});
 
 	it("serves the box program to a live identity only", async () => {
