@@ -295,6 +295,7 @@ import {
 	type ThinkingPauseScheduler,
 	thinkingPauseScheduler,
 } from "../services/thinking-pause";
+import { threadPeerTools } from "../services/thread-peer-tools";
 import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import type { CommittedTurn, PublishedTurn } from "../services/turn-commit";
@@ -2202,7 +2203,7 @@ async function runApiTurnAttempt(
 					})
 				: {};
 		// The thin lead only inspects, so a round needs no write guard.
-		const baseTools: ToolSet = ySquared
+		const leadTools: ToolSet = ySquared
 			? {
 					// Y² asks the person; it has no secret or delegation tools.
 					...(ownTools[ASK_USER_TOOL]
@@ -2236,6 +2237,24 @@ async function runApiTurnAttempt(
 							...planning,
 							...goalMode,
 						};
+		// A root thread may read its project's other threads (read-only; appended
+		// so earlier requests' tool lists stay a cached prefix).
+		const peerProject = owner.projectId;
+		const baseTools: ToolSet =
+			ySquared || owner.parentSessionId || !peerProject
+				? leadTools
+				: {
+						...leadTools,
+						...threadPeerTools({
+							read: (id) =>
+								ports.peerThreadRead({
+									userId: owner.userId,
+									projectId: peerProject,
+									selfId: owner.id,
+									id,
+								}),
+						}),
+					};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
 		// call tools (run_code only). agent, agent_send and
 		// request_project_secret are ordinary tools. Additions append, so
