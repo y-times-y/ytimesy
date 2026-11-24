@@ -898,12 +898,9 @@ it("keeps coordinator failure primary when renewal aborts the provider stream", 
 	vi.useFakeTimers();
 	try {
 		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
-			if (action === "renew")
-				throw new CoordinationFailure(
-					"renew",
-					{ kind: "http", status: 503 },
-					2,
-				);
+			// A real outage: the room answers neither the renewal nor the take-back.
+			if (action === "renew" || action === "resume")
+				throw new CoordinationFailure(action, { kind: "http", status: 503 }, 2);
 			return true;
 		});
 		mocks.runtime.mockImplementation(async (input) => {
@@ -1024,6 +1021,54 @@ it("stops a writer on lease conflict without retrying inference or publication",
 		).toHaveLength(1);
 	} finally {
 		vi.useRealTimers();
+	}
+});
+
+it("keeps a healthy turn whose renewals time out for the whole grace window, when the database still says it owns its lease (2026-11-24)", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	vi.useFakeTimers();
+	try {
+		const actions: string[] = [];
+		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
+			actions.push(action);
+			// The edge's pool is starved: every renewal times out, the take-back works.
+			if (action === "renew")
+				throw new CoordinationFailure(
+					"renew",
+					{ kind: "transport", category: "timeout" },
+					3,
+				);
+			return true;
+		});
+		let stopped = false;
+		mocks.runtime.mockImplementation(async (input) => {
+			let finished = false;
+			await new Promise<void>((resolve) => {
+				input.signal.addEventListener(
+					"abort",
+					() => {
+						if (!finished) stopped = true;
+						resolve();
+					},
+					{ once: true },
+				);
+				setTimeout(() => {
+					finished = true;
+					resolve();
+				}, 45_000);
+			});
+		});
+		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		await vi.advanceTimersByTimeAsync(46_000);
+		await run;
+		expect(actions).toContain("resume");
+		expect(stopped).toBe(false);
+		expect(
+			JSON.stringify(mocks.finalize.mock.calls.map((call) => call[2])),
+		).not.toContain("coordination failed");
+	} finally {
+		vi.useRealTimers();
+		warn.mockRestore();
 	}
 });
 

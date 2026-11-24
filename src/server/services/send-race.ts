@@ -1,5 +1,5 @@
 import { Cause, Effect } from "effect";
-import { TURN_ALREADY_RUNNING } from "../adapters/api-turns";
+import { TURN_ALREADY_RUNNING } from "#/domain/api-turn-failure";
 
 /** Whether a failed send was refused only because a turn started first. */
 export function isTurnAlreadyRunningRefusal(

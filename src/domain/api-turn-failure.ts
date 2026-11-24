@@ -1143,3 +1143,7 @@ export function apiTurnFailureMessage(
 			return "The model finished, but automatic Git handoff failed. Your edits and local commits remain in the workspace. Check Git status, commit hooks, and GitHub access before continuing.";
 	}
 }
+
+/** A send found its chat's turn already running (a Y² wake, say, started it a moment before). */
+export const TURN_ALREADY_RUNNING =
+	"Finish or stop the current turn before sending another prompt.";

@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
 import { Effect, Schedule } from "effect";
 import type { PoolClient } from "pg";
-import { ApiTurnCancelled } from "#/domain/api-turn-failure";
+import {
+	ApiTurnCancelled,
+	TURN_ALREADY_RUNNING,
+} from "#/domain/api-turn-failure";
 import {
 	type ApiTurnSettings,
 	apiTurnSettings,
@@ -216,10 +219,6 @@ async function deleteDeliveredQueuedMessages(
 			}),
 		);
 }
-
-/** A send found its chat's turn already running (a Y² wake, say, started it a moment before). */
-export const TURN_ALREADY_RUNNING =
-	"Finish or stop the current turn before sending another prompt.";
 
 export async function enqueueApiTurn(input: {
 	sessionId: string;

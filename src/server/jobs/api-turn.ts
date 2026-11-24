@@ -900,7 +900,7 @@ async function runApiTurnAttempt(
 	};
 	const heartbeat = setInterval(() => {
 		const guardHeartbeat = (stage: string, operation: Promise<void>) =>
-			operation.catch((error: unknown) => {
+			operation.catch(async (error: unknown) => {
 				if (turnSettled) return;
 				// One failed database renewal (a dropped connection, a blip shared
 				// by every chat at once, Nov 12 00:16 and 00:19) says nothing about
@@ -930,6 +930,19 @@ async function runApiTurnAttempt(
 						sinceLastRenewalMs: Date.now() - lastDatabaseRenewal,
 						...apiTurnFailureClassification(error),
 					});
+					return;
+				}
+				// The coordinator did not answer for most of the lease, but the
+				// database, which fences every write, still says this turn owns its
+				// lease: take the chat's lock back instead of stopping a healthy turn
+				// (2026-11-24: a pool-starved edge delayed two turns' renewals).
+				if (
+					stage === "coordination-renewal" &&
+					error instanceof CoordinationFailure &&
+					error.retryable &&
+					(await resumeLapsedLease())
+				) {
+					lastCoordinationRenewal = Date.now();
 					return;
 				}
 				heartbeatFailed = true;

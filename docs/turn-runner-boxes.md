@@ -827,6 +827,21 @@ progress write, last renewal) before calling a thread stuck (docs/y.md,
 
 ## Deploying while turns run (2026-11-23)
 
+- **One slow renewal never ends a turn** (2026-11-24): two box turns died at
+  18:41 UTC on "coordination failed during renew (timeout, 1 attempt)". The
+  edge's pool of two database connections was busy: every box port call,
+  even the chat's lock renewal, first loaded the whole turn row (megabytes
+  on a long chat), and the renewal waited for a free connection past the
+  box's single 8 s attempt ("Timed out while waiting for an open slot in the
+  pool", op coordinateTurn). Now the lock calls read the turn's identity
+  only, the box repeats each of them (3 attempts of 6 s with 0.3 s and 1 s
+  between, 19 s in all, inside the 30 s lease), and a renewal that still
+  fails after the grace window first asks the database whether the turn
+  owns its lease and takes the lock back (`resume`) before stopping it.
+  Only a real outage stops a turn. No production Worker changed at that
+  moment (the 18:32 deploy and the 18:45 one bracket it; the Alchemy work
+  touched the development Worker only).
+
 - **Cut connections resume, they do not fail** (2026-11-23 evening): a deploy
   cuts a chat object's outbound calls about a second before resetting it
   ("Network connection lost."), and resets a box's requests to the edge

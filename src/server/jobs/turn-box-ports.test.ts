@@ -6,7 +6,7 @@ import { TurnBoxEdgeClient, TurnBoxLeaseLost } from "./turn-box-client";
 import {
 	BOX_PORTS_UNAVAILABLE,
 	boxTurnPorts,
-	COORDINATION_PORT_TIMEOUT_MS,
+	COORDINATION_PORT_ATTEMPTS,
 } from "./turn-box-ports";
 import { TurnPortUnavailable } from "./turn-ports";
 import { localTurnPorts } from "./turn-ports-local";
@@ -46,13 +46,45 @@ async function setup() {
 	return { edge, client, session, ports, requests, served };
 }
 
+const realSetTimeout = globalThis.setTimeout;
+/** Advances fake time in slices, letting the real signing and answering of a request finish between them. */
+async function advanceInSlices(totalMs: number, sliceMs = 250) {
+	for (let elapsed = 0; elapsed < totalMs; elapsed += sliceMs) {
+		await vi.advanceTimersByTimeAsync(sliceMs);
+		await new Promise((resolve) => realSetTimeout(resolve, 8));
+	}
+}
+
 describe("boxTurnPorts over the edge's port endpoint", () => {
-	it("gives up a lock call that hangs, as a retryable failure, well inside the 30 s lease", async () => {
+	it("repeats a lock call that timed out, so one slow answer never ends a turn (2026-11-24: two turns died on a single timeout)", async () => {
+		const { ports, edge } = await setup();
+		let calls = 0;
+		(edge.state.ports as Record<string, unknown>).coordinateTurn = () =>
+			++calls < 3 ? new Promise(() => {}) : true;
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		try {
+			const renewed = ports.coordinateConversationTurn("renew", {
+				userId: USER,
+				sessionId: SESSION,
+				turnId: TURN,
+				leaseId: "l",
+			});
+			renewed.catch(() => {});
+			await advanceInSlices(30_000);
+			expect(await renewed).toBe(true);
+			expect(calls).toBe(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("gives up a lock call that never answers, as a retryable failure, still inside the 30 s lease", async () => {
 		const { ports, edge } = await setup();
 		(edge.state.ports as Record<string, unknown>).coordinateTurn = () =>
 			new Promise(() => {});
-		vi.useFakeTimers();
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
 		try {
+			const started = Date.now();
 			const call = ports
 				.coordinateConversationTurn("renew", {
 					userId: USER,
@@ -61,10 +93,14 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 					leaseId: "l",
 				})
 				.catch((error: unknown) => error);
-			await vi.advanceTimersByTimeAsync(COORDINATION_PORT_TIMEOUT_MS + 1);
+			await advanceInSlices(30_000);
 			const failure = await call;
 			expect(failure).toBeInstanceOf(CoordinationFailure);
 			expect((failure as CoordinationFailure).retryable).toBe(true);
+			expect((failure as CoordinationFailure).attempts).toBe(
+				COORDINATION_PORT_ATTEMPTS,
+			);
+			void started;
 		} finally {
 			vi.useRealTimers();
 		}
