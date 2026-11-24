@@ -49,6 +49,7 @@ export const saveYProactiveFn = createServerFn({ method: "POST" })
 		projectInput
 			.extend({
 				stallNudges: z.boolean().optional(),
+				modelChoice: z.boolean().optional(),
 				timezone: z.string().max(64).optional(),
 			})
 			.parse(data),

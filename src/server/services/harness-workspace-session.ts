@@ -5,6 +5,7 @@ import type {
 	IncomingAttachment,
 	MessageAttachment,
 } from "#/domain/message-attachment";
+import { harnessForModelId } from "#/domain/model-harness";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import type { MergedQueuedTurn } from "#/domain/queued-merge";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
@@ -122,7 +123,7 @@ export function connectHarnessWorkspaceSession(
 /** `_machines` is unused; it stays so the evaluation harness's call shape is unchanged. */
 export function sendHarnessWorkspaceTask(
 	_machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
+	requestedScope: HarnessSessionScope,
 	input: {
 		readonly text: string;
 		readonly modelId: string;
@@ -155,6 +156,15 @@ export function sendHarnessWorkspaceTask(
 	/** The chat as the caller just read it (by id, for this user), saving a read. */
 	known?: AgentSessionRecord | null,
 ): Effect.Effect<PublicHarnessSession> {
+	// The model decides the runtime: a thread whose model was changed to one on
+	// the other runtime (the Super agent's set_thread_model) keeps its recorded
+	// harness until this send, and every sender (a wake, an answered question, a
+	// retry) passes that harness along with the thread's model.
+	const modelHarness = harnessForModelId(input.modelId);
+	const scope =
+		modelHarness && modelHarness !== requestedScope.harnessId
+			? { ...requestedScope, harnessId: modelHarness }
+			: requestedScope;
 	if (
 		scope.harnessId !== "api" &&
 		input.runtimeText === undefined &&

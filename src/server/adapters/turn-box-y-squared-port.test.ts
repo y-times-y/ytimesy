@@ -74,6 +74,15 @@ function world(options: { yEnabled?: boolean; ySquaredId?: string } = {}) {
 		stop: record("stop", { turnStatus: "idle" }),
 		archive: record("archive"),
 		prOpen: record("prOpen", false),
+		models: record("models", {
+			enabled: true,
+			failover: true,
+			models: [
+				{ id: "claude-code/claude-opus-5-5", usable: true },
+				{ id: "gpt-6.2-sol", usable: false },
+			],
+		}),
+		setModel: record("setModel", { found: true, lineWritten: true }),
 	} as never;
 	const turn = { id: "t1", user_id: "u1", session_id: Y2 } as ApiTurn;
 	return {
@@ -150,6 +159,86 @@ describe("ySquared port: a box's Y² reaches only its own project's threads", ()
 				}
 			).harnessId,
 		).toBe("api");
+	});
+
+	it("takes the harness a chosen model names (codex or api only) and forwards reasoning and speed", async () => {
+		const w = world();
+		await w.call("send", [
+			{
+				userId: "u1",
+				projectId: "p1",
+				createNew: true,
+				harnessId: "codex",
+			},
+			{
+				text: "new\n\nbrief",
+				modelId: "gpt-6-luna",
+				idempotencyKey: "k4",
+				variant: "high",
+				speed: "fast",
+				fast: true,
+			},
+		]);
+		const send = w.calls.find((c) => c.dep === "send");
+		expect(send?.args[1]).toMatchObject({ harnessId: "codex" });
+		expect(send?.args[2]).toMatchObject({
+			modelId: "gpt-6-luna",
+			variant: "high",
+			speed: "fast",
+			fast: true,
+		});
+		await w.call("send", [
+			{ userId: "u1", projectId: "p1", createNew: true, harnessId: "x" },
+			{
+				text: "t",
+				modelId: "m",
+				idempotencyKey: "k5",
+				variant: "v".repeat(100),
+				speed: "turbo",
+			},
+		]);
+		const second = w.calls.filter((c) => c.dep === "send")[1];
+		expect(second?.args[1]).toMatchObject({ harnessId: "api" });
+		expect(second?.args[2]).not.toHaveProperty("variant");
+		expect(second?.args[2]).not.toHaveProperty("speed");
+	});
+
+	it("lists models for its own user and project only, and changes a model only to a usable one of a thread of the project", async () => {
+		const w = world();
+		expect(
+			(await w.call("models", ["u1", "p1"])) as { enabled: boolean },
+		).toMatchObject({ enabled: true });
+		await refused(w.call("models", ["u2", "p1"]));
+		await refused(w.call("models", ["u1", "p2"]));
+		const change = (patch: Record<string, unknown>) =>
+			w.call("setModel", [
+				{
+					userId: "evil",
+					projectId: "evil",
+					sessionId: THREAD,
+					modelId: "claude-code/claude-opus-5-5",
+					harness: "codex",
+					line: "Model changed to X by the Super agent",
+					changeId: "c1",
+					...patch,
+				},
+			]);
+		await change({});
+		// The user, project and harness are the edge's, not the box's.
+		expect(w.calls.find((c) => c.dep === "setModel")?.args[0]).toEqual({
+			userId: "u1",
+			projectId: "p1",
+			sessionId: THREAD,
+			modelId: "claude-code/claude-opus-5-5",
+			harness: "api",
+			line: "Model changed to X by the Super agent",
+			changeId: "c1",
+		});
+		await refused(change({ modelId: "gpt-6.2-sol" })); // plan used up
+		await refused(change({ modelId: "not-listed" }));
+		await refused(change({ sessionId: Y2 }));
+		await refused(change({ sessionId: HELPER }));
+		await refused(change({ sessionId: OTHER_PROJECT }));
 	});
 
 	it("archives only a root thread of the project and checks only the project's pull requests", async () => {

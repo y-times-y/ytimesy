@@ -11,6 +11,12 @@ import {
 	Y_SQUARED_VIEW_IMAGE_TOOL,
 } from "./y-squared-images";
 import {
+	startThreadModelFields,
+	Y_SQUARED_LIST_MODELS_TOOL,
+	Y_SQUARED_SET_THREAD_MODEL_TOOL,
+	ySquaredModelPolicy,
+} from "./y-squared-models";
+import {
 	Y_SQUARED_QUIET_REPLY,
 	Y_SQUARED_SCHEDULE_LIMIT,
 	Y_SQUARED_SCHEDULE_TOOL,
@@ -82,6 +88,10 @@ export const Y_SQUARED_MESSAGE_THREAD_TOOL = "message_thread";
 export const Y_SQUARED_STOP_THREAD_TOOL = "stop_thread";
 export const Y_SQUARED_RETRY_THREAD_TOOL = "retry_thread";
 export const Y_SQUARED_ARCHIVE_THREAD_TOOL = "archive_thread";
+export {
+	Y_SQUARED_LIST_MODELS_TOOL,
+	Y_SQUARED_SET_THREAD_MODEL_TOOL,
+} from "./y-squared-models";
 export const Y_SQUARED_READ_CANVAS_TOOL = "read_canvas";
 export const Y_SQUARED_SHOW_CANVAS_TOOL = SHOW_CANVAS_TOOL;
 
@@ -134,7 +144,7 @@ export const showCanvasInput = z.object({
 	title: z.string().min(1).max(120).describe("The canvas's title"),
 });
 export const Y_SQUARED_START_THREAD_DESCRIPTION =
-	"Start a new thread (a root chat with its own Y and its own machine) in this project. The brief is the thread's first message and must be self-contained: the goal, the constraints and what done looks like, since the thread knows nothing of this chat. Starting may leave the thread queued behind the budget or concurrency limit; the result says which. Start only what is needed.";
+	"Start a new thread (a root chat with its own Y and its own machine) in this project. The brief is the thread's first message and must be self-contained: the goal, the constraints and what done looks like, since the thread knows nothing of this chat. Optional `model` (with `reasoning`, `speed`) runs it on a model other than the default: only when the person names one or the model policy gives a reason; see list_models. Starting may leave the thread queued behind the budget or concurrency limit; the result says which. Start only what is needed.";
 export const Y_SQUARED_MESSAGE_THREAD_DESCRIPTION =
 	'Send a message to one of this project\'s threads. Pass the id from the threads list. An idle thread starts a turn with it (which may itself queue behind the budget or concurrency limit), whatever the mode. For a working thread, mode decides: "queue" (default) puts it behind the running turn, which starts its next turn with it when it ends (several may wait, in order, at most 50); "steer" delivers it at the thread\'s next step, with no extra turn, for a correction while it works (a Claude Code thread takes it only after its next tool call; a thread on a runner box may see it up to 10 s late; a turn that ends first starts its next turn with it); "interrupt" stops the running turn first, then sends it. Steer for a correction while it works, queue when it can wait for the turn to end, interrupt only to stop wrong work.';
 /** How message_thread reaches a working thread. */
@@ -162,6 +172,7 @@ export const startThreadInput = z.object({
 		.max(Y_SQUARED_MESSAGE_LIMIT)
 		.describe("The thread's first message: self-contained"),
 	attachments: forwardAttachmentsField,
+	...startThreadModelFields,
 });
 export const messageThreadInput = z.object({
 	id: z.string().min(1).max(64).describe("The thread's id"),
@@ -191,6 +202,8 @@ export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
 	Y_SQUARED_STOP_THREAD_TOOL,
 	Y_SQUARED_RETRY_THREAD_TOOL,
 	Y_SQUARED_ARCHIVE_THREAD_TOOL,
+	Y_SQUARED_LIST_MODELS_TOOL,
+	Y_SQUARED_SET_THREAD_MODEL_TOOL,
 	Y_SQUARED_READ_CANVAS_TOOL,
 	Y_SQUARED_SHOW_CANVAS_TOOL,
 	Y_SQUARED_SCHEDULE_TOOL,
@@ -222,6 +235,11 @@ export function ySquaredInstructions() {
 		`- Name a thread as a link to its id from \`${Y_SQUARED_THREADS_TOOL}\`: [Fix sign-up form](thread:<id>). It shows as a chip the person clicks to open the thread and talk to its Y. Name a pull request by its URL or as pr:owner/repo#123. ${REFERENCE_WRITING_RULE}`,
 		"- Write one thread's status as a normal sentence that starts with :needs-you:, :failed:, :finished: or :merged: and then the thread's link; it shows with a small status icon. One sentence each, for example:\n  :needs-you: [Fix sign-up form](thread:<id>) needs you to merge pr:acme/web#8.\n  :failed: [Nightly import](thread:<id>) failed on its last turn: the database was unreachable.",
 		`- You may run threads: \`${Y_SQUARED_START_THREAD_TOOL}\` (title, brief), \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (id, text, mode), \`${Y_SQUARED_STOP_THREAD_TOOL}\` (id). Only when the person asks for work or for a change to a thread; never on your own idea.`,
+		ySquaredModelPolicy({
+			start: Y_SQUARED_START_THREAD_TOOL,
+			set: Y_SQUARED_SET_THREAD_MODEL_TOOL,
+			list: Y_SQUARED_LIST_MODELS_TOOL,
+		}),
 		"- Start a thread only with a self-contained brief (goal, constraints, what done looks like): the thread cannot see this chat. Never start more threads than the work needs; one thread per independent piece of work. A started thread may be queued behind the budget or concurrency limit: say how many were started and how many are queued, from the tool results.",
 		'- Acknowledge in ONE line right away when the person asks for something or you start, message or stop threads, naming what you did: "Started A and B; I\'ll tell you as each finishes or needs you." Never go silent between a start and the end.',
 		'- You wake when a thread finishes a turn, needs the person or fails, when the person starts a thread themselves, and about every 10 minutes while threads are still working. At each wake give a short delta ("A finished, PR #12 opened. B still working, 8 min."), never a full re-listing. A still-working wake with nothing new and no follow-up signal needs no message at all (see Quiet wakes). "You were not part of this: <thread> got <request>" means the person messaged that thread directly: take it into account, do not repeat it back.',

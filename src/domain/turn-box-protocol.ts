@@ -298,6 +298,8 @@ export const Y_SQUARED_PORT_DEPS = [
 	"crewReconcile",
 	"crewNoteY2Sent",
 	"crewSchedule",
+	"models",
+	"setModel",
 ] as const;
 export type YSquaredPortDep = (typeof Y_SQUARED_PORT_DEPS)[number];
 

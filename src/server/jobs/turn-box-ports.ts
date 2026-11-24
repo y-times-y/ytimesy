@@ -924,6 +924,8 @@ export function boxYSquaredToolDeps(
 			await dep("archive", userId, sessionId);
 		},
 		prOpen: (userId, projectId, url) => dep("prOpen", userId, projectId, url),
+		models: (userId, projectId) => dep("models", userId, projectId),
+		setModel: (change) => dep("setModel", change),
 		// A crew answers through the edge; one that is missing there answers null.
 		crew: () => crew,
 	};

@@ -1,4 +1,5 @@
 import { incomingAttachments } from "#/domain/message-attachment";
+import { harnessForModelId } from "#/domain/model-harness";
 import {
 	TurnBoxPortForbidden,
 	type YSquaredPortDep,
@@ -132,8 +133,15 @@ export async function ySquaredPort(
 				{
 					userId: user,
 					projectId: project,
-					// A new thread takes Y²'s own harness; an existing one keeps its own.
-					harnessId: target ? target.harness : self.harness,
+					// A new thread takes Y²'s own harness; an existing one keeps its
+					// own. A model chosen for the thread names its harness (the send
+					// switches a chat between runtimes), so only those two are taken.
+					harnessId:
+						scope.harnessId === "codex" || scope.harnessId === "api"
+							? scope.harnessId
+							: target
+								? target.harness
+								: self.harness,
 					...(target
 						? { sessionId: target.id, createNew: false }
 						: { createNew: true }),
@@ -144,6 +152,13 @@ export async function ySquaredPort(
 					idempotencyKey: text(input.idempotencyKey, "y2:send:key", 256),
 					...(files ? { attachments: files } : {}),
 					...(input.released === true ? { released: true } : {}),
+					...(typeof input.variant === "string" && input.variant.length <= 64
+						? { variant: input.variant }
+						: {}),
+					...(input.speed === "fast" || input.speed === "ultrafast"
+						? { speed: input.speed }
+						: {}),
+					...(input.fast === true ? { fast: true } : {}),
 				} as never,
 			);
 		}
@@ -168,6 +183,38 @@ export async function ySquaredPort(
 		case "prOpen":
 			ownUser(args[0]);
 			return run.prOpen(user, ownProject(args[1]), text(args[2], dep, 400));
+		case "models":
+			ownUser(args[0]);
+			ownProject(args[1]);
+			return run.models(user, project);
+		case "setModel": {
+			// Only a thread of the project (never Y²): the edge reads the thread itself.
+			const change = record(args[0], dep);
+			const target = await thread(change.sessionId);
+			const modelId = text(change.modelId, "y2:setModel:model", 512);
+			// The tools checked it; the edge does not take the box's word for it.
+			const choices = await run.models(user, project);
+			if (
+				!choices.enabled ||
+				!choices.models.some((model) => model.id === modelId && model.usable)
+			)
+				throw new TurnBoxPortForbidden("y2:setModel:model");
+			return run.setModel({
+				userId: user,
+				projectId: project,
+				sessionId: target.id,
+				modelId,
+				harness: harnessForModelId(modelId) ?? "api",
+				...(typeof change.variant === "string" && change.variant.length <= 64
+					? { variant: change.variant }
+					: {}),
+				...(change.speed === "fast" || change.speed === "ultrafast"
+					? { speed: change.speed }
+					: {}),
+				line: text(change.line, "y2:setModel:line", 300),
+				changeId: text(change.changeId, "y2:setModel:change", 200),
+			});
+		}
 		case "crewList":
 			return (await crew()?.list()) ?? null;
 		case "crewThread":

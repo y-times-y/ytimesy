@@ -113,11 +113,13 @@ export function YProactiveView({
 	data,
 	pending,
 	onStallNudges,
+	onModelChoice,
 	onCancel,
 }: {
 	readonly data: ProactiveData;
 	readonly pending: boolean;
 	readonly onStallNudges: (enabled: boolean) => void;
+	readonly onModelChoice: (enabled: boolean) => void;
 	readonly onCancel: (id: string) => void;
 }) {
 	const zone = data.settings.timezone;
@@ -139,6 +141,26 @@ export function YProactiveView({
 						checked={data.settings.stallNudges}
 						disabled={pending}
 						onCheckedChange={onStallNudges}
+					/>
+				</div>
+			</div>
+			<div className="settings-row">
+				<div className="settings-row-text">
+					<label htmlFor="y-model-choice" className="settings-row-title">
+						Let Y² choose a thread's model
+					</label>
+					<span className="settings-row-meta">
+						Y² may start a thread on a stronger or cheaper model and switch a
+						thread's model; a model you name is used exactly. Off: Y² cannot
+						choose or change models and threads use the default.
+					</span>
+				</div>
+				<div className="settings-row-actions">
+					<SettingsSwitch
+						id="y-model-choice"
+						checked={data.settings.modelChoice}
+						disabled={pending}
+						onCheckedChange={onModelChoice}
 					/>
 				</div>
 			</div>
@@ -215,8 +237,11 @@ function YProactiveSettings({ projectId }: { projectId: string }) {
 	});
 	const refresh = () => queryClient.invalidateQueries({ queryKey });
 	const saveMutation = useMutation({
-		mutationFn: (patch: { stallNudges?: boolean; timezone?: string }) =>
-			save({ data: { projectId, ...patch } }),
+		mutationFn: (patch: {
+			stallNudges?: boolean;
+			modelChoice?: boolean;
+			timezone?: string;
+		}) => save({ data: { projectId, ...patch } }),
 		onSuccess: refresh,
 	});
 	const cancelMutation = useMutation({
@@ -238,6 +263,7 @@ function YProactiveSettings({ projectId }: { projectId: string }) {
 			data={status.data}
 			pending={saveMutation.isPending || cancelMutation.isPending}
 			onStallNudges={(stallNudges) => saveMutation.mutate({ stallNudges })}
+			onModelChoice={(modelChoice) => saveMutation.mutate({ modelChoice })}
 			onCancel={(id) => cancelMutation.mutate(id)}
 		/>
 	);
