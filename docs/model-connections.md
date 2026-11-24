@@ -106,6 +106,10 @@ in Settings", so a refused request looked like an expired sign-in.
   from/to, cause, HTTP status and a redacted body snippet (`xaiLogSnippet`);
   a sign-in logs which status it replaced.
 
+## Gemini 4 Neon (added 2026-11-24)
+
+`gemini-4-neon` (OpenRouter `google/gemini-4-neon`), GA 2026-11-18 per Google's model page: 1,048,576-token context, text/image/audio/video/PDF input, function calling, $3 / $15 per 1M tokens (cache read $0.15; priority 1.8x). Frontier failover tier, between Carbon and Argon. Like every listed model it shows only on a connection (Google key or OpenRouter) whose discovered list includes it. Not verified against the live API (no key in this environment).
+
 ## Retired from the pickers 2026-11-17
 
 Every GPT-5 variant (`gpt-5`, `gpt-5.x`, `-codex`, mini, nano; bare or
