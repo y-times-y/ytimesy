@@ -74,16 +74,14 @@ export async function coordinateConversationTurn(
 	const result = await Effect.runPromise(
 		request.pipe(
 			Effect.retry({
-				schedule: Schedule.intersect(
-					Schedule.recurs(action === "renew" ? 1 : 0),
-					Schedule.spaced("250 millis"),
-				),
+				schedule: Schedule.spaced("250 millis"),
+				times: action === "renew" ? 1 : 0,
 				while: (error) =>
 					error instanceof CoordinationFailure && error.retryable,
 			}),
-			Effect.either,
+			Effect.result,
 		),
 	);
-	if (result._tag === "Left") throw result.left;
-	return result.right;
+	if (result._tag === "Failure") throw result.failure;
+	return result.success;
 }

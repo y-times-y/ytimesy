@@ -56,7 +56,7 @@ export default class FreestyleWorkerWebSocket extends EventEmitter {
 			headers: { ...headers, Upgrade: "websocket" },
 			redirect: "manual",
 			signal: this.abort.signal,
-		})) as WorkerResponse;
+		})) as unknown as WorkerResponse;
 		const socket = response.webSocket;
 		if (response.status !== 101 || !socket) {
 			await response.body?.cancel();

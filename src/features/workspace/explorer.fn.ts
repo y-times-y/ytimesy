@@ -100,7 +100,7 @@ export const wakeWorkspaceMachineFn = createServerFn({ method: "POST" })
 		forgetChatMachine(scope);
 		const ref = await runWithMachines((machines) =>
 			ensureSessionMachine(machines, scope).pipe(
-				Effect.catchAll(() => Effect.succeed(null)),
+				Effect.catch(() => Effect.succeed(null)),
 			),
 		);
 		return { ready: ref !== null };
@@ -115,7 +115,7 @@ export const resumeWorkspaceMachineFn = createServerFn({ method: "POST" })
 		forgetChatMachine(scope);
 		const ready = await runWithMachines((machines) =>
 			resumeSessionMachine(machines, scope).pipe(
-				Effect.catchAll(() => Effect.succeed(false)),
+				Effect.catch(() => Effect.succeed(false)),
 			),
 		);
 		return { ready };

@@ -124,7 +124,7 @@ it("does not create a pull request for another users project", async () => {
 	adapter.project.mockResolvedValue(null);
 	const runtime = new MemoryWorkspaceRuntime();
 	const result = await Effect.runPromise(
-		Effect.either(
+		Effect.result(
 			publishProject(
 				"alice",
 				{
@@ -135,7 +135,7 @@ it("does not create a pull request for another users project", async () => {
 			),
 		),
 	);
-	expect(result._tag).toBe("Left");
+	expect(result._tag).toBe("Failure");
 	expect(adapter.create).not.toHaveBeenCalled();
 	expect(runtime.commands).toHaveLength(0);
 });
@@ -148,11 +148,11 @@ it("does not create a pull request before the workspace is ready", async () => {
 	});
 	const runtime = new MemoryWorkspaceRuntime();
 	const result = await Effect.runPromise(
-		Effect.either(
+		Effect.result(
 			publishProject("alice", { projectId, title: "Ship feature" }, runtime),
 		),
 	);
-	expect(result._tag).toBe("Left");
+	expect(result._tag).toBe("Failure");
 	expect(adapter.create).not.toHaveBeenCalled();
 	expect(runtime.commands).toHaveLength(0);
 });
@@ -161,11 +161,11 @@ it("does not create a pull request when the branch is not ahead", async () => {
 	const runtime = await readyRuntime();
 	adapter.ahead.mockResolvedValue(0);
 	const result = await Effect.runPromise(
-		Effect.either(
+		Effect.result(
 			publishProject("alice", { projectId, title: "Ship feature" }, runtime),
 		),
 	);
-	expect(result._tag).toBe("Left");
+	expect(result._tag).toBe("Failure");
 	expect(adapter.create).not.toHaveBeenCalled();
 	expect(adapter.push).toHaveBeenCalled();
 });

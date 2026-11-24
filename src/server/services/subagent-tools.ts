@@ -218,10 +218,10 @@ export const subagentToolDefaultDeps: SubagentToolDeps = {
 		// Either, not runPromise: a failure keeps its typed error and cause
 		// instead of becoming a FiberFailure.
 		const result = await Effect.runPromise(
-			Effect.either(startPreparedAgentTask(scope, taskId, options)),
+			Effect.result(startPreparedAgentTask(scope, taskId, options)),
 		);
-		if (result._tag === "Left") throw result.left;
-		return result.right;
+		if (result._tag === "Failure") throw result.failure;
+		return result.success;
 	},
 	routes: (userId) => failoverConnections(userId),
 	markFailed: (sessionId) => saveAgentTaskState(sessionId, "failed"),

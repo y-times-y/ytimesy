@@ -14,11 +14,12 @@ it("turns a thrown Response into an Error with its body text", async () => {
 	);
 });
 
-it("unwraps a Response that failed inside an Effect (which reads as {})", async () => {
+it("unwraps a Response that failed inside an Effect", async () => {
 	const cause = await Effect.runPromise(
 		Effect.promise(() => Promise.reject(notConnected())),
 	).catch((error: unknown) => error);
-	expect((cause as Error).message).toBe("{}");
+	// Effect 4 rejects with the failure itself, not a FiberFailure wrapper.
+	expect(cause).toBeInstanceOf(Response);
 	expect(publicFailureMessage(await readableServerError(cause))).toBe(
 		"Connect GitHub to choose repositories.",
 	);

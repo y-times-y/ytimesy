@@ -49,7 +49,7 @@ it("does not save a repository outside the users GitHub access", async () => {
 		new Response("Forbidden", { status: 403 }),
 	);
 	const result = await Effect.runPromise(
-		Effect.either(
+		Effect.result(
 			connectProject("alice", {
 				installationId: 1,
 				repositoryId: 2,
@@ -57,7 +57,7 @@ it("does not save a repository outside the users GitHub access", async () => {
 			}),
 		),
 	);
-	expect(result._tag).toBe("Left");
+	expect(result._tag).toBe("Failure");
 	expect(adapter.save).not.toHaveBeenCalled();
 	expect(adapter.branch).not.toHaveBeenCalled();
 });
@@ -111,7 +111,7 @@ it("does not save a nonexistent branch", async () => {
 	});
 	adapter.branch.mockResolvedValue(null);
 	const result = await Effect.runPromise(
-		Effect.either(
+		Effect.result(
 			connectProject("alice", {
 				installationId: 1,
 				repositoryId: 2,
@@ -119,8 +119,8 @@ it("does not save a nonexistent branch", async () => {
 			}),
 		),
 	);
-	expect(result._tag).toBe("Left");
-	const failure = result._tag === "Left" ? result.left.error : null;
+	expect(result._tag).toBe("Failure");
+	const failure = result._tag === "Failure" ? result.failure.cause : null;
 	expect(failure).toBeInstanceOf(Response);
 	expect(await (failure as Response).text()).toBe(
 		"Branch missing does not exist in test/repo.",
@@ -189,7 +189,7 @@ it("does not change branch while the workspace is still preparing", async () => 
 		updatedAt: new Date(0).toISOString(),
 	});
 	const result = await Effect.runPromise(
-		Effect.either(
+		Effect.result(
 			connectProject("alice", {
 				installationId: 1,
 				repositoryId: 2,
@@ -197,7 +197,7 @@ it("does not change branch while the workspace is still preparing", async () => 
 			}),
 		),
 	);
-	expect(result._tag).toBe("Left");
+	expect(result._tag).toBe("Failure");
 	expect(adapter.save).not.toHaveBeenCalled();
 	expect(adapter.failReady).not.toHaveBeenCalled();
 });
@@ -327,7 +327,7 @@ it("reports clashing folder names as a request the user can fix", async () => {
 		}),
 	);
 	const result = await Effect.runPromise(
-		Effect.either(
+		Effect.result(
 			connectProjectGroup("alice", {
 				name: "Both",
 				repositories: [
@@ -337,8 +337,8 @@ it("reports clashing folder names as a request the user can fix", async () => {
 			}),
 		),
 	);
-	expect(result._tag).toBe("Left");
-	const failure = result._tag === "Left" ? result.left.error : null;
+	expect(result._tag).toBe("Failure");
+	const failure = result._tag === "Failure" ? result.failure.cause : null;
 	expect((failure as Response).status).toBe(400);
 	expect(await (failure as Response).text()).toMatch(/different folder names/);
 });

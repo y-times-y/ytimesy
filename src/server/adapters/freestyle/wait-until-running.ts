@@ -115,7 +115,7 @@ export async function waitUntilVmRunning(
 						Effect.tapError((error) =>
 							Effect.sync(() => trace.startFailed(error)),
 						),
-						Effect.catchAll(() => Effect.void),
+						Effect.catch(() => Effect.void),
 						Effect.flatMap(() => Effect.fail(new VmStillStarting())),
 					);
 				}
@@ -129,7 +129,7 @@ export async function waitUntilVmRunning(
 			) {
 				restartedFromStopped++;
 				return Effect.tryPromise(() => vm.start()).pipe(
-					Effect.catchAll(() => Effect.void),
+					Effect.catch(() => Effect.void),
 					Effect.flatMap(() => Effect.fail(new VmStillStarting())),
 				);
 			}
@@ -146,7 +146,7 @@ export async function waitUntilVmRunning(
 			if (data.state === "paused" && !started) {
 				started = true;
 				return Effect.tryPromise(() => vm.start()).pipe(
-					Effect.catchAll(() => Effect.void),
+					Effect.catch(() => Effect.void),
 					Effect.flatMap(() => Effect.fail(new VmStillStarting())),
 				);
 			}
@@ -159,11 +159,11 @@ export async function waitUntilVmRunning(
 		waitStarted +
 		(sawPausing ? PAUSING_WAIT_SECONDS : STARTING_WAIT_SECONDS) * 1000;
 	for (let pause = FIRST_PAUSE_MS; ; ) {
-		const result = await Effect.runPromise(Effect.either(read), { signal });
-		if (result._tag === "Right") return result.right;
-		if (!(result.left instanceof VmStillStarting)) {
+		const result = await Effect.runPromise(Effect.result(read), { signal });
+		if (result._tag === "Success") return result.success;
+		if (!(result.failure instanceof VmStillStarting)) {
 			trace.log("stopped");
-			throw result.left;
+			throw result.failure;
 		}
 		if (Date.now() + pause > deadline()) break;
 		await new Promise<void>((resolve, reject) => {

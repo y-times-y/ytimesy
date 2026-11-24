@@ -34,7 +34,7 @@ export const Route = createFileRoute("/api/workspaces/retry")({
 					);
 					const id = WorkspaceId(workspaceId);
 					const result = await Effect.runPromise(
-						Effect.either(
+						Effect.result(
 							mode === "plain"
 								? prepareWithoutSetup(user.id, id)
 								: mode === "rebuild"
@@ -42,8 +42,8 @@ export const Route = createFileRoute("/api/workspaces/retry")({
 									: retryProjectWorkspace(user.id, id, undefined, repairModel),
 						),
 					);
-					if (result._tag === "Left") throw result.left.error;
-					return workspaceStatusView(result.right);
+					if (result._tag === "Failure") throw result.failure.cause;
+					return workspaceStatusView(result.success);
 				}),
 		},
 	},

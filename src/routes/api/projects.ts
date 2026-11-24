@@ -26,9 +26,9 @@ export const Route = createFileRoute("/api/projects")({
 						body && typeof body === "object" && "repositories" in body
 							? connectProjectGroup(user.id, projectGroupSelection.parse(body))
 							: connectProject(user.id, projectSelection.parse(body));
-					const result = await Effect.runPromise(Effect.either(operation));
-					if (result._tag === "Left") throw result.left.error;
-					return result.right;
+					const result = await Effect.runPromise(Effect.result(operation));
+					if (result._tag === "Failure") throw result.failure.cause;
+					return result.success;
 				}),
 		},
 	},

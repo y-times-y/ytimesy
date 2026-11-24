@@ -1,0 +1,42 @@
+diff --git a/lib/Workers/WorkerAsyncBindings.js b/lib/Workers/WorkerAsyncBindings.js
+index d8e489b9bf5c254b7eaef642b34be0a8c5d393a1..4b4f11abf52f79b3bc546679aee7028215e00f28 100644
+--- a/lib/Workers/WorkerAsyncBindings.js
++++ b/lib/Workers/WorkerAsyncBindings.js
+@@ -460,6 +460,16 @@ const toValueBinding = (bindingName, value) => {
+  * them before the returned Output is ever bound.
+  */
+ const toBinding = (bindingName, binding) => {
++    // ytimesy patch: Cloudflare VPC network binding (wrangler's vpc_networks),
++    // declared in env as { type: "vpc_network", networkId } or { type, tunnelId }.
++    if (binding !== null && typeof binding === "object" && !Redacted.isRedacted(binding) && binding.type === "vpc_network") {
++        return {
++            type: "vpc_network",
++            name: bindingName,
++            ...(binding.networkId ? { networkId: binding.networkId } : {}),
++            ...(binding.tunnelId ? { tunnelId: binding.tunnelId } : {}),
++        };
++    }
+     if (typeof binding === "string" || Redacted.isRedacted(binding)) {
+         return toValueBinding(bindingName, binding);
+     }
+diff --git a/src/Workers/WorkerAsyncBindings.ts b/src/Workers/WorkerAsyncBindings.ts
+index 938bcef26406ca1d1d015a6baacfddd272763079..5acad20178d3dc9d9ffd4d2f473241c8c6853d72 100644
+--- a/src/Workers/WorkerAsyncBindings.ts
++++ b/src/Workers/WorkerAsyncBindings.ts
+@@ -571,6 +571,16 @@ const toBinding = (
+   bindingName: string,
+   binding: WorkerBindingResource,
+ ): BindingSpec | Output.Output<WorkerBinding, unknown> => {
++  // ytimesy patch: Cloudflare VPC network binding (wrangler's vpc_networks).
++  const vpc = binding as { type?: unknown; networkId?: string; tunnelId?: string } | null;
++  if (vpc !== null && typeof vpc === "object" && !Redacted.isRedacted(vpc) && vpc.type === "vpc_network") {
++    return {
++      type: "vpc_network",
++      name: bindingName,
++      ...(vpc.networkId ? { networkId: vpc.networkId } : {}),
++      ...(vpc.tunnelId ? { tunnelId: vpc.tunnelId } : {}),
++    } as BindingSpec;
++  }
+   if (typeof binding === "string" || Redacted.isRedacted(binding)) {
+     return toValueBinding(bindingName, binding);
+   } else if (isAssets(binding)) {

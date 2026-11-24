@@ -1,4 +1,4 @@
-import { Cause, Runtime } from "effect";
+import { Cause } from "effect";
 import { publicFailureMessage } from "#/domain/project-workspace";
 
 /**
@@ -8,9 +8,9 @@ import { publicFailureMessage } from "#/domain/project-workspace";
  * as it was.
  */
 export async function readableServerError(cause: unknown): Promise<unknown> {
-	const inner = Runtime.isFiberFailure(cause)
-		? Cause.squash(cause[Runtime.FiberFailureCauseId])
-		: cause;
+	// Effect.runPromise rejects with the failure itself (the squashed cause),
+	// so a Response is bare; a Cause that reaches here is squashed the same way.
+	const inner = Cause.isCause(cause) ? Cause.squash(cause) : cause;
 	if (!(inner instanceof Response)) return cause;
 	const body = await inner.text().catch(() => "");
 	return new Error(body.trim() || publicFailureMessage(inner));

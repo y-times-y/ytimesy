@@ -159,7 +159,7 @@ export function startWorkspaceDesktop(
 		// The route does not depend on the processes; publishing it alongside
 		// saves a round trip. A failed start leaves a route nothing answers.
 		const published = Effect.runPromise(
-			Effect.either(
+			Effect.result(
 				Effect.tryPromise(() => publishDesktopViewer(machines, providerRef)),
 			),
 		);
@@ -196,7 +196,7 @@ export function startWorkspaceDesktop(
 		desktops.set(key, running);
 		return running;
 	}).pipe(
-		Effect.catchAll((cause) => {
+		Effect.catch((cause) => {
 			console.error("desktop start failed", failureMessage(cause));
 			const failed: WorkspaceDesktop = {
 				status: "failed",
@@ -383,7 +383,7 @@ function recoverRunningDesktop(
 			remotes.delete(scopeKey(scope));
 			yield* Effect.tryPromise(() =>
 				withdrawDesktopViewer(machines, providerRef),
-			).pipe(Effect.catchAll(() => Effect.void));
+			).pipe(Effect.catch(() => Effect.void));
 			return null;
 		}
 		const recovered = yield* Effect.tryPromise(() =>
@@ -403,7 +403,7 @@ function recoverRunningDesktop(
 			publishDesktopViewer(machines, providerRef),
 		).catch(() => undefined);
 		return clientFacingDesktop(recovered, scope);
-	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+	}).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
 const desktops = new Map<string, WorkspaceDesktop>();

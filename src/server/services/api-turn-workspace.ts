@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { MachineNotResponding } from "#/domain/api-turn-failure";
 import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import { WorkspaceId } from "#/domain/ids";
@@ -172,7 +172,7 @@ export function deferredApiTurnWorkspace(
 		const earlyCheckout = owner.parentSessionId
 			? undefined
 			: Effect.runPromise(
-					Effect.either(loadTenantProjectCheckout(checkoutScope)),
+					Effect.result(loadTenantProjectCheckout(checkoutScope)),
 				);
 		earlyCheckout?.catch(() => {});
 		if (earlyCheckout) void turnSpan("ws:checkoutPlan", () => earlyCheckout);
@@ -186,7 +186,7 @@ export function deferredApiTurnWorkspace(
 			!owner.parentSessionId
 		) {
 			const fresh = earlyCheckout.then((planned) =>
-				Either.isRight(planned) ? planned.right : null,
+				Result.isSuccess(planned) ? planned.success : null,
 			);
 			const newBranch = fresh.then(
 				(planned) => !!planned && startsNewChatBranch(planned),
@@ -250,9 +250,9 @@ export function deferredApiTurnWorkspace(
 		const checkingOut = Effect.runPromise(
 			Effect.gen(function* () {
 				const checkout = earlyCheckout
-					? yield* Either.match(yield* Effect.promise(() => earlyCheckout), {
-							onLeft: Effect.fail,
-							onRight: Effect.succeed,
+					? yield* Result.match(yield* Effect.promise(() => earlyCheckout), {
+							onFailure: Effect.fail,
+							onSuccess: Effect.succeed,
 						})
 					: yield* loadTenantProjectCheckout(checkoutScope);
 				additionalRepositoryNames = (
