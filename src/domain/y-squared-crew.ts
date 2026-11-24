@@ -245,7 +245,9 @@ export function crewWakeBody(input: {
 			case "failed":
 				return `- "${event.title}" failed${detail}.`;
 			case "started":
-				return `- The person started "${event.title}" themselves${detail}.`;
+				return event.detail?.startsWith('From thread "')
+					? `- Another thread started "${event.title}" with a message, not the person${detail}.`
+					: `- The person started "${event.title}" themselves${detail}.`;
 			default:
 				return event.detail?.startsWith('From thread "')
 					? `- You were not part of this: "${event.title}" got a message from another thread, not the person${detail}.`

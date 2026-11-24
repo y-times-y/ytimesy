@@ -91,4 +91,21 @@ describe("a peer message in the crew wake", () => {
 		);
 		expect(body).not.toContain("from the person");
 	});
+	it("says a thread started by another thread's message was not started by the person", () => {
+		const body = crewWakeBody({
+			events: [
+				{
+					kind: "started",
+					title: "Ship it",
+					detail: 'From thread "Fix login": Please rebase on main',
+				} as never,
+			],
+			working: [],
+			now: 0,
+		});
+		expect(body).toContain(
+			'Another thread started "Ship it" with a message, not the person',
+		);
+		expect(body).not.toContain("The person started");
+	});
 });
