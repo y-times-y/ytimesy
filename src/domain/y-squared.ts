@@ -5,6 +5,7 @@ import { isClaudeCodeRoute } from "./claude-code-route";
 import { REFERENCE_WRITING_RULE } from "./reference-writing";
 import type { SessionItem } from "./session-item";
 import type { ChatWaitingOn } from "./sidebar-chats";
+import { parsePeerMessage } from "./thread-peer";
 import { ASK_USER_TOOL } from "./user-question";
 import {
 	forwardAttachmentsField,
@@ -308,6 +309,12 @@ const clip = (text: string, limit = SNIPPET) => {
 	return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 };
 
+/** A peer message as Y² reads it: who sent it and what it said, not the wrapper's boilerplate. */
+function peerRequestText(text: string) {
+	const peer = parsePeerMessage(text);
+	return peer ? `From thread "${peer.from}": ${peer.body}` : text;
+}
+
 /** The parts of a thread's history Y² reports: its last request, last reply and pull request. */
 export function threadHistoryFacts(items: readonly SessionItem[]) {
 	let lastRequest: string | null = null;
@@ -323,7 +330,7 @@ export function threadHistoryFacts(items: readonly SessionItem[]) {
 			!("wake" in item && item.wake) &&
 			item.text.trim()
 		)
-			lastRequest = clip(item.text);
+			lastRequest = clip(peerRequestText(item.text));
 		if (
 			!pullRequest &&
 			item.kind === "notice" &&

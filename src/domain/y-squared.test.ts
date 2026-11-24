@@ -4,6 +4,7 @@ import { SessionItemId } from "./ids";
 import { REFERENCE_WRITING_RULE } from "./reference-writing";
 import type { SessionItem } from "./session-item";
 import { chatsWithPinnedFirst } from "./sidebar-chats";
+import { peerMessageText } from "./thread-peer";
 import { turnMayHaveChangedWorkspace } from "./turn-saving";
 import {
 	openChatIsSuperAgent,
@@ -501,6 +502,22 @@ describe("openChatIsSuperAgent", () => {
 		).toBe(false);
 		expect(openChatIsSuperAgent({ activeSessionId: undefined, project })).toBe(
 			false,
+		);
+	});
+});
+
+describe("threadHistoryFacts and a peer message", () => {
+	it("reads a peer message as its sender and body, so Y² sees the content", () => {
+		const text = peerMessageText(
+			{ title: "Fix login", id: "t1" },
+			"Please rebase on main",
+		);
+		const facts = threadHistoryFacts([
+			{ kind: "userMessage", id: "m1", text } as never,
+			{ kind: "agentMessage", id: "a1", text: "On it" } as never,
+		]);
+		expect(facts.lastRequest).toBe(
+			'From thread "Fix login": Please rebase on main',
 		);
 	});
 });
