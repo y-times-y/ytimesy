@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { crewAskLine, crewWakeBody } from "./y-squared-crew";
+import { peerMessageText } from "./thread-peer";
+import {
+	crewAskLine,
+	crewRequestFromStartItems,
+	crewWakeBody,
+} from "./y-squared-crew";
 
 describe("crewAskLine", () => {
 	const ask = (items: unknown[]) => crewAskLine(items as never);
@@ -55,5 +60,35 @@ describe("crewAskLine", () => {
 		});
 		expect(body).toContain('asks "stderr?" options: a / b');
 		expect(body).toContain("put that question to the person yourself");
+	});
+});
+
+describe("a peer message in the crew wake", () => {
+	const peer = peerMessageText(
+		{ title: "Fix login", id: "t1" },
+		"Please rebase on main",
+	);
+	it("names the sending thread instead of the wrapper", () => {
+		const request = crewRequestFromStartItems([
+			{ kind: "userMessage", id: "m1", text: peer } as never,
+		]);
+		expect(request).toBe('From thread "Fix login": Please rebase on main');
+	});
+	it("tells Y² the message came from another thread, not the person", () => {
+		const body = crewWakeBody({
+			events: [
+				{
+					kind: "direct",
+					title: "Ship it",
+					detail: 'From thread "Fix login": Please rebase on main',
+				} as never,
+			],
+			working: [],
+			now: 0,
+		});
+		expect(body).toContain(
+			'"Ship it" got a message from another thread, not the person (From thread "Fix login": Please rebase on main).',
+		);
+		expect(body).not.toContain("from the person");
 	});
 });
