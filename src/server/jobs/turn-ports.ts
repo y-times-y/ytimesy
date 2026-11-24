@@ -215,6 +215,16 @@ export interface TurnPorts {
 	 */
 	readonly ySquaredToolDeps?: Partial<YSquaredToolDeps>;
 	/**
+	 * read_thread's read of another thread of the project (thread-peer-read.ts):
+	 * here in the Durable Object, through the edge on a box.
+	 */
+	readonly peerThreadRead: (input: {
+		readonly userId: string;
+		readonly projectId: string;
+		readonly selfId: string;
+		readonly id: string;
+	}) => Promise<string>;
+	/**
 	 * Set on a box: the failover plan, made by the edge from the turn's own
 	 * row (model-failover.ts reads the user's connections and preferences).
 	 */

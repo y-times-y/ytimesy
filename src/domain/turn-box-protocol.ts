@@ -487,6 +487,8 @@ export const boxPortArgs = {
 		dep: z.enum(Y_SQUARED_PORT_DEPS),
 		args: z.array(z.unknown()).max(8),
 	}),
+	/** One read of another thread of the turn's project (read_thread); the edge takes the user, project and chat from the grant. */
+	peerThread: z.object({ id: portText }),
 	/** A helper's step count and its own helpers' token use (guardSubagentStep). */
 	helperStep: z.object({ op: z.enum(["record", "descendantUsage"]) }),
 	/**

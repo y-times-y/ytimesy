@@ -147,6 +147,18 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 				null,
 			],
 			[
+				"peerThread",
+				() =>
+					ports.peerThreadRead({
+						userId: USER,
+						projectId: "p1",
+						selfId: SESSION,
+						id: "t2",
+					}),
+				{ id: "t2" },
+				"Thread text",
+			],
+			[
 				"modelConnection",
 				() => ports.loadModelConnection(USER, "conn-1"),
 				{ id: "conn-1" },
