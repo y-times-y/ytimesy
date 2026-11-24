@@ -1,6 +1,6 @@
 import { ArrowLeft, Check, ChevronDown } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { chatForIssue } from "#/domain/github-issues";
 import { IssueList, IssuePage, NewIssue } from "./issues-inspector";
@@ -11,6 +11,14 @@ import "./pull-request-inspector.css";
 import "./work-items-page.css";
 
 export type WorkItemsKind = "pull-requests" | "issues";
+
+/** A pull request or issue a chip asked for: the page opens it (`at` makes a repeat click open it again). */
+export type WorkItemsFocus = {
+	readonly kind: "pull-request" | "issue";
+	readonly repositoryId: number;
+	readonly number: number;
+	readonly at: number;
+};
 
 type Screen =
 	| { readonly kind: "list" }
@@ -97,7 +105,9 @@ export function WorkItemsPage({
 	modelId,
 	currentSessionId,
 	onChatStarted,
+	focus,
 }: {
+	focus?: WorkItemsFocus | null;
 	kind: WorkItemsKind;
 	repositories: readonly WorkRepository[];
 	/** The chat working on each pull request of a repository, by its head branch. */
@@ -113,6 +123,25 @@ export function WorkItemsPage({
 }) {
 	const [repoId, setRepoId] = useState(ALL);
 	const [screen, setScreen] = useState<Screen>({ kind: "list" });
+	const focusAt = focus?.at;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a new click (at) opens its item; other renders keep the screen
+	useEffect(() => {
+		const repository = repositories.find(
+			(candidate) => candidate.repositoryId === focus?.repositoryId,
+		);
+		if (!focus || !repository) return;
+		setRepoId(String(repository.repositoryId));
+		setScreen(
+			focus.kind === "pull-request"
+				? { kind: "pull-request", repository, number: focus.number }
+				: {
+						kind: "issue",
+						repository,
+						number: focus.number,
+						chat: issueChatsOf(repository.repositoryId).get(focus.number),
+					},
+		);
+	}, [focusAt]);
 	const [issueFilter, setIssueFilter] = useState<"open" | "closed" | "all">(
 		"open",
 	);
