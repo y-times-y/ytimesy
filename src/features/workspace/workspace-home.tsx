@@ -350,7 +350,8 @@ import {
 	useHubRead,
 	userHubStore,
 } from "./user-hub-store";
-import type { WorkItemsKind } from "./work-items-page";
+import { workItemsTarget } from "./work-items-focus";
+import type { WorkItemsFocus, WorkItemsKind } from "./work-items-page";
 import {
 	issuesKey,
 	issuesRequest,
@@ -730,6 +731,8 @@ export function WorkspaceHome({
 	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
 	/** The full-page Pull requests or Issues view from the left sidebar, in place of the chat. */
 	const [workPage, setWorkPage] = useState<WorkItemsKind | null>(null);
+	/** The pull request or issue a chat chip opened in that page. */
+	const [workFocus, setWorkFocus] = useState<WorkItemsFocus | null>(null);
 	/** Leaves whichever full page (Memory, Pull requests, Issues) is open. */
 	const closeFullPages = () => {
 		setMemoryPageOpen(false);
@@ -3587,12 +3590,23 @@ export function WorkspaceHome({
 			const ref = pullRequestReference(pr.url);
 			return ref ? referenceKey(ref) === key : false;
 		});
-		if (!pullRequest) {
-			if (detail.kind === "pull-request") return;
+		const openInWorkPage = () => {
+			const target = workItemsTarget(
+				detail,
+				projectRepositories.filter((candidate) =>
+					workRepositories.some(
+						(work) => work.repositoryId === candidate.repositoryId,
+					),
+				),
+				Date.now(),
+			);
+			if (!target) return;
 			detail.handled = true;
-			openInspector("issues");
-			return;
-		}
+			setMemoryPageOpen(false);
+			setWorkFocus(target.focus);
+			setWorkPage(target.page);
+		};
+		if (!pullRequest) return openInWorkPage();
 		const owner = sidebarChats.find((chat) => {
 			if (chat.role === "y2") return false;
 			const head =
@@ -3603,7 +3617,7 @@ export function WorkspaceHome({
 				(pullRequest.head === head || pullRequest.head.endsWith(`:${head}`))
 			);
 		});
-		if (!owner) return;
+		if (!owner) return openInWorkPage();
 		detail.handled = true;
 		if (owner.id !== activeSessionId) openChat(owner.id);
 		openInspector("pr");
@@ -3970,6 +3984,7 @@ export function WorkspaceHome({
 							}}
 							onOpenWorkItems={(kind) => {
 								setMemoryPageOpen(false);
+								setWorkFocus(null);
 								setWorkPage(kind);
 								if (compact) setProjectsOpen(false);
 							}}
@@ -4083,6 +4098,7 @@ export function WorkspaceHome({
 									<Suspense fallback={null}>
 										<WorkItemsPage
 											kind={workPage}
+											focus={workFocus}
 											repositories={workRepositories}
 											chatsOf={(repositoryId) =>
 												pullRequestChatsByRepository.get(repositoryId) ??
