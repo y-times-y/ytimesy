@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Prints the proposed v0.x.y tag plan. Read-only: never creates, pushes or publishes a tag.
-// Rules (docs/versioning.md): each milestone below is a minor bump; after a minor, each
+// Rules (docs/versioning.md): the first milestone is v0.0.0 and each later one is a minor bump; after a minor, each
 // later Monday that has at least PATCH_MIN_COMMITS new commits since the last tag gets a patch.
 import { execFileSync } from "node:child_process";
 
@@ -46,7 +46,7 @@ const rows = [];
 milestones.forEach(([rev, title], i) => {
 	const start = indexOf(rev);
 	const end = i + 1 < milestones.length ? indexOf(milestones[i + 1][0]) : all.length;
-	rows.push({ tag: `v0.${i + 1}.0`, rev, date: dateOf(rev), title });
+	rows.push({ tag: `v0.${i}.0`, rev, date: dateOf(rev), title });
 	let patch = 0;
 	let last = start;
 	let lastMonday = monday(all[start][1]);
@@ -55,7 +55,7 @@ milestones.forEach(([rev, title], i) => {
 		if (m !== lastMonday) {
 			if (n - last >= PATCH_MIN_COMMITS) {
 				patch += 1;
-				rows.push({ tag: `v0.${i + 1}.${patch}`, rev: all[n - 1][0].slice(0, 8), date: all[n - 1][1], title: "weekly patch" });
+				rows.push({ tag: `v0.${i}.${patch}`, rev: all[n - 1][0].slice(0, 8), date: all[n - 1][1], title: "weekly patch" });
 				last = n;
 			}
 			lastMonday = m;
