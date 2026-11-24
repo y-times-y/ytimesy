@@ -21,8 +21,10 @@ import {
 	type EventKind,
 	type IssueReference,
 	type PullRequestReference,
+	referenceKey,
 	threadReference,
 } from "./agent-references";
+import { type ReferenceRepository, useReferenceKind } from "./reference-kind";
 
 /**
  * What the workspace tells the chips: the project's repository (a bare
@@ -33,6 +35,8 @@ export type ReferenceContextValue = {
 	readonly defaultRepository?: string | null;
 	/** Lowercase "owner/repo#12" keys of the project's pull requests. */
 	readonly pullRequests?: ReadonlySet<string>;
+	/** Lowercase "owner/repo" to the ids a type lookup needs, for the project's repositories. */
+	readonly repositories?: ReadonlyMap<string, ReferenceRepository>;
 	readonly threads?: ThreadDirectory;
 };
 export const ReferenceContext = createContext<ReferenceContextValue | null>(
@@ -263,6 +267,100 @@ export function IssueChip({
 				</span>
 			</a>
 			<GitHubLink url={issue.url} name={display} />
+		</span>
+	);
+}
+
+/**
+ * A bare `#12` (or `owner/repo#12`): an issue or a pull request, GitHub
+ * does not say which from the number. A pull request the project lists is
+ * known at once; any other number in the project's repositories is looked up
+ * once (reference-kind.ts). Until then, and for a repository the workspace
+ * cannot read, the chip is neutral: the number with no issue or PR icon.
+ */
+export function NumberChip({
+	number,
+	label,
+}: {
+	number: IssueReference;
+	label?: ReactNode;
+}) {
+	const context = useContext(ReferenceContext);
+	const key = referenceKey(number);
+	if (context?.pullRequests?.has(key))
+		return (
+			<PullRequestChip
+				pullRequest={{
+					...number,
+					url: `https://github.com/${number.owner}/${number.repo}/pull/${number.number}`,
+				}}
+				label={label}
+			/>
+		);
+	const repository = context?.repositories?.get(
+		`${number.owner}/${number.repo}`.toLowerCase(),
+	);
+	return repository ? (
+		<LookedUpChip number={number} repository={repository} label={label} />
+	) : (
+		<NeutralNumberChip number={number} label={label} />
+	);
+}
+
+function LookedUpChip({
+	number,
+	repository,
+	label,
+}: {
+	number: IssueReference;
+	repository: ReferenceRepository;
+	label?: ReactNode;
+}) {
+	const kind = useReferenceKind(
+		referenceKey(number),
+		repository,
+		number.number,
+	);
+	if (kind === "pull-request")
+		return (
+			<PullRequestChip
+				pullRequest={{
+					...number,
+					url: `https://github.com/${number.owner}/${number.repo}/pull/${number.number}`,
+				}}
+				label={label}
+			/>
+		);
+	if (kind === "issue") return <IssueChip issue={number} label={label} />;
+	return <NeutralNumberChip number={number} label={label} />;
+}
+
+/** A number not yet known to be an issue or a pull request: no icon, opens GitHub (which redirects to the right page). */
+function NeutralNumberChip({
+	number,
+	label,
+}: {
+	number: IssueReference;
+	label?: ReactNode;
+}) {
+	const context = useContext(ReferenceContext);
+	const name = `${number.owner}/${number.repo}#${number.number}`;
+	return (
+		<span className="reference-chip-group">
+			<a
+				className="reference-chip"
+				data-reference="number"
+				data-ref={name}
+				href={number.url}
+				title={name}
+				target="_blank"
+				rel="noopener noreferrer"
+			>
+				<span className="reference-chip-label">
+					{label ?? numberLabel(number, context?.defaultRepository)}
+				</span>
+			</a>
+			<GitHubLink url={number.url} name={name} />
 		</span>
 	);
 }

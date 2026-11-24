@@ -3,6 +3,8 @@
  *
  * - A thread: `[Fix sign-up form](thread:<chat id>)` (or `/thread/<chat id>`).
  * - A pull request: its GitHub URL, or `pr:owner/repo#123` in prose or as a link.
+ * - An issue: its GitHub URL or `issue:owner/repo#12`. A bare `#12` is neither:
+ *   its type is looked up (agent-reference-chips.tsx).
  * - An event: a line of its own, `::finished All 3 threads finished`
  *   (kinds below; `::event{kind="finished"} …` reads the same). One short
  *   centered line; a longer one reads as a status paragraph instead.
@@ -210,6 +212,24 @@ function issue(owner: string, repo: string, number: string): IssueReference {
 	};
 }
 
+/**
+ * A bare `#12` or `owner/repo#12` in prose: GitHub numbers issues and pull
+ * requests together, so its type is not known from the text. It links as
+ * `ref:owner/repo#12` and the chip looks the type up.
+ */
+export const NUMBER_SCHEME = "ref";
+const NUMBER_SHORTHAND = new RegExp(`^ref:(${NAME})/(${NAME})#(\\d+)$`, "i");
+
+/** The pull request or issue a `ref:owner/repo#12` link names (type unknown). */
+export function numberReference(
+	href: string | undefined,
+): IssueReference | null {
+	const match = NUMBER_SHORTHAND.exec(href ?? "");
+	if (!match) return null;
+	const [, owner = "", repo = "", number = ""] = match;
+	return issue(owner, repo, number);
+}
+
 /** `#12` or `owner/repo#12` in prose; a bare number needs the project's repository. */
 const NUMBER_IN_TEXT = new RegExp(
 	`(?<![\\w/&#.-])(?:(${NAME})/(${NAME}))?#(\\d+)(?![\\w-])`,
@@ -229,13 +249,15 @@ export type ReferenceSegment =
 	| { readonly kind: "text"; readonly text: string }
 	| { readonly kind: "pullRequest"; readonly pullRequest: PullRequestReference }
 	| { readonly kind: "issue"; readonly issue: IssueReference }
+	/** A bare number: an issue or a pull request, not yet known. */
+	| { readonly kind: "number"; readonly number: IssueReference }
 	| { readonly kind: "thread"; readonly label: string; readonly id: string };
 
 /**
  * Prose split around everything that links: `pr:owner/repo#1`,
  * `owner/repo#12`, a bare `#12` (with `defaultRepository` "owner/repo")
- * and a known thread's label. A number is an issue here; the chip turns
- * it into a pull request when the project lists one by that number.
+ * and a known thread's label. A bare number is neither issue nor pull
+ * request here (kind "number"); the chip resolves its type.
  */
 export function referenceSegments(
 	text: string,
@@ -265,7 +287,7 @@ export function referenceSegments(
 			const repo = match[2] ?? defaultRepo;
 			if (!owner || !repo) continue;
 			pushText(match.index);
-			out.push({ kind: "issue", issue: issue(owner, repo, match[3] ?? "") });
+			out.push({ kind: "number", number: issue(owner, repo, match[3] ?? "") });
 			last = match.index + match[0].length;
 		}
 		pushText(segment.text.length);
