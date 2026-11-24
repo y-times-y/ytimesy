@@ -20,7 +20,7 @@ beforeEach(async () => {
 	 create table agent_peer_inbox(id text primary key,recipient_id uuid,message text,queued_send jsonb,accepted boolean not null default false);`);
 	await db.exec(
 		readFileSync(
-			"supabase/migrations/20261124120000_thread_model_selection.sql",
+			"supabase/migrations/20261124130000_thread_model_selection.sql",
 			"utf8",
 		),
 	);
