@@ -6,6 +6,7 @@ import {
 	serverAnalyticsEvents,
 } from "#/domain/analytics";
 import { redactSecrets } from "#/domain/redact-secrets";
+import { isTestAccountId } from "#/domain/test-account";
 import { scopedResource } from "./database-scope";
 import { trackInvocationTask } from "./invocation-tasks";
 
@@ -39,7 +40,7 @@ async function captureAnalytics<E extends ServerAnalyticsEvent>(
 ): Promise<void> {
 	try {
 		const token = process.env.POSTHOG_PROJECT_TOKEN;
-		if (!token || !userId) return;
+		if (!token || !userId || isTestAccountId(userId)) return;
 		const parsed = serverAnalyticsEvents[event].safeParse(properties);
 		if (!parsed.success || !Number.isFinite(identity.timestamp.getTime()))
 			return;

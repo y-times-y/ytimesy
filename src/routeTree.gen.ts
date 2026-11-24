@@ -39,6 +39,7 @@ import { Route as ApiGithubRepairEventsRouteImport } from './routes/api/github/r
 import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/repositories'
 import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
 import { Route as ApiInternalCodexTransportRouteImport } from './routes/api/internal/codex-transport'
+import { Route as ApiInternalTestSessionRouteImport } from './routes/api/internal/test-session'
 import { Route as ApiLocalImportCancelRouteImport } from './routes/api/local-import/cancel'
 import { Route as ApiLocalImportCreateProjectRouteImport } from './routes/api/local-import/create-project'
 import { Route as ApiLocalImportFinishRouteImport } from './routes/api/local-import/finish'
@@ -207,6 +208,11 @@ const ApiInternalCodexTransportRoute =
     path: '/api/internal/codex-transport',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiInternalTestSessionRoute = ApiInternalTestSessionRouteImport.update({
+  id: '/api/internal/test-session',
+  path: '/api/internal/test-session',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiLocalImportCancelRoute = ApiLocalImportCancelRouteImport.update({
   id: '/api/local-import/cancel',
   path: '/api/local-import/cancel',
@@ -325,6 +331,7 @@ export interface FileRoutesByFullPath {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
+  '/api/internal/test-session': typeof ApiInternalTestSessionRoute
   '/api/local-import/cancel': typeof ApiLocalImportCancelRoute
   '/api/local-import/create-project': typeof ApiLocalImportCreateProjectRoute
   '/api/local-import/finish': typeof ApiLocalImportFinishRoute
@@ -373,6 +380,7 @@ export interface FileRoutesByTo {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
+  '/api/internal/test-session': typeof ApiInternalTestSessionRoute
   '/api/local-import/cancel': typeof ApiLocalImportCancelRoute
   '/api/local-import/create-project': typeof ApiLocalImportCreateProjectRoute
   '/api/local-import/finish': typeof ApiLocalImportFinishRoute
@@ -422,6 +430,7 @@ export interface FileRoutesById {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
+  '/api/internal/test-session': typeof ApiInternalTestSessionRoute
   '/api/local-import/cancel': typeof ApiLocalImportCancelRoute
   '/api/local-import/create-project': typeof ApiLocalImportCreateProjectRoute
   '/api/local-import/finish': typeof ApiLocalImportFinishRoute
@@ -472,6 +481,7 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
+    | '/api/internal/test-session'
     | '/api/local-import/cancel'
     | '/api/local-import/create-project'
     | '/api/local-import/finish'
@@ -520,6 +530,7 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
+    | '/api/internal/test-session'
     | '/api/local-import/cancel'
     | '/api/local-import/create-project'
     | '/api/local-import/finish'
@@ -568,6 +579,7 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
+    | '/api/internal/test-session'
     | '/api/local-import/cancel'
     | '/api/local-import/create-project'
     | '/api/local-import/finish'
@@ -617,6 +629,7 @@ export interface RootRouteChildren {
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
   ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
   ApiInternalCodexTransportRoute: typeof ApiInternalCodexTransportRoute
+  ApiInternalTestSessionRoute: typeof ApiInternalTestSessionRoute
   ApiLocalImportCancelRoute: typeof ApiLocalImportCancelRoute
   ApiLocalImportCreateProjectRoute: typeof ApiLocalImportCreateProjectRoute
   ApiLocalImportFinishRoute: typeof ApiLocalImportFinishRoute
@@ -844,6 +857,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiInternalCodexTransportRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/internal/test-session': {
+      id: '/api/internal/test-session'
+      path: '/api/internal/test-session'
+      fullPath: '/api/internal/test-session'
+      preLoaderRoute: typeof ApiInternalTestSessionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/local-import/cancel': {
       id: '/api/local-import/cancel'
       path: '/api/local-import/cancel'
@@ -1017,6 +1037,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
   ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
   ApiInternalCodexTransportRoute: ApiInternalCodexTransportRoute,
+  ApiInternalTestSessionRoute: ApiInternalTestSessionRoute,
   ApiLocalImportCancelRoute: ApiLocalImportCancelRoute,
   ApiLocalImportCreateProjectRoute: ApiLocalImportCreateProjectRoute,
   ApiLocalImportFinishRoute: ApiLocalImportFinishRoute,
