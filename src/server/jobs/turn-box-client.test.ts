@@ -81,6 +81,68 @@ async function setup() {
 }
 
 describe("turn box client against the edge", () => {
+	it.each([
+		"relay stopped",
+		"relay changed",
+		"turn finalized",
+		"turn cancelled",
+		"lease lost",
+	])("discards a pending reconnect after %s", async (ending) => {
+		const edge = await fakeEdge();
+		edge.queue.push({ ...edge.row });
+		let finishOpening!: (socket: BoxSocket) => void;
+		const client = new TurnBoxEdgeClient({
+			edgeUrl: "https://edge.test",
+			identity: edge.identity,
+			fetch: edge.fetchEdge,
+			now: () => edge.state.now,
+			socket: () =>
+				new Promise((resolve) => {
+					finishOpening = resolve;
+				}),
+		});
+		const session = await client.claim();
+		if (!session) throw new Error("no turn claimed");
+		vi.useFakeTimers();
+		try {
+			const stop = session.claudeRelay(async () => ({
+				text: "ok",
+				isError: false,
+			}));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(finishOpening).toBeTypeOf("function");
+			if (ending === "relay stopped") stop();
+			else if (ending === "relay changed")
+				session.claudeRelay(async () => ({ text: "new", isError: false }));
+			else if (ending === "turn finalized")
+				await session.finalize("completed", []);
+			else if (ending === "turn cancelled") {
+				edge.row.cancel_requested = true;
+				await expect(session.checkpoint([], [])).rejects.toBeInstanceOf(
+					ApiTurnCancelled,
+				);
+			} else {
+				edge.row.lease_id = "66666666-6666-4666-8666-666666666666";
+				await expect(session.checkpoint([], [])).rejects.toBeInstanceOf(
+					TurnBoxLeaseLost,
+				);
+			}
+			const socket: BoxSocket = {
+				send: vi.fn(),
+				close: vi.fn(),
+				onMessage: vi.fn(),
+				onClose: vi.fn(),
+			};
+			finishOpening(socket);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(socket.close).toHaveBeenCalledOnce();
+			expect(socket.onMessage).not.toHaveBeenCalled();
+			expect(socket.onClose).not.toHaveBeenCalled();
+			expect(socket.send).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it("bounds a stuck socket handshake and falls back to HTTP without adopting a late socket", async () => {
 		const edge = await fakeEdge();
 		edge.queue.push({ ...edge.row });

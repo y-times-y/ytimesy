@@ -400,7 +400,7 @@ export class TurnBoxTurnSession {
 	}
 
 	/** Opens the turn's ONE socket (progress, renewals, Stop); falls back to HTTP when it cannot. */
-	async openSocket() {
+	async openSocket(stillNeeded: () => boolean = () => true) {
 		const factory = this.options.socket ?? runtimeBoxSocket;
 		let timedOut = false;
 		const openingAbort = new AbortController();
@@ -411,7 +411,13 @@ export class TurnBoxTurnSession {
 				this.grantToken,
 				openingAbort.signal,
 			).then((socket) => {
-				if (timedOut) {
+				if (
+					timedOut ||
+					this.finished ||
+					this.lost ||
+					this.cancelled ||
+					!stillNeeded()
+				) {
 					socket.close();
 					return false;
 				}
@@ -676,11 +682,20 @@ export class TurnBoxTurnSession {
 		this.reconnecting = true;
 		const attempt = (wait: number) =>
 			setTimeout(async () => {
-				if (this.finished || this.lost || !this.claudeHandler) {
+				if (
+					this.finished ||
+					this.lost ||
+					this.cancelled ||
+					!this.claudeHandler
+				) {
 					this.reconnecting = false;
 					return;
 				}
-				if (this.socket || (await this.openSocket())) {
+				const handler = this.claudeHandler;
+				if (
+					this.socket ||
+					(await this.openSocket(() => this.claudeHandler === handler))
+				) {
 					this.reconnecting = false;
 					return;
 				}
