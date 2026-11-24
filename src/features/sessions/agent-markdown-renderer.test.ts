@@ -1,6 +1,7 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { threadDirectory } from "#/domain/thread-label";
 import { AgentMarkdown } from "./agent-markdown-renderer";
 import { ReferenceContext } from "./agent-reference-chips";
@@ -188,14 +189,79 @@ describe("pull request, issue and thread mentions", () => {
 			),
 		);
 
-	it("draws #8 as a PR chip when the project lists that pull request, else as an issue chip", () => {
+	it("draws #8 as a PR chip when the project lists that pull request, else as a neutral number chip", () => {
 		const html = renderIn("See #8 and #9, also acme/web#8.");
 		expect(html.match(/data-reference="pull-request"/g)).toHaveLength(2);
-		expect(html.match(/data-reference="issue"/g)).toHaveLength(1);
+		expect(html).not.toContain('data-reference="issue"');
+		expect(html.match(/data-reference="number"/g)).toHaveLength(1);
 		expect(html).toContain('href="https://github.com/acme/web/pull/8"');
-		expect(html).toContain('href="https://github.com/acme/web/issues/9"');
 		expect(html).toContain('<span class="reference-chip-label">#8</span>');
 		expect(html).toContain('<span class="reference-chip-label">#9</span>');
+		// The neutral chip has no issue or pull request icon.
+		const neutral = /<a [^>]*data-reference="number"[^>]*>(.*?)<\/a>/.exec(
+			html,
+		);
+		expect(neutral?.[1]).not.toContain("<svg");
+	});
+
+	describe("a bare number the project does not list", () => {
+		const stored = new Map<string, string>();
+		beforeEach(() => {
+			stored.clear();
+			vi.stubGlobal("sessionStorage", {
+				getItem: (key: string) => stored.get(key) ?? null,
+				setItem: (key: string, value: string) => stored.set(key, value),
+			});
+		});
+		afterEach(() => vi.unstubAllGlobals());
+		const renderLookedUp = (text: string) =>
+			renderToStaticMarkup(
+				createElement(
+					QueryClientProvider,
+					{ client: new QueryClient() },
+					createElement(
+						ReferenceContext.Provider,
+						{
+							value: {
+								defaultRepository: "acme/web",
+								pullRequests: new Set<string>(),
+								repositories: new Map([
+									["acme/web", { installationId: 1, repositoryId: 77 }],
+								]),
+							},
+						},
+						createElement(AgentMarkdown, { text, onOpenFile: () => {} }),
+					),
+				),
+			);
+
+		it("is a pull request chip when GitHub says the number is one", () => {
+			stored.set("ytimesy:reference-kind:77#14", "pull-request");
+			const html = renderLookedUp("Merged #14 and acme/web#14.");
+			expect(html.match(/data-reference="pull-request"/g)).toHaveLength(2);
+			expect(html).not.toContain('data-reference="issue"');
+			expect(html).toContain('href="https://github.com/acme/web/pull/14"');
+		});
+		it("is an issue chip when GitHub says the number is an issue", () => {
+			stored.set("ytimesy:reference-kind:77#3", "issue");
+			const html = renderLookedUp("Fixes #3.");
+			expect(html.match(/data-reference="issue"/g)).toHaveLength(1);
+			expect(html).not.toContain('data-reference="pull-request"');
+		});
+		it("stays neutral until the type is known", () => {
+			const html = renderLookedUp("See #9.");
+			expect(html).toContain('data-reference="number"');
+			expect(html).not.toContain('data-reference="issue"');
+			expect(html).not.toContain('data-reference="pull-request"');
+		});
+		it("keeps the explicit forms and URLs as they are", () => {
+			stored.set("ytimesy:reference-kind:77#5", "issue");
+			const html = renderLookedUp(
+				"pr:acme/web#5, issue:acme/web#5 and https://github.com/acme/web/pull/5",
+			);
+			expect(html.match(/data-reference="pull-request"/g)).toHaveLength(2);
+			expect(html.match(/data-reference="issue"/g)).toHaveLength(1);
+		});
 	});
 
 	it("draws GitHub issue URLs as issue chips and other repositories' numbers with their name", () => {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
 	issueDetail,
 	listIssues,
+	referenceKind,
 	runIssueAction,
 } from "../../../server/adapters/github/issues";
 import { repositoryChoices } from "../../../server/adapters/github/pull-request-actions";
@@ -51,6 +52,10 @@ export const Route = createFileRoute("/api/github/issue")({
 						};
 					}
 					const { number } = selection.parse(search);
+					if (search.kind)
+						return timed("github:kind", () =>
+							referenceKind(token, fullName, number),
+						).catch(refused);
 					return timed("github:issue", () =>
 						issueDetail(token, fullName, number),
 					).catch(refused);

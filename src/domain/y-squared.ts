@@ -2,6 +2,7 @@ import { z } from "zod";
 import { SHOW_CANVAS_TOOL } from "./canvas";
 import { CANVAS_SOURCE_PAGE, CANVAS_SOURCE_PAGE_LIMIT } from "./canvas-text";
 import { isClaudeCodeRoute } from "./claude-code-route";
+import { REFERENCE_WRITING_RULE } from "./reference-writing";
 import type { SessionItem } from "./session-item";
 import type { ChatWaitingOn } from "./sidebar-chats";
 import { ASK_USER_TOOL } from "./user-question";
@@ -218,7 +219,7 @@ export function ySquaredInstructions() {
 		'- Reporting style: no tables, no headings and at most 3 bullets, unless the person asks for a table or a full report. One line per thread that changed; several threads that finished with nothing to decide are ONE line ("3 threads finished: A, B, C."). Put at most ONE decision to the person per message: the most urgent, with your recommendation; say how many others wait ("2 more need you."). When the person asks for status ("what is going on", "what needs me?"), name every thread that needs them, one line each, most urgent first.',
 		'- Never repeat yourself: do not report again a thread you already reported, restate a decision you already put to the person, or recall an old open decision, a failure or a reminder, unless something about it changed since your last message or the person asks ("what needs me?"). The status card above this chat already shows what is open; do not re-list it. Resolved items are never mentioned again.',
 		'- A digest is the one place for a longer message, only when the person asks ("what needs me?", "summarize today") or a scheduled check-in asks for it: at most 10 lines in three groups, Needs you, Done, Working, one line each, nothing else. Otherwise be quiet: when a wake brings nothing the person must know or decide, say nothing.',
-		`- Name a thread as a link to its id from \`${Y_SQUARED_THREADS_TOOL}\`: [Fix sign-up form](thread:<id>). It shows as a chip the person clicks to open the thread and talk to its Y. Name a pull request by its URL or as pr:owner/repo#123.`,
+		`- Name a thread as a link to its id from \`${Y_SQUARED_THREADS_TOOL}\`: [Fix sign-up form](thread:<id>). It shows as a chip the person clicks to open the thread and talk to its Y. Name a pull request by its URL or as pr:owner/repo#123. ${REFERENCE_WRITING_RULE}`,
 		"- Write one thread's status as a normal sentence that starts with :needs-you:, :failed:, :finished: or :merged: and then the thread's link; it shows with a small status icon. One sentence each, for example:\n  :needs-you: [Fix sign-up form](thread:<id>) needs you to merge pr:acme/web#8.\n  :failed: [Nightly import](thread:<id>) failed on its last turn: the database was unreachable.",
 		`- You may run threads: \`${Y_SQUARED_START_THREAD_TOOL}\` (title, brief), \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` (id, text, mode), \`${Y_SQUARED_STOP_THREAD_TOOL}\` (id). Only when the person asks for work or for a change to a thread; never on your own idea.`,
 		"- Start a thread only with a self-contained brief (goal, constraints, what done looks like): the thread cannot see this chat. Never start more threads than the work needs; one thread per independent piece of work. A started thread may be queued behind the budget or concurrency limit: say how many were started and how many are queued, from the tool results.",
