@@ -108,6 +108,19 @@ program after every successful smoke check.
   (its read waits for the edge). It now binds by script name, and the guard
   refuses a production `create` of `Edge`, `Web` or the fleet.
 
+## Rollout state
+
+- **Done 2026-11-24:** state store created; development Workers adopted
+  and their chat proofs (Codex and API) passed; production Cloudflare adopted
+  and deployed through Alchemy (`YTIMESY_DEPLOY_ENGINE=alchemy
+  YTIMESY_INFRA_ADOPT=1`, build `b3f4abc9053b`), smoke checks passed, 72 edge
+  and 73 web secrets and every binding intact. The first production run with
+  those variables used wrangler, because the secret deploy's clean
+  environment dropped them; it now passes them through.
+- **Open:** the AWS stack (waits for the IAM permissions below), then make
+  Alchemy the default engine (`deployEngine` in `deploy-production.ts`) and
+  delete the wrangler upload path.
+
 ## Rollout (each step needs the owner's go)
 
 1. **Permissions** (AWS, see below), and confirming that the deploy token may
