@@ -1,3 +1,4 @@
+import { clearStaleGitIndexLock } from "#/domain/git-stale-lock";
 import { SECRET_COMMIT_GUARD } from "#/domain/project-secret";
 import {
 	commitCoAuthorTrailer,
@@ -59,6 +60,10 @@ const GENERATED_DIRECTORIES = [
 ];
 const GENERATED_PATTERNS = [
 	...GENERATED_DIRECTORIES.flatMap((name) => [`${name}/*`, `*/${name}/*`]),
+	// A node_modules symlink (agents link one into git worktrees) is staged as
+	// one entry named node_modules; committed, it replaced a real one.
+	"node_modules",
+	"*/node_modules",
 	"*.egg-info/*",
 	"*.pyc",
 	"*.pyo",
@@ -94,6 +99,7 @@ export function commitAllArgv(
 		"-lc",
 		[
 			`cd ${shellSingleQuote(directory)}`,
+			clearStaleGitIndexLock(directory),
 			"git add -A",
 			UNSTAGE_NEW_GENERATED_FILES,
 			SECRET_COMMIT_GUARD,

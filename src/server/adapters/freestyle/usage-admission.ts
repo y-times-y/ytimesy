@@ -16,6 +16,7 @@ import {
 } from "../infrastructure-usage";
 import { loadToolsSnapshotSetting } from "../product-settings";
 import { consumeUserAction } from "../user-action-rate";
+import { machineBudgetSpent } from "./machine-failure";
 import { CHEAP_BASE_RESOURCES, CHEAP_BASE_SNAPSHOT } from "./product-vm";
 import { sessionSlugMatch, uuidSlugMatch } from "./slug-sql";
 import {
@@ -522,6 +523,37 @@ export async function admitVmResume(
 	});
 }
 
+/**
+ * Starts a VM that was just admitted. The admission's cap can still be gone
+ * by the time the provider acts on the start (a slow start lets the
+ * reconcile sweep revoke it, see START_GRACE_SECONDS), and the provider then
+ * refuses with "used its total runtime budget". That refusal is about our own
+ * bookkeeping, not the user's allowance, so the VM is admitted again (which
+ * extends the cap or refuses with the real usage reason) and started once
+ * more instead of failing the turn.
+ */
+export async function startAdmittedVm(
+	vm: Pick<Vm, "id" | "start" | "data">,
+	requiredSeconds = 60,
+	admit: (
+		vm: Vm,
+		data: VmData,
+		requiredSeconds: number,
+	) => Promise<unknown> = admitVmResume,
+) {
+	try {
+		await vm.start();
+	} catch (error) {
+		if (!machineBudgetSpent(error) || !infrastructureAdmissionEnabled())
+			throw error;
+		console.warn(
+			JSON.stringify({ event: "vm.start_budget_readmitted", vmId: vm.id }),
+		);
+		await admit(vm as Vm, await vm.data(), requiredSeconds);
+		await vm.start();
+	}
+}
+
 /** A full admission of a running VM is reused for this long by later guest operations. */
 const ADMISSION_REUSE_MS = 60_000;
 const recentAdmissions = new Map<
@@ -701,8 +733,18 @@ function unsettle<T>(settled: Settled<T>): T {
 	return settled.value;
 }
 
+/**
+ * How long a fresh admission is left alone by the reconcile sweep. It was
+ * bought for a start that may still be in flight, and the provider reports
+ * the VM paused until that start lands: on 2026-11-19 a start took 93 s, the
+ * minute sweep revoked the new cap to the runtime already used meanwhile, and
+ * the start then failed with "used its total runtime budget of 188s (188s
+ * used)". Leaving it costs only a hold settled a few minutes later.
+ */
+export const START_GRACE_SECONDS = 300;
+
 /** Revoke future prepaid execution before refunding unused runtime. An uncertain provider response retains its hold. */
-export async function reconcilePausedVm(vm: Vm) {
+export async function reconcilePausedVm(vm: Vm, now = Date.now()) {
 	if (!infrastructureAdmissionEnabled()) return;
 	const data = await vm.data();
 	if (!data.slug || !settledState(data.state) || data.totalRunSeconds == null)
@@ -714,6 +756,8 @@ export async function reconcilePausedVm(vm: Vm) {
 		);
 		const row = result.rows[0];
 		if (!row || row.vm_id !== data.id) return;
+		if (now - new Date(row.updated_at).getTime() < START_GRACE_SECONDS * 1000)
+			return;
 		const current = await vm.data();
 		if (!settledState(current.state) || current.totalRunSeconds == null) return;
 		await revokeAndSettlePaused(vm, client, current, row);
@@ -788,7 +832,10 @@ async function settleDeletedVm(vmId: string) {
 	});
 }
 
-export async function reconcileInfrastructureVms(client: Freestyle) {
+export async function reconcileInfrastructureVms(
+	client: Freestyle,
+	now = Date.now(),
+) {
 	if (!infrastructureAdmissionEnabled()) return;
 	const result = await database().query<{ vm_id: string }>(
 		`select a.vm_id from infrastructure_vm_admission a join infrastructure_usage_reservation r on r.id=a.reservation_id where a.vm_id is not null and r.consumed_micro_usd is null order by a.updated_at limit 20`,
@@ -803,7 +850,7 @@ export async function reconcileInfrastructureVms(client: Freestyle) {
 				Date.now() - new Date(data.lastNetworkActivity).getTime() < 60_000
 			)
 				await admitVmResume(vm, data, 120);
-			else await reconcilePausedVm(vm);
+			else await reconcilePausedVm(vm, now);
 		} catch (error) {
 			if (error instanceof FreestyleApiError && error.status === 404) {
 				await settleDeletedVm(row.vm_id).catch(() =>

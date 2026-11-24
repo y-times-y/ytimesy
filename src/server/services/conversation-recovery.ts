@@ -62,6 +62,7 @@ import {
 } from "./conversation-turn-settled";
 import { WorkspaceProvisionError } from "./errors";
 import { machinesForAgentSession } from "./session-workspace-machines";
+import { forkRepositoryPath } from "./subagent-writer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export const conversationRecoveryRequest = z.object({
@@ -373,9 +374,9 @@ export async function prepareForkWorkspace(
 				),
 			)
 		).vm;
-		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
-		if (!cwd?.startsWith("/"))
-			throw new Error("The fork has no prepared repository path.");
+		// A copy that has just booted may not show its files at once; it is
+		// the source's copy, so the source's path stands in (as for helpers).
+		const cwd = await forkRepositoryPath(scoped, vm, source);
 		// As a copied session VM: the source's runtime scratch is not the fork's.
 		const copy = vm;
 		await Promise.all(

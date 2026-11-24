@@ -79,6 +79,7 @@ import {
 	admitVmResume,
 	infrastructureAdmissionEnabled,
 	recentAdmissionCovers,
+	startAdmittedVm,
 } from "./usage-admission";
 import { applyVmNetworkPolicy } from "./vm-network";
 import {
@@ -770,7 +771,7 @@ async function resumeProductVm(
 	const lifecycle = productLifecycleUpdate(data);
 	if (lifecycle) await vm.update(lifecycle).catch(() => undefined);
 	if (data.state === "paused" || data.state === "stopped") {
-		await turnSpan("vm:start", () => vm.start());
+		await turnSpan("vm:start", () => startAdmittedVm(vm, requiredSeconds));
 	}
 	// A machine that was not running yet has a guest that may not answer yet.
 	if (probeGuest || data.state !== "running") {

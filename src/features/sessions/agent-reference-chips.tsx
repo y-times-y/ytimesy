@@ -119,6 +119,13 @@ if (typeof document !== "undefined") {
 	document.addEventListener("click", openReferenceInApp);
 }
 
+/** The plain text of a chip's title (a string, or the strings of a reply's link text); "" when it has none. */
+export function titleText(node: ReactNode): string {
+	if (typeof node === "string" || typeof node === "number") return String(node);
+	if (Array.isArray(node)) return node.map(titleText).join("");
+	return "";
+}
+
 /** A thread of this project, by its title and its short label; opens it. */
 export function ThreadChip({
 	id,
@@ -133,11 +140,14 @@ export function ThreadChip({
 	/** "ytimesy-12": the thread's name in the project. */
 	label?: string;
 }) {
+	// The title may be cut to fit a narrow bubble: the whole of it is the tooltip.
+	const full = titleText(title);
 	return (
 		<a
 			className="reference-chip"
 			data-reference="thread"
 			href={`/thread/${id}`}
+			title={[label, full].filter(Boolean).join(" · ") || undefined}
 			style={
 				{ "--thread-color": threadColor({ id, threadNumber }) } as CSSProperties
 			}

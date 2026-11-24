@@ -182,6 +182,10 @@ export async function otherRunningTurnOnMachine(
 	return result.rows[0]?.shared ?? true;
 }
 
+/** A send found its chat's turn already running (a Y² wake, say, started it a moment before). */
+export const TURN_ALREADY_RUNNING =
+	"Finish or stop the current turn before sending another prompt.";
+
 export async function enqueueApiTurn(input: {
 	sessionId: string;
 	userId: string;
@@ -277,7 +281,16 @@ export async function enqueueApiTurn(input: {
 		eligibleForBox =
 			!!facts &&
 			!(claudeCode && facts.child) &&
-			boxTurnBlock({ ...facts, evaluation, leadFusion }, process.env) === null;
+			boxTurnBlock(
+				{
+					...facts,
+					// Only Claude Code's box path hands a fresh machine's turn back.
+					freshMachine: claudeCode && facts.freshMachine,
+					evaluation,
+					leadFusion,
+				},
+				process.env,
+			) === null;
 	}
 	const chosenExecutor = chooseTurnExecutor({
 		configured: configuredExecutor,
@@ -379,9 +392,7 @@ export async function enqueueApiTurn(input: {
 						checked.task_state === "working"
 					))
 			)
-				throw new Error(
-					"Finish or stop the current turn before sending another prompt.",
-				);
+				throw new Error(TURN_ALREADY_RUNNING);
 			if (input.base) {
 				// The history it continues, unchanged since it was planned (share-locked
 				// until commit); otherwise the caller plans the send again.

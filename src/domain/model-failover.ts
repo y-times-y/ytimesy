@@ -457,20 +457,47 @@ export function connectionWideFailure(reason: FailoverReason) {
 	);
 }
 
-export type FailoverPolicy = "any-model" | "same-model" | "off";
+/**
+ * any-model: the best candidate; same-model: only the turn's model on another
+ * connection; same-model-first: that, else the closest same-tier model.
+ */
+export type FailoverPolicy =
+	| "any-model"
+	| "same-model"
+	| "same-model-first"
+	| "off";
+
+/**
+ * Failures after which the chosen model's route cannot serve again before
+ * the user acts or its plan resets (minutes to hours), not a brief outage.
+ */
+const ROUTE_GONE_FOR_TURN: ReadonlySet<FailoverReason> = new Set([
+	"usage-limit",
+	"signed-out",
+	"plan-access",
+]);
 
 /**
  * Benchmarks stay pinned to their model and connection, so their scores mean
- * something. Child agents may move only to the same model on another
- * connection: their parent chose that model for the task.
+ * something. Child agents prefer the same model on another connection: their
+ * parent chose that model for the task. A brief failure (outage, rate limit)
+ * keeps them on it; when its route is gone for the turn (a spent Claude or
+ * ChatGPT plan) they continue on the closest same-tier model instead of
+ * failing with nothing done: on 2026-11-22 eleven Claude Opus helpers of one
+ * user failed at their first step on a spent Claude plan while the user's
+ * Grok plan was serving its other chats.
  */
 export function turnFailoverPolicy(input: {
 	readonly enabled: boolean;
 	readonly evaluation: boolean;
 	readonly child: boolean;
+	readonly reason?: FailoverReason;
 }): FailoverPolicy {
 	if (!input.enabled || input.evaluation) return "off";
-	return input.child ? "same-model" : "any-model";
+	if (!input.child) return "any-model";
+	return input.reason && ROUTE_GONE_FOR_TURN.has(input.reason)
+		? "same-model-first"
+		: "same-model";
 }
 
 export type FailoverDecision =
@@ -501,9 +528,13 @@ export function decideFailover(input: {
 		(input.fallbackHops ?? 0) >= MAX_FALLBACK_HOPS
 	)
 		return { kind: "stop" };
-	const candidate = input.candidates.find(
-		(row) => input.policy === "any-model" || row.sameModel,
-	);
+	const candidate =
+		input.policy === "any-model"
+			? input.candidates[0]
+			: (input.candidates.find((row) => row.sameModel) ??
+				(input.policy === "same-model-first"
+					? input.candidates[0]
+					: undefined));
 	if (!candidate) return { kind: "stop" };
 	// Moving from a prepaid subscription onto the user's own bill.
 	if (
@@ -777,4 +808,28 @@ export function forcedDevelopmentOutage(
 	const [key, from] = value.split("@");
 	const first = from ? Number.parseInt(from, 10) : 1;
 	return key === connectionKey && Number.isFinite(first) && step >= first;
+}
+
+/**
+ * The fallback a new turn starts on, or null: the chat's last turn already
+ * moved off this same route (its plan ran out) and that plan is still spent
+ * (`spentUntil`, the provider's reset time), so asking it again would only
+ * fail and add the same "continued on …" line to every turn (2026-11-23: one
+ * Y² chat showed 338 such lines in 275 turns). Once the plan resets, turns
+ * start on the chosen route again. Failover switched off: never.
+ */
+export function stickyFallbackKey(input: {
+	readonly enabled: boolean;
+	readonly original: ModelRoute;
+	readonly previous: TurnFailover | null;
+	readonly spentUntil: number | null;
+	readonly now: number;
+}): string | null {
+	const { previous } = input;
+	if (!input.enabled || !previous) return null;
+	if (input.spentUntil === null || input.spentUntil <= input.now) return null;
+	const original = routeKey(input.original);
+	const fallback = routeKey(previous.route);
+	if (fallback === original || !previous.tried.includes(original)) return null;
+	return fallback;
 }

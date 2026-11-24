@@ -26,6 +26,7 @@ import {
 } from "#/domain/y-overview";
 import { listProjectAgentSessions } from "../sessions/agent-session.fn";
 import { chatListRetry } from "../sessions/chat-list-retry";
+import { YInboxControls } from "./y-inbox-controls";
 
 /** How often the open overview reads the project's threads again. */
 const LIVE_THREADS_POLL_MS = 15_000;
@@ -117,6 +118,7 @@ export function YOverview({
 						key={row.threadId}
 						row={row}
 						nowMs={nowMs}
+						projectId={projectId}
 						onOpen={onOpenThread}
 					/>
 				))}
@@ -223,7 +225,9 @@ function YOverviewRow({
 	age,
 	onOpen,
 	hint,
+	children,
 }: {
+	children?: ReactNode;
 	threadId: string;
 	/** The row's tooltip. */
 	hint?: string;
@@ -250,6 +254,7 @@ function YOverviewRow({
 				</span>
 				{age ? <span className="y-overview-age">{age}</span> : null}
 			</button>
+			{children}
 		</li>
 	);
 }
@@ -257,9 +262,11 @@ function YOverviewRow({
 function NeedsYouItem({
 	row,
 	nowMs,
+	projectId,
 	onOpen,
 }: {
 	row: NeedsYouRow;
+	projectId: string;
 	nowMs: number;
 	onOpen: (threadId: string) => void;
 }) {
@@ -273,7 +280,15 @@ function NeedsYouItem({
 			detail={<ThreadId label={row.label}>{row.detail}</ThreadId>}
 			age={compactRelativeAge(row.updatedAt, nowMs)}
 			onOpen={(id) => onOpen(id)}
-		/>
+		>
+			<YInboxControls
+				projectId={projectId}
+				threadId={row.threadId}
+				title={row.label ?? row.title}
+				waitingOn={row.waitingOn}
+				onOpen={onOpen}
+			/>
+		</YOverviewRow>
 	);
 }
 

@@ -1163,3 +1163,40 @@ describe("messages held while the project's environment is set up", () => {
 		]);
 	});
 });
+
+it("queues a person's send that lost the race to a Y² wake's turn, instead of refusing it (2026-11-24)", async () => {
+	// The chat looked idle at the send's check; a wake started its turn before
+	// the send's own insert, which refused it as "already running".
+	mocks.session.mockResolvedValueOnce({
+		id: "chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "idle",
+		items: [],
+	});
+	mocks.send.mockReturnValue(
+		Effect.fail(
+			new Error(
+				"Finish or stop the current turn before sending another prompt.",
+			),
+		),
+	);
+	mocks.queued.mockResolvedValue([]);
+	const result = await Effect.runPromise(
+		sendComposerMessage(machines, scope, {
+			text: "which threads can be removed",
+			modelId: "connection|model",
+			idempotencyKey: messageId,
+		}),
+	);
+	expect(mocks.send).toHaveBeenCalledOnce();
+	expect(mocks.queue).toHaveBeenCalledOnce();
+	expect(mocks.queue.mock.calls[0]?.[2]).toMatchObject({
+		item: {
+			kind: "userMessage",
+			id: messageId,
+			text: "which threads can be removed",
+		},
+	});
+	expect(result.turnStatus).toBe("running");
+});

@@ -10,7 +10,9 @@ Screenshot 2026-09-12 at 5.41.44*PM.png
 ytimesy-ui-reference/
 
 # Application output and local secrets
-node_modules/
+# No trailing slash: a node_modules symlink (agents link one into git
+# worktrees) is not a directory, and `node_modules/` would not ignore it.
+node_modules
 dist/
 .output/
 .tanstack/

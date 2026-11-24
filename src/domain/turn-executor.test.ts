@@ -95,6 +95,32 @@ describe("boxTurnBlock (what keeps a turn off the boxes)", () => {
 	});
 });
 
+describe("boxTurnBlock: a chat's first turn on a machine it does not have yet", () => {
+	const none = { subagent: false, evaluation: false, hasRuntimeSecrets: false };
+	const allowed = { YTIMESY_CLAUDE_BOX_TOOLS_SECRETS: "1" };
+	// A box boots that machine (about a minute), finds it cannot redact the
+	// runtime secrets, and hands the turn to the chat's object, which waits
+	// for admission and the chat's lock all over again (2026-11-23: 137 s and
+	// 129 s before the first reply of a new project's first chats).
+	it("goes straight to the chat's object when the chat holds runtime secrets", () => {
+		expect(
+			boxTurnBlock(
+				{ ...none, hasRuntimeSecrets: true, freshMachine: true },
+				allowed,
+			),
+		).toBe("fresh-machine-secrets");
+	});
+	it("still runs on a box once the chat has its machine, or without runtime secrets", () => {
+		expect(
+			boxTurnBlock(
+				{ ...none, hasRuntimeSecrets: true, freshMachine: false },
+				allowed,
+			),
+		).toBeNull();
+		expect(boxTurnBlock({ ...none, freshMachine: true }, allowed)).toBeNull();
+	});
+});
+
 describe("turn box routing: Y² and the turn-box secrets switch", () => {
 	const none = { subagent: false, evaluation: false, hasRuntimeSecrets: false };
 	it("keeps lead mode fusion off the boxes", () => {

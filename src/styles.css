@@ -5657,6 +5657,65 @@ details.environment-build[open] > summary .session-activity-chevron {
 .y-overview-heading[aria-expanded="false"] .y-overview-chevron {
 	transform: rotate(-90deg);
 }
+/* Inline answers under a Needs-you row (y-inbox-controls.tsx). */
+.y-inbox,
+.y-inbox-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 2px var(--list-row-pad-x) 8px 36px;
+}
+.y-inbox-actions {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+}
+.y-inbox-button {
+	align-self: flex-start;
+	padding: 4px 10px;
+	border: 1px solid #ffffff22;
+	border-radius: 7px;
+	background: #1a1a1a;
+	color: var(--list-text);
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.y-inbox-button[data-primary="true"] {
+	border-color: #e6e6e6;
+	background: #e6e6e6;
+	color: #111;
+}
+.y-inbox-button:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+.y-inbox-note,
+.y-inbox-done,
+.y-inbox-error {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	padding: 2px var(--list-row-pad-x) 6px 36px;
+	color: var(--list-text-muted);
+	font-size: 12px;
+}
+.y-inbox-note {
+	padding-left: 0;
+}
+.y-inbox-error {
+	padding-left: 0;
+	color: #ff6764;
+}
+.y-inbox-link {
+	border: 0;
+	background: none;
+	color: var(--list-text);
+	font: inherit;
+	text-decoration: underline;
+	cursor: pointer;
+}
 .y-overview-rows {
 	margin: 0;
 	padding: 0;
@@ -5825,19 +5884,28 @@ details.environment-build[open] > summary .session-activity-chevron {
    or a pull request as a compact chip in running text, an event as one
    quiet centered line, and a thread's status as prose behind a small icon. Chips keep the reply's 13px text and 18px line, so a
    line with a chip is as tall as one without; the label sits on the text
-   baseline and a long thread title ends in an ellipsis instead of wrapping. */
+   baseline and a long thread title ends in an ellipsis instead of wrapping.
+   A chip never leaves its container (a message bubble, a narrow phone
+   column): it is a flex row that shrinks, the mark and the id keep their size
+   and the title takes what is left and ends in an ellipsis. */
 .reference-chip-label {
-	display: inline-block;
+	display: block;
+	flex: 0 1 auto;
+	min-width: 0;
 	max-width: 240px;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	vertical-align: top;
+	white-space: nowrap;
+}
+.reference-chip > .thread-mark,
+.reference-chip-icon {
+	align-self: flex-start;
 }
 .reference-chip-icon {
-	display: inline-block;
+	display: block;
+	flex: 0 0 auto;
 	margin-top: 2.5px;
 	margin-right: 4px;
-	vertical-align: top;
 }
 .session-event-icon {
 	flex-shrink: 0;
@@ -5845,8 +5913,13 @@ details.environment-build[open] > summary .session-activity-chevron {
 }
 .session-markdown a.reference-chip,
 .mention-text a.reference-chip {
-	display: inline-block;
+	display: inline-flex;
+	/* The id and the title share a text baseline, as they did inline. */
+	align-items: baseline;
+	box-sizing: border-box;
+	min-width: 0;
 	max-width: 100%;
+	overflow: hidden;
 	height: 18px;
 	padding: 0 5px;
 	border-radius: 5px;
@@ -5857,7 +5930,9 @@ details.environment-build[open] > summary .session-activity-chevron {
 	text-decoration: none;
 	white-space: nowrap;
 	overflow-wrap: normal;
-	vertical-align: baseline;
+	/* Not baseline: a box that clips takes its bottom edge for a baseline. The
+	   chip is as tall as the text's line, so top aligns it with the text. */
+	vertical-align: top;
 }
 .session-markdown a.reference-chip:hover,
 .mention-text a.reference-chip:hover {
@@ -6036,12 +6111,17 @@ details.environment-build[open] > summary .session-activity-chevron {
 }
 .reference-chip-group {
 	display: inline-flex;
+	min-width: 0;
 	max-width: 100%;
 	align-items: baseline;
 	gap: 1px;
 	vertical-align: baseline;
 }
+.reference-chip-group > a.reference-chip {
+	flex: 0 1 auto;
+}
 .reference-chip-id {
+	flex: 0 0 auto;
 	margin-right: 5px;
 	font-family: var(--font-mono, ui-monospace, monospace);
 	font-size: 11px;
@@ -6186,4 +6266,46 @@ details.environment-build[open] > summary .session-activity-chevron {
 /* The new-version notice owns the bottom-right corner; the usage banner steps above it. */
 body:has([data-new-version]) .usage-warning-banner {
 	bottom: 72px;
+}
+/* The Threads header's project filter: a quiet select beside the + . */
+.sidebar-thread-filter {
+	max-width: 110px;
+	min-width: 0;
+	height: 22px;
+	margin: 0 2px 0 0;
+	padding: 0 2px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--list-text-muted);
+	font: inherit;
+	font-size: 11px;
+	text-overflow: ellipsis;
+}
+.sidebar-thread-filter:hover,
+.sidebar-thread-filter:focus-visible {
+	background: #ffffff14;
+	color: #f2f2f2;
+}
+.sidebar-thread-filter option {
+	background: #1b1b1b;
+	color: #f2f2f2;
+}
+/* The Threads list's state groups: Needs you, Working, Recently finished. */
+.sidebar-thread-group + .sidebar-thread-group {
+	margin-top: 4px;
+}
+.sidebar-thread-group-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 6px 0 2px;
+	padding-inline: 8px;
+	color: var(--list-text-muted);
+	font: inherit;
+	font-size: 11px;
+	letter-spacing: 0.02em;
+}
+.sidebar-thread-group[data-group-name="needs-you"] .sidebar-thread-group-title {
+	color: var(--list-text-strong);
 }
