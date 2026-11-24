@@ -64,6 +64,9 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 	titleUntitledAgentSession: vi.fn(async () => undefined),
 	descendantAgentSessions: vi.fn(async () => []),
 }));
+vi.mock("#/server/adapters/thread-model", () => ({
+	threadModelSettings: vi.fn(async () => null),
+}));
 vi.mock("#/server/adapters/api-turns", () => ({
 	enqueueApiTurn: fake.enqueue,
 	inheritedApiTurnSettings: vi.fn(async () => ({})),
