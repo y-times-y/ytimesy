@@ -13,6 +13,11 @@ import { posixShellQuoted as quote } from "#/domain/posix-command";
 export { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
 
 import {
+	hasManagedPushMetadata,
+	MANAGED_PUSH_METADATA_FORMAT,
+	MANAGED_PUSH_REFUSED,
+} from "../managed-git-identity";
+import {
 	gitProxyConfiguration,
 	pushProxiedRepository,
 	receiveProxiedRepository,
@@ -297,6 +302,39 @@ base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
 			bundle,
 			`${revision}:refs/heads/publish`,
 		]);
+		await git(
+			[
+				"-C",
+				"repo.git",
+				"fetch",
+				"--no-tags",
+				url,
+				"refs/heads/*:refs/ytimesy/upstream/*",
+			],
+			token,
+		);
+		const commits = await git([
+			"-C",
+			"repo.git",
+			"--no-replace-objects",
+			"rev-list",
+			"refs/heads/publish",
+			"--not",
+			"--glob=refs/ytimesy/upstream/*",
+		]);
+		for (const commit of commits.split("\n").filter(Boolean)) {
+			const metadata = await git([
+				"-C",
+				"repo.git",
+				"--no-replace-objects",
+				"show",
+				"-s",
+				`--format=${MANAGED_PUSH_METADATA_FORMAT}`,
+				commit,
+			]);
+			if (!hasManagedPushMetadata(metadata))
+				throw new Error(MANAGED_PUSH_REFUSED);
+		}
 		await git(
 			[
 				"-C",

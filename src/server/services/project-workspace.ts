@@ -30,6 +30,7 @@ import {
 } from "#/server/adapters/github";
 import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
 import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
+import { managedGitSetupCommand } from "#/server/adapters/managed-git-identity";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -81,6 +82,10 @@ function ensureSingleProjectCheckout(
 				15_000,
 			),
 		);
+		if (reused.exitCode !== 0)
+			return yield* Effect.fail(
+				new Error("Could not prepare the existing managed checkout."),
+			);
 		const prepared = preparedCheckoutFromReuse(reused.stdout);
 		if (prepared) {
 			const reusedPath = prepared.path;
@@ -166,6 +171,7 @@ function ensureSingleProjectCheckout(
 				{ ...checkout, destination, mode: "clone" },
 			),
 		);
+		yield* configureManagedCheckout(machines, workspaceId, destination);
 		// As a reused checkout does: a machine booted without the project's
 		// template (no build wrote it) finds its repository here. The primary
 		// repository is cloned last, so its path is the one left.
@@ -174,6 +180,22 @@ function ensureSingleProjectCheckout(
 		);
 		return destination;
 	}).pipe(Effect.mapError((cause) => new Error(failureMessage(cause))));
+}
+
+function configureManagedCheckout(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	directory: string,
+) {
+	return Effect.tryPromise(async () => {
+		const result = await machines.exec(
+			workspaceId,
+			managedGitSetupCommand(directory),
+			15_000,
+		);
+		if (result.exitCode !== 0)
+			throw new Error("Could not configure the managed Git identity.");
+	});
 }
 
 /**
