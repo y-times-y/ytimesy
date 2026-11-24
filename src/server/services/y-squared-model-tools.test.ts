@@ -5,6 +5,7 @@ import type {
 	ThreadModel,
 	ThreadModelChoices,
 } from "#/domain/y-squared-models";
+import type { ThreadModelChange } from "../adapters/thread-model";
 import { ySquaredTools } from "./y-squared-tools";
 
 const run = (
@@ -68,7 +69,7 @@ function fixture(
 		chats?: Record<string, Record<string, unknown>>;
 	} = {},
 ) {
-	const chats = options.chats ?? {
+	const chats: Record<string, Record<string, unknown>> = options.chats ?? {
 		idle: chat({ id: "idle" }),
 		busy: chat({ id: "busy", turnStatus: "running" }),
 		foreign: chat({ id: "foreign", projectId: "other" }),
@@ -84,7 +85,9 @@ function fixture(
 	}));
 	const stop = vi.fn(async () => ({ turnStatus: "idle" }));
 	const setModel = vi.fn(
-		async (): Promise<{
+		async (
+			_change: ThreadModelChange,
+		): Promise<{
 			found: boolean;
 			lineWritten: boolean;
 			running?: boolean;
@@ -111,7 +114,9 @@ function fixture(
 			metadata: (async (_user: string, id: string) =>
 				id === "y2"
 					? chat({ id: "y2", harness: "api" })
-					: (chats[id] ?? null)) as never,
+					: chats[id]
+						? { ...chats[id] }
+						: null) as never,
 			send: send as never,
 			stop: stop as never,
 			setModel: setModel as never,
@@ -344,6 +349,61 @@ describe("set_thread_model", () => {
 		expect(result).toContain("interrupt true");
 		expect(f.setModel.mock.calls[0]?.[0]).toMatchObject({ requireIdle: true });
 		expect(f.stop).not.toHaveBeenCalled();
+	});
+
+	it("interrupts a turn that starts after the idle pre-read without stopping a subsequent restart", async () => {
+		const f = fixture();
+		f.setModel
+			.mockResolvedValueOnce({ found: true, lineWritten: false, running: true })
+			.mockResolvedValueOnce({ found: true, lineWritten: false });
+		const result = await run(f.tools, "set_thread_model", {
+			id: "idle",
+			model: "Claude Opus 5.5",
+			interrupt: true,
+		});
+		expect(f.setModel).toHaveBeenCalledTimes(2);
+		expect(f.setModel.mock.calls[0]?.[0]).toMatchObject({ requireIdle: true });
+		expect(f.setModel.mock.calls[1]?.[0]).toMatchObject({ requireIdle: false });
+		expect(f.stop).toHaveBeenCalledOnce();
+		expect(f.setModel.mock.invocationCallOrder[0]).toBeLessThan(
+			f.stop.mock.invocationCallOrder[0] as number,
+		);
+		expect(f.stop.mock.invocationCallOrder[0]).toBeLessThan(
+			f.setModel.mock.invocationCallOrder[1] as number,
+		);
+		expect(result).toContain("running turn was stopped first");
+		expect(result).toContain("A turn had already started again");
+	});
+
+	it("uses the current harness when a different route started after the pre-read", async () => {
+		const target = chat({ id: "idle" });
+		const f = fixture({ chats: { idle: target } });
+		f.setModel.mockImplementationOnce(async () => {
+			target.harness = "api";
+			return { found: true, lineWritten: false, running: true };
+		});
+		await run(f.tools, "set_thread_model", {
+			id: "idle",
+			model: "GPT-6 Luna",
+			interrupt: true,
+		});
+		expect(f.stop).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ sessionId: "idle", harnessId: "api" }),
+		);
+	});
+
+	it("does not stop an idle thread when interrupt is requested", async () => {
+		const f = fixture();
+		const result = await run(f.tools, "set_thread_model", {
+			id: "idle",
+			model: "GPT-6 Luna",
+			interrupt: true,
+		});
+		expect(f.setModel).toHaveBeenCalledOnce();
+		expect(f.setModel.mock.calls[0]?.[0]).toMatchObject({ requireIdle: true });
+		expect(f.stop).not.toHaveBeenCalled();
+		expect(result).not.toContain("running turn was stopped");
 	});
 
 	it("says so when a queued message restarted the thread before the line could be written", async () => {

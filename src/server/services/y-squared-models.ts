@@ -61,6 +61,7 @@ export function codexPlanState(
 		if (typeof window?.usedPercent !== "number") continue;
 		const reset =
 			typeof window.resetsAt === "number" ? resetMs(window.resetsAt) : null;
+		if (reset !== null && reset <= now) continue;
 		if (window.usedPercent >= 100 && reset !== null && reset > now)
 			spentUntil = Math.max(spentUntil ?? 0, reset);
 		else if (window.usedPercent >= NEARLY_SPENT_PERCENT) nearly = true;

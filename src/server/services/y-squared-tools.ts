@@ -787,23 +787,29 @@ export function ySquaredTools(input: {
 				const { model } = chosen;
 				const working = `Not changed: "${chat.title}" is working, and its running turn finishes on its current model. Wait for it to finish (you wake when it does) and call ${Y_SQUARED_SET_THREAD_MODEL_TOOL} again, or pass interrupt true to stop the running turn first (what it did stays in the thread).`;
 				if (chat.turnStatus === "running" && !interrupt) return working;
-				const interrupted = chat.turnStatus === "running";
-				if (interrupted)
-					await deps.stop(input.machines, {
+				let interrupted = chat.turnStatus === "running";
+				const machines = input.machines;
+				const stop = async () => {
+					const current = await ownThread(chat.id);
+					if (!current) return false;
+					await deps.stop(machines, {
 						userId: input.userId,
 						projectId: input.projectId,
 						sessionId: chat.id,
-						harnessId: chat.harness,
+						harnessId: current.harness,
 						createNew: false,
 					});
+					return true;
+				};
+				if (interrupted && !(await stop())) return noThread;
 				const settings = modelSettings(model, { reasoning, speed });
-				const changed = await deps.setModel({
+				const change = {
 					userId: input.userId,
 					projectId: input.projectId,
 					sessionId: chat.id,
 					modelId: model.id,
 					harness: model.harness,
-					requireIdle: !interrupt,
+					requireIdle: !interrupted,
 					...(settings.variant ? { variant: settings.variant } : {}),
 					...("speed" in settings && settings.speed
 						? { speed: settings.speed }
@@ -818,7 +824,13 @@ export function ySquaredTools(input: {
 						reasoning ?? "",
 						speed ?? "",
 					),
-				});
+				};
+				let changed = await deps.setModel(change);
+				if (changed.running && interrupt) {
+					if (!(await stop())) return noThread;
+					interrupted = true;
+					changed = await deps.setModel({ ...change, requireIdle: false });
+				}
 				if (!changed.found) return noThread;
 				if (changed.running) return working;
 				const on = `${model.label} (${model.route})${reasoning ? `, reasoning ${reasoning}` : ""}${speed ? `, ${speed} speed` : ""}`;
