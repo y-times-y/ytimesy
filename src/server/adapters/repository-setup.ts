@@ -11,39 +11,6 @@ export function repositoryDirectory(fullName: string) {
 	return `/home/ubuntu/${repo}`;
 }
 
-export function githubBotCommitHookPath(directory: string) {
-	return `${directory.replace(/\/$/, "")}/.git/hooks/commit-msg`;
-}
-
-export function activateGithubBotCommitHookArgv(directory: string) {
-	const hook = shellSingleQuote(githubBotCommitHookPath(directory));
-	return ["bash", "-lc", `chmod +x ${hook} || sudo -n chmod +x ${hook}`];
-}
-
-export function githubBotCommitMsgHook(bot: PublicationAuthor) {
-	return `#!/bin/sh
-trailer=${JSON.stringify(commitCoAuthorTrailer(bot))}
-if grep -F -q "$trailer" "$1"; then
-  exit 0
-fi
-printf '\\n%s\\n' "$trailer" >> "$1"
-`;
-}
-
-export function configureCommitAuthorArgv(
-	directory: string,
-	author: { readonly name: string; readonly email: string },
-) {
-	return [
-		"bash",
-		"-lc",
-		[
-			`git -C ${shellSingleQuote(directory)} config user.name ${shellSingleQuote(author.name)}`,
-			`git -C ${shellSingleQuote(directory)} config user.email ${shellSingleQuote(author.email)}`,
-		].join(" && "),
-	];
-}
-
 /** Directories of generated files, at the root or anywhere below it. */
 const GENERATED_DIRECTORIES = [
 	"__pycache__",
@@ -87,10 +54,15 @@ export function commitAllArgv(
 	message: string,
 	author: PublicationAuthor,
 	coAuthor?: PublicationAuthor | null,
+	additionalCoAuthor?: PublicationAuthor | null,
 ) {
-	const trailer = coAuthor
-		? ` -m ${shellSingleQuote(commitCoAuthorTrailer(coAuthor))}`
-		: "";
+	const trailer = [coAuthor, additionalCoAuthor]
+		.map((credit) =>
+			credit
+				? ` --trailer ${shellSingleQuote(commitCoAuthorTrailer(credit))}`
+				: "",
+		)
+		.join("");
 	const name = shellSingleQuote(author.name);
 	const email = shellSingleQuote(author.email);
 	const identity = `GIT_AUTHOR_NAME=${name} GIT_AUTHOR_EMAIL=${email} GIT_COMMITTER_NAME=${name} GIT_COMMITTER_EMAIL=${email}`;
@@ -103,8 +75,6 @@ export function commitAllArgv(
 			"git add -A",
 			UNSTAGE_NEW_GENERATED_FILES,
 			SECRET_COMMIT_GUARD,
-			`git config user.name ${name}`,
-			`git config user.email ${email}`,
 			`if git diff --cached --quiet; then echo YTIMESY_NO_COMMIT; else ${identity} git -c user.name=${name} -c user.email=${email} commit -m ${shellSingleQuote(message)}${trailer}; fi`,
 		].join(" && "),
 	];

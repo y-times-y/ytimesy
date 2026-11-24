@@ -1,18 +1,12 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { turnPublicationRole } from "#/domain/agent-task";
-import { UNATTRIBUTED_COMMIT_NOTICE } from "#/domain/github-commit-identity";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	type Project,
 	projectFolderName,
 	repositoriesForProject,
 } from "#/domain/projects";
-import {
-	type PublicationAuthor,
-	publicationCoAuthor,
-	publicationCommitAuthor,
-} from "#/domain/publication";
 import { handoffFactsFromItems } from "#/domain/pull-request-handoff";
 import { branchFromGitHead } from "#/domain/session-branch";
 import {
@@ -26,8 +20,8 @@ import {
 } from "../adapters/agent-sessions";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
-import { resolveGithubAppBot } from "../adapters/github/bot-identity";
 import { githubCommitIdentityForToken } from "../adapters/github/commit-identity";
+import { MANAGED_GIT_BOT } from "../adapters/managed-git-identity";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import { automaticTurnCommitArgv } from "../adapters/turn-commit";
@@ -121,10 +115,9 @@ export async function commitSessionTurn(
 
 /**
  * A root chat commits whatever its turn left in each checkout (no
- * server-owned verification gate, as before); its publish then pushes its
- * branch and keeps its draft PR open. The commit author is the user's GitHub
- * identity when that login is known; otherwise the ytimesy author is kept
- * and the chat says why. GitHub trouble never fails the user's turn: the
+ * server-owned verification gate, as before) with the managed bot identity.
+ * Its publish pushes the branch and keeps its draft PR open. GitHub trouble
+ * never fails the user's turn: the
  * commit stays in the chat and the chat says why it was not pushed.
  * Evaluation runs and eval users neither commit nor push.
  */
@@ -144,19 +137,9 @@ async function commitChatTurn(
 	const turn = turnIdentity(session, items);
 	const description = turnDescription(session, items);
 	const body = turnRequestBody(items);
-	// GitHub's answers overlap the checkout reads below.
-	const identity = timed("commit:identity", () =>
-		Promise.all([
-			commitAuthorForUser(session.userId),
-			// GitHub shows the app beside the user, as a Co-authored-by trailer.
-			// resolveGithubAppBot logs (never silently drops) a missing identity.
-			resolveGithubAppBot({
-				installationId: project.installationId,
-				repositoryName: project.fullName.split("/")[1],
-			}),
-		]),
-	);
-	identity.catch(() => {});
+	const humanCoAuthor = githubAccessToken(session.userId)
+		.then(githubCommitIdentityForToken)
+		.catch(() => null);
 	const host = runtime ?? workspaceRuntimeFromEnv();
 	const repositories = await turnRepositories(
 		host,
@@ -170,8 +153,7 @@ async function commitChatTurn(
 		repositories.find(({ repo }) => repo.fullName === project.fullName)
 			?.directory,
 	);
-	const [authorship, bot] = await identity;
-	const coAuthor = publicationCoAuthor({ author: authorship.author, bot });
+	const humanCredit = await humanCoAuthor;
 	for (const { repo, directory } of repositories) {
 		signal?.throwIfAborted();
 		const result = await timed("commit:exec", () =>
@@ -184,8 +166,9 @@ async function commitChatTurn(
 						.filter(Boolean)
 						.join("\n\n"),
 					"",
-					authorship.author,
-					coAuthor,
+					MANAGED_GIT_BOT,
+					MANAGED_GIT_BOT,
+					humanCredit,
 				),
 				{},
 				60_000,
@@ -196,7 +179,6 @@ async function commitChatTurn(
 				notice: `Changes stay in this chat but were not committed in ${repo.fullName}: ${(result.stderr || result.stdout).trim().slice(0, 300) || "check Git status in Terminal."}`,
 			};
 	}
-	const unattributed = authorship.unattributed ?? undefined;
 	const pending = await timed("commit:pending", () =>
 		unpublishedTurnRepositories(
 			host,
@@ -205,10 +187,9 @@ async function commitChatTurn(
 			turn,
 		),
 	);
-	if (!pending.size) return unattributed ? { notice: unattributed } : {};
+	if (!pending.size) return {};
 	const facts = handoffFactsFromItems(items);
 	return {
-		...(unattributed ? { notice: unattributed } : {}),
 		publish: async (onPullRequest) => {
 			try {
 				const publication = await timed("publish:handoff", () =>
@@ -228,29 +209,6 @@ async function commitChatTurn(
 			}
 		},
 	};
-}
-
-/** GitHub name and email for the commit, or the ytimesy author when the login is unknown. */
-async function commitAuthorForUser(userId: string): Promise<{
-	author: PublicationAuthor;
-	unattributed: string | null;
-}> {
-	const fallback = publicationCommitAuthor({});
-	try {
-		const token = await githubAccessToken(userId);
-		const author = await githubCommitIdentityForToken(token);
-		if (author) return { author, unattributed: null };
-		return { author: fallback, unattributed: UNATTRIBUTED_COMMIT_NOTICE };
-	} catch (error) {
-		// A missing connection is reported when the push is refused.
-		if (error instanceof Response)
-			return { author: fallback, unattributed: null };
-		return {
-			author: fallback,
-			unattributed:
-				"Commits use the ytimesy author because the GitHub profile could not be read.",
-		};
-	}
 }
 
 /**

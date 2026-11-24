@@ -5,8 +5,6 @@ import { publicFailureMessage } from "../../domain/project-workspace";
 import { repositoriesForProject } from "../../domain/projects";
 import {
 	publicationBlockedReason,
-	publicationCoAuthor,
-	publicationCommitAuthor,
 	publicationHeadBranch,
 	publicationSessionBlockedReason,
 	publicationWorkspaceBlockedReason,
@@ -16,13 +14,13 @@ import { captureServerAnalytics } from "../adapters/analytics";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { authorizedRepository, compareBranchAhead } from "../adapters/github";
 import { ensureAppDraftPullRequest } from "../adapters/github/app-pull-request";
-import { resolveGithubAppBot } from "../adapters/github/bot-identity";
+import { githubCommitIdentityForToken } from "../adapters/github/commit-identity";
 import { pushBrokeredRepository } from "../adapters/github/git-broker";
+import { MANAGED_GIT_BOT } from "../adapters/managed-git-identity";
 import { projectForOwner } from "../adapters/projects";
 import {
 	checkoutBranchArgv,
 	commitAllArgv,
-	configureCommitAuthorArgv,
 	repositoryDirectory,
 } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
@@ -118,17 +116,6 @@ export function publishProject(
 			authorizedRepository(token, project.installationId, project.repositoryId),
 		);
 		const directory = repositoryDirectory(project.fullName);
-		const bot = yield* Effect.tryPromise(() =>
-			resolveGithubAppBot({
-				installationId: project.installationId,
-				repositoryName: project.fullName.split("/")[1],
-			}),
-		);
-		const author = publicationCommitAuthor({
-			name: input.authorName,
-			email: input.authorEmail,
-		});
-		const coAuthor = publicationCoAuthor({ author, bot });
 		const chatBranch = project.isPrimaryRepository ? peeked.session : null;
 		const base =
 			input.baseBranch?.trim() ||
@@ -149,17 +136,19 @@ export function publishProject(
 				throw hostFailure(error, "Workspace is not available.");
 			}),
 		);
-		yield* runGit(
-			runtime,
-			providerRef,
-			configureCommitAuthorArgv(directory, author),
-			{},
-			"Could not set the commit author.",
+		const humanCredit = yield* Effect.promise(() =>
+			githubCommitIdentityForToken(token).catch(() => null),
 		);
 		const committed = yield* runGit(
 			runtime,
 			providerRef,
-			commitAllArgv(directory, input.title, author, coAuthor),
+			commitAllArgv(
+				directory,
+				input.title,
+				MANAGED_GIT_BOT,
+				MANAGED_GIT_BOT,
+				humanCredit,
+			),
 			{},
 			"Commit failed in the workspace.",
 		);

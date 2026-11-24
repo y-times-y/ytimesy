@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
-import { publicationCommitAuthor } from "#/domain/publication";
 import {
 	excludedFilesNote,
 	type WriterPatch,
@@ -11,6 +10,11 @@ import {
 	writerPatchRef,
 } from "#/domain/subagent";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import {
+	MANAGED_GIT,
+	MANAGED_GIT_TRAILER,
+	managedGitSetupCommand,
+} from "../adapters/managed-git-identity";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
@@ -22,27 +26,22 @@ import type { WorkspaceMachines } from "./workspace-machines";
  * and applies with `git apply -3` or a merge; nothing merges automatically.
  */
 
-const GIT =
-	"git -c user.name=ytimesy-agent -c user.email=agent@ytimesy.invalid";
 /** A bundle larger than this is not copied; the patch still is. */
 const MAX_BUNDLE_BASE64 = 24_000_000;
 
 /**
  * Run in the fresh fork: commit what the parent had (uncommitted work
- * included). The fork's checkout gets the identity the builder's turn commits
- * use (automaticTurnCommitArgv), unless the repository already names one, so
- * the writer's own `git commit` does not fail for want of an author.
+ * included). Repair legacy identity in the copied checkout only; the
+ * parent's Git configuration is never touched.
  */
 export function forkBaseScript(cwd: string) {
-	const author = publicationCommitAuthor({});
 	return [
 		"set -e",
 		`cd ${quote(cwd)}`,
-		`git config user.email >/dev/null || git config user.email ${quote(author.email)}`,
-		`git config user.name >/dev/null || git config user.name ${quote(author.name)}`,
+		managedGitSetupCommand(cwd),
 		"parent_head=$(git rev-parse HEAD)",
 		"git add -A",
-		`${GIT} commit -q --no-verify --allow-empty -m "ytimesy fork base"`,
+		`${MANAGED_GIT} commit -q --allow-empty -m "ytimesy fork base" --trailer ${quote(MANAGED_GIT_TRAILER)}`,
 		'echo "$parent_head $(git rev-parse HEAD)"',
 	].join("\n");
 }
@@ -131,7 +130,7 @@ export function writerExportScript(input: {
 					`rm -f ${quote(input.excludeFile)}`,
 				]
 			: []),
-		`if ! git diff --cached --quiet; then ${GIT} commit -q --no-verify -m ${quote(`wip (ytimesy agent ${input.label})`)}; fi`,
+		`if ! git diff --cached --quiet; then ${MANAGED_GIT} commit -q -m ${quote(`wip (ytimesy agent ${input.label})`)} --trailer ${quote(MANAGED_GIT_TRAILER)}; fi`,
 		`rm -rf ${out} && mkdir -p ${out}`,
 		`git diff --binary ${input.base} HEAD > ${out}/patch`,
 		`git diff --numstat ${input.base} HEAD > ${out}/numstat`,
