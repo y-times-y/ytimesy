@@ -151,6 +151,15 @@ it("reads and messages threads against the real schema, refusing everything else
 
 	expect(await read(b)).toContain("PR #12 is ready");
 	expect(await read(b)).toContain('Thread "Fix login"');
+	const number = (
+		await db.query<{ thread_number: number }>(
+			"select thread_number from agent_session where id=$1",
+			[b],
+		)
+	).rows[0]?.thread_number;
+	expect(number).toBeGreaterThan(0);
+	expect(await read(`peer-main-${number}`)).toContain("PR #12 is ready");
+	expect(await read("not-a-thread")).toBe(NO_PEER_THREAD);
 	for (const id of [elsewhere, helper, y2, a, crypto.randomUUID()])
 		expect(await read(id)).toBe(NO_PEER_THREAD);
 	expect(await read(bobThread)).toBe(NO_PEER_THREAD);
