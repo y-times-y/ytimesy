@@ -52,6 +52,27 @@ it("configures fresh managed repos, shares identity with worktrees, and rejects 
 		expect(() =>
 			run("git", ["push", upstream, "HEAD:refs/heads/rejected"]),
 		).toThrow(/unpublished commit does not have the managed Git identity/i);
+		run("git", ["checkout", "--detach", "HEAD^"]);
+		for (const message of [
+			"No trailer",
+			"Wrong credit\n\nCo-authored-by: Other <other@example.test>",
+			`Example\n\nCo-authored-by: ${identity}\n\nThis is body text, not a trailer.`,
+		]) {
+			run("git", [
+				"-c",
+				"core.hooksPath=missing-hooks",
+				...commit.slice(0, -1),
+				message,
+			]);
+			const rejected = run("git", ["rev-parse", "HEAD"]);
+			expect(() =>
+				run("git", ["push", upstream, "HEAD:refs/heads/rejected"]),
+			).toThrow(/unpublished commit/);
+			expect(run("git", ["rev-parse", "HEAD"])).toBe(rejected);
+			expect(run("git", ["ls-remote", upstream, "refs/heads/rejected"])).toBe(
+				"",
+			);
+		}
 		const linked = join(root, "linked checkout");
 		run("git", ["worktree", "add", "-qb", "helper", linked]);
 		run("git", ["-C", linked, ...commit, "--no-verify"]);

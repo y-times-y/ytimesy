@@ -9,6 +9,7 @@ import { redactSecrets } from "#/domain/redact-secrets";
 import {
 	MANAGED_GIT_ENV,
 	MANAGED_GIT_TRAILER,
+	MANAGED_PUSH_REFUSED,
 	managedPushIdentityCheck,
 } from "../managed-git-identity";
 import type { GitTransferHost } from "./git-broker";
@@ -568,7 +569,7 @@ ${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/
 			}
 			const failure =
 				result.exitCode === PUSH_EXIT.identity
-					? "Push refused: an unpublished commit does not have the managed Git identity."
+					? MANAGED_PUSH_REFUSED
 					: result.exitCode === PUSH_EXIT.commit
 						? "Workspace Git could not prepare the commit to push."
 						: WORKFLOW_PUSH_REFUSED_PATTERN.test(stderr)

@@ -8,7 +8,10 @@ export const MANAGED_GIT_BOT = {
 } as const;
 
 export const MANAGED_GIT_TRAILER = commitCoAuthorTrailer(MANAGED_GIT_BOT);
-export const GIT_IDENTITY_FORMAT = "%an <%ae>%x09%cn <%ce>";
+export const MANAGED_PUSH_METADATA_FORMAT =
+	"%an <%ae>%x09%cn <%ce>%n%(trailers:key=Co-authored-by,valueonly,unfold,separator=%x0a)";
+export const MANAGED_PUSH_REFUSED =
+	"Push refused: an unpublished commit does not have the managed Git identity and Co-authored-by trailer required for publication. Keep the original branch and apply its changes as new commits on a fresh managed branch based on a published branch.";
 const identity = `${MANAGED_GIT_BOT.name} <${MANAGED_GIT_BOT.email}>`;
 const bothIdentities = `${identity}	${identity}`;
 const name = quote(MANAGED_GIT_BOT.name);
@@ -66,10 +69,9 @@ ${git} config --local user.useConfigOnly true &&
 ${git} config --local core.hooksPath "$common/ytimesy-hooks"`;
 }
 
-export function allManagedGitIdentities(identities: string) {
-	return identities
-		.split("\n")
-		.every((line) => line === "" || line === bothIdentities);
+export function hasManagedPushMetadata(metadata: string) {
+	const [identities, ...coAuthors] = metadata.split("\n");
+	return identities === bothIdentities && coAuthors.includes(identity);
 }
 
 /** Validate only commits not reachable from the fetched upstream refs, using raw (not mailmapped) identities. */
@@ -88,9 +90,13 @@ function pushIdentityCheck(
 	upstream: string,
 	failureCode: number,
 ) {
-	return `identities=$(${git} --no-replace-objects log --format=${quote(GIT_IDENTITY_FORMAT)} ${tip} --not ${upstream}) || exit ${failureCode}
-if printf '%s\\n' "$identities" | grep -Fvx -e '' -e ${quote(bothIdentities)} >/dev/null; then
-  echo 'Push refused: an unpublished commit does not have the managed Git identity.' >&2
-  exit ${failureCode}
-fi`;
+	return `pending_commits=$(${git} --no-replace-objects rev-list ${tip} --not ${upstream}) || exit ${failureCode}
+for pending_commit in $pending_commits; do
+  metadata=$(${git} --no-replace-objects show -s --format=${quote(MANAGED_PUSH_METADATA_FORMAT)} "$pending_commit") || exit ${failureCode}
+  if [ "$(printf '%s\\n' "$metadata" | head -n 1)" != ${quote(bothIdentities)} ] ||
+     ! printf '%s\\n' "$metadata" | grep -Fx -e ${quote(identity)} >/dev/null; then
+    echo ${quote(MANAGED_PUSH_REFUSED)} >&2
+    exit ${failureCode}
+  fi
+done`;
 }

@@ -164,14 +164,27 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 		await expect(pushBrokeredRepository(host, publish)).rejects.toThrow(
 			/managed Git identity/,
 		);
-		await execute("git", amend, {
+		const botCommitter = {
 			env: {
 				...env,
 				GIT_COMMITTER_NAME: "ytimesy-agent[bot]",
 				GIT_COMMITTER_EMAIL:
 					"328807657+ytimesy-agent[bot]@users.noreply.github.com",
 			},
-		});
+		};
+		await execute("git", amend, botCommitter);
+		const readHead = () => execute("git", ["-C", guest, "rev-parse", "HEAD"]);
+		const before = (await readHead()).stdout;
+		await expect(pushBrokeredRepository(host, publish)).rejects.toThrow(
+			/Co-authored-by trailer/,
+		);
+		expect((await readHead()).stdout).toBe(before);
+		expect((await git("branch", "--list", "feature")).stdout).toBe("");
+		await execute(
+			"git",
+			[...amend, "--trailer", `Co-authored-by: ${bot}`],
+			botCommitter,
+		);
 		await pushBrokeredRepository(host, publish);
 		expect((await git("show", "feature:file")).stdout).toBe("changed");
 		const revision = `refs/ytimesy/turn-commits/${"a".repeat(64)}`;

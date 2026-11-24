@@ -13,8 +13,9 @@ import { posixShellQuoted as quote } from "#/domain/posix-command";
 export { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
 
 import {
-	allManagedGitIdentities,
-	GIT_IDENTITY_FORMAT,
+	hasManagedPushMetadata,
+	MANAGED_PUSH_METADATA_FORMAT,
+	MANAGED_PUSH_REFUSED,
 } from "../managed-git-identity";
 import {
 	gitProxyConfiguration,
@@ -312,20 +313,28 @@ base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
 			],
 			token,
 		);
-		const identities = await git([
+		const commits = await git([
 			"-C",
 			"repo.git",
 			"--no-replace-objects",
-			"log",
-			`--format=${GIT_IDENTITY_FORMAT}`,
+			"rev-list",
 			"refs/heads/publish",
 			"--not",
 			"--glob=refs/ytimesy/upstream/*",
 		]);
-		if (!allManagedGitIdentities(identities))
-			throw new Error(
-				"Push refused: an unpublished commit does not have the managed Git identity.",
-			);
+		for (const commit of commits.split("\n").filter(Boolean)) {
+			const metadata = await git([
+				"-C",
+				"repo.git",
+				"--no-replace-objects",
+				"show",
+				"-s",
+				`--format=${MANAGED_PUSH_METADATA_FORMAT}`,
+				commit,
+			]);
+			if (!hasManagedPushMetadata(metadata))
+				throw new Error(MANAGED_PUSH_REFUSED);
+		}
 		await git(
 			[
 				"-C",
