@@ -960,7 +960,7 @@ it("fails expired leases instead of replaying uncertain side effects", async () 
 	// A box-run turn is handed to another box a few times first
 	// (requeueInterruptedBoxTurns); once those are used up, or for any other
 	// executor, a lost turn is failed, never replayed.
-	await db.exec("update api_turn set run_attempts=3");
+	await db.exec("update api_turn set run_attempts=10");
 	await db.exec("update api_turn set heartbeat_at=now()-interval '1 minute'");
 	await expireApiTurnLeases();
 	expect(await claimApiTurn()).toBeNull();

@@ -37,6 +37,7 @@ import {
 import { Y_SQUARED_CLAUDE_CODE_REFUSAL } from "#/domain/y-squared";
 import { withoutViewedImages } from "#/domain/y-squared-images";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
+import { reportInterruption } from "../services/interruption-monitoring";
 import { withStepTrace } from "../services/step-timing";
 import {
 	captureTurnFinished,
@@ -1400,7 +1401,30 @@ export async function abandonApiTurn(turnId: string, leaseId: string) {
 		[turnId, leaseId, ABANDONED_TURN_MESSAGE],
 	);
 	captureSettledTurns(result.rows ?? []);
+	await reportSettledInterruptions(result.rows ?? [], "executor-stopped");
 	return (result.rows?.length ?? 0) > 0;
+}
+
+/**
+ * Turns failed for an infrastructure cause: one interruption each, which
+ * the user saw (the chat shows the error item). Best effort, never throws.
+ */
+async function reportSettledInterruptions(
+	rows: readonly Pick<SettledTurnRow, "turn_id" | "session_id">[],
+	cause: string,
+) {
+	await Promise.all(
+		rows.map((row) =>
+			reportInterruption({
+				kind: "turn-abandoned",
+				turnId: row.turn_id,
+				sessionId: row.session_id,
+				cause,
+				recovered: false,
+				userVisible: true,
+			}),
+		),
+	);
 }
 
 /**
@@ -1453,8 +1477,12 @@ export async function readRunningApiTurnIdentity(
 	return result.rows[0] ?? null;
 }
 
-/** How many times a box-run turn is handed to another box after its box stopped heartbeating. */
-export const MAX_BOX_TURN_TAKEOVERS = 3;
+/**
+ * How many times a box-run turn is handed to another box after its box stopped
+ * heartbeating. Each takeover resumes from a checkpoint, so a fleet replacement
+ * or a few crashes in a row must not fail a turn (was 3).
+ */
+export const MAX_BOX_TURN_TAKEOVERS = 10;
 
 /**
  * A turn running on a box whose heartbeat stopped (the box died, lost its
@@ -1467,8 +1495,21 @@ export async function requeueInterruptedBoxTurns() {
 	const result = await database().query(
 		`update api_turn set state='queued',run_attempts=run_attempts+1,updated_at=now()
 		 where state='running' and executor='node' and not cancel_requested
-		 and run_attempts < $1 and heartbeat_at < now()-interval '45 seconds'`,
+		 and run_attempts < $1 and heartbeat_at < now()-interval '45 seconds' returning id,session_id`,
 		[MAX_BOX_TURN_TAKEOVERS],
+	);
+	// Another box resumes each of these from its saved progress.
+	await Promise.all(
+		result.rows.map((row: { id: string; session_id: string }) =>
+			reportInterruption({
+				kind: "lease-takeover",
+				turnId: row.id,
+				sessionId: row.session_id,
+				cause: "box-heartbeat-lost",
+				recovered: true,
+				userVisible: false,
+			}),
+		),
 	);
 	return result.rowCount ?? 0;
 }
@@ -1485,6 +1526,7 @@ export async function expireApiTurnLeases() {
 	 task_state=case when parent_session_id is null then task_state else 'failed' end,updated_at=now()
 	 from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`);
 	captureSettledTurns(result.rows ?? []);
+	await reportSettledInterruptions(result.rows ?? [], "lease-expired");
 	// No executor is left to tell the chat (its object or box stopped): the
 	// crew and the user's hub would show these turns working for good.
 	await noteTurnsSettledElsewhere(
