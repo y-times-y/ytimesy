@@ -5825,19 +5825,28 @@ details.environment-build[open] > summary .session-activity-chevron {
    or a pull request as a compact chip in running text, an event as one
    quiet centered line, and a thread's status as prose behind a small icon. Chips keep the reply's 13px text and 18px line, so a
    line with a chip is as tall as one without; the label sits on the text
-   baseline and a long thread title ends in an ellipsis instead of wrapping. */
+   baseline and a long thread title ends in an ellipsis instead of wrapping.
+   A chip never leaves its container (a message bubble, a narrow phone
+   column): it is a flex row that shrinks, the mark and the id keep their size
+   and the title takes what is left and ends in an ellipsis. */
 .reference-chip-label {
-	display: inline-block;
+	display: block;
+	flex: 0 1 auto;
+	min-width: 0;
 	max-width: 240px;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	vertical-align: top;
+	white-space: nowrap;
+}
+.reference-chip > .thread-mark,
+.reference-chip-icon {
+	align-self: flex-start;
 }
 .reference-chip-icon {
-	display: inline-block;
+	display: block;
+	flex: 0 0 auto;
 	margin-top: 2.5px;
 	margin-right: 4px;
-	vertical-align: top;
 }
 .session-event-icon {
 	flex-shrink: 0;
@@ -5845,8 +5854,13 @@ details.environment-build[open] > summary .session-activity-chevron {
 }
 .session-markdown a.reference-chip,
 .mention-text a.reference-chip {
-	display: inline-block;
+	display: inline-flex;
+	/* The id and the title share a text baseline, as they did inline. */
+	align-items: baseline;
+	box-sizing: border-box;
+	min-width: 0;
 	max-width: 100%;
+	overflow: hidden;
 	height: 18px;
 	padding: 0 5px;
 	border-radius: 5px;
@@ -5857,7 +5871,9 @@ details.environment-build[open] > summary .session-activity-chevron {
 	text-decoration: none;
 	white-space: nowrap;
 	overflow-wrap: normal;
-	vertical-align: baseline;
+	/* Not baseline: a box that clips takes its bottom edge for a baseline. The
+	   chip is as tall as the text's line, so top aligns it with the text. */
+	vertical-align: top;
 }
 .session-markdown a.reference-chip:hover,
 .mention-text a.reference-chip:hover {
@@ -6036,12 +6052,17 @@ details.environment-build[open] > summary .session-activity-chevron {
 }
 .reference-chip-group {
 	display: inline-flex;
+	min-width: 0;
 	max-width: 100%;
 	align-items: baseline;
 	gap: 1px;
 	vertical-align: baseline;
 }
+.reference-chip-group > a.reference-chip {
+	flex: 0 1 auto;
+}
 .reference-chip-id {
+	flex: 0 0 auto;
 	margin-right: 5px;
 	font-family: var(--font-mono, ui-monospace, monospace);
 	font-size: 11px;
