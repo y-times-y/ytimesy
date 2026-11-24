@@ -132,6 +132,14 @@ try {
 				// itself; --preflight-only never reaches it.
 				SUPABASE_CA_CERT: process.env.SUPABASE_CA_CERT,
 				YTIMESY_GO_LIVE: "1",
+				// Who uploads the Workers, and the one-time takeover of Workers made
+				// before the infra/alchemy stacks existed (docs/infrastructure-as-code.md).
+				...(process.env.YTIMESY_DEPLOY_ENGINE
+					? { YTIMESY_DEPLOY_ENGINE: process.env.YTIMESY_DEPLOY_ENGINE }
+					: {}),
+				...(process.env.YTIMESY_INFRA_ADOPT
+					? { YTIMESY_INFRA_ADOPT: process.env.YTIMESY_INFRA_ADOPT }
+					: {}),
 				...(overlay ? { YTIMESY_PRODUCTION_OVERLAY: overlay } : {}),
 			},
 		},
