@@ -51,6 +51,8 @@ import {
 	runMemoryDream,
 	runMemorySave,
 } from "./memory-jobs";
+import { productionCanary } from "./interruption-canary";
+import { runInterruptionMonitoring } from "./interruption-monitoring";
 import {
 	alertAbandonedTurns,
 	alertFailedEmails,
@@ -174,6 +176,13 @@ export async function deliverBackgroundJob(
 							run: () => releaseReplacedTemplateSnapshots(client),
 						},
 						{ name: "fleet-budget", run: () => alertFleetBudget() },
+						// Daily digest and the synthetic canary ride this tick
+						// (docs/interruption-monitoring.md); never fails the job.
+						{
+							name: "interruption-monitoring",
+							run: () =>
+								runInterruptionMonitoring(new Date(), productionCanary(machines)),
+						},
 					]);
 					break;
 				}

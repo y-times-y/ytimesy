@@ -5,7 +5,17 @@ import { ApiTurnCancelled } from "#/domain/api-turn-failure";
 import { MAX_WORKFLOW_MODEL_STEPS } from "#/domain/model-workflow";
 import { TURN_BOX_CLAIM_WAIT_MS } from "#/domain/turn-box-protocol";
 import { configuredTurnExecutor } from "#/domain/turn-executor";
+import {
+	isEdgeOutage,
+	isTransientInfrastructureFailure,
+	shouldRetryStep,
+	stepRetryDelayMs,
+} from "#/domain/turn-interruption";
 import type { ApiTurn } from "../adapters/api-turns";
+import {
+	isCutConnection,
+	isPlatformRestart,
+} from "../adapters/freestyle/provider-retry";
 import type { GuestExec } from "../claude-box-tools/identity-machines";
 import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
 import { registerRemoteCommandReceipts } from "../services/remote-command-receipts";
@@ -83,6 +93,7 @@ export async function runBoxTurn(
 	let turn = claimed;
 	let resumed = (claimed.run_attempts ?? 0) > 0;
 	let failures = 0;
+	let firstFailureAt = 0;
 	for (let index = 1; ; ) {
 		try {
 			const outcome = await run(machines, turn, {
@@ -94,6 +105,7 @@ export async function runBoxTurn(
 			});
 			if (outcome !== "continue") return outcome;
 			failures = 0;
+			firstFailureAt = 0;
 			index++;
 			resumed = false;
 		} catch (error) {
@@ -102,8 +114,20 @@ export async function runBoxTurn(
 				() => null,
 			);
 			if (!current) throw error;
-			if (++failures > MAX_BOX_STEP_RETRIES) {
-				console.warn("Box turn kept failing; turn abandoned.", { index });
+			// An infrastructure failure (the coordinator, the edge, a cut
+			// connection) is waited out with backoff, never settled as failed.
+			const transient =
+				isTransientInfrastructureFailure(error) ||
+				isCutConnection(error) ||
+				isPlatformRestart(error) ||
+				isEdgeOutage(error);
+			const now = Date.now();
+			if (++failures === 1 || !firstFailureAt) firstFailureAt = now;
+			if (!shouldRetryStep({ transient, failures, firstFailureAt, now })) {
+				console.warn("Box turn kept failing; turn abandoned.", {
+					index,
+					transient,
+				});
 				await abandon(turn.id, leaseId).catch(() => false);
 				throw error;
 			}
@@ -111,7 +135,7 @@ export async function runBoxTurn(
 				index,
 				cause: error instanceof Error ? error.name : "unknown",
 			});
-			await pause(5_000 * failures);
+			await pause(transient ? stepRetryDelayMs(failures) : 5_000 * failures);
 			resumed = true;
 		}
 		const next = await reread(turn.id, leaseId);

@@ -321,6 +321,10 @@ import {
 import { ySquaredTools } from "../services/y-squared-tools";
 import { yTools } from "../services/y-tools";
 
+import {
+	isEdgeOutage,
+	isTransientInfrastructureFailure,
+} from "#/domain/turn-interruption";
 import type { TurnPorts } from "./turn-ports";
 
 /**
@@ -377,14 +381,6 @@ async function acquireConversationTurn(
  * the edge was briefly unavailable (2026-11-22/23: 4 box turns failed this
  * way, reported as "the model request failed"). The box retries the step.
  */
-function isEdgeOutage(error: unknown) {
-	const refused = error as { name?: unknown; status?: unknown } | null;
-	return (
-		refused?.name === "TurnBoxVmRefused" &&
-		typeof refused.status === "number" &&
-		refused.status >= 500
-	);
-}
 
 /** The person pressed Stop: that ends the turn even if a connection was cut too. */
 function userStopped(reason: unknown) {
@@ -3634,12 +3630,18 @@ async function runApiTurnAttempt(
 		// provider stream may report only "Model run cancelled" after the abort.
 		// A cut connection resumes only where an executor retries the step
 		// (a chat object or a box), and never over the person's own Stop.
-		const platformRestart = [error, abort.signal.reason].find(
+		const platformRestart = [
+			error,
+			abort.signal.reason,
+			coordinationFailure,
+		].find(
 			(cause) =>
 				isPlatformRestart(cause) ||
 				(!!step &&
 					!userStopped(abort.signal.reason) &&
-					(isCutConnection(cause) || isEdgeOutage(cause))),
+					(isCutConnection(cause) ||
+						isEdgeOutage(cause) ||
+						isTransientInfrastructureFailure(cause))),
 		);
 		if (platformRestart) {
 			// One line per interruption, so they are counted without anyone
@@ -3654,7 +3656,9 @@ async function runApiTurnAttempt(
 						? "reset"
 						: isEdgeOutage(platformRestart)
 							? "edge-outage"
-							: "connection",
+							: isTransientInfrastructureFailure(platformRestart)
+								? "coordination"
+								: "connection",
 					executor: step ? "step" : "local",
 				}),
 			);

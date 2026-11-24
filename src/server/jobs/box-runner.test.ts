@@ -7,6 +7,8 @@ vi.mock("./conversation-delivery", () => ({
 	relayConversationDeliveriesOnce: vi.fn(async () => undefined),
 }));
 
+import { CoordinationFailure } from "#/domain/conversation-turn-control";
+import { TRANSIENT_RETRY_WINDOW_MS } from "#/domain/turn-interruption";
 import { MAX_BOX_STEP_RETRIES, runBoxTurn } from "./box-runner";
 
 const machines = {} as WorkspaceMachines;
@@ -41,7 +43,7 @@ const deps = (
 		async () => (rereads.length ? rereads.shift() : turn()) as ApiTurn | null,
 	);
 	const abandon = vi.fn(async () => true);
-	const pause = vi.fn(async () => undefined);
+	const pause = vi.fn(async (_ms: number) => undefined);
 	return {
 		calls,
 		d: { run, reread, abandon, pause } as never,
@@ -95,6 +97,68 @@ describe("runBoxTurn", () => {
 		);
 		expect(bad.abandon).toHaveBeenCalledWith("t1", "lease-1");
 		expect(bad.run).toHaveBeenCalledTimes(MAX_BOX_STEP_RETRIES + 1);
+	});
+
+	it("rides out a 10-minute coordinator outage with backoff and completes the turn (fault injection)", async () => {
+		const outage = () =>
+			Promise.reject(
+				new CoordinationFailure(
+					"renew",
+					{ kind: "transport", category: "timeout" },
+					3,
+				),
+			);
+		const runs = [
+			...Array.from({ length: 12 }, () => outage),
+			async () => "completed",
+		];
+		const clock = vi.spyOn(Date, "now");
+		let now = 1_000_000;
+		clock.mockImplementation(() => now);
+		try {
+			const d = deps(runs);
+			d.pause.mockImplementation(async (ms: number) => {
+				now += ms;
+			});
+			await expect(runBoxTurn(machines, turn(), d.d)).resolves.toBe(
+				"completed",
+			);
+			expect(d.abandon).not.toHaveBeenCalled();
+			expect(d.run).toHaveBeenCalledTimes(13);
+			// Backoff grows to its cap; every retry after the first is a resumed step.
+			const waits = d.pause.mock.calls.map((call) => call[0]);
+			expect(waits.slice(0, 5)).toEqual([
+				5_000, 10_000, 20_000, 40_000, 60_000,
+			]);
+			expect(Math.max(...waits)).toBe(60_000);
+			expect(now - 1_000_000).toBeGreaterThan(60_000 * 5);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("gives up on an outage only after the whole window, and then fails the turn", async () => {
+		const clock = vi.spyOn(Date, "now");
+		let now = 0;
+		clock.mockImplementation(() => now);
+		try {
+			const outage = () =>
+				Promise.reject(
+					Object.assign(new Error("x"), {
+						name: "TurnBoxVmRefused",
+						status: 503,
+					}),
+				);
+			const d = deps(Array.from({ length: 100 }, () => outage));
+			d.pause.mockImplementation(async (ms: number) => {
+				now += ms;
+			});
+			await expect(runBoxTurn(machines, turn(), d.d)).rejects.toThrow();
+			expect(now).toBeGreaterThanOrEqual(TRANSIENT_RETRY_WINDOW_MS - 60_000);
+			expect(d.abandon).toHaveBeenCalledOnce();
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("does not retry a turn it no longer owns (stopped, finished, taken over)", async () => {

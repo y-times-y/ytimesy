@@ -2170,14 +2170,14 @@ it("gives up acquiring a chat that stays held past a whole retirement and lease,
 		expect(await run).toBe("failed");
 		expect(mocks.runtime).not.toHaveBeenCalled();
 		expect(JSON.stringify(mocks.finalize.mock.calls[0]?.[2])).toContain(
-			"Nothing ran and nothing was lost",
+			"Nothing ran and your message is saved",
 		);
 	} finally {
 		vi.useRealTimers();
 	}
 });
 
-it("gives up after one lease period on a later step, whose lease is gone", async () => {
+it("a later step whose lease is refused is resumed by its executor, not failed", async () => {
 	vi.useFakeTimers();
 	try {
 		vi.mocked(coordinateConversationTurn).mockImplementation(
@@ -2187,8 +2187,15 @@ it("gives up after one lease period on a later step, whose lease is gone", async
 			index: 2,
 			signal: new AbortController().signal,
 		});
+		const settled = run.then(
+			() => "returned",
+			(error: unknown) => (error as Error).message,
+		);
 		await vi.advanceTimersByTimeAsync(40_000);
-		expect(await run).toBe("failed");
+		expect(await settled).toBe(
+			"The conversation is already running or was stopped.",
+		);
+		expect(mocks.finalize).not.toHaveBeenCalled();
 	} finally {
 		vi.useRealTimers();
 	}
