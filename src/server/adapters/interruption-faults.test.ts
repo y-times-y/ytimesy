@@ -393,6 +393,25 @@ it("(2) the box dies mid-turn: requeued with its checkpoint, a second box takes 
 	await expectNothingLost(["build it", "also this"]);
 });
 
+it("a claimed turn with a fresh heartbeat is not recovered just because its claim is old", async () => {
+	await sendMessage("prepare the orchard");
+	const first = await claimed();
+	await db.query(
+		"update api_turn set updated_at=now()-interval '90 seconds', heartbeat_at=now() where id=$1",
+		[first.id],
+	);
+
+	// An empty checkpoint does not distinguish an unstarted turn from a model
+	// request or external operation whose result has not yet been saved.
+	expect(await requeueInterruptedBoxTurns()).toBe(0);
+	expect(await claim()).toBeNull();
+	expect((await turns())[0]).toMatchObject({
+		state: "running",
+		run_attempts: 0,
+	});
+	expect(await renewApiTurn(first)).toBe(true);
+});
+
 it("(3) a zombie 'running' turn with a stale heartbeat blocks a send: the message queues, never errors, and is delivered after takeover", async () => {
 	await sendMessage("long job");
 	await claimed();
