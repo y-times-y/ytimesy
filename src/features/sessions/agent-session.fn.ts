@@ -286,6 +286,51 @@ export const sendHelperMessage = createServerFn({ method: "POST" })
 		return sendUserMessageToHelper({ userId: user.id, ...data });
 	});
 
+const inboxThreadInput = z.object({
+	projectId: z.string().uuid(),
+	threadId: z.string().uuid(),
+});
+
+/**
+ * The open question or secret request of one thread, for the Super agent's
+ * inbox: read when the person opens the row, never on a timer.
+ */
+export const readThreadAskFn = createServerFn({ method: "GET" })
+	.validator((data: unknown) => inboxThreadInput.parse(data))
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		const { readThreadAsk } = await import("#/server/services/thread-inbox");
+		return readThreadAsk({ userId: user.id, ...data });
+	});
+
+/**
+ * The person's answer to a thread from the Super agent's inbox: sent to the
+ * thread as their own message (the composer's Send path), never through Y².
+ */
+export const answerThreadFn = createServerFn({ method: "POST" })
+	.validator((data: unknown) =>
+		inboxThreadInput
+			.extend({
+				text: z.string().trim().min(1).max(4_000),
+				answerId: z.string().uuid().optional(),
+			})
+			.parse(data),
+	)
+	.handler(async ({ data }) => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		const { answerThread } = await import("#/server/services/thread-inbox");
+		return runWithMachines("Answer thread", publicFailureMessage, (machines) =>
+			answerThread(machines, {
+				userId: user.id,
+				projectId: data.projectId,
+				threadId: data.threadId,
+				text: data.text,
+				...(data.answerId ? { idempotencyKey: data.answerId } : {}),
+			}),
+		);
+	});
+
 export const deleteProjectAgentSession = createServerFn({ method: "POST" })
 	.validator((data: { projectId?: string; sessionId?: string }) => {
 		const projectId = data.projectId?.trim() ?? "";

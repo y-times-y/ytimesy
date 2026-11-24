@@ -354,6 +354,7 @@ export class SqliteYSquaredCrew {
 			existing.pr_url === note.prUrl &&
 			// A turn that showed a canvas is news even when its reply is the same.
 			!note.canvas &&
+			!note.ask &&
 			// A working note carries no reply: keep the last one shown.
 			(note.state === "working" || existing.last_reply === reply) &&
 			// A start note may carry no request: keep the last one.
@@ -442,6 +443,8 @@ export class SqliteYSquaredCrew {
 								: note.prUrl
 									? `pull request ${note.prUrl}`
 									: null,
+							// What it asks: the question and options, or the secrets' names.
+							note.ask,
 							// One line from titles and revisions the thread already held.
 							note.canvas,
 						]

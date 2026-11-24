@@ -6,7 +6,7 @@ Status 2026-11-12: built behind a per-project switch (Project settings → Y →
 
 | Layer | One per | Does | Tools |
 |---|---|---|---|
-| **Y²** | project | Watches every thread and tells the person what is going on: what needs them, what is working, what finished with its pull request. Never works. | `threads`, `thread`, `start_thread`, `message_thread`, `stop_thread`, `schedule`, `view_image`, `ask_user` (`src/domain/y-squared.ts`, `src/server/services/y-squared-tools.ts`) |
+| **Y²** | project | Watches every thread and tells the person what is going on: what needs them, what is working, what finished with its pull request. Never works. | `threads`, `thread`, `start_thread`, `message_thread`, `stop_thread`, `retry_thread`, `archive_thread`, `schedule`, `view_image`, `ask_user` (`src/domain/y-squared.ts`, `src/server/services/y-squared-tools.ts`) |
 | **Y** | thread (chat) | The agent the person talks to. Hands every change to builders, asks readers for code facts, reports in ≤100 words. Never changes, runs or reads code. | `agent`, `agent_send`, `ask_user`, `request_project_secret` (`src/domain/y-agent.ts`) |
 | **Builders** | piece of work | Today's builder harness as writer subagents on forks of the thread's VM. Not conversational: brief in, report out. | the full harness |
 | **Subagents** | — | Bounded helpers under a builder, as before. | as before |
@@ -57,6 +57,15 @@ Y² does not read thread transcripts. Each Y project has one `YSquaredCrew` Dura
 - **No user MCP servers.** A Y² turn never loads the user's configured MCP servers (`runApiTurn` skips `connectableMcpServers` for Y²) and so never adds the "MCP servers unavailable this turn" notice; on the Claude runner-box route only ytimesy's bridge server is in `mcp.json` (the runner already sets `strictMcpConfig`). `noteThread` accepts the first deploy's older shapes (`turnStatus`, `pullRequest`, `reply`).
 
 Cost per thread-turn (the new columns ride the same upsert): 2 notes (start, settle) = **2 crew requests** (3 when it ends on a card for the person: the waiting hint), ≤2 row writes plus ≤2 `wake_state` / `wake_events` writes. A wake adds 1 alarm invocation, ≤3 `wake_state` writes, one normal Y² turn (model cost: API tokens, or the person's plan usage on the Claude runner) and its `threads` read (1 request). A Y² `start_thread` / `message_thread` adds 1 mark request. A Y² overview read is 1 request, 0 writes.
+
+## Needs-you inbox and cleanup (2026-11-24)
+
+From the Capy Captain study (docs/research/y2-captain-ux-study.md).
+
+- **Inline answers.** The Overview beside the Y² chat (`y-overview.tsx`) shows, under each Needs-you row, `YInboxControls` (`y-inbox-controls.tsx`): *Answer here* (a thread's `ask_user` question, rendered with the thread's own `UserQuestionCard`), *Enter it here* (a requested secret, `SecretRequestCard`; each value goes to `saveProjectSecretFn`, i.e. project settings, never a model, a transcript or a log; the thread is told only the names saved or skipped) and *Retry* (a failed thread). Pushes and plans keep the thread's own card (no inline control). The answer is the person's own message to the thread: `answerThreadFn` → `answerThread` (`src/server/services/thread-inbox.ts`) → `sendComposerMessage`, the composer's Send path, on the thread's own model; it never goes through Y²'s model. The open question is read (`readThreadAskFn` → `openThreadAsk`, one page of that thread) only when the person opens the row: no timer, no new Durable Object request.
+- **Wake carries the ask.** A waiting thread's settle note carries `ask` (`crewAskLine`, from items the chat already holds): the first question with its option labels, or the secret NAMES. It rides the wake line (not stored in the rows), so Y² can put the question to the person without reading the thread.
+- **Cleanup tools.** `retry_thread(id)` (only a thread whose last turn failed; sends "Your last turn failed. Retry it…" through the send path) and `archive_thread(id)` (`archiveOwned`, restorable in Settings > Archived; refused for a working thread, one waiting on the person, or one with a pull request). The instructions limit retry to one per cause and archiving to one summary line. Both are read-only to the workspace (turn-saving) and not given to anything but Y².
+- **Skipped heartbeats.** See Heartbeat above.
 
 ## Staying in the loop
 
