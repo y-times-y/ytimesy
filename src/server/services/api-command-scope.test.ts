@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
+import { SOURCE_AGENT_SECRETS } from "#/domain/project-secret";
 import { scopedShellCommand, stopApiTurnCommands } from "./api-command-scope";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -136,7 +137,10 @@ it("keeps quote-heavy scripts linear in size through nested shell layers", () =>
 	// Wrap it the way tmux, bash -lc and docker exec do: quote it twice more.
 	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 	const nested = quote(quote(scoped));
-	expect(scoped).toContain(Buffer.from(script).toString("base64"));
+	// The script travels base64-encoded after the env-file loader line.
+	expect(scoped).toContain(
+		Buffer.from(`${SOURCE_AGENT_SECRETS}\n${script}`).toString("base64"),
+	);
 	expect(nested.length).toBeLessThan(scoped.length * 2);
 	expect(nested.length).toBeLessThan(script.length * 4 + 8_000);
 });

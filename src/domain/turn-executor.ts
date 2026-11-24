@@ -64,6 +64,7 @@ export type BoxTurnBlock =
 	| "subagent"
 	| "evaluation"
 	| "runtime-secrets"
+	| "fresh-machine-secrets"
 	| "lead-fusion";
 
 /** Whether turn boxes may run chats whose project or account holds runtime secrets. */
@@ -85,6 +86,13 @@ export function boxTurnBlock(
 		readonly ySquared?: boolean;
 		/** Harness variant lead=fusion (its sidekick work is not served to a box). */
 		readonly leadFusion?: boolean;
+		/**
+		 * The chat has no machine yet (its first turn). A box would boot one,
+		 * find it cannot redact the runtime secrets and hand the turn to the
+		 * chat's object, which queues and locks all over again: with runtime
+		 * secrets the turn goes to the object at once.
+		 */
+		readonly freshMachine?: boolean;
 	},
 	env: {
 		readonly YTIMESY_TURN_BOX_SECRETS?: string;
@@ -96,6 +104,8 @@ export function boxTurnBlock(
 	if (facts.leadFusion) return "lead-fusion";
 	if (facts.hasRuntimeSecrets && !turnBoxSecretsAllowed(env))
 		return "runtime-secrets";
+	if (facts.hasRuntimeSecrets && facts.freshMachine)
+		return "fresh-machine-secrets";
 	return null;
 }
 

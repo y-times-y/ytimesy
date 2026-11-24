@@ -5,8 +5,15 @@ import { isReaderRole, type SubagentRole } from "./subagent";
  * Where a task VM keeps the project's environment variables and runtime
  * secrets. One fixed path, because agent commands, services and commits run
  * through execs whose $HOME can differ. The directory is private (0700).
+ *
+ * Not under /tmp: the VM image (Ubuntu) empties /tmp on every boot
+ * (`D /tmp` in tmpfiles.d), so a chat whose VM was stopped and started again
+ * lost its secrets while its turn still counted them as written; /var/tmp is
+ * kept across reboots.
  */
-export const AGENT_SECRETS_DIRECTORY = "/tmp/ytimesy-secrets";
+export const AGENT_SECRETS_DIRECTORY = "/var/tmp/ytimesy-secrets";
+/** Where VMs prepared before 2026-11-23 keep them; scrubbed with the current one. */
+export const LEGACY_AGENT_SECRETS_DIRECTORY = "/tmp/ytimesy-secrets";
 export const AGENT_SECRETS_ENV_PATH = `${AGENT_SECRETS_DIRECTORY}/agent.env`;
 
 /**
@@ -40,14 +47,22 @@ export class ProjectSecretsPreparationFailure extends Error {
 }
 
 /** Shell that loads the project's variables when present. */
-export const SOURCE_AGENT_SECRETS = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then . ${AGENT_SECRETS_ENV_PATH}; fi`;
+export const SOURCE_AGENT_SECRETS = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then . ${AGENT_SECRETS_ENV_PATH}; elif [ -r ${LEGACY_AGENT_SECRETS_DIRECTORY}/agent.env ]; then . ${LEGACY_AGENT_SECRETS_DIRECTORY}/agent.env; fi`;
+
+/**
+ * Points the legacy path at the current directory, so a box still running a
+ * program from before the move (it sources the legacy path until it updates)
+ * reads the file the edge now writes. Never replaces a real legacy
+ * directory; /tmp is emptied on boot, so the link only lasts until then.
+ */
+export const LINK_LEGACY_AGENT_SECRETS = `if [ ! -e ${LEGACY_AGENT_SECRETS_DIRECTORY} ] || [ -L ${LEGACY_AGENT_SECRETS_DIRECTORY} ]; then ln -sfn ${AGENT_SECRETS_DIRECTORY} ${LEGACY_AGENT_SECRETS_DIRECTORY} 2>/dev/null || true; fi`;
 
 /**
  * Shell run before any VM snapshot: deletes the env file and proves it is gone,
  * so plaintext values never land in a reusable or retained image. The next turn
  * writes the file again.
  */
-export const SCRUB_AGENT_SECRETS = `rm -rf ${AGENT_SECRETS_DIRECTORY} && test ! -e ${AGENT_SECRETS_DIRECTORY}`;
+export const SCRUB_AGENT_SECRETS = `rm -rf ${AGENT_SECRETS_DIRECTORY} ${LEGACY_AGENT_SECRETS_DIRECTORY} && test ! -e ${AGENT_SECRETS_DIRECTORY} && test ! -e ${LEGACY_AGENT_SECRETS_DIRECTORY}`;
 
 /** Holds the names of the runtime secrets in the env file, for the commit guard. */
 const REDACTED_NAMES_VARIABLE = "YTIMESY_REDACTED_SECRETS";

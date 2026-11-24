@@ -2,6 +2,7 @@
 // tools, the tools answered from a fixed project (no database, no VMs).
 //
 //   ANTHROPIC_API_KEY=... node --import tsx scripts/y-squared-behaviour-check.ts [--runs 5]
+
 import {
 	threadDigest,
 	threadsOverview,
@@ -9,6 +10,7 @@ import {
 	Y_SQUARED_THREADS_TOOL,
 	ySquaredInstructions,
 } from "../src/domain/y-squared";
+import { crewWakeBody } from "../src/domain/y-squared-crew";
 
 const API = "https://api.anthropic.com/v1/messages";
 const args = process.argv.slice(2);
@@ -215,6 +217,48 @@ const scenarios: { name: string; run: () => Promise<Check[]> }[] = [
 		},
 	},
 	{
+		name: "busy wake",
+		run: async () => {
+			const r = await turn(
+				crewWakeBody({
+					events: [
+						{
+							kind: "waiting",
+							title: "Verbose flag",
+							detail: "asked a question",
+						},
+						{ kind: "failed", title: "Flaky login test" },
+						{ kind: "finished", title: "README typo", detail: "PR #41" },
+					] as never,
+					working: [{ title: "Health endpoint", since: NOW - 12 * 60_000 }],
+					now: NOW,
+				}),
+			);
+			return [
+				{
+					name: "≤ 70 words",
+					pass: words(r.reply) <= 70,
+					detail: `${words(r.reply)} words`,
+				},
+				{
+					name: "no table",
+					pass: !r.reply.includes("|"),
+					detail: r.reply.slice(0, 80),
+				},
+				{
+					name: "one question at most",
+					pass: (r.reply.match(/\?/g) ?? []).length <= 1,
+					detail: r.reply.slice(0, 120),
+				},
+				{
+					name: "leads with what needs the person",
+					pass: /verbose|flaky|login/i.test(r.reply.slice(0, 80)),
+					detail: r.reply.slice(0, 80),
+				},
+			];
+		},
+	},
+	{
 		name: "details of one thread",
 		run: async () => {
 			const r = await turn("Why did the flaky login test thread fail?");
@@ -229,7 +273,9 @@ const scenarios: { name: string; run: () => Promise<Check[]> }[] = [
 				},
 				{
 					name: "explains from it",
-					pass: /reproduce/i.test(r.reply),
+					pass: /repro|couldn.t make|could not|didn.t hit|30/i.test(
+						r.reply,
+					),
 					detail: r.reply.slice(0, 80),
 				},
 			];

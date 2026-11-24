@@ -64,10 +64,12 @@ export async function boxRoutingFacts(userId: string, sessionId: string) {
 		child: boolean;
 		runtime_secrets: boolean;
 		y_squared: boolean;
+		fresh_machine: boolean;
 	}>(
 		`select (s.parent_session_id is not null and s.agent_role is null) as subagent,
 		 (s.parent_session_id is not null) as child,
 		 (s.chat_role is not distinct from 'y2') as y_squared,
+		 (s.provider_ref is null) as fresh_machine,
 		 (exists(select 1 from project_secret ps where ps.project_id=s.project_id and ps.kind='runtime')
 		  or exists(select 1 from account_secret a where a.user_id=s.user_id and a.kind='runtime')) as runtime_secrets
 		 from agent_session s where s.id=$1 and s.user_id=$2`,
@@ -80,5 +82,7 @@ export async function boxRoutingFacts(userId: string, sessionId: string) {
 		child: row?.child ?? true,
 		hasRuntimeSecrets: row?.runtime_secrets ?? false,
 		ySquared: row?.y_squared ?? false,
+		/** No machine of its own yet: its first turn boots one. */
+		freshMachine: row?.fresh_machine ?? false,
 	};
 }

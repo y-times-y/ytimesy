@@ -27,6 +27,7 @@ import {
 	routeConnectionKey,
 	routeKey,
 	SUBSCRIPTION_KEY,
+	stickyFallbackKey,
 	type TurnFailover,
 	turnFailover,
 	turnFailoverPolicy,
@@ -37,6 +38,10 @@ import { hasClaudeSubscription } from "../adapters/claude-subscription";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { listModelConnections } from "../adapters/model-connections";
 import { loadModelFailoverPreferences } from "../adapters/model-failover-preferences";
+import {
+	lastSettledTurnFailover,
+	planSpentUntil,
+} from "../adapters/plan-spent";
 import {
 	claudeCodeYSquaredAvailable,
 	isYSquaredSession,
@@ -196,6 +201,7 @@ export async function planModelFailover(input: {
 		enabled: preferences.enabled,
 		evaluation: input.evaluation,
 		child: input.child,
+		reason: input.reason,
 	});
 	const connections =
 		policy === "off" ? [] : await failoverConnections(turn.user_id);
@@ -276,4 +282,41 @@ export async function pinnedTurnFailover(
 		{ route: original, label: routeLabel(connections, original) },
 		candidate,
 	);
+}
+
+/**
+ * A new turn of a chat whose last turn moved off this route because its
+ * plan ran out: while that plan is still spent, the turn starts on the same
+ * fallback (stickyFallbackKey), with no failed request and no repeated
+ * "continued on …" line. Undefined otherwise, or on any doubt: the turn then
+ * starts on its route and fails over inside itself as before.
+ */
+export async function stickyTurnFailover(
+	userId: string,
+	sessionId: string,
+	original: ModelRoute,
+): Promise<TurnFailover | undefined> {
+	try {
+		const preferences = await loadModelFailoverPreferences(userId);
+		if (!preferences.enabled) return undefined;
+		const [spentUntil, previous] = await Promise.all([
+			planSpentUntil(userId, original),
+			lastSettledTurnFailover(sessionId),
+		]);
+		const key = stickyFallbackKey({
+			enabled: preferences.enabled,
+			original,
+			previous: turnFailover(previous),
+			spentUntil,
+			now: Date.now(),
+		});
+		if (!key) return undefined;
+		const failover = await pinnedTurnFailover(userId, original, key);
+		console.info(
+			JSON.stringify({ event: "turn.started_on_fallback", sessionId }),
+		);
+		return failover;
+	} catch {
+		return undefined;
+	}
 }

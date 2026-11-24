@@ -2327,9 +2327,11 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		mocks.lean = null;
 		const [y2] = seen;
 		expect(y2?.tools).toEqual([
+			"archive_thread",
 			"ask_user",
 			"message_thread",
 			"read_canvas",
+			"retry_thread",
 			"schedule",
 			"show_canvas",
 			"start_thread",

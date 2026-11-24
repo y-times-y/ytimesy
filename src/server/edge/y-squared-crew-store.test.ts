@@ -537,16 +537,22 @@ describe("wake policy: long-running heartbeat", () => {
 			crew.noteThread(note({ sessionId: "t2", title: "Docs" }), T0 + 60_000)
 				.alarmAt,
 		).toBeNull();
-		const first = fire(crew, T0 + CREW_HEARTBEAT_AFTER_MS);
-		expect(first.body).toContain("Still working:");
-		expect(first.body).toContain('"Fix sign-up" still working, 5 min.');
-		expect(first.body).toContain('"Docs" still working, 4 min.');
+		// A heartbeat with nothing new sends no wake (it could only be answered
+		// NOTHING_TO_REPORT, a model turn for no message), but the clock moves on.
+		const first = crew.takeWake(T0 + CREW_HEARTBEAT_AFTER_MS);
+		expect(first.action).toBe("none");
 		expect(first.rearmAt).toBe(
 			T0 + CREW_HEARTBEAT_AFTER_MS + CREW_HEARTBEAT_EVERY_MS,
 		);
-		const second = fire(crew, first.rearmAt as number);
-		expect(second.body).toContain("15 min.");
-		expect(crew.wakeState().wakesThisHour).toBe(2);
+		expect(crew.wakeState().wakesThisHour).toBe(0);
+		// a real change after it still wakes, and names who is working
+		crew.noteThread(
+			note({ sessionId: "t2", title: "Docs", state: "finished" }),
+			T0 + CREW_HEARTBEAT_AFTER_MS + 1_000,
+		);
+		const second = fire(crew, T0 + CREW_HEARTBEAT_AFTER_MS + 20_000);
+		expect(second.body).toContain('"Fix sign-up" still working, 5 min.');
+		expect(crew.wakeState().wakesThisHour).toBe(1);
 	});
 
 	it("a wake in between restarts the five minutes", () => {

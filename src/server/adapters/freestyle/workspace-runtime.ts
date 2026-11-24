@@ -27,6 +27,7 @@ import {
 	admitVmCreate,
 	admitVmResume,
 	infrastructureAdmissionEnabled,
+	startAdmittedVm,
 } from "./usage-admission";
 import { waitUntilGuestReady, waitUntilVmRunning } from "./wait-until-running";
 
@@ -150,7 +151,7 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		const lifecycle = productLifecycleUpdate(data);
 		if (lifecycle) await vm.update(lifecycle).catch(() => undefined);
 		if (data.state === "paused" || data.state === "stopped") {
-			await vm.start();
+			await startAdmittedVm(vm, requiredSeconds);
 		}
 		// A machine that was not running yet has a guest that may not answer yet.
 		if (data.state === "running") await waitUntilVmRunning(vm, "Workspace VM");

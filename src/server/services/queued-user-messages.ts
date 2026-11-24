@@ -69,6 +69,7 @@ import {
 	stopHarnessWorkspaceTurn,
 } from "./harness-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
+import { sendQueuingBehindRace } from "./send-race";
 import { timed } from "./step-timing";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -136,19 +137,34 @@ export function sendComposerMessage(
 		(queued) =>
 			"view" in queued
 				? Effect.succeed(queued.view)
-				: sendHarnessWorkspaceTask(
-						machines,
-						queued.scope,
-						{
-							...harnessTask(input),
-							...(queued.storedAttachments
-								? {
-										attachments: undefined,
-										storedAttachments: queued.storedAttachments,
-									}
-								: {}),
-						},
-						queued.session,
+				: sendQueuingBehindRace(
+						sendHarnessWorkspaceTask(
+							machines,
+							queued.scope,
+							{
+								...harnessTask(input),
+								...(queued.storedAttachments
+									? {
+											attachments: undefined,
+											storedAttachments: queued.storedAttachments,
+										}
+									: {}),
+							},
+							queued.session,
+						),
+						// A merged batch and a message the queue delivers go back to the
+						// queue themselves (deliverQueuedSend); queueing one again here
+						// would split or reorder them.
+						input.merged || input.released
+							? null
+							: async () => {
+									const again = await queueBehindRunningTurn(
+										machines,
+										queued.scope,
+										input,
+									);
+									return "view" in again ? again.view : null;
+								},
 					),
 	);
 }

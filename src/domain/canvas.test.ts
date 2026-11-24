@@ -6,6 +6,7 @@ import {
 	CANVAS_HTML_LIMIT,
 	CANVAS_SANDBOX,
 	canvasDocument,
+	canvasInstructions,
 	canvasStandalonePage,
 	chatCanvases,
 	latestCanvasRevision,
@@ -240,5 +241,17 @@ describe("applyApiProgress", () => {
 			}),
 		]);
 		expect(turnMayHaveChangedWorkspace(failed, "turn")).toBe(false);
+	});
+});
+
+describe("canvasInstructions", () => {
+	it("tells agents to show the real UI with the app's own CSS and assets, on isolated artboards, checked against the app", () => {
+		const text = canvasInstructions();
+		expect(text).toContain("show the real thing");
+		expect(text).toContain("compiled CSS");
+		expect(text).toContain("assets");
+		expect(text).toContain("artboard");
+		expect(text).toContain("compare it with the real app");
+		expect(text).toContain("cannot reproduce");
 	});
 });
