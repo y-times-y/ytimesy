@@ -6,12 +6,27 @@ import { SessionItemId } from "#/domain/ids";
 import { MESSAGE_ATTACHMENT_LIMITS } from "#/domain/message-attachment";
 import { QUEUED_MESSAGES_PER_CHAT_LIMIT } from "#/domain/peer-inbox-injection";
 import {
+	takeNextQueuedUserMessages as claimNextQueuedUserMessages,
 	type QueuedUserSend,
 	queueUserMessageWhileRunning,
 	releaseQueuedUserMessage,
 	restoreQueuedUserMessages,
-	takeNextQueuedUserMessages,
 } from "./queued-user-messages";
+
+/** Taking claims a message; creating its turn deletes it (enqueueApiTurn). The tests that read what is taken in turn finish each delivery. */
+const settleDelivered = (batch: readonly { item: { id: string } }[]) =>
+	db.query("delete from agent_peer_inbox where id=any($1::text[])", [
+		batch.map((send) => `queued-user:${send.item.id}`),
+	]);
+const takeNextQueuedUserMessages = async (
+	userId: string,
+	sessionId: string,
+	limit?: number,
+) => {
+	const batch = await claimNextQueuedUserMessages(userId, sessionId, limit);
+	await settleDelivered(batch);
+	return batch;
+};
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("./database", () => ({ database: () => holder }));
