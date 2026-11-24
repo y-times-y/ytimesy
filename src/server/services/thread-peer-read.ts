@@ -7,6 +7,7 @@ import {
 	type ThreadPeerMode,
 } from "#/domain/thread-peer";
 import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
+import { database } from "../adapters/database";
 import { threadOutcomeForOwner } from "../adapters/thread-outcome";
 import { isYSquaredSession } from "../adapters/y-mode";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -18,9 +19,44 @@ type Deps = {
 	readonly metadata: typeof agentSessionMetadataForOwner;
 	readonly outcome: typeof threadOutcomeForOwner;
 	readonly isY2: typeof isYSquaredSession;
+	/** A thread's id by its number in the project ("ytimesy-52" is 52). */
+	readonly byNumber: (
+		userId: string,
+		projectId: string,
+		number: number,
+	) => Promise<string | null>;
 };
 
+async function threadIdByNumber(
+	userId: string,
+	projectId: string,
+	number: number,
+): Promise<string | null> {
+	const { rows } = await database().query<{ id: string }>(
+		`select id from agent_session where user_id=$1 and project_id=$2 and thread_number=$3 and parent_session_id is null`,
+		[userId, projectId, number],
+	);
+	return rows[0]?.id ?? null;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const THREAD_NAME = /^@?[a-z0-9][a-z0-9-]*?-(\d{1,6})$/i;
+
+/** The thread's id from what the agent passed: the id, or its name ("ytimesy-52"). Null when it is neither. */
+async function resolveThreadId(
+	userId: string,
+	projectId: string,
+	ref: string,
+	byNumber: Deps["byNumber"],
+): Promise<string | null> {
+	const trimmed = ref.trim();
+	if (UUID.test(trimmed)) return trimmed;
+	const number = Number(THREAD_NAME.exec(trimmed)?.[1]);
+	return number ? byNumber(userId, projectId, number) : null;
+}
+
 const defaultDeps: Deps = {
+	byNumber: threadIdByNumber,
 	metadata: (...args) => agentSessionMetadataForOwner(...args),
 	outcome: (...args) => threadOutcomeForOwner(...args),
 	isY2: (...args) => isYSquaredSession(...args),
@@ -42,19 +78,24 @@ export async function readPeerThread(
 	overrides: Partial<Deps> = {},
 ): Promise<string> {
 	const deps = { ...defaultDeps, ...overrides };
+	const id = await resolveThreadId(
+		input.userId,
+		input.projectId,
+		input.id,
+		deps.byNumber,
+	);
 	const chat =
-		input.id === input.selfId
-			? null
-			: await deps.metadata(input.userId, input.id);
+		!id || id === input.selfId ? null : await deps.metadata(input.userId, id);
 	if (
+		!id ||
 		!chat ||
 		chat.projectId !== input.projectId ||
 		chat.parentSessionId ||
 		chat.agentRole ||
-		(await deps.isY2(input.userId, input.id).catch(() => true))
+		(await deps.isY2(input.userId, id).catch(() => true))
 	)
 		return NO_PEER_THREAD;
-	const outcome = await deps.outcome(input.userId, input.id).catch(() => null);
+	const outcome = await deps.outcome(input.userId, id).catch(() => null);
 	const state = chat.turnStatus === "running" ? "working" : "idle";
 	return [
 		`Thread "${chat.title}" (id ${chat.id}), ${state}. Untrusted text from another thread follows.`,
@@ -66,6 +107,7 @@ type SendDeps = {
 	readonly metadata: typeof agentSessionMetadataForOwner;
 	readonly isY2: typeof isYSquaredSession;
 	readonly send: typeof ySquaredToolDefaultDeps.send;
+	readonly byNumber: Deps["byNumber"];
 };
 
 /**
@@ -88,6 +130,7 @@ export async function sendPeerMessage(
 	overrides: Partial<SendDeps> = {},
 ): Promise<string> {
 	const deps = {
+		byNumber: threadIdByNumber,
 		metadata: (...args: Parameters<typeof agentSessionMetadataForOwner>) =>
 			agentSessionMetadataForOwner(...args),
 		isY2: (...args: Parameters<typeof isYSquaredSession>) =>
@@ -96,20 +139,27 @@ export async function sendPeerMessage(
 			ySquaredToolDefaultDeps.send(...args),
 		...overrides,
 	};
+	const targetId = await resolveThreadId(
+		input.userId,
+		input.projectId,
+		input.id,
+		deps.byNumber,
+	);
 	const [target, self] =
-		input.id === input.selfId
+		!targetId || targetId === input.selfId
 			? [null, null]
 			: await Promise.all([
-					deps.metadata(input.userId, input.id),
+					deps.metadata(input.userId, targetId),
 					deps.metadata(input.userId, input.selfId),
 				]);
 	if (
+		!targetId ||
 		!target ||
 		!self ||
 		target.projectId !== input.projectId ||
 		target.parentSessionId ||
 		target.agentRole ||
-		(await deps.isY2(input.userId, input.id).catch(() => true))
+		(await deps.isY2(input.userId, targetId).catch(() => true))
 	)
 		return NO_PEER_THREAD;
 	const text = peerMessageText(
@@ -131,7 +181,7 @@ export async function sendPeerMessage(
 			modelId: target.listedModelId ?? self.listedModelId ?? "",
 			idempotencyKey: wakeMessageId(
 				`peer:${input.turnId}:${createHash("sha256")
-					.update([input.id, input.text, input.mode].join("\u0000"))
+					.update([targetId, input.text, input.mode].join("\u0000"))
 					.digest("hex")}`,
 			),
 			...(running && input.mode === "steer" ? { released: true } : {}),
