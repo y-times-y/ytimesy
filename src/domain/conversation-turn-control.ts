@@ -5,6 +5,12 @@ export const turnControlSchema = z.object({
 	sessionId: z.string().uuid(),
 	turnId: z.string().uuid(),
 	leaseId: z.string().uuid(),
+	/**
+	 * A holder that is not a turn: a code restore holding the chat's lock
+	 * (conversation-turn-settled.ts). A takeover never takes the lock from a
+	 * live one; a stale turn's lock it does.
+	 */
+	hold: z.literal("restore").optional(),
 });
 export type TurnControl = z.infer<typeof turnControlSchema>;
 /** Deletes a chat's Durable Object state when the chat, its project or its account goes. */
@@ -42,14 +48,6 @@ export function retiredLeaseKey(turn: { turnId: string; leaseId: string }) {
 }
 
 /**
- * How long a turn that has not started waits for its chat's lease: past a
- * whole retirement and lease (legacy turn-ID retirements, or a holder whose
- * release was lost), so no owner the room can still free is refused.
- */
-export const TURN_START_WAIT_MS =
-	RETIRED_TURN_MS + TURN_COORDINATION_LEASE_MS + 5_000;
-
-/**
  * "handoff" lets the room go of a turn that is being moved to another
  * executor under a new lease (a box handing a turn to the chat's object): the
  * room forgets the turn without retiring it, so the new executor can acquire
@@ -63,6 +61,16 @@ export const TURN_START_WAIT_MS =
  * renews Postgres first. Refused while another lease holds the room or the
  * turn was stopped. Without it such a turn was stopped mid-work ("Run
  * stopped. Conversation coordination lease was lost", 2026-11-23).
+ *
+ * "takeover" is the chat's one active turn (Postgres allows one, and the
+ * caller has just renewed it there) taking the lock from whatever the room
+ * still names: a turn that ended or was failed without releasing it, or a
+ * box that went on after its lease was lost, is stale by that fact, and its
+ * own renewals are then refused. Never from a live code restore (`hold`),
+ * and never for a turn that was stopped. A turn used to wait for such a
+ * holder and, after 105 s, fail with "This turn did not start…", or a
+ * later step failed the same way after a lapse (2026-11-24: a 14 minute
+ * turn ended with it).
  */
 export type TurnControlAction =
 	| "acquire"
@@ -70,6 +78,7 @@ export type TurnControlAction =
 	| "release"
 	| "handoff"
 	| "resume"
+	| "takeover"
 	| "cancel";
 type CoordinationFailureReason =
 	| { kind: "http"; status: number }

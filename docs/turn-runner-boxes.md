@@ -878,3 +878,7 @@ progress write, last renewal) before calling a thread stuck (docs/y.md,
   again on the published program. Other boxes take new turns meanwhile.
   An instance refresh (which kills running turns; another box takes them
   over after 45 s) is only for launch template changes.
+
+## A turn that cannot start waits, then takes the lock
+
+A turn never ends red with "did not start". If the chat's lock is held, the first step waits 4 s, then takes the lock over (`takeover` in the room: the active-turn row is the owner, so the old holder is retired). A live code restore is never taken; the turn waits up to 10 min for it. After that the turn throws `TurnNotStarted`, the executor retries the step, and a calm saved/will-run-by-itself message is the only thing shown. Logs: `lock.takeover` (room), `turn.lock_taken_over`, `turn.start_delayed` (runner).

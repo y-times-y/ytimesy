@@ -38,6 +38,8 @@ export async function holdSettledConversationTurn(
 		sessionId,
 		turnId: randomUUID(),
 		leaseId: randomUUID(),
+		// Not a turn: a new turn waits for it instead of taking the lock over.
+		hold: "restore" as const,
 	};
 	const acquired = await coordinateConversationTurn("acquire", probe).catch(
 		() => {

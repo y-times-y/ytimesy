@@ -2137,14 +2137,15 @@ it("waits for a code restore's brief hold on the chat instead of failing the tur
 	vi.useFakeTimers();
 	try {
 		let held = 3;
-		vi.mocked(coordinateConversationTurn).mockImplementation(
-			async (action) => action !== "acquire" || --held < 0,
+		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) =>
+			// A live restore is never taken from: only its release ends the wait.
+			action === "takeover" ? false : action !== "acquire" || --held < 0,
 		);
 		mocks.runtime.mockImplementation(async (input) =>
 			input.onEvent({ type: "text-delta", id: "answer", text: "Done" }),
 		);
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
-		await vi.advanceTimersByTimeAsync(3_500);
+		await vi.advanceTimersByTimeAsync(5_000);
 		expect(await run).toBe("completed");
 		expect(
 			vi
@@ -2157,41 +2158,133 @@ it("waits for a code restore's brief hold on the chat instead of failing the tur
 	}
 });
 
-it("gives up acquiring a chat that stays held past a whole retirement and lease, and says nothing ran", async () => {
-	vi.useFakeTimers();
-	try {
-		vi.mocked(coordinateConversationTurn).mockImplementation(
-			async (action) => action !== "acquire",
+describe("a turn whose chat's lock is still named by another holder (2026-11-24: 'This turn did not start' ended a turn that had run 14 minutes)", () => {
+	const lockMock = (answers: {
+		acquire: (now: number) => boolean;
+		takeover: (now: number) => boolean;
+	}) =>
+		vi
+			.mocked(coordinateConversationTurn)
+			.mockImplementation(async (action) =>
+				action === "acquire"
+					? answers.acquire(Date.now())
+					: action === "takeover"
+						? answers.takeover(Date.now())
+						: true,
+			);
+	const quietModel = () =>
+		mocks.runtime.mockImplementation(async (input) =>
+			input.onEvent({ type: "text-delta", id: "answer", text: "Done" }),
 		);
-		const run = runApiTurn({} as WorkspaceMachines, childTurn);
-		await vi.advanceTimersByTimeAsync(40_000);
-		expect(mocks.finalize).not.toHaveBeenCalled();
-		await vi.advanceTimersByTimeAsync(70_000);
-		expect(await run).toBe("failed");
-		expect(mocks.runtime).not.toHaveBeenCalled();
-		expect(JSON.stringify(mocks.finalize.mock.calls[0]?.[2])).toContain(
-			"Nothing ran and nothing was lost",
-		);
-	} finally {
-		vi.useRealTimers();
-	}
-});
 
-it("gives up after one lease period on a later step, whose lease is gone", async () => {
-	vi.useFakeTimers();
-	try {
-		vi.mocked(coordinateConversationTurn).mockImplementation(
-			async (action) => action !== "acquire",
-		);
-		const run = runApiTurn({} as WorkspaceMachines, childTurn, {
-			index: 2,
-			signal: new AbortController().signal,
-		});
-		await vi.advanceTimersByTimeAsync(40_000);
-		expect(await run).toBe("failed");
-	} finally {
-		vi.useRealTimers();
-	}
+	it("takes the lock over from a stale holder after a few seconds, once the database says it is the active turn, and says so in the log", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			lockMock({ acquire: () => false, takeover: () => true });
+			quietModel();
+			const run = runApiTurn({} as WorkspaceMachines, childTurn);
+			await vi.advanceTimersByTimeAsync(6_000);
+			expect(await run).toBe("completed");
+			expect(mocks.runtime).toHaveBeenCalledOnce();
+			expect(mocks.renew).toHaveBeenCalled();
+			expect(JSON.stringify(warn.mock.calls)).toContain("turn.lock_taken_over");
+			expect(
+				JSON.stringify(mocks.finalize.mock.calls.map((call) => call[2])),
+			).not.toContain("did not start");
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
+	});
+
+	it("waits as long as a live code restore holds the lock, then starts by itself", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			const releasedAt = Date.now() + 5 * 60_000;
+			lockMock({ acquire: (now) => now >= releasedAt, takeover: () => false });
+			quietModel();
+			const run = runApiTurn({} as WorkspaceMachines, childTurn);
+			await vi.advanceTimersByTimeAsync(5 * 60_000 + 10_000);
+			expect(await run).toBe("completed");
+			expect(mocks.runtime).toHaveBeenCalledOnce();
+			expect(JSON.stringify(warn.mock.calls)).toContain("turn.start_delayed");
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
+	});
+
+	it("never refuses a later step its lock when the database says the turn is active: it takes it back at once", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			lockMock({ acquire: () => false, takeover: () => true });
+			mocks.stepRuntime.mockImplementation(async (input) => ({
+				messages: input.messages,
+				outcome: "completed",
+			}));
+			const run = runApiTurn({} as WorkspaceMachines, childTurn, {
+				index: 4,
+				signal: new AbortController().signal,
+			});
+			run.catch(() => {});
+			await vi.advanceTimersByTimeAsync(1_000);
+			await run.catch(() => {});
+			expect(mocks.stepRuntime).toHaveBeenCalled();
+			expect(
+				JSON.stringify(mocks.finalize.mock.calls.map((call) => call[2])),
+			).not.toContain("locked by earlier work");
+			expect(
+				warn.mock.calls.some((call) =>
+					String(call[0]).includes('"step":"later"'),
+				),
+			).toBe(true);
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
+	});
+
+	it("hands a start that stayed blocked to its executor to retry, without a word to the person", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			lockMock({ acquire: () => false, takeover: () => false });
+			const run = runApiTurn({} as WorkspaceMachines, childTurn, {
+				index: 1,
+				signal: new AbortController().signal,
+			});
+			run.catch(() => {});
+			await vi.advanceTimersByTimeAsync(10 * 60_000 + 30_000);
+			await expect(run).rejects.toThrow("already running or was stopped");
+			expect(mocks.finalize).not.toHaveBeenCalled();
+			expect(mocks.runtime).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
+	});
+
+	it("when no executor retries it, ends calmly with what is happening, never asking to send again", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			lockMock({ acquire: () => false, takeover: () => false });
+			const run = runApiTurn({} as WorkspaceMachines, childTurn);
+			await vi.advanceTimersByTimeAsync(10 * 60_000 + 30_000);
+			expect(await run).toBe("failed");
+			const shown = JSON.stringify(
+				mocks.finalize.mock.calls.map((call) => call[2]),
+			);
+			expect(shown).toContain("will run by itself");
+			expect(shown).not.toMatch(/send (your|it|that|the) (message )?again/i);
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
+	});
 });
 
 describe("the attempt loop (harness variant attempts=3)", () => {
@@ -3864,11 +3957,13 @@ describe("a turn that cannot take its chat's lease at once (2026-11-23)", () => 
 		vi.useFakeTimers();
 		try {
 			vi.mocked(coordinateConversationTurn).mockImplementation(
-				async (action) => action !== "acquire",
+				async (action) => action !== "acquire" && action !== "takeover",
 			);
+			// Stop sets the flag the database heartbeat reads: it is no longer alive.
+			mocks.renew.mockResolvedValue(false);
 			mocks.cancelRequested.mockResolvedValue(true);
 			const run = runApiTurn({} as WorkspaceMachines, childTurn);
-			await vi.advanceTimersByTimeAsync(110_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 			expect(await run).toBe("cancelled");
 			expect(mocks.runtime).not.toHaveBeenCalled();
 			expect(items()).not.toContain('"kind":"error"');

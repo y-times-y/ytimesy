@@ -21,7 +21,7 @@ import {
 	isYSquaredNoWorkspace,
 	LifecycleHookRefusal,
 	SafeApiModelFailure,
-	TURN_NOT_STARTED,
+	TurnNotStarted,
 	Y_SQUARED_NO_WORKSPACE,
 	YSquaredClaudeRunnerUnreachable,
 } from "#/domain/api-turn-failure";
@@ -40,8 +40,6 @@ import {
 import { type ClaudeRunnerBox, claudeRunnerFor } from "#/domain/claude-runner";
 import {
 	CoordinationFailure,
-	TURN_COORDINATION_LEASE_MS,
-	TURN_START_WAIT_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
 import { isDevelopmentEnvironment } from "#/domain/development-environment";
@@ -324,32 +322,52 @@ import { yTools } from "../services/y-tools";
 import type { TurnPorts } from "./turn-ports";
 
 /**
- * Acquires the chat's coordination lease, waiting out a brief holder instead
- * of failing: a code restore holds the lease until just before it commits, and
- * a hold whose release failed lapses within one lease period. A turn that was
- * stopped meanwhile ends the wait through its heartbeat's abort.
+ * Takes the chat's coordination lock for a turn, however stale the room's
+ * holder: Postgres allows one active turn per chat, and `takeOver` first
+ * renews this turn there, so when it says yes the turn IS the chat's active
+ * one and whoever the room still names (a turn that ended or was failed
+ * without releasing, a lease that lapsed between steps) is stale and fenced
+ * by the takeover. The one holder that is not a turn, a code restore, is never
+ * taken from: the wait below outlasts it while it stays healthy.
  *
- * A turn's first step under its lease has run nothing yet, so it waits longer
- * (TURN_START_WAIT_MS: past any retirement the room may still hold) and rides
- * out the chat's coordinator restarting (a deploy) instead of failing: until
- * it holds the lease, failing it only shows the person an error for nothing.
- * A later step re-acquires a lease it held; refused, that lease is gone.
+ * A later step of a running turn has the lock by right: it takes it back at
+ * once. A turn's first step gives a releasing predecessor a few seconds, then
+ * takes over; it waits out a live restore and a coordinator that is
+ * restarting (a deploy) up to TURN_START_PATIENCE_MS, and a start that still
+ * cannot is retried by its executor (TurnNotStarted), not failed.
  */
-async function acquireConversationTurn(
-	control: TurnControl,
-	signal: AbortSignal,
-	coordinateConversationTurn: TurnPorts["coordinateConversationTurn"],
-	starting: boolean,
-) {
-	const deadline =
-		Date.now() +
-		(starting ? TURN_START_WAIT_MS : TURN_COORDINATION_LEASE_MS + 5_000);
-	for (;;) {
+async function acquireConversationTurn(input: {
+	readonly turnId: string;
+	readonly control: TurnControl;
+	readonly signal: AbortSignal;
+	readonly coordinate: TurnPorts["coordinateConversationTurn"];
+	readonly takeOver: () => Promise<boolean>;
+	readonly starting: boolean;
+}) {
+	const startedAt = Date.now();
+	const deadline = startedAt + (input.starting ? TURN_START_PATIENCE_MS : 0);
+	let delayedLogged = false;
+	for (let attempt = 0; ; attempt++) {
 		try {
-			if (await coordinateConversationTurn("acquire", control)) return true;
+			if (await input.coordinate("acquire", input.control)) return true;
+			// Refused: the room still names another holder. A later step takes
+			// the lock back at once; a first step after a few seconds.
+			if (
+				(!input.starting || Date.now() - startedAt >= TURN_START_GRACE_MS) &&
+				(await input.takeOver())
+			) {
+				console.warn(
+					JSON.stringify({
+						event: "turn.lock_taken_over",
+						turnId: input.turnId,
+						waitedMs: Date.now() - startedAt,
+						step: input.starting ? "first" : "later",
+					}),
+				);
+				return true;
+			}
 		} catch (error) {
 			if (
-				!starting ||
 				!(error instanceof CoordinationFailure && error.retryable) ||
 				Date.now() >= deadline
 			)
@@ -358,19 +376,34 @@ async function acquireConversationTurn(
 				...apiTurnFailureClassification(error),
 			});
 		}
-		if (signal.aborted || Date.now() >= deadline) return false;
+		if (input.signal.aborted || Date.now() >= deadline) return false;
+		if (!delayedLogged && Date.now() - startedAt >= TURN_START_GRACE_MS) {
+			delayedLogged = true;
+			console.warn(
+				JSON.stringify({
+					event: "turn.start_delayed",
+					turnId: input.turnId,
+					waitedMs: Date.now() - startedAt,
+				}),
+			);
+		}
 		await new Promise<void>((resolve) => {
-			const timer = setTimeout(done, 1000);
+			const timer = setTimeout(done, Math.min(1_000 + attempt * 500, 5_000));
 			function done() {
 				clearTimeout(timer);
-				signal.removeEventListener("abort", done);
+				input.signal.removeEventListener("abort", done);
 				resolve();
 			}
-			signal.addEventListener("abort", done, { once: true });
+			input.signal.addEventListener("abort", done, { once: true });
 		});
-		if (signal.aborted) return false;
+		if (input.signal.aborted) return false;
 	}
 }
+
+/** A first step waits this long for a releasing predecessor before it takes the lock over. */
+const TURN_START_GRACE_MS = 4_000;
+/** How long one attempt to start waits for a live holder (a code restore) or a restarting coordinator. */
+const TURN_START_PATIENCE_MS = 10 * 60_000;
 
 /**
  * The edge answered a box's workspace request 5xx: the machine provider or
@@ -884,12 +917,14 @@ async function runApiTurnAttempt(
 	 * Stop, the turn takes the room back instead of being stopped mid-work;
 	 * the room refuses while another lease holds it or the turn was stopped.
 	 */
-	const resumeLapsedLease = async () => {
+	const resumeLapsedLease = async (
+		action: "resume" | "takeover" = "resume",
+	) => {
 		if (turnSettled || abort.signal.aborted) return false;
 		try {
 			if (!(await renewApiTurn(turn))) return false;
-			const resumed = await coordinateConversationTurn("resume", control);
-			if (resumed)
+			const resumed = await coordinateConversationTurn(action, control);
+			if (resumed && action === "resume")
 				console.warn("The chat's lease had lapsed; this turn took it back.", {
 					turnId: turn.id,
 				});
@@ -1059,18 +1094,20 @@ async function runApiTurnAttempt(
 		if (
 			!turn.lease_id ||
 			!(await timed("turn:acquire", () =>
-				acquireConversationTurn(
+				acquireConversationTurn({
+					turnId: turn.id,
 					control,
-					abort.signal,
-					coordinateConversationTurn,
-					!continued && (!step || step.index === 1),
-				),
+					signal: abort.signal,
+					coordinate: coordinateConversationTurn,
+					takeOver: () => resumeLapsedLease("takeover"),
+					starting: !continued && (!step || step.index === 1),
+				}),
 			))
 		) {
 			// Stopped before it started: it ends as stopped, not as an error.
 			if (await apiTurnCancelRequested(turn).catch(() => false))
 				abort.abort(new ApiTurnCancelled());
-			throw new Error(TURN_NOT_STARTED);
+			throw new TurnNotStarted();
 		}
 		coordinated = true;
 		timing?.mark("leaseAcquired");
@@ -3639,7 +3676,9 @@ async function runApiTurnAttempt(
 				isPlatformRestart(cause) ||
 				(!!step &&
 					!userStopped(abort.signal.reason) &&
-					(isCutConnection(cause) || isEdgeOutage(cause))),
+					(isCutConnection(cause) ||
+						isEdgeOutage(cause) ||
+						cause instanceof TurnNotStarted)),
 		);
 		if (platformRestart) {
 			// One line per interruption, so they are counted without anyone
