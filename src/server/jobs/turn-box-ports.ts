@@ -901,6 +901,10 @@ export function boxYSquaredToolDeps(
 		download: (userId, sessionId, id) => dep("download", userId, sessionId, id),
 		send: (_machines, scope, input) => dep("send", scope, input),
 		stop: (_machines, scope) => dep("stop", scope),
+		archive: async (userId, sessionId) => {
+			await dep("archive", userId, sessionId);
+		},
+		prOpen: (userId, projectId, url) => dep("prOpen", userId, projectId, url),
 		// A crew answers through the edge; one that is missing there answers null.
 		crew: () => crew,
 	};

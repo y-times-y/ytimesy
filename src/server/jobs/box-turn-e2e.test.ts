@@ -473,6 +473,17 @@ describe("the super agent (Y²) and helpers on a box", () => {
 		const deps: string[] = [];
 		ports.ySquared = async (a: { dep: string; args: unknown[] }) => {
 			deps.push(a.dep);
+			// The root threads of the project: crew rows of helper chats are not listed.
+			if (a.dep === "list")
+				return [
+					{
+						id: THREAD,
+						title: "Fix login",
+						waitingOn: null,
+						workingSince: null,
+						updatedAt: null,
+					},
+				];
 			if (a.dep === "crewList")
 				return {
 					reconciled: true,
@@ -508,7 +519,13 @@ describe("the super agent (Y²) and helpers on a box", () => {
 		expect(s.edge.row.state).toBe("completed");
 		expect(dbCalls.stacks).toEqual([]);
 		expect(s.reads).toEqual([]);
-		expect(deps).toEqual(["crewList", "metadata", "crewNoteY2Sent", "send"]);
+		expect(deps).toEqual([
+			"list",
+			"crewList",
+			"metadata",
+			"crewNoteY2Sent",
+			"send",
+		]);
 		const result = JSON.stringify(s.edge.row.items);
 		expect(result).toContain("Fix login");
 		expect(result).toContain("its turn started");
