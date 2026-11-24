@@ -192,6 +192,13 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 	},
 	{
 		author: "google",
+		label: "Gemini 4 Neon",
+		openRouterId: "google/gemini-4-neon",
+		directId: "gemini-4-neon",
+		speeds: [GOOGLE_PRIORITY],
+	},
+	{
+		author: "google",
 		label: "Gemini 4 Hydrogen",
 		openRouterId: "google/gemini-4-hydrogen",
 		directId: "gemini-4-hydrogen",
