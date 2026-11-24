@@ -27,18 +27,24 @@ import { wakeMessageId } from "#/domain/pull-request-wake";
 import type { SessionItem } from "#/domain/session-item";
 import { threadOutcomeLines } from "#/domain/thread-outcome";
 import {
+	archiveThreadInput,
 	messageThreadInput,
 	readCanvasInput,
+	retryThreadInput,
 	showCanvasInput,
 	startThreadInput,
 	stopThreadInput,
 	threadsOverview,
 	threadTimesText,
+	Y_SQUARED_ARCHIVE_THREAD_DESCRIPTION,
+	Y_SQUARED_ARCHIVE_THREAD_TOOL,
 	Y_SQUARED_MAX_STARTS_PER_TURN,
 	Y_SQUARED_MESSAGE_THREAD_DESCRIPTION,
 	Y_SQUARED_MESSAGE_THREAD_TOOL,
 	Y_SQUARED_READ_CANVAS_DESCRIPTION,
 	Y_SQUARED_READ_CANVAS_TOOL,
+	Y_SQUARED_RETRY_THREAD_DESCRIPTION,
+	Y_SQUARED_RETRY_THREAD_TOOL,
 	Y_SQUARED_SHOW_CANVAS_DESCRIPTION,
 	Y_SQUARED_START_THREAD_DESCRIPTION,
 	Y_SQUARED_START_THREAD_TOOL,
@@ -120,6 +126,8 @@ type Deps = {
 		/** The chat the message went to (a new thread's id); absent from an older edge. */
 		readonly sessionId?: string | null;
 	}>;
+	/** Archives a root chat (stops its turn, keeps everything; Settings > Archived restores it). */
+	readonly archive: (userId: string, sessionId: string) => Promise<void>;
 	/** The Stop button's path. */
 	readonly stop: (
 		machines: WorkspaceMachines,
@@ -152,6 +160,11 @@ const defaultDeps: Deps = {
 				? { failed: view.connection.message }
 				: {}),
 		};
+	},
+	archive: async (userId, sessionId) => {
+		// Lazy: the archive service pulls in the machine and project services.
+		const { archiveOwned } = await import("./archive");
+		await archiveOwned(userId, "chat", sessionId);
 	},
 	stop: async (machines, scope) => {
 		const view = await Effect.runPromise(stopTurnKeepingQueue(machines, scope));
@@ -654,6 +667,59 @@ export function ySquaredTools(input: {
 				]
 					.filter(Boolean)
 					.join("\n");
+			},
+		}),
+		[Y_SQUARED_RETRY_THREAD_TOOL]: tool({
+			description: Y_SQUARED_RETRY_THREAD_DESCRIPTION,
+			inputSchema: retryThreadInput,
+			execute: async ({ id }) => {
+				if (!input.machines || !input.modelId) return noMachines;
+				const chat = await ownThread(id);
+				if (!chat) return noThread;
+				if (chat.turnStatus !== "failed")
+					return `"${chat.title}" did not fail on its last turn (it is ${chat.turnStatus}); nothing to retry.`;
+				await markSent(chat.id);
+				const text =
+					"Your last turn failed. Retry it: continue where you stopped and finish the work.";
+				const sent = await deps.send(
+					input.machines,
+					{
+						userId: input.userId,
+						projectId: input.projectId,
+						sessionId: chat.id,
+						harnessId: chat.harness,
+						createNew: false,
+					},
+					{
+						text,
+						modelId: chat.listedModelId ?? input.modelId,
+						idempotencyKey: sendKey("retry", chat.id, text),
+					},
+				);
+				if (sent.failed) return `Not retried: ${sent.failed}`;
+				return sent.turnStatus === "running"
+					? `Retrying "${chat.title}": a new turn started.`
+					: `Retry queued for "${chat.title}" behind the budget/concurrency limit; it starts by itself.`;
+			},
+		}),
+		[Y_SQUARED_ARCHIVE_THREAD_TOOL]: tool({
+			description: Y_SQUARED_ARCHIVE_THREAD_DESCRIPTION,
+			inputSchema: archiveThreadInput,
+			execute: async ({ id }) => {
+				const chat = await ownThread(id);
+				if (!chat) return noThread;
+				if (chat.turnStatus === "running")
+					return `"${chat.title}" is working; stop it first if it should go.`;
+				const row = await deps
+					.crew(input.projectId)
+					?.thread(id)
+					.catch(() => null);
+				if (row?.waitingOn && row.waitingOn !== "failed")
+					return `"${chat.title}" is waiting on the person (${row.waitingOn}); not archived.`;
+				if (row?.prUrl)
+					return `"${chat.title}" has a pull request (${row.prUrl}); not archived.`;
+				await deps.archive(input.userId, chat.id);
+				return `Archived "${chat.title}". Settings > Archived restores it.`;
 			},
 		}),
 		[Y_SQUARED_STOP_THREAD_TOOL]: tool({

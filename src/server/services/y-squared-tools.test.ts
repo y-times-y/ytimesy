@@ -358,6 +358,66 @@ describe("ySquaredTools write tools", () => {
 		expect(idle.stop).not.toHaveBeenCalled();
 	});
 
+	it("retry_thread continues only a failed thread, through the send path", async () => {
+		const f = writeFixture(
+			{ t1: chat({ turnStatus: "failed" }), t2: chat({ id: "t2" }) },
+			"running",
+		);
+		expect(await run(f.tools, "retry_thread", { id: "t1" })).toContain(
+			"Retrying",
+		);
+		expect(f.send).toHaveBeenCalledTimes(1);
+		const [, , sent] = f.send.mock.calls[0] as unknown as [
+			unknown,
+			unknown,
+			{ text: string; modelId: string },
+		];
+		expect(sent.text).toContain("Your last turn failed");
+		expect(sent.modelId).toBe("m-thread");
+		expect(await run(f.tools, "retry_thread", { id: "t2" })).toContain(
+			"nothing to retry",
+		);
+		expect(f.send).toHaveBeenCalledTimes(1);
+		expect(await run(f.tools, "retry_thread", { id: "nope" })).toBe(
+			"No such thread in this project.",
+		);
+	});
+
+	it("archive_thread archives idle or failed threads and refuses working, waiting and pull-request ones", async () => {
+		const archive = vi.fn(async () => undefined);
+		const rows: Record<string, unknown> = {
+			t1: { waitingOn: "failed", prUrl: null },
+			t2: { waitingOn: "question", prUrl: null },
+			t3: { waitingOn: null, prUrl: "https://github.com/o/r/pull/1" },
+		};
+		const tools = ySquaredTools({
+			userId: "u",
+			projectId: "p",
+			selfId: "y2",
+			deps: {
+				metadata: (async (_u: string, id: string) =>
+					id === "w"
+						? chat({ id, turnStatus: "running" })
+						: id in rows
+							? chat({ id, turnStatus: "failed" })
+							: null) as never,
+				crew: (() => ({
+					thread: async (id: string) => rows[id] ?? null,
+				})) as never,
+				archive,
+			},
+		});
+		expect(await run(tools, "archive_thread", { id: "t1" })).toContain(
+			"Archived",
+		);
+		expect(archive).toHaveBeenCalledWith("u", "t1");
+		for (const id of ["t2", "t3", "w"])
+			expect(await run(tools, "archive_thread", { id })).toContain(
+				id === "w" ? "working" : "not archived",
+			);
+		expect(archive).toHaveBeenCalledTimes(1);
+	});
+
 	it("reads no sidebar and no crew for any write tool", async () => {
 		const f = writeFixture({ t1: chat({ turnStatus: "running" }) });
 		await run(f.tools, "start_thread", { title: "A", brief: "B" });

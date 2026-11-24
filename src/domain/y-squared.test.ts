@@ -109,9 +109,11 @@ describe("threadsOverview", () => {
 describe("Y² surface", () => {
 	it("keeps only its read tools and the person's questions", () => {
 		expect([...Y_SQUARED_TOOLS].sort()).toEqual([
+			"archive_thread",
 			"ask_user",
 			"message_thread",
 			"read_canvas",
+			"retry_thread",
 			"schedule",
 			"show_canvas",
 			"start_thread",
@@ -359,6 +361,20 @@ describe("Y² reports briefly and quietly (instructions)", () => {
 		expect(wake).toContain("Skip anything you already reported");
 		expect(wake).toContain("use no tables");
 		expect(wake).not.toContain("Never just say it finished");
+	});
+});
+
+describe("Y² cleans up after failed threads (instructions)", () => {
+	const text = ySquaredInstructions();
+	it("retries a transient failure once and archives old failed threads in one line", () => {
+		expect(text).toContain("`retry_thread`");
+		expect(text).toContain("when the cause looks transient");
+		expect(text).toContain("a second failure for the same reason is a blocker");
+		expect(text).toContain("`archive_thread`");
+		expect(text).toContain(
+			"no pull request, not working and not waiting on the person",
+		);
+		expect(text).toContain("Archived 5 old failed threads.");
 	});
 });
 

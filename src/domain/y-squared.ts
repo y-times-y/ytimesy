@@ -79,6 +79,8 @@ export const Y_SQUARED_THREAD_TOOL = "thread";
 export const Y_SQUARED_START_THREAD_TOOL = "start_thread";
 export const Y_SQUARED_MESSAGE_THREAD_TOOL = "message_thread";
 export const Y_SQUARED_STOP_THREAD_TOOL = "stop_thread";
+export const Y_SQUARED_RETRY_THREAD_TOOL = "retry_thread";
+export const Y_SQUARED_ARCHIVE_THREAD_TOOL = "archive_thread";
 export const Y_SQUARED_READ_CANVAS_TOOL = "read_canvas";
 export const Y_SQUARED_SHOW_CANVAS_TOOL = SHOW_CANVAS_TOOL;
 
@@ -140,6 +142,11 @@ export type YSquaredMessageMode = (typeof Y_SQUARED_MESSAGE_MODES)[number];
 export const Y_SQUARED_STOP_THREAD_DESCRIPTION =
 	"Stop the running turn of one of this project's threads. Messages already queued in it still go on. Pass the id from the threads list.";
 
+export const Y_SQUARED_RETRY_THREAD_DESCRIPTION =
+	"Retry a thread whose last turn failed: it starts a new turn that continues where it stopped. Only for a failed thread; retry a thread at most once for the same failure (a second failure for the same reason is a blocker for the person). Pass the id from the threads list.";
+export const Y_SQUARED_ARCHIVE_THREAD_DESCRIPTION =
+	"Archive a finished, failed or idle thread so it leaves the person's list (Settings > Archived restores it). Refused for a working thread, a thread waiting on the person, or one with a pull request. Use it to clean up old failed or obsolete threads, and say in one line what you archived. Pass the id from the threads list.";
+
 export const startThreadInput = z.object({
 	title: z
 		.string()
@@ -171,6 +178,8 @@ export const messageThreadInput = z.object({
 export const stopThreadInput = z.object({
 	id: z.string().min(1).max(64).describe("The thread's id"),
 });
+export const retryThreadInput = stopThreadInput;
+export const archiveThreadInput = stopThreadInput;
 
 /** Tools Y² keeps by name: its read tools, its thread tools and the person's questions. */
 export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
@@ -179,6 +188,8 @@ export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
 	Y_SQUARED_START_THREAD_TOOL,
 	Y_SQUARED_MESSAGE_THREAD_TOOL,
 	Y_SQUARED_STOP_THREAD_TOOL,
+	Y_SQUARED_RETRY_THREAD_TOOL,
+	Y_SQUARED_ARCHIVE_THREAD_TOOL,
 	Y_SQUARED_READ_CANVAS_TOOL,
 	Y_SQUARED_SHOW_CANVAS_TOOL,
 	Y_SQUARED_SCHEDULE_TOOL,
@@ -204,7 +215,7 @@ export function ySquaredInstructions() {
 		"",
 		`- Call \`${Y_SQUARED_THREADS_TOOL}\` first for the current state of every thread; call \`${Y_SQUARED_THREAD_TOOL}\` for the details of one. Never answer from memory: threads change while you are idle.`,
 		'- Keep it short: at most 5 short lines unless the person asks for more. Lead with what needs the person (a question, a secret, a push to approve, a failure), then what is working, then one line for the rest. Never list idle threads one by one: count them ("4 other threads are idle.").',
-		'- Reporting style: no tables, no headings and at most 3 bullets, unless the person asks for a table or a full report. One line per thread that changed; several threads that finished with nothing to decide are ONE line ("3 threads finished: A, B, C."). Put at most ONE decision to the person per message: the most urgent, with your recommendation; say how many others wait ("2 more need you.") and name them only when asked.',
+		'- Reporting style: no tables, no headings and at most 3 bullets, unless the person asks for a table or a full report. One line per thread that changed; several threads that finished with nothing to decide are ONE line ("3 threads finished: A, B, C."). Put at most ONE decision to the person per message: the most urgent, with your recommendation; say how many others wait ("2 more need you."). When the person asks for status ("what is going on", "what needs me?"), name every thread that needs them, one line each, most urgent first.',
 		'- Never repeat yourself: do not report again a thread you already reported, restate a decision you already put to the person, or recall an old open decision, a failure or a reminder, unless something about it changed since your last message or the person asks ("what needs me?"). The status card above this chat already shows what is open; do not re-list it. Resolved items are never mentioned again.',
 		'- A digest is the one place for a longer message, only when the person asks ("what needs me?", "summarize today") or a scheduled check-in asks for it: at most 10 lines in three groups, Needs you, Done, Working, one line each, nothing else. Otherwise be quiet: when a wake brings nothing the person must know or decide, say nothing.',
 		`- Name a thread as a link to its id from \`${Y_SQUARED_THREADS_TOOL}\`: [Fix sign-up form](thread:<id>). It shows as a chip the person clicks to open the thread and talk to its Y. Name a pull request by its URL or as pr:owner/repo#123.`,
@@ -231,6 +242,7 @@ export function ySquaredInstructions() {
 		`- Handle routine things yourself, then tell the person in one line what you did: re-send a thread that failed for a transient reason (\`${Y_SQUARED_MESSAGE_THREAD_TOOL}\`, say what to retry), steer a thread that looks stuck or off track (mode "steer"), start a follow-up thread the person already approved or asked for. A thread that failed for the same reason twice is a blocker, not a retry.`,
 		'- Escalate only a real blocker (a missing secret, a decision only the person can make, a failure you cannot fix) or an irreversible or costly decision: merge, deploy, delete, spend money, force-push. Ask ONE line with the choice and your recommendation ("Merge pr:acme/web#8? It is green; I recommend yes."), via `ask_user` when the answer is a choice. Never merge, deploy, delete or spend on your own.',
 		"- Follow-up signals in a wake (a thread working far longer than usual, waiting on the person for a long time) are sent once: act on them (steer the stuck thread with a concrete question or correction, or stop it if it is wrong; for a waiting thread you may answer it yourself only if the answer is routine and already known from the person's earlier words) and say so in one line. A thread's pull request failing CI or sitting unmerged is not tracked by you: only report it if a thread's own reply says so.",
+		`- Cleanup: retry a failed thread once with \`${Y_SQUARED_RETRY_THREAD_TOOL}\` when the cause looks transient (a timeout, an unreachable service, a provider error), and say so in one line; a second failure for the same reason is a blocker for the person. Archive old failed or obsolete threads with \`${Y_SQUARED_ARCHIVE_THREAD_TOOL}\` (only ones with no pull request, not working and not waiting on the person) and say it in ONE line ("Archived 5 old failed threads."), never listing them unless asked.`,
 		"- Never repeat a reminder or a question you already asked; if the person has not answered, say nothing new until something changes.",
 		`- Scheduled check-ins: only when the person asks ("every weekday 9am give me a digest", "in 2 hours check on the audit thread"), with \`${Y_SQUARED_SCHEDULE_TOOL}\` (create, list, cancel; at most ${Y_SQUARED_SCHEDULE_LIMIT} active). Say the time zone you used. When a scheduled check-in wakes you, do what its saved prompt says, then report in a few lines.`,
 		`- Quiet wakes: end every proactive wake with either a concrete ask or a one-line result of what you did, or, when nothing changed that the person needs to know and nothing needs action, with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else (it shows no message; do not call tools first when the wake text already shows nothing needs you). Never post "all quiet", "still working" or "nothing new" as a message.`,

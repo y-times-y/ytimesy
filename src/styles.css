@@ -5657,6 +5657,65 @@ details.environment-build[open] > summary .session-activity-chevron {
 .y-overview-heading[aria-expanded="false"] .y-overview-chevron {
 	transform: rotate(-90deg);
 }
+/* Inline answers under a Needs-you row (y-inbox-controls.tsx). */
+.y-inbox,
+.y-inbox-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 2px var(--list-row-pad-x) 8px 36px;
+}
+.y-inbox-actions {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+}
+.y-inbox-button {
+	align-self: flex-start;
+	padding: 4px 10px;
+	border: 1px solid #ffffff22;
+	border-radius: 7px;
+	background: #1a1a1a;
+	color: var(--list-text);
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.y-inbox-button[data-primary="true"] {
+	border-color: #e6e6e6;
+	background: #e6e6e6;
+	color: #111;
+}
+.y-inbox-button:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+.y-inbox-note,
+.y-inbox-done,
+.y-inbox-error {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	padding: 2px var(--list-row-pad-x) 6px 36px;
+	color: var(--list-text-muted);
+	font-size: 12px;
+}
+.y-inbox-note {
+	padding-left: 0;
+}
+.y-inbox-error {
+	padding-left: 0;
+	color: #ff6764;
+}
+.y-inbox-link {
+	border: 0;
+	background: none;
+	color: var(--list-text);
+	font: inherit;
+	text-decoration: underline;
+	cursor: pointer;
+}
 .y-overview-rows {
 	margin: 0;
 	padding: 0;

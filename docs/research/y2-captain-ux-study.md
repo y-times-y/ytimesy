@@ -53,7 +53,7 @@ Code: `src/domain/y-squared.ts` (instructions, tools), `src/domain/y-squared-cre
 
 1. **The answer UI lives in the thread.** Questions, secrets, push and plan approvals are cards in the thread's chat; Y² can only relay in words, then write the answer back as text. This is the exact complaint ("I still have to go to these threads").
 2. **Too many long messages.** ~130 wakes a day, 45% spoken, a third over 100 words, with tables, bullets and repeated old decisions; contradictory length rules in the prompt. Nothing is "the one thing to look at".
-3. **No standing "needs you" list in the chat.** The status card is a link list (title, request, elapsed); it shows no question or options and cannot answer. A needs-you item reported once scrolls away.
+3. **No standing "needs you" list with controls.** The pinned status card was dropped (f918b8b8); the Overview beside the chat lists needs-you rows, but they only open the thread (no question, no options, no answer). A needs-you item reported once scrolls away.
 4. **Thin visibility.** Truncated last reply, no CI/PR state, canvases only recently readable; Y² can describe, not show, a thread's result inline (only canvases via `show_canvas`).
 5. **Failures are noticed late and never cleaned.** 7 failed and 4 stuck-`starting` threads sit there; no archive/retry tool; stall signals fire per wake.
 6. **Identity.** Wrong thread links when titles were missing (partly fixed 2026-11-23); links by title only, no `<project>-<number>` handle in messages.
@@ -101,6 +101,10 @@ No new alarm or poll. Inbox data = the crew card read already done per status ch
 3. Skip model wakes when nothing is new (server-side)? Recommend yes; keep the heartbeat only as a stall check.
 4. A scheduled morning digest by default (9:00 local) or only on request? Recommend on request first; offer it once.
 5. Add `<project>-<number>` to crew rows and links? Recommend yes (small data change).
+
+## 7. Built after approval (2026-11-24)
+
+Skip of heartbeat-only wakes (server); `ask` line on wake events; `retry_thread` and `archive_thread`; inline Answer / Enter secret / Retry under Needs-you rows of the Overview (answer posted by the server as the person's message, secret saved straight to project settings). Not built: `<project>-<number>` in Y²'s tool output (the box port has no project name; thread names already link in text), push/plan approval inline, PR/CI state, server batching of finishes.
 
 ## 6. What was built (prompt level, committed locally, not deployed)
 

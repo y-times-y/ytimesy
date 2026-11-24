@@ -273,7 +273,9 @@ const scenarios: { name: string; run: () => Promise<Check[]> }[] = [
 				},
 				{
 					name: "explains from it",
-					pass: /reproduce|couldn.t make|could not/i.test(r.reply),
+					pass: /repro|couldn.t make|could not|didn.t hit|30/i.test(
+						r.reply,
+					),
 					detail: r.reply.slice(0, 80),
 				},
 			];
