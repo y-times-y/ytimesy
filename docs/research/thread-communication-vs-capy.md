@@ -70,3 +70,15 @@ Research and design, 2026-11-24. No production code changed.
 
 ## 5. Not verified here
 Whether side chats share a VM or checkout with Main; the R2 usage beyond checkpoints; whether Freestyle supports a shared volume across VMs; Capy cloud Drive mount behaviour.
+
+## 6. Built (2026-11-24, branch `ytimesy/thread-to-thread-32f9e2`, not deployed)
+
+Drive is deferred by the user's decision. Public harness: not ported (the user says the monorepo is the public one).
+
+- `read_thread(id)` and `message_thread(id, text, mode)` for an ordinary root thread (not Y², not helpers): `src/server/services/thread-peer-tools.ts`, rules in `src/domain/thread-peer.ts`, work in `src/server/services/thread-peer-read.ts`. Same user, same project, root threads only, never itself, never Y².
+- Reads and sends run where the database is: directly in the Durable Object, through the `peerThread` and `peerSend` box ports on a box (`turn-box-protocol.ts`, `turn-box-port-handlers.ts`). The box sends only the id, text and mode; user, project and chat come from the grant.
+- `message_thread` modes are `queue` (default) and `steer`; there is no interrupt. It goes through the person's own send path, so concurrency, usage windows and budgets apply.
+- Loop protection: at most 3 sends per turn; a turn whose latest user message is a peer message cannot send (`startedByPeerMessage`), so A→B never becomes B→A→B. The person's next message lifts it. The recipient's queue cap (50) still applies. Each send is idempotent per turn, recipient and text.
+- Surfacing: the recipient's chat shows the message with a "From thread X" label (`session-timeline.tsx`). Y² learns of it through the existing crew "direct start" note, which carries the first 200 characters of the request (the peer marker is short for that reason). Not built: a sidebar row badge.
+- Tests: `thread-peer-read.test.ts`, `thread-peer-tools.test.ts`, the `peerThread`/`peerSend` cases in `turn-box-ports.test.ts`, and a box check in `box-turn-e2e.test.ts`.
+- Not verified live: a real turn on the Durable Object or a box; the Claude Code route (it should receive the tools through `claudeCodeBridgeToolSet`, unchecked); the Y² narration of a peer message.

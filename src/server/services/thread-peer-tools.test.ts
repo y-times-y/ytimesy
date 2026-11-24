@@ -65,3 +65,18 @@ describe("startedByPeerMessage", () => {
 		expect(startedByPeerMessage([])).toBe(false);
 	});
 });
+
+describe("parsePeerMessage", () => {
+	it("splits a peer message into sender and body", async () => {
+		const { parsePeerMessage } = await import("#/domain/thread-peer");
+		const text = peerMessageText(
+			{ title: 'Fix "login"', id: "t1" },
+			"Rebase\n\nplease",
+		);
+		expect(parsePeerMessage(text)).toEqual({
+			from: "Fix login",
+			body: "Rebase\n\nplease",
+		});
+		expect(parsePeerMessage("hello")).toBeNull();
+	});
+});
