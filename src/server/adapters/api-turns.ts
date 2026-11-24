@@ -1479,8 +1479,12 @@ export async function readRunningApiTurnIdentity(
 	return result.rows[0] ?? null;
 }
 
-/** How many times a box-run turn is handed to another box after its box stopped heartbeating. */
-export const MAX_BOX_TURN_TAKEOVERS = 3;
+/**
+ * How many times a box-run turn is handed to another box after its box stopped
+ * heartbeating. Each takeover resumes from a checkpoint, so a fleet replacement
+ * or a few crashes in a row must not fail a turn (was 3).
+ */
+export const MAX_BOX_TURN_TAKEOVERS = 10;
 
 /**
  * A turn running on a box whose heartbeat stopped (the box died, lost its
