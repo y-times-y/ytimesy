@@ -166,6 +166,28 @@ it("a running thread: the model changes for its next turn, its transcript is lef
 	expect(after?.items).toHaveLength(1);
 });
 
+it("refuses an idle-only change if a turn started before the row was locked", async () => {
+	const id = await chat({ turn: "running" });
+	await db.query(
+		"insert into agent_peer_inbox(id,recipient_id,message,queued_send) values('q1',$1,'m',$2::jsonb)",
+		[id, JSON.stringify({ modelId: "old", harnessId: "codex" })],
+	);
+	expect(await setThreadModel(change(id, { requireIdle: true }))).toEqual({
+		found: true,
+		lineWritten: false,
+		running: true,
+	});
+	expect((await row(id))?.listed_model_id).toBe("gpt-6-sol");
+	expect((await row(id))?.items).toHaveLength(1);
+	expect(
+		(
+			await db.query<{ queued_send: { modelId: string } }>(
+				"select queued_send from agent_peer_inbox where id='q1'",
+			)
+		).rows[0]?.queued_send.modelId,
+	).toBe("old");
+});
+
 it("messages already waiting move to the new model and lose the old model's settings", async () => {
 	const id = await chat();
 	const waiting = {

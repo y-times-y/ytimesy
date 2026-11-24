@@ -19,6 +19,8 @@ export type ThreadModelChange = {
 	readonly line: string;
 	/** Makes the line's id stable: a replayed change adds it once. */
 	readonly changeId: string;
+	/** Refuse a change if the turn started before the row lock. */
+	readonly requireIdle?: boolean;
 };
 
 /** A selection is pending until a new turn records its own settings. */
@@ -54,7 +56,7 @@ export async function threadModelSettings(
  */
 export async function setThreadModel(
 	change: ThreadModelChange,
-): Promise<{ found: boolean; lineWritten: boolean }> {
+): Promise<{ found: boolean; lineWritten: boolean; running?: boolean }> {
 	const line: SessionItem = {
 		kind: "notice",
 		id: SessionItemId(`${change.sessionId}:model-change:${change.changeId}`),
@@ -73,6 +75,7 @@ export async function setThreadModel(
 	const result = await database().query<{
 		found: number;
 		line: boolean | null;
+		running: boolean;
 	}>(
 		`/* setThreadModel */ with target as (
 		   select id, turn_status from agent_session
@@ -86,14 +89,15 @@ export async function setThreadModel(
 		     items=case when t.turn_status <> 'running'
 		       and not coalesce(s.items,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('id',$7::text))
 		       then coalesce(s.items,'[]'::jsonb)||$5::jsonb else s.items end
-		   from target t where s.id=t.id returning t.turn_status as before),
+		   from target t where s.id=t.id and (not $8::boolean or t.turn_status <> 'running') returning t.id, t.turn_status as before),
 		 waiting as (
 		   update agent_peer_inbox q
 		   set queued_send=(q.queued_send - 'variant' - 'speed' - 'fast' - 'alternateContext')||$6::jsonb
-		   where q.recipient_id in (select id from target) and not q.accepted and q.queued_send is not null
+		   where q.recipient_id in (select id from changed) and not q.accepted and q.queued_send is not null
 		   returning q.id)
-		 select (select count(*) from changed)::int as found,
-		        (select bool_or(before <> 'running') from changed) as line`,
+		 select (select count(*) from target)::int as found,
+		        (select bool_or(before <> 'running') from changed) as line,
+		        ($8::boolean and exists(select 1 from target where turn_status='running')) as running`,
 		[
 			change.sessionId,
 			change.userId,
@@ -102,10 +106,12 @@ export async function setThreadModel(
 			jsonbText([line]),
 			jsonbText(queued),
 			line.id,
+			change.requireIdle ?? false,
 		],
 	);
 	const row = result.rows[0];
 	if (!row?.found) return { found: false, lineWritten: false };
+	if (row.running) return { found: true, lineWritten: false, running: true };
 	forgetPeerInboxObservation(change.sessionId);
 	await wakeConversationProgress().catch(() => undefined);
 	return { found: true, lineWritten: row.line === true };

@@ -58,12 +58,13 @@ export async function selectAgentSessionHarness(
 	projectId: string,
 	sessionId: string,
 	harness: AgentProviderId,
+	preserveModelId?: string,
 ): Promise<AgentSessionRecord> {
 	const result = await database().query(
-		`/* selectAgentSessionHarness */ update agent_session set harness=$4,listed_model_id=null,updated_at=now()
+		`/* selectAgentSessionHarness */ update agent_session set harness=$4,listed_model_id=case when listed_model_id=$5 then listed_model_id else null end,updated_at=now()
 		 where user_id=$1 and project_id=$2 and id=$3 and turn_status <> 'running'
 		 returning ${METADATA_COLUMNS}`,
-		[userId, projectId, sessionId, harness],
+		[userId, projectId, sessionId, harness, preserveModelId ?? null],
 	);
 	if (!result.rows[0])
 		throw new Error(

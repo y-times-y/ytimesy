@@ -83,7 +83,13 @@ function fixture(
 		sessionId: "new-thread",
 	}));
 	const stop = vi.fn(async () => ({ turnStatus: "idle" }));
-	const setModel = vi.fn(async () => ({ found: true, lineWritten: true }));
+	const setModel = vi.fn(
+		async (): Promise<{
+			found: boolean;
+			lineWritten: boolean;
+			running?: boolean;
+		}> => ({ found: true, lineWritten: true }),
+	);
 	const models = vi.fn(
 		async (): Promise<ThreadModelChoices> => ({
 			enabled: true,
@@ -321,6 +327,23 @@ describe("set_thread_model", () => {
 		expect(f.stop.mock.invocationCallOrder[0]).toBeLessThan(
 			f.setModel.mock.invocationCallOrder[0] as number,
 		);
+	});
+
+	it("refuses when a turn starts after the initial idle check", async () => {
+		const f = fixture();
+		f.setModel.mockResolvedValueOnce({
+			found: true,
+			lineWritten: false,
+			running: true,
+		});
+		const result = await run(f.tools, "set_thread_model", {
+			id: "idle",
+			model: "gpt-6-luna",
+		});
+		expect(result).toContain("is working");
+		expect(result).toContain("interrupt true");
+		expect(f.setModel.mock.calls[0]?.[0]).toMatchObject({ requireIdle: true });
+		expect(f.stop).not.toHaveBeenCalled();
 	});
 
 	it("says so when a queued message restarted the thread before the line could be written", async () => {

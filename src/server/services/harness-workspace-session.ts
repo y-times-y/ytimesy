@@ -240,6 +240,7 @@ export function sendHarnessWorkspaceTask(
 						previous.projectId,
 						previous.id,
 						scope.harnessId,
+						input.modelId,
 					),
 				);
 			const read = current ?? undefined;
