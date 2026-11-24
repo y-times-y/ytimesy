@@ -457,6 +457,8 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		machineGit: () => boxMachineGit(call),
 		claudeBox: boxClaudeHost(session, call),
 		ySquaredToolDeps: boxYSquaredToolDeps(call),
+		// The edge reads from the grant's own user, project and chat.
+		peerThreadRead: ({ id }) => call<string>("peerThread", { id }),
 		planFailover: (input) => call("planFailover", input),
 		helperStepDeps: {
 			recordStep: async () =>
