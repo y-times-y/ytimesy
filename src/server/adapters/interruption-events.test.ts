@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 vi.mock("./database", () => ({
 	database: () => ({ query: async () => ({ rows: [] }) }),
 }));
+
 import {
 	recordInterruption,
 	resetInterruptionLimiter,
@@ -69,7 +70,9 @@ it("never throws: a failing or hanging database is 'failed'", async () => {
 });
 
 it("truncates oversized fields", async () => {
-	const query = vi.fn(async () => ({ rowCount: 1 }));
+	const query = vi.fn(async (_sql: string, _values: unknown[]) => ({
+		rowCount: 1,
+	}));
 	await recordInterruption(
 		{ kind: "k".repeat(200), turnId: "t", cause: "c".repeat(500) },
 		{ query },
