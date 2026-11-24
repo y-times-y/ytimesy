@@ -1,0 +1,15 @@
+{
+	"name": "ytimesy-infra-alchemy-poc",
+	"private": true,
+	"type": "module",
+	"description": "Proof of concept only, never applied: the turn box fleet as an Alchemy stack. Separate package because Alchemy v2 needs Effect 4 (the app pins Effect 3). Not part of the app build.",
+	"scripts": {
+		"plan": "alchemy plan",
+		"deploy": "alchemy deploy"
+	},
+	"dependencies": {
+		"alchemy": "2.0.0-beta.87",
+		"@alchemy.run/aws": "2.0.0-beta.87",
+		"effect": "^4.1.4"
+	}
+}
