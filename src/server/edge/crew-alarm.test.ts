@@ -54,6 +54,7 @@ function world() {
 		queued: [] as string[],
 		failNext: 0,
 		unsendable: false,
+		dormant: null as string | null,
 	};
 	const logs: string[] = [];
 	const note1 = (n: CrewNote, at = now) => {
@@ -73,6 +74,7 @@ function world() {
 					y2.failNext--;
 					throw new Error("connection timeout");
 				}
+				if (y2.dormant) return { skipped: y2.dormant };
 				if (y2.unsendable) return false;
 				if (y2.busy) y2.queued.push(body);
 				else y2.turns.push(body);
@@ -187,6 +189,21 @@ describe("a thread's turn end reaches Y²", () => {
 		expect(w.y2.turns[0]).toContain('"Fix sign-up" finished its turn');
 		expect(w.alarm()).toBeNull();
 		expect(w.logs.some((line) => line.includes('"enqueued":true'))).toBe(true);
+	});
+
+	it("is dormant for a person with no usable model: no turn, no retry loop, no error", async () => {
+		const w = world();
+		w.y2.dormant = "no-model";
+		w.note1(note(), T0);
+		w.note1(finish("t1", "Fix sign-up"), T0 + 1_000);
+		await w.fire();
+		expect(w.y2.turns).toHaveLength(0);
+		expect(w.y2.queued).toHaveLength(0);
+		expect(w.alarm()).toBeNull();
+		expect(w.logs.some((line) => line.includes('"skipped":"no-model"'))).toBe(
+			true,
+		);
+		expect(w.logs.some((line) => line.includes('"error"'))).toBe(false);
 	});
 
 	it("does not spend the hourly wake budget on failed sends", async () => {

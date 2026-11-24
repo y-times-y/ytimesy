@@ -1004,9 +1004,10 @@ describe("a Y project is a Y project before its chats load", () => {
 		expect(html).not.toContain('data-section="y2"');
 	});
 
-	it("a project with Y on and no Super agent chat yet still shows its row, and says why", () => {
+	it("a project with Y on whose Super agent chat is not listed yet still shows its row", () => {
 		const html = loading([alphaY, betaY]);
-		expect(html).toContain("Appears with its first thread");
+		expect(html).toContain("Getting ready");
+		expect(html).not.toContain("Appears with its first thread");
 		// Never an endless, unclickable Loading… row: it opens the project.
 		expect(html).not.toMatch(/data-pending="true"[^>]*>\s*<div/);
 		expect(html).toMatch(/data-pending="true"[^>]*>\s*<button/);
@@ -1019,5 +1020,12 @@ describe("a Y project is a Y project before its chats load", () => {
 		expect(html).toMatch(
 			/data-pending="true"[^>]*>\s*<button[^>]*class="sidebar-chat"/,
 		);
+	});
+
+	it("a project added just now has its Super agent at once: no waiting for a first thread, no dead Loading… row", () => {
+		const html = loading([{ ...alphaY, ySquaredId: "super-1" }, beta]);
+		expect(html).toContain("No threads yet");
+		expect(html).not.toContain("Loading…");
+		expect(html).not.toContain("Appears with its first thread");
 	});
 });

@@ -20,8 +20,10 @@ import {
 import { SettingsSwitch } from "./settings-switch";
 import {
 	cancelYScheduleFn,
+	readUserYDefaultFn,
 	readYModeFn,
 	readYProactiveFn,
+	saveUserYDefaultFn,
 	saveYModeFn,
 	saveYProactiveFn,
 } from "./y-mode.fn";
@@ -81,7 +83,9 @@ export function YModeSettings({ projectId }: { projectId: string }) {
 							className="settings-row-meta"
 							title="Each chat is Y: it hands the work to builders and keeps you posted, and builders' changes go to the chat's pull request. Y², pinned above the chats, tells you what is going on across them."
 						>
-							Off: each chat does the work itself.
+							On by default. It stays quiet until you connect a model, and it
+							runs only on your own plan or key. Off: each chat does the work
+							itself.
 						</span>
 					</div>
 					<div className="settings-row-actions">
@@ -94,10 +98,56 @@ export function YModeSettings({ projectId }: { projectId: string }) {
 				</div>
 			</div>
 			{error ? <p role="alert">{error}</p> : null}
+			<YUserDefaultSwitch />
 			{setting.data?.enabled ? (
 				<YProactiveSettings projectId={projectId} />
 			) : null}
 		</section>
+	);
+}
+
+/**
+ * The user-level off switch: Y² for all of this person's projects, now and
+ * the ones they add later (Settings and Project settings > Y show the same).
+ */
+function YUserDefaultSwitch() {
+	const read = useServerFn(readUserYDefaultFn);
+	const save = useServerFn(saveUserYDefaultFn);
+	const queryClient = useQueryClient();
+	const setting = useQuery({
+		queryKey: ["user-y-default"],
+		queryFn: () => read(),
+	});
+	const change = useMutation({
+		mutationFn: (enabled: boolean) => save({ data: { enabled } }),
+		onSuccess: () => {
+			queryClient.setQueryData(["user-y-default"], undefined);
+			void queryClient.invalidateQueries({ queryKey: ["user-y-default"] });
+			void queryClient.invalidateQueries({ queryKey: ["project-y-mode"] });
+			void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+		},
+	});
+	return (
+		<div className="settings-group">
+			<div className="settings-row">
+				<div className="settings-row-text">
+					<label htmlFor="user-y-default" className="settings-row-title">
+						Y² for all my projects
+					</label>
+					<span className="settings-row-meta">
+						Turn it off to switch Y² off for every project you have and the ones
+						you add later.
+					</span>
+				</div>
+				<div className="settings-row-actions">
+					<SettingsSwitch
+						id="user-y-default"
+						checked={setting.data?.enabled}
+						onCheckedChange={(enabled) => change.mutate(enabled)}
+					/>
+				</div>
+			</div>
+		</div>
 	);
 }
 

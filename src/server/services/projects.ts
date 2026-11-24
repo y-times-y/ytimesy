@@ -52,6 +52,7 @@ import { rejectRequest } from "./errors";
 import { removeProjectPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
 import { enqueueProjectWorkspace } from "./workspaces";
+import { createProjectYSquared } from "./y-on-add";
 
 /** A missing branch is the user's to fix, not a GitHub outage. */
 function requireBranch(token: string, fullName: string, branch: string) {
@@ -188,6 +189,7 @@ export function connectProjectGroup(
 			{ key: project.id, timestamp: new Date() },
 		);
 		yield* enqueueProjectWorkspace(userId, project.id);
+		yield* Effect.promise(() => createProjectYSquared(userId, project.id));
 		return project;
 	});
 }
@@ -243,6 +245,7 @@ export function connectProject(
 				saveWorkspaceStatus(restartWorkspaceId, "failed", branchChangedMessage),
 			);
 		yield* enqueue(userId, project.id);
+		yield* Effect.promise(() => createProjectYSquared(userId, project.id));
 		return project;
 	});
 }
@@ -272,7 +275,10 @@ export function createScratchProject(
 			{ repositories: 1 },
 			{ key: project.id, timestamp: new Date() },
 		);
-		if (!options.empty) yield* enqueue(userId, project.id);
+		if (!options.empty) {
+			yield* enqueue(userId, project.id);
+			yield* Effect.promise(() => createProjectYSquared(userId, project.id));
+		}
 		return { project, repository };
 	});
 }

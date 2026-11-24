@@ -2,7 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { parseSettingsPatch } from "#/domain/y-squared-proactive";
-import { projectYMode, setProjectYMode } from "#/server/adapters/y-mode";
+import {
+	projectYMode,
+	readUserYDefault,
+	setProjectYMode,
+	setUserYDefault,
+} from "#/server/adapters/y-mode";
 import { ySquaredCrewFor } from "#/server/adapters/y-squared-crew-client";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
@@ -69,4 +74,21 @@ export const cancelYScheduleFn = createServerFn({ method: "POST" })
 		requireSameOrigin(getRequest());
 		const crew = await proactiveCrew(data.projectId);
 		return { cancelled: (await crew?.cancelSchedule?.(data.id)) ?? false };
+	});
+
+/** The user-level switch: Y² for all of the person's projects, now and new ones. */
+export const readUserYDefaultFn = createServerFn({ method: "GET" }).handler(
+	async () => {
+		const user = await requireUser(getRequest().headers);
+		return { enabled: await readUserYDefault(user.id) };
+	},
+);
+
+export const saveUserYDefaultFn = createServerFn({ method: "POST" })
+	.validator((data: unknown) => z.object({ enabled: z.boolean() }).parse(data))
+	.handler(async ({ data }) => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		await setUserYDefault(user.id, data.enabled);
+		return { enabled: data.enabled };
 	});
