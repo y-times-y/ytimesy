@@ -87,6 +87,16 @@ import { ThreadHoverCard } from "./thread-hover-card";
 import { ThreadMark } from "./thread-mark";
 import { YSquaredMark } from "./y-squared-mark";
 
+/** The Threads list's groups, in order: what needs the person comes first. */
+const THREAD_GROUPS: readonly {
+	readonly status: SidebarStatusGroup;
+	readonly label: string;
+}[] = [
+	{ status: "needs-you", label: "Needs you" },
+	{ status: "working", label: "Working" },
+	{ status: "done", label: "Recently finished" },
+];
+
 /** Who is signed in, as the account button shows them. */
 export type SidebarAccount = {
 	readonly name?: string | null;
@@ -558,15 +568,30 @@ export function ProjectSidebar({
 		const settledOpen = settledShown || !hydrated;
 		return (
 			<>
-				{list.length ? (
-					<ul className="sidebar-chats sidebar-threads">
-						{list.map(({ chat, project }) =>
-							chatRow(chat, { project, thread: true }),
-						)}
-					</ul>
-				) : settled.length ? null : (
+				{THREAD_GROUPS.map(({ status, label }) => {
+					const inGroup = list.filter((row) => chatStatus(row.chat) === status);
+					if (!inGroup.length) return null;
+					return (
+						<div
+							key={status}
+							className="sidebar-thread-group"
+							data-group-name={status}
+						>
+							<h4 className="sidebar-thread-group-title">
+								{label}
+								<span className="sidebar-status-count">{inGroup.length}</span>
+							</h4>
+							<ul className="sidebar-chats sidebar-threads">
+								{inGroup.map(({ chat, project }) =>
+									chatRow(chat, { project, thread: true }),
+								)}
+							</ul>
+						</div>
+					);
+				})}
+				{!list.length && !settled.length ? (
 					<p className="sidebar-empty">{empty}</p>
-				)}
+				) : null}
 				{settled.length ? (
 					<div className="sidebar-settled" data-open={settledOpen}>
 						<button

@@ -6232,3 +6232,21 @@ body:has([data-new-version]) .usage-warning-banner {
 	background: #1b1b1b;
 	color: #f2f2f2;
 }
+/* The Threads list's state groups: Needs you, Working, Recently finished. */
+.sidebar-thread-group + .sidebar-thread-group {
+	margin-top: 4px;
+}
+.sidebar-thread-group-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 6px 0 2px;
+	padding-inline: 8px;
+	color: var(--list-text-muted);
+	font: inherit;
+	font-size: 11px;
+	letter-spacing: 0.02em;
+}
+.sidebar-thread-group[data-group-name="needs-you"] .sidebar-thread-group-title {
+	color: var(--list-text-strong);
+}
