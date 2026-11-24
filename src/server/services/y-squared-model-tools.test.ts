@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { wakeMessageId } from "#/domain/pull-request-wake";
 import type {
 	ThreadModel,
 	ThreadModelChoices,
@@ -112,6 +114,49 @@ function fixture(
 	});
 	return { tools, send, stop, setModel, models };
 }
+
+describe("start_thread idempotency", () => {
+	const keyFor = async (settings: Record<string, string> = {}) => {
+		const f = fixture();
+		await run(f.tools, "start_thread", {
+			title: "Audit",
+			brief: "Inspect cache.",
+			...settings,
+		});
+		expect(f.send).toHaveBeenCalledOnce();
+		return (
+			f.send.mock.calls[0] as unknown as [
+				unknown,
+				unknown,
+				{ idempotencyKey: string },
+			]
+		)[2].idempotencyKey;
+	};
+
+	it("keeps the legacy key when no model is chosen", async () => {
+		const hash = createHash("sha256")
+			.update(["Audit", "Inspect cache."].join("\u0000"))
+			.digest("hex");
+		expect(await keyFor()).toBe(wakeMessageId(`y2-start:turn-1:${hash}`));
+	});
+
+	it("distinguishes explicit models, reasoning and speed but deduplicates retries", async () => {
+		const defaultKey = await keyFor();
+		const opus = await keyFor({ model: "Claude Opus 5.5" });
+		const high = await keyFor({ model: "Claude Opus 5.5", reasoning: "HIGH" });
+		const medium = await keyFor({
+			model: "Claude Opus 5.5",
+			reasoning: "medium",
+		});
+		const luna = await keyFor({ model: "gpt-6-luna" });
+		const fast = await keyFor({ model: "gpt-6-luna", speed: "fast" });
+		expect(new Set([defaultKey, opus, high, medium, luna, fast]).size).toBe(6);
+		expect(
+			await keyFor({ model: "claude-code/claude-opus-5-5", reasoning: "high" }),
+		).toBe(high);
+		expect(await keyFor({ model: "GPT-6 Luna", speed: "FAST" })).toBe(fast);
+	});
+});
 
 describe("start_thread with a model", () => {
 	it("starts the thread on the chosen model and its runtime, with reasoning", async () => {
@@ -315,7 +360,7 @@ describe("set_thread_model", () => {
 		expect(f.models).not.toHaveBeenCalled();
 	});
 
-	it("does nothing when the thread already uses the model, and when the setting is off", async () => {
+	it("resets omitted settings on the same model, and does nothing when the setting is off", async () => {
 		const same = fixture({
 			chats: { idle: chat({ id: "idle", listedModelId: "gpt-6-luna" }) },
 		});
@@ -324,8 +369,10 @@ describe("set_thread_model", () => {
 				id: "idle",
 				model: "GPT-6 Luna",
 			}),
-		).toContain("already uses GPT-6 Luna");
-		expect(same.setModel).not.toHaveBeenCalled();
+		).toContain("will use GPT-6 Luna");
+		expect(same.setModel).toHaveBeenCalledOnce();
+		expect(same.setModel.mock.calls[0]?.[0]).not.toHaveProperty("variant");
+		expect(same.setModel.mock.calls[0]?.[0]).not.toHaveProperty("speed");
 		const off = fixture({ choices: { enabled: false } });
 		expect(
 			await run(off.tools, "set_thread_model", {

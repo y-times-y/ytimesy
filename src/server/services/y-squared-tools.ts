@@ -667,7 +667,16 @@ export function ySquaredTools(input: {
 							? modelSettings(chosen.model, { reasoning, speed })
 							: { modelId: input.modelId }),
 						idempotencyKey: sendKey(
-							"start",
+							chosen ? "start-model" : "start",
+							...(chosen
+								? [
+										JSON.stringify([
+											chosen.model.id,
+											canonicalReasoning(chosen.model, reasoning ?? "") ?? null,
+											speed?.trim().toLowerCase() ?? null,
+										]),
+									]
+								: []),
 							title,
 							brief,
 							...(attachments ?? []),
@@ -776,13 +785,6 @@ export function ySquaredTools(input: {
 				const { model } = chosen;
 				if (chat.turnStatus === "running" && !interrupt)
 					return `Not changed: "${chat.title}" is working, and its running turn finishes on its current model. Wait for it to finish (you wake when it does) and call ${Y_SQUARED_SET_THREAD_MODEL_TOOL} again, or pass interrupt true to stop the running turn first (what it did stays in the thread).`;
-				if (
-					chat.listedModelId === model.id &&
-					!reasoning &&
-					!speed &&
-					chat.turnStatus !== "running"
-				)
-					return `"${chat.title}" already uses ${model.label}; nothing changed.`;
 				const interrupted = chat.turnStatus === "running";
 				if (interrupted)
 					await deps.stop(input.machines, {

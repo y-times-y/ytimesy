@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -8,14 +9,21 @@ vi.mock("./conversation-progress-wake", () => ({
 	wakeConversationProgress: async () => undefined,
 }));
 
-import { setThreadModel } from "./thread-model";
+import { setThreadModel, threadModelSettings } from "./thread-model";
 
 let db: PGlite;
 const project = randomUUID();
 beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,project_id uuid,harness text,parent_session_id uuid,agent_role text,chat_role text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',updated_at timestamptz default now());
+	 create table api_turn(id uuid primary key,session_id uuid,created_at timestamptz default now());
 	 create table agent_peer_inbox(id text primary key,recipient_id uuid,message text,queued_send jsonb,accepted boolean not null default false);`);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261124120000_thread_model_selection.sql",
+			"utf8",
+		),
+	);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
 		const result = await db.query(sql, values);
 		return { ...result, rowCount: result.affectedRows || result.rows.length };
@@ -87,6 +95,53 @@ it("an idle thread: model changes, harness and history stay, one quiet line is a
 	expect(after?.items[1]).toMatchObject({
 		kind: "notice",
 		message: "Model changed to Claude Opus 5.5 by the Super agent",
+	});
+});
+
+it("retains an idle selection for future sends, including explicit defaults", async () => {
+	const id = await chat();
+	await setThreadModel(
+		change(id, {
+			modelId: "connection|model-z",
+			variant: "high",
+			speed: "ultrafast",
+		}),
+	);
+	expect(await threadModelSettings("alice", id, "connection|model-z")).toEqual({
+		variant: "high",
+		speed: "ultrafast",
+	});
+	expect(await threadModelSettings("alice", id, "other|model-z")).toBeNull();
+	expect(await threadModelSettings("bob", id, "connection|model-z")).toBeNull();
+	await setThreadModel(
+		change(id, { modelId: "connection|model-z", changeId: "c2" }),
+	);
+	expect(await threadModelSettings("alice", id, "connection|model-z")).toEqual(
+		{},
+	);
+	await db.query("insert into api_turn(id,session_id) values($1,$2)", [
+		randomUUID(),
+		id,
+	]);
+	expect(
+		await threadModelSettings("alice", id, "connection|model-z"),
+	).toBeNull();
+});
+
+it("retains Codex fast mode and replaces old API settings", async () => {
+	const id = await chat();
+	await setThreadModel(change(id, { variant: "high", speed: "ultrafast" }));
+	await setThreadModel(
+		change(id, {
+			modelId: "gpt-example",
+			harness: "codex",
+			speed: "fast",
+			variant: "low",
+		}),
+	);
+	expect(await threadModelSettings("alice", id, "gpt-example")).toEqual({
+		variant: "low",
+		fast: true,
 	});
 });
 

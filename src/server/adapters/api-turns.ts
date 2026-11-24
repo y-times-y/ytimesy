@@ -131,7 +131,7 @@ export async function inheritedApiTurnSettings(
 	userId: string,
 	sessionId: string,
 	modelId: string,
-	connectionId: string,
+	connectionId: string | null,
 ) {
 	const result = await database().query<{ settings: unknown }>(
 		`with recursive ancestors as (
@@ -139,7 +139,8 @@ export async function inheritedApiTurnSettings(
 		 union all select p.id,p.parent_session_id,a.depth+1 from agent_session p
 		 join ancestors a on p.id=a.parent_session_id where p.user_id=$2 and a.depth<8
 		) select t.settings from ancestors a join api_turn t on t.session_id=a.id
-		 where t.user_id=$2 and t.model_id=$3 and t.connection_id=$4
+		 where t.user_id=$2 and t.model_id=$3 and t.connection_id is not distinct from $4::uuid
+		 and ($4::uuid is not null or t.connection_revision like 'claude-code:v1:%')
 		 order by a.depth,t.created_at desc limit 1`,
 		[sessionId, userId, modelId, connectionId],
 	);

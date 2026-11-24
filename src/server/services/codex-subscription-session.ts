@@ -35,6 +35,7 @@ import {
 	previousTurnMessages,
 } from "../adapters/api-turns";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
+import { threadModelSettings } from "../adapters/thread-model";
 import { loadAgentAccount, loadAgentAccountState } from "../auth/agent-account";
 import {
 	type CodexDeviceLogin,
@@ -283,11 +284,21 @@ export async function sendSubscriptionTask(
 	const continuing = Boolean(input.continueOn);
 	// The chat view (its row, the account and catalog) and the settings the
 	// turn inherits are independent reads.
-	const [view, inherited] = await timed("send:view", () =>
+	const [view, inherited, selection] = await timed("send:view", () =>
 		Promise.all([
 			readSubscriptionSession(scope, continuing, read),
 			input.variant === undefined && input.fast === undefined
 				? inheritedSubscriptionSettings(
+						scope.userId,
+						scope.sessionId as string,
+						input.modelId,
+					)
+				: null,
+			!continuing &&
+			input.variant === undefined &&
+			input.fast === undefined &&
+			input.alternateContext === undefined
+				? threadModelSettings(
 						scope.userId,
 						scope.sessionId as string,
 						input.modelId,
@@ -300,7 +311,8 @@ export async function sendSubscriptionTask(
 	if (!continuing && !view.models.some((model) => model.id === input.modelId))
 		throw new Error("Selected subscription model is unavailable.");
 	const alternateContext =
-		input.alternateContext ?? inherited?.alternateContext === true;
+		input.alternateContext ??
+		(!selection && inherited?.alternateContext === true);
 	if (
 		alternateContext &&
 		!continuing &&
@@ -310,8 +322,8 @@ export async function sendSubscriptionTask(
 			"A larger context window is not available for this model on your ChatGPT plan.",
 		);
 	const revision = subscriptionTurnRevision(
-		input.variant ?? inherited?.reasoning,
-		input.fast ?? inherited?.fast,
+		input.variant ?? (selection ? selection.variant : inherited?.reasoning),
+		input.fast ?? (selection ? (selection.fast ?? false) : inherited?.fast),
 		alternateContext,
 	);
 	// The send's key is its message id: a replayed request was already queued.

@@ -73,6 +73,18 @@ describe("which model a request names", () => {
 		});
 	});
 
+	it("an exact route id never selects another route with the same bare model id", () => {
+		const api = { ...luna, id: "api/connection/gpt-6-luna", route: "API key" };
+		const unavailable = { ...luna, usable: false, unavailable: "plan used up" };
+		expect(resolveThreadModel(luna.id, [api, luna])).toEqual({
+			ok: true,
+			model: luna,
+		});
+		const result = resolveThreadModel(luna.id, [api, unavailable]);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("plan used up");
+	});
+
 	it("an unknown model is an error that lists the valid choices, never a fallback", () => {
 		const picked = resolveThreadModel("gpt-9-ultra", models);
 		expect(picked.ok).toBe(false);
