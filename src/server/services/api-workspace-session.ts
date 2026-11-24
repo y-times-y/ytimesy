@@ -75,7 +75,7 @@ import {
 } from "./codex-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
 import { availableApiModelRoutes } from "./model-connections";
-import { pinnedTurnFailover } from "./model-failover";
+import { pinnedTurnFailover, stickyTurnFailover } from "./model-failover";
 import { githubSendBlocked } from "./send-blockers";
 import { commitChatBranchForSubmission } from "./session-branch";
 
@@ -334,18 +334,15 @@ export async function sendApiWorkspaceTask(
 	// The send's key is its message id: a replayed request was already queued.
 	if (await alreadySent(scope, session.id, held, input.idempotencyKey))
 		return readApiWorkspaceSession(scope);
+	const route = {
+		connectionId: connection.id,
+		connectionRevision: connection.revision,
+		modelId: selected.modelId,
+		settings,
+	};
 	const failover = input.continueOn
-		? await pinnedTurnFailover(
-				scope.userId,
-				{
-					connectionId: connection.id,
-					connectionRevision: connection.revision,
-					modelId: selected.modelId,
-					settings,
-				},
-				input.continueOn,
-			)
-		: undefined;
+		? await pinnedTurnFailover(scope.userId, route, input.continueOn)
+		: await stickyTurnFailover(scope.userId, session.id, route);
 	const planned = input.approvesPlan
 		? await wholeTranscript(scope, session.id, held)
 		: held;
@@ -461,18 +458,15 @@ async function sendClaudeCodeTask(
 		return readApiWorkspaceSession(scope);
 	const revision = claudeCodeTurnRevision();
 	const effort = apiReasoningEffort(input.variant);
+	const route = {
+		connectionId: null,
+		connectionRevision: revision,
+		modelId,
+		settings: effort ? { reasoning: effort } : {},
+	};
 	const failover = input.continueOn
-		? await pinnedTurnFailover(
-				scope.userId,
-				{
-					connectionId: null,
-					connectionRevision: revision,
-					modelId,
-					settings: effort ? { reasoning: effort } : {},
-				},
-				input.continueOn,
-			)
-		: undefined;
+		? await pinnedTurnFailover(scope.userId, route, input.continueOn)
+		: await stickyTurnFailover(scope.userId, session.id, route);
 	const planned = input.approvesPlan
 		? await wholeTranscript(scope, session.id, held)
 		: held;
