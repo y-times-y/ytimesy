@@ -982,6 +982,30 @@ export class SqliteYSquaredCrew {
 		const proactive = this.dueProactive(now, row);
 		const hasProactive =
 			proactive.schedules.length > 0 || proactive.signals.length > 0;
+		// A due wake with no change to tell and nothing proactive is only a
+		// "still working" heartbeat: the model could answer nothing but
+		// NOTHING_TO_REPORT (212 of 389 production wakes in 3 days), so it
+		// costs a model turn for no message. Skip it; the heartbeat clock moves
+		// on and the stall signals (proactive) still wake Y².
+		if (
+			baseDue &&
+			!hasProactive &&
+			this.sql
+				.exec<{ n: number }>("select count(*) n from wake_events")
+				.toArray()[0]?.n === 0
+		) {
+			this.sql.exec(
+				"update wake_state set pending=0,pending_due_at=null,last_heartbeat_at=case when ? then ? else last_heartbeat_at end where id=1",
+				heartbeatDue ? 1 : 0,
+				now,
+			);
+			this.saveWake({ ...state, pending: false, alarmAt: null });
+			return {
+				action: "none" as const,
+				next: { ...state, pending: false, alarmAt: null },
+				rearmAt: this.rearm(now),
+			};
+		}
 		if (!baseDue && !hasProactive) {
 			// An early or stale alarm: nothing to send; set the next one.
 			this.saveWake({ ...state, alarmAt: null });
