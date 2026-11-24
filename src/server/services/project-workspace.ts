@@ -133,7 +133,7 @@ function ensureSingleProjectCheckout(
 					},
 				),
 			).pipe(
-				Effect.catchAll((error) => {
+				Effect.catch((error) => {
 					// A checkout on another branch than the one on record, with work
 					// of its own: switching would overwrite it. The chat's agent (or
 					// the user) moved it there, so the turn goes on where it is.
@@ -346,6 +346,6 @@ function guestHome(
 			const home = result.stdout.trim();
 			return home || "/home/ubuntu";
 		}),
-		Effect.catchAll(() => Effect.succeed("/home/ubuntu")),
+		Effect.catch(() => Effect.succeed("/home/ubuntu")),
 	);
 }

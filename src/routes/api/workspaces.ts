@@ -49,7 +49,7 @@ export const Route = createFileRoute("/api/workspaces")({
 						await request.json(),
 					);
 					const result = await Effect.runPromise(
-						Effect.either(
+						Effect.result(
 							enqueueProjectWorkspace(
 								user.id,
 								ProjectId(projectId),
@@ -58,8 +58,8 @@ export const Route = createFileRoute("/api/workspaces")({
 							),
 						),
 					);
-					if (result._tag === "Left") throw result.left.error;
-					return workspaceStatusView(result.right);
+					if (result._tag === "Failure") throw result.failure.cause;
+					return workspaceStatusView(result.success);
 				}),
 		},
 	},

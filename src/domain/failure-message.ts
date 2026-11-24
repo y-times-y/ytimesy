@@ -3,10 +3,20 @@ import {
 	USAGE_WINDOW_REFUSAL_PATTERN,
 } from "./infrastructure-usage";
 
-/** Effect's default message for `Effect.tryPromise(fn)` without a `catch`. */
-export const EFFECT_GENERIC_FAILURE =
-	"An unknown error occurred in Effect.tryPromise";
-const GENERIC_EFFECT_PROMISE_FAILURE = EFFECT_GENERIC_FAILURE;
+/**
+ * Effect's default message for `Effect.tryPromise(fn)` without a `catch`:
+ * "An error occurred in Effect.tryPromise" since Effect 4 (Effect 3 said
+ * "An unknown error occurred ..."; stored failures can still carry it).
+ */
+export const EFFECT_GENERIC_FAILURE = "An error occurred in Effect.tryPromise";
+const GENERIC_EFFECT_PROMISE_TEXT =
+	/An (?:unknown )?error occurred in Effect\.tryPromise/;
+/** True for exactly Effect's default tryPromise message (either version). */
+export function isGenericEffectText(text: string): boolean {
+	return /^An (?:unknown )?error occurred in Effect\.tryPromise$/.test(
+		text.trim(),
+	);
+}
 export const GENERIC_SERVER_FAILURE =
 	"Something went wrong on our side. It's been logged; try again.";
 
@@ -16,7 +26,9 @@ export const GENERIC_SERVER_FAILURE =
  * stage when the failure carries one.
  */
 export function plainFailureText(text: string, stage?: string): string {
-	if (!/Effect\.tryPromise|FiberFailure|UnknownException/.test(text))
+	if (
+		!/Effect\.tryPromise|FiberFailure|UnknownException|UnknownError/.test(text)
+	)
 		return text;
 	return stage
 		? `${GENERIC_SERVER_FAILURE} (stage: ${stage})`
@@ -90,7 +102,7 @@ export function isWorkspaceComputeAllowanceExhausted(message: string) {
 }
 
 function hasGenericEffectText(cause: unknown, depth = 0): boolean {
-	if (typeof cause === "string") return cause.includes(EFFECT_GENERIC_FAILURE);
+	if (typeof cause === "string") return GENERIC_EFFECT_PROMISE_TEXT.test(cause);
 	if (!cause || typeof cause !== "object" || depth > 6) return false;
 	const record = cause as {
 		message?: unknown;
@@ -99,7 +111,7 @@ function hasGenericEffectText(cause: unknown, depth = 0): boolean {
 	};
 	return (
 		(typeof record.message === "string" &&
-			record.message.includes(EFFECT_GENERIC_FAILURE)) ||
+			GENERIC_EFFECT_PROMISE_TEXT.test(record.message)) ||
 		hasGenericEffectText(record.error, depth + 1) ||
 		hasGenericEffectText(record.cause, depth + 1)
 	);
@@ -109,7 +121,7 @@ function unwrapFailureMessage(cause: unknown, seen: Set<unknown>): string {
 	if (cause == null) return "";
 	if (typeof cause === "string") {
 		const text = cause.trim();
-		return text === GENERIC_EFFECT_PROMISE_FAILURE ? "" : text;
+		return isGenericEffectText(text) ? "" : text;
 	}
 	if (typeof cause !== "object") return "";
 	if (seen.has(cause)) return "";
@@ -125,7 +137,7 @@ function unwrapFailureMessage(cause: unknown, seen: Set<unknown>): string {
 	if (innerCause) return innerCause;
 	if (typeof record.message === "string") {
 		const text = record.message.trim();
-		if (text && text !== GENERIC_EFFECT_PROMISE_FAILURE) return text;
+		if (text && !isGenericEffectText(text)) return text;
 	}
 	return "";
 }

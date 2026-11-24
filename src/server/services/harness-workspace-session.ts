@@ -247,7 +247,7 @@ export function sendHarnessWorkspaceTask(
 			);
 		}).pipe(
 			// A rejected first send hands its chat back for New chat to reuse.
-			Effect.tapErrorCause(() =>
+			Effect.tapCause(() =>
 				claimed
 					? Effect.promise(() =>
 							releaseChatClaim(
@@ -258,7 +258,7 @@ export function sendHarnessWorkspaceTask(
 						)
 					: Effect.void,
 			),
-			Effect.catchAll((cause) =>
+			Effect.catch((cause) =>
 				Effect.succeed({
 					...emptyHarnessSession(),
 					connection: {

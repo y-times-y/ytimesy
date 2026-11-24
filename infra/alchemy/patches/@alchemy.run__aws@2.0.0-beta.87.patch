@@ -1,0 +1,88 @@
+diff --git a/lib/AutoScaling/LaunchTemplate.d.ts b/lib/AutoScaling/LaunchTemplate.d.ts
+index f2a467233d1658356284e38ab18424a941ea704e..2965cf8be32cfaca5030b35d3df14098363ef844 100644
+--- a/lib/AutoScaling/LaunchTemplate.d.ts
++++ b/lib/AutoScaling/LaunchTemplate.d.ts
+@@ -58,6 +58,8 @@ export interface LaunchTemplateProps extends PlatformProps {
+      * Optional IAM instance profile name to attach at launch.
+      */
+     instanceProfileName?: string;
++  /** ytimesy patch: EC2 BlockDeviceMappings, passed through as-is. */
++  blockDeviceMappings?: Array<{ DeviceName: string; Ebs?: { VolumeSize?: number; VolumeType?: string; DeleteOnTermination?: boolean; Encrypted?: boolean } }>;
+     /**
+      * User data script to provide at launch time.
+      */
+diff --git a/lib/AutoScaling/LaunchTemplate.js b/lib/AutoScaling/LaunchTemplate.js
+index c5769d79218115e3f3a6685613d543e7147db2c4..57599fa62cac90ff49e3c088c6846d3044d2d126 100644
+--- a/lib/AutoScaling/LaunchTemplate.js
++++ b/lib/AutoScaling/LaunchTemplate.js
+@@ -141,6 +141,7 @@ export const LaunchTemplateProvider = () => Provider.effect(LaunchTemplate, Effe
+                 associatePublicIpAddress: news.associatePublicIpAddress,
+                 metadataOptions: news.metadataOptions,
+                 enclaveOptions: news.enclaveOptions,
++                blockDeviceMappings: news.blockDeviceMappings,
+                 tags: news.tags,
+             }, runtime),
+         });
+@@ -270,6 +271,7 @@ export const LaunchTemplateProvider = () => Provider.effect(LaunchTemplate, Effe
+                         associatePublicIpAddress: news.associatePublicIpAddress,
+                         metadataOptions: news.metadataOptions,
+                         enclaveOptions: news.enclaveOptions,
++                        blockDeviceMappings: news.blockDeviceMappings,
+                         tags: desiredTags,
+                     }, runtime),
+                 });
+diff --git a/lib/EC2/hosted.js b/lib/EC2/hosted.js
+index d1932cf33d2a78cc5cf6c82e13d2eac6a06c42da..456408923d288c0591dd5c1161e77e18e166ef91 100644
+--- a/lib/EC2/hosted.js
++++ b/lib/EC2/hosted.js
+@@ -623,6 +623,8 @@ systemctl enable --now ${unitName}.service
+                 }
+                 : undefined,
+             UserData: encodedUserData,
++            // ytimesy patch: root disk size and type (fleet.py's 20 GB gp3).
++            BlockDeviceMappings: news.blockDeviceMappings,
+             Placement: news.availabilityZone
+                 ? {
+                     AvailabilityZone: news.availabilityZone,
+diff --git a/src/AutoScaling/LaunchTemplate.ts b/src/AutoScaling/LaunchTemplate.ts
+index 70495bba6adcbdca313e9767b0af611ef9b44e29..3d21b4fadccee8367a88ee2bd7152d8c7b4a9f60 100644
+--- a/src/AutoScaling/LaunchTemplate.ts
++++ b/src/AutoScaling/LaunchTemplate.ts
+@@ -72,6 +72,8 @@ export interface LaunchTemplateProps extends PlatformProps {
+    * Optional IAM instance profile name to attach at launch.
+    */
+   instanceProfileName?: string;
++  /** ytimesy patch: EC2 BlockDeviceMappings, passed through as-is. */
++  blockDeviceMappings?: Array<{ DeviceName: string; Ebs?: { VolumeSize?: number; VolumeType?: string; DeleteOnTermination?: boolean; Encrypted?: boolean } }>;
+   /**
+    * User data script to provide at launch time.
+    */
+@@ -409,6 +411,7 @@ export const LaunchTemplateProvider = () =>
+               associatePublicIpAddress: news.associatePublicIpAddress,
+               metadataOptions: news.metadataOptions,
+               enclaveOptions: news.enclaveOptions,
++              blockDeviceMappings: news.blockDeviceMappings,
+               tags: news.tags,
+             },
+             runtime,
+@@ -567,6 +570,7 @@ export const LaunchTemplateProvider = () =>
+                   associatePublicIpAddress: news.associatePublicIpAddress,
+                   metadataOptions: news.metadataOptions,
+                   enclaveOptions: news.enclaveOptions,
++                  blockDeviceMappings: news.blockDeviceMappings,
+                   tags: desiredTags,
+                 },
+                 runtime,
+diff --git a/src/EC2/hosted.ts b/src/EC2/hosted.ts
+index a09730cc6248505b0b936ababe5b49dc8cea05d5..2d4e724dc2660ac51dbcf25d0bd91f22e1ba1e8e 100644
+--- a/src/EC2/hosted.ts
++++ b/src/EC2/hosted.ts
+@@ -1017,6 +1017,8 @@ systemctl enable --now ${unitName}.service
+           }
+         : undefined,
+       UserData: encodedUserData,
++      // ytimesy patch: root disk size and type.
++      BlockDeviceMappings: (news as { blockDeviceMappings?: unknown }).blockDeviceMappings,
+       Placement: news.availabilityZone
+         ? {
+             AvailabilityZone: news.availabilityZone,

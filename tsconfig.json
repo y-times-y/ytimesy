@@ -4,6 +4,7 @@
 		"node_modules",
 		"src/workflows",
 		"src/server/edge",
+		"infra/alchemy",
 		".ytimesy",
 		".generated"
 	],

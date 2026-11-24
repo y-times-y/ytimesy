@@ -38,7 +38,7 @@ export function sendQueuingBehindRace<A>(
 	queueBehind: (() => Promise<A | null>) | null,
 ): Effect.Effect<A> {
 	if (!queueBehind) return send;
-	return Effect.catchAllCause(send, (cause) =>
+	return Effect.catchCause(send, (cause) =>
 		isTurnAlreadyRunningRefusal(Cause.squash(cause))
 			? Effect.flatMap(
 					Effect.promise(() => queueBehind().catch(() => null)),

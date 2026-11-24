@@ -398,6 +398,13 @@ function deployedSecretNames(config: string[]): string[] {
 	}
 }
 
+// Who uploads the Workers: "alchemy" (the infra/alchemy Cloudflare stack,
+// through scripts/infra.ts) or, until its first production apply is
+// verified, "wrangler". docs/infrastructure-as-code.md has the rollout.
+const deployEngine =
+	process.env.YTIMESY_DEPLOY_ENGINE === "alchemy" ? "alchemy" : "wrangler";
+console.log(`Workers upload with ${deployEngine}.`);
+
 // One production deploy at a time (scripts/deploy-lock.ts).
 if (!preflightOnly) {
 	const releaseDeployLock = acquireDeployLock("production");
@@ -517,15 +524,62 @@ try {
 	const webSecretsFile = join(secretsDirectory, "web.json");
 	await writeFile(edgeSecretsFile, JSON.stringify(secrets), { mode: 0o600 });
 	await writeFile(webSecretsFile, JSON.stringify(webSecrets), { mode: 0o600 });
-	// Masked like a stdin secret call: wrangler's error never shows a value.
-	for (const args of productionDeploySteps({
-		edgeConfig: EDGE_CONFIG,
-		webConfig: WEB_CONFIG,
-		edgeSecretsFile,
-		webSecretsFile,
-	})) {
-		run("pnpm", ["exec", "wrangler", ...args], { masked: true });
-		deployedWorkers.push(args.includes(edgeSecretsFile) ? "edge" : "web");
+	if (deployEngine === "alchemy") {
+		// The same files wrangler would upload (its dry run bundles the edge;
+		// the web was built above), uploaded by the infra/alchemy Cloudflare
+		// stack with the secrets as one version per Worker. scripts/infra.ts
+		// plans first and refuses any removal, replacement or lost binding.
+		run(
+			"pnpm",
+			[
+				"exec",
+				"wrangler",
+				"deploy",
+				"--dry-run",
+				"--outdir",
+				".ytimesy/edge-upload",
+				...EDGE_CONFIG,
+			],
+			{ masked: true },
+		);
+		const infraSecretsFile = join(secretsDirectory, "infra.json");
+		await writeFile(
+			infraSecretsFile,
+			JSON.stringify({ edge: secrets, web: webSecrets }),
+			{ mode: 0o600 },
+		);
+		run(
+			"node",
+			[
+				"--import",
+				"tsx",
+				"scripts/infra.ts",
+				"deploy",
+				"cloudflare",
+				"--stage",
+				"production",
+				"--prebuilt",
+				"--confirm-production",
+				"--secrets-file",
+				infraSecretsFile,
+				...(process.env.YTIMESY_INFRA_ADOPT === "1"
+					? ["--adopt-existing"]
+					: []),
+			],
+			{ masked: true },
+		);
+		deployedWorkers.push("edge", "web");
+	} else {
+		// Masked like a stdin secret call: wrangler's error never shows a value.
+		for (const args of productionDeploySteps({
+			edgeConfig: EDGE_CONFIG,
+			webConfig: WEB_CONFIG,
+			edgeSecretsFile,
+			webSecretsFile,
+		})) {
+			run("pnpm", ["exec", "wrangler", ...args], { masked: true });
+			deployedWorkers.push(args.includes(edgeSecretsFile) ? "edge" : "web");
+		}
 	}
 } finally {
 	await rm(secretsDirectory, { recursive: true, force: true });
@@ -585,6 +639,24 @@ if (smokeProblems.length) {
 	process.exit(1);
 }
 console.log(`Production smoke check passed for build ${buildId}.`);
+
+// The turn box program goes out with the edge it talks to (boxes move to
+// it once their running turns finish; an unchanged program is the same
+// object and moves nobody). Bookkeeping-style: a failed publish is reported,
+// it does not undo the deploy, and the next deploy publishes again.
+try {
+	run("node", ["--import", "tsx", "scripts/publish-turn-box.ts"], {
+		masked: true,
+		env: {
+			CLOUDFLARE_API_TOKEN:
+				process.env.CLOUDFLARE_API_TOKEN ?? process.env.CLOUDFLARE_DEPLOY_TOKEN,
+		},
+	});
+} catch {
+	console.error(
+		"The turn box program was not published; boxes keep the previous one. Run node --import tsx scripts/publish-turn-box.ts.",
+	);
+}
 
 // What actually landed: every required name on each Worker.
 const missing = [

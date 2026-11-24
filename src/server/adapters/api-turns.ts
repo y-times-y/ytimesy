@@ -946,10 +946,8 @@ export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 			catch: (error) => error,
 		}).pipe(
 			Effect.retry({
-				schedule: Schedule.intersect(
-					Schedule.recurs(1),
-					Schedule.spaced("250 millis"),
-				),
+				schedule: Schedule.spaced("250 millis"),
+				times: 1,
 				while: (error) =>
 					typeof error === "object" &&
 					error !== null &&
@@ -957,11 +955,11 @@ export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 						("code" in error &&
 							["ECONNRESET", "EPIPE", "08006"].includes(String(error.code)))),
 			}),
-			Effect.either,
+			Effect.result,
 		),
 	);
-	if (result._tag === "Left") throw result.left;
-	return Boolean(result.right.rowCount);
+	if (result._tag === "Failure") throw result.failure;
+	return Boolean(result.success.rowCount);
 }
 
 /** `failover`, when given, moves the rest of the turn to its route (or records its same-route retries) in the same write. */

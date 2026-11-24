@@ -1,7 +1,4 @@
-import {
-	EFFECT_GENERIC_FAILURE,
-	usageCapFailureMessage,
-} from "./failure-message";
+import { isGenericEffectText, usageCapFailureMessage } from "./failure-message";
 
 /**
  * Where in the `agent` tool's start path a helper failed to start. Logged as
@@ -126,14 +123,14 @@ export function rawMessage(cause: unknown, depth = 0): string {
 	};
 	for (const inner of [record.error, record.cause]) {
 		const text = rawMessage(inner, depth + 1);
-		if (text && text !== EFFECT_GENERIC_FAILURE) return text;
+		if (text && !isGenericEffectText(text)) return text;
 	}
 	return typeof record.message === "string" ? record.message.trim() : "";
 }
 
 /** True when text carries Effect's or the runtime's internal wording. */
 export function hasInternalFailureText(text: string): boolean {
-	return /Effect\.tryPromise|FiberFailure|UnknownException|\(FiberFailure\)/.test(
+	return /Effect\.tryPromise|FiberFailure|UnknownException|UnknownError|\(FiberFailure\)/.test(
 		text,
 	);
 }

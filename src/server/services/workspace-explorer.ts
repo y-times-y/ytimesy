@@ -87,7 +87,7 @@ export function listProjectCommands(
 						}
 						return [...commands.values()];
 					}),
-					Effect.catchAll(() => Effect.succeed([] as SlashCommand[])),
+					Effect.catch(() => Effect.succeed([] as SlashCommand[])),
 				)
 			: Effect.succeed([] as SlashCommand[]),
 	).pipe(Effect.map((commands) => commands ?? []));
@@ -146,7 +146,7 @@ export function listWorkspaceExplorer(
 			listing ? Effect.succeed(listing) : list(false),
 		),
 		Effect.map((listing) => listing ?? emptyListing()),
-		Effect.catchAll(() => Effect.succeed(emptyListing())),
+		Effect.catch(() => Effect.succeed(emptyListing())),
 	);
 }
 
@@ -178,7 +178,7 @@ function listRunningCheckout(
 			root: prefixed ? posix.dirname(roots[0].directory) : roots[0].directory,
 		})),
 		Effect.timeout(RUNNING_LIST_WAIT),
-		Effect.catchAll(() =>
+		Effect.catch(() =>
 			listCheckoutIndex(machines, workspaceId, roots).pipe(
 				Effect.map((listing) => listing ?? emptyListing()),
 			),
@@ -221,7 +221,7 @@ function listCheckoutIndex(
 						: roots[0].directory,
 			};
 		}),
-		Effect.catchAll(() => Effect.succeed(null)),
+		Effect.catch(() => Effect.succeed(null)),
 	);
 }
 
@@ -270,7 +270,7 @@ export function readWorkspaceExplorerFiles(
 				? Effect.succeed(files)
 				: read(false).pipe(Effect.map((again) => again.files)),
 		),
-		Effect.catchAll(() => Effect.succeed(none)),
+		Effect.catch(() => Effect.succeed(none)),
 	);
 }
 
@@ -288,7 +288,7 @@ function readCheckoutFile(
 			const text = workspaceSourceText(contents);
 			return text == null ? null : { path: want, text };
 		}),
-		Effect.catchAll(() => Effect.succeed(null)),
+		Effect.catch(() => Effect.succeed(null)),
 	);
 }
 
@@ -317,7 +317,7 @@ export function writeWorkspaceExplorerFile(
 			machines.writeTextFile(workspaceId, path, text),
 		).pipe(
 			Effect.map((): WorkspaceSourceWrite => ({ ok: true, path: want })),
-			Effect.catchAll(() =>
+			Effect.catch(() =>
 				Effect.succeed<WorkspaceSourceWrite>({ ok: false, reason: "failed" }),
 			),
 		);
@@ -367,7 +367,7 @@ export function readWorkspaceFilePreview(
 						: "Preview unavailable.",
 			};
 		}).pipe(
-			Effect.catchAll(() =>
+			Effect.catch(() =>
 				Effect.succeed<WorkspaceFilePreview>({
 					kind: "unavailable",
 					reason: "Could not read the preview.",
@@ -402,7 +402,7 @@ export function readWorkspaceGitChanges(
 							scope.userId,
 							scope.sessionId as string,
 						),
-					).pipe(Effect.catchAll(() => Effect.succeed(null)))
+					).pipe(Effect.catch(() => Effect.succeed(null)))
 				: null;
 			const base = session?.baseBranch || session?.selectedBranch || "";
 			const changes: FileChangeEntry[] = [];
@@ -423,7 +423,7 @@ export function readWorkspaceGitChanges(
 				);
 			}
 			return changes;
-		}).pipe(Effect.catchAll(() => Effect.succeed(null))),
+		}).pipe(Effect.catch(() => Effect.succeed(null))),
 	);
 }
 
@@ -475,7 +475,7 @@ function withRunningCheckout<A>(
 				? run(checkout.workspaceId, checkout.root, checkout.roots)
 				: Effect.succeed(null),
 		),
-		Effect.catchAll(() => Effect.succeed(null)),
+		Effect.catch(() => Effect.succeed(null)),
 	);
 }
 

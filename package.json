@@ -65,7 +65,7 @@
 		"cn": "^0.3.0",
 		"date-fns": "4.4.0",
 		"diff": "9.0.0",
-		"effect": "3.22.2",
+		"effect": "4.1.5",
 		"freestyle": "0.2.13",
 		"html-to-text": "10.0.1",
 		"ipaddr.js": "2.5.0",

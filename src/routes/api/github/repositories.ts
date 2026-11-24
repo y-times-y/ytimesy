@@ -57,10 +57,10 @@ export const Route = createFileRoute("/api/github/repositories")({
 					if (!name)
 						throw new Response("Repository name is invalid.", { status: 400 });
 					const result = await Effect.runPromise(
-						Effect.either(createScratchProject(user.id, name)),
+						Effect.result(createScratchProject(user.id, name)),
 					);
-					if (result._tag === "Left") throw result.left.error;
-					return result.right.project;
+					if (result._tag === "Failure") throw result.failure.cause;
+					return result.success.project;
 				}),
 		},
 	},

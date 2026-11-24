@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { z } from "zod";
 import { accountDeletionConfirmed } from "../../domain/account-deletion";
 import { readFreestyleApiKey } from "../../server/adapters/freestyle/api-key";
@@ -17,8 +17,9 @@ const deletion = z.object({ confirmation: z.string().max(320) });
 /** Without a Freestyle key there are no VMs to reach; each destroy then fails
  * softly and account deletion still removes everything else. */
 function providerMachines() {
-	const key = Effect.runSync(Effect.either(readFreestyleApiKey()));
-	if (Either.isRight(key)) return createFreestyleWorkspaceMachines(key.right);
+	const key = Effect.runSync(Effect.result(readFreestyleApiKey()));
+	if (Result.isSuccess(key))
+		return createFreestyleWorkspaceMachines(key.success);
 	const unavailable = () =>
 		Promise.reject(new Error("Machine provider is not configured."));
 	return { destroy: unavailable, destroySnapshot: unavailable };

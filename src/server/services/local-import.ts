@@ -339,7 +339,7 @@ const defaultImportProjectDependencies: ImportProjectDependencies = {
 	projectForRepository,
 	connect: async (userId, repository) => {
 		const result = await Effect.runPromise(
-			Effect.either(
+			Effect.result(
 				connectProject(userId, {
 					installationId: repository.installationId,
 					repositoryId: repository.repositoryId,
@@ -347,8 +347,8 @@ const defaultImportProjectDependencies: ImportProjectDependencies = {
 				}),
 			),
 		);
-		if (result._tag === "Left") throw result.left.error;
-		return result.right;
+		if (result._tag === "Failure") throw result.failure.cause;
+		return result.success;
 	},
 	save: (userId, repository) =>
 		saveProject(userId, repository, addedProjectBranch(repository)),
@@ -603,10 +603,10 @@ export async function finishImport(
 	let workspace = await workspaceForProject(caller.userId, project.id);
 	if (!workspace || workspace.status === "failed") {
 		const queued = await Effect.runPromise(
-			Effect.either(enqueueProjectWorkspace(caller.userId, project.id)),
+			Effect.result(enqueueProjectWorkspace(caller.userId, project.id)),
 		);
-		if (queued._tag === "Left") throw queued.left.error;
-		workspace = queued.right;
+		if (queued._tag === "Failure") throw queued.failure.cause;
+		workspace = queued.success;
 	}
 	if (!workspace)
 		return refuse("The project's environment is not available.", 503);

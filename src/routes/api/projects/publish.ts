@@ -22,7 +22,7 @@ export const Route = createFileRoute("/api/projects/publish")({
 					const user = await requireUser(request.headers);
 					const input = draft.parse(await request.json());
 					const result = await Effect.runPromise(
-						Effect.either(
+						Effect.result(
 							publishProject(user.id, {
 								...input,
 								authorName: user.name,
@@ -30,8 +30,8 @@ export const Route = createFileRoute("/api/projects/publish")({
 							}),
 						),
 					);
-					if (result._tag === "Left") throw result.left.error;
-					return result.right;
+					if (result._tag === "Failure") throw result.failure.cause;
+					return result.success;
 				}),
 		},
 	},
