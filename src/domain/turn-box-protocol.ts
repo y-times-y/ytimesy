@@ -489,6 +489,12 @@ export const boxPortArgs = {
 	}),
 	/** One read of another thread of the turn's project (read_thread); the edge takes the user, project and chat from the grant. */
 	peerThread: z.object({ id: portText }),
+	/** One message from the turn's chat to another thread of its project (message_thread); user, project and chat come from the grant. */
+	peerSend: z.object({
+		id: portText,
+		text: z.string().min(1).max(8_000),
+		mode: z.enum(["queue", "steer"]),
+	}),
 	/** A helper's step count and its own helpers' token use (guardSubagentStep). */
 	helperStep: z.object({ op: z.enum(["record", "descendantUsage"]) }),
 	/**

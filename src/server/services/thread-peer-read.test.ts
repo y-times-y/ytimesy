@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { NO_PEER_THREAD, readPeerThread } from "./thread-peer-read";
+import {
+	NO_PEER_THREAD,
+	readPeerThread,
+	sendPeerMessage,
+} from "./thread-peer-read";
 
 const chat = (over: Record<string, unknown> = {}) => ({
 	id: "t2",
@@ -46,5 +50,61 @@ describe("readPeerThread", () => {
 	it("refuses Y² and itself", async () => {
 		expect(await run({}, true).text).toBe(NO_PEER_THREAD);
 		expect(await run({}, false, "t1").text).toBe(NO_PEER_THREAD);
+	});
+});
+
+describe("sendPeerMessage", () => {
+	const base = {
+		userId: "u1",
+		projectId: "p1",
+		selfId: "t1",
+		id: "t2",
+		text: "Please rebase",
+		mode: "queue" as const,
+		turnId: "turn-1",
+		machines: {} as never,
+	};
+	function go(target: Record<string, unknown> | null, over = {}) {
+		const send = vi.fn(async () => ({ turnStatus: "running" }));
+		const result = sendPeerMessage(
+			{ ...base, ...over },
+			{
+				metadata: (async (_u: string, id: string) =>
+					id === "t1"
+						? chat({ id: "t1", title: "Main work" })
+						: target === null
+							? null
+							: chat(target)) as never,
+				isY2: async () => false,
+				send: send as never,
+			},
+		);
+		return { send, result };
+	}
+	it("sends a wrapped peer message through the send path", async () => {
+		const { send, result } = go({ listedModelId: "m", harness: "api" });
+		expect(await result).toContain("its turn started");
+		const body = (send.mock.calls[0] as unknown[])[2] as { text: string };
+		expect(body.text).toContain('[Message from thread "Main work" (id t1)');
+		expect(body.text).toContain("Please rebase");
+	});
+	it("steers a running thread with a released row", async () => {
+		const { send, result } = go(
+			{ turnStatus: "running" },
+			{ mode: "steer" as const },
+		);
+		expect(await result).toContain("next step");
+		expect((send.mock.calls[0] as unknown[])[2]).toMatchObject({
+			released: true,
+		});
+	});
+	it.each([
+		["unknown", null],
+		["other project", { projectId: "p2" }],
+		["a helper", { agentRole: "writer" }],
+	])("refuses %s without sending", async (_n, target) => {
+		const { send, result } = go(target);
+		expect(await result).toBe(NO_PEER_THREAD);
+		expect(send).not.toHaveBeenCalled();
 	});
 });
