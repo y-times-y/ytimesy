@@ -298,6 +298,18 @@ async function handle(
 				allowCustom: call.args.allowCustom,
 			});
 		}
+		case "peerThread": {
+			const { agentSessionMetadataForOwner } = await import("./agent-sessions");
+			const self = await agentSessionMetadataForOwner(user, turn.session_id);
+			if (!self?.projectId || self.parentSessionId)
+				throw new TurnBoxPortForbidden("peerThread:session");
+			return (await import("../services/thread-peer-read")).readPeerThread({
+				userId: user,
+				projectId: self.projectId,
+				selfId: self.id,
+				id: call.args.id,
+			});
+		}
 		case "ySquared":
 			// Loaded on first use: the super agent's tools pull in the send path.
 			return (await import("./turn-box-y-squared-port")).ySquaredPort(
