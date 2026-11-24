@@ -78,6 +78,7 @@ import {
 	type UserMessageItem,
 } from "#/domain/session-item";
 import { thoughtLabel } from "#/domain/thought-label";
+import { parsePeerMessage } from "#/domain/thread-peer";
 import {
 	commandsLabel,
 	explorationGroupIsLive,
@@ -1225,7 +1226,7 @@ function SessionItemView({
 		? "session-activity-title session-shimmer"
 		: "session-activity-title";
 	switch (item.kind) {
-		case "userMessage":
+		case "userMessage": {
 			if (sender !== null) {
 				const message = steeringSender(item.text, sender);
 				return (
@@ -1272,6 +1273,18 @@ function SessionItemView({
 			}
 			// The setup's own request: one line and the build it ran after.
 			if (isSetupRequestMessage(item.text)) return <SetupRequestItem />;
+			const peer = parsePeerMessage(item.text);
+			if (peer)
+				return (
+					<div className="session-message" data-role="user" data-peer="true">
+						<span className="session-message-sender">
+							From thread {peer.from}
+						</span>
+						<p>
+							<MentionText text={peer.body} />
+						</p>
+					</div>
+				);
 			return (
 				<div className="session-message" data-role="user">
 					<MessageAttachments attachments={item.attachments} />
@@ -1281,6 +1294,7 @@ function SessionItemView({
 					{item.memory ? <MemoryRecallNote recall={item.memory} /> : null}
 				</div>
 			);
+		}
 		case "memorySave":
 			return <MemorySaveNote item={item} />;
 		case "agentMessage":
