@@ -128,6 +128,7 @@ import {
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { startedByPeerMessage } from "#/domain/thread-peer";
 import { withStoppedNotice } from "#/domain/turn-end";
 import {
 	savingChangesItem,
@@ -2253,6 +2254,18 @@ async function runApiTurnAttempt(
 									selfId: owner.id,
 									id,
 								}),
+							send: ({ id, text, mode }) =>
+								ports.peerThreadSend({
+									userId: owner.userId,
+									projectId: peerProject,
+									selfId: owner.id,
+									id,
+									text,
+									mode,
+									turnId: turn.id,
+									machines: unscopedMachines,
+								}),
+							startedByPeer: () => startedByPeerMessage(items),
 						}),
 					};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and

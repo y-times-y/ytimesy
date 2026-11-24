@@ -310,6 +310,22 @@ async function handle(
 				id: call.args.id,
 			});
 		}
+		case "peerSend": {
+			const { agentSessionMetadataForOwner } = await import("./agent-sessions");
+			const self = await agentSessionMetadataForOwner(user, turn.session_id);
+			if (!self?.projectId || self.parentSessionId || !deps.machines)
+				throw new TurnBoxPortForbidden("peerSend:session");
+			return (await import("../services/thread-peer-read")).sendPeerMessage({
+				userId: user,
+				projectId: self.projectId,
+				selfId: self.id,
+				id: call.args.id,
+				text: call.args.text,
+				mode: call.args.mode,
+				turnId: turn.id,
+				machines: deps.machines(),
+			});
+		}
 		case "ySquared":
 			// Loaded on first use: the super agent's tools pull in the send path.
 			return (await import("./turn-box-y-squared-port")).ySquaredPort(
