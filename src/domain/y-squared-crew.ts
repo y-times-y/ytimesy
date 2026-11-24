@@ -5,6 +5,7 @@ import {
 	UNTITLED_SESSION_TITLE,
 } from "./session-item";
 import { type ChatWaitingOn, chatWaitingOn } from "./sidebar-chats";
+import { parsePeerMessage } from "./thread-peer";
 import {
 	type ThreadDigest,
 	threadHistoryFacts,
@@ -246,7 +247,9 @@ export function crewWakeBody(input: {
 			case "started":
 				return `- The person started "${event.title}" themselves${detail}.`;
 			default:
-				return `- You were not part of this: "${event.title}" got a message from the person${detail}.`;
+				return event.detail?.startsWith('From thread "')
+					? `- You were not part of this: "${event.title}" got a message from another thread, not the person${detail}.`
+					: `- You were not part of this: "${event.title}" got a message from the person${detail}.`;
 		}
 	});
 	const working = input.working.map(
@@ -457,6 +460,13 @@ export function crewRequestFromStartItems(items: readonly SessionItem[]) {
 	const last = items.at(-1);
 	if (!last || last.kind !== "userMessage" || ("wake" in last && last.wake))
 		return null;
+	// Another thread's message: say who sent it, not the wrapper's boilerplate.
+	const peer = parsePeerMessage(last.text);
+	if (peer)
+		return (
+			text(`From thread "${peer.from}": ${peer.body}`, CREW_REQUEST_LIMIT) ||
+			null
+		);
 	return text(last.text, CREW_REQUEST_LIMIT) || null;
 }
 
