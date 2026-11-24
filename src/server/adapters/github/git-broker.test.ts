@@ -135,13 +135,57 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 			"-m",
 			"changed",
 		]);
-		await pushBrokeredRepository(host, {
+		const publish = {
 			owner: "acme",
 			name: "app",
 			branch: "feature",
 			installationId: 1,
 			directory: guest,
-		});
+		};
+		await expect(pushBrokeredRepository(host, publish)).rejects.toThrow(
+			/managed Git identity/,
+		);
+		const bot =
+			"ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>";
+		const amend = [
+			"-C",
+			guest,
+			"commit",
+			"--amend",
+			"--no-edit",
+			`--author=${bot}`,
+		];
+		const env = {
+			...process.env,
+			GIT_COMMITTER_NAME: "Override",
+			GIT_COMMITTER_EMAIL: "wrong@example.test",
+		};
+		await execute("git", amend, { env });
+		await expect(pushBrokeredRepository(host, publish)).rejects.toThrow(
+			/managed Git identity/,
+		);
+		const botCommitter = {
+			env: {
+				...env,
+				GIT_COMMITTER_NAME: "ytimesy-agent[bot]",
+				GIT_COMMITTER_EMAIL:
+					"328807657+ytimesy-agent[bot]@users.noreply.github.com",
+			},
+		};
+		await execute("git", amend, botCommitter);
+		const readHead = () => execute("git", ["-C", guest, "rev-parse", "HEAD"]);
+		const before = (await readHead()).stdout;
+		await expect(pushBrokeredRepository(host, publish)).rejects.toThrow(
+			/Co-authored-by trailer/,
+		);
+		expect((await readHead()).stdout).toBe(before);
+		expect((await git("branch", "--list", "feature")).stdout).toBe("");
+		await execute(
+			"git",
+			[...amend, "--trailer", `Co-authored-by: ${bot}`],
+			botCommitter,
+		);
+		await pushBrokeredRepository(host, publish);
 		expect((await git("show", "feature:file")).stdout).toBe("changed");
 		const revision = `refs/ytimesy/turn-commits/${"a".repeat(64)}`;
 		await execute("git", ["-C", guest, "update-ref", revision, "HEAD"]);
@@ -192,7 +236,9 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 		const authenticated = transport.commands.filter(
 			({ env }) => env.GIT_CONFIG_VALUE_0,
 		);
-		expect(authenticated).toHaveLength(5);
+		expect(
+			authenticated.filter(({ args }) => args.includes("push")),
+		).toHaveLength(3);
 		for (const command of authenticated) {
 			expect(JSON.stringify(command.args)).not.toContain(
 				"broker-token-fixture",

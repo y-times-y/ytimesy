@@ -1,5 +1,7 @@
 # ytimesy
 
+Never invent a Git identity or impersonate a person, including Het. Managed agent commits use `ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>` as both author and committer and include the same identity in a `Co-authored-by` trailer. Do not change Git identity in user-owned local repositories. If the authorized identity cannot be verified, stop rather than guessing.
+
 Before implementation or architectural changes, read [PLAN.md](PLAN.md) for the product scope, accepted stack, module boundaries, and acceptance criteria.
 
 Before writing or reviewing code, apply [.agents/skills/self-documenting-code/SKILL.md](.agents/skills/self-documenting-code/SKILL.md). Keep routes thin, models focused, and provider details behind explicit adapters.

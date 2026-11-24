@@ -3,6 +3,10 @@ import { z } from "zod";
 import { RecoveryRefused } from "#/domain/conversation-recovery-failure";
 import { posixShellQuoted } from "#/domain/posix-command";
 import type { ConversationPoint } from "../adapters/conversation-recovery";
+import {
+	MANAGED_GIT_BOT,
+	MANAGED_GIT_TRAILER,
+} from "../adapters/managed-git-identity";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 const hash = z.string().regex(/^[a-f0-9]{40,64}$/);
@@ -30,10 +34,10 @@ with tempfile.TemporaryDirectory(prefix='ytimesy-recovery-') as tmp:
  git('read-tree','HEAD',env=env)
  git('add','-A','--','.',env=env)
  tree=git('write-tree',env=env)
- env.update({'GIT_AUTHOR_NAME':'ytimesy recovery','GIT_AUTHOR_EMAIL':'recovery@localhost','GIT_COMMITTER_NAME':'ytimesy recovery','GIT_COMMITTER_EMAIL':'recovery@localhost'})
- commit=git('commit-tree',tree,'-p',head,'-m','Recoverable working tree',env=env)
+ env.update(${JSON.stringify({ GIT_AUTHOR_NAME: MANAGED_GIT_BOT.name, GIT_AUTHOR_EMAIL: MANAGED_GIT_BOT.email, GIT_COMMITTER_NAME: MANAGED_GIT_BOT.name, GIT_COMMITTER_EMAIL: MANAGED_GIT_BOT.email })})
+ commit=git('commit-tree',tree,'-p',head,'-m','Recoverable working tree','-m',${JSON.stringify(MANAGED_GIT_TRAILER)},env=env)
  git('update-ref',ref,commit)
- staged=git('commit-tree',index,'-p',head,'-m','Recoverable index',env=env)
+ staged=git('commit-tree',index,'-p',head,'-m','Recoverable index','-m',${JSON.stringify(MANAGED_GIT_TRAILER)},env=env)
  git('update-ref',ref+'-index',staged)
 print(json.dumps({'cwd':requestedRoot,'tree':tree,'indexTree':index,'head':head,'ref':ref}))`;
 
