@@ -16,7 +16,8 @@ beforeEach(async () => {
 	 unique(user_id,repository_id,repository_set_key));
 	 create table project_repository(project_id uuid, repository_id bigint, installation_id bigint,
 	 full_name text, branch text, position integer);
-	 create table agent_session(id text primary key, user_id text, project_id uuid, chat_role text, archived_at timestamptz);`);
+	 create table agent_session(id text primary key, user_id text, project_id uuid, chat_role text, archived_at timestamptz);
+	 create table user_y_setting(user_id text primary key, enabled boolean not null default true);`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
 		const result = await db.query(sql, values);
 		return { ...result, rowCount: result.affectedRows || result.rows.length };
@@ -71,8 +72,9 @@ it("lists each project's machine size for the thread hover card", async () => {
 it("lists whether each project is a Y project, with the project", async () => {
 	await saveProject("u", repo(1, "plain") as never, "main");
 	await saveProject("u", repo(2, "yproject") as never, "main");
-	await db.query("update project set y_enabled=true where full_name=$1", [
-		"me/yproject",
+	// Y² is on for a new project; a plain one is a project the person switched off.
+	await db.query("update project set y_enabled=false where full_name=$1", [
+		"me/plain",
 	]);
 	const listed = await listProjects("u");
 	expect(
@@ -83,7 +85,7 @@ it("lists whether each project is a Y project, with the project", async () => {
 it("lists a Y project's Super agent chat id with the project, and none for others", async () => {
 	const plain = await saveProject("u", repo(1, "plain") as never, "main");
 	const y = await saveProject("u", repo(2, "yproject") as never, "main");
-	await db.query("update project set y_enabled=true where id=$1", [y.id]);
+	await db.query("update project set y_enabled=false where id=$1", [plain.id]);
 	await db.query(
 		`insert into agent_session(id,user_id,project_id,chat_role) values
 		 ('super-1','u',$1,'y2'),('thread-1','u',$1,null),('old-super','u',$1,'y2'),('other-1','u',$2,'y2')`,

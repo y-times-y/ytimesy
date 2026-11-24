@@ -456,9 +456,11 @@ export function ProjectSidebar({
 					<span className="sidebar-chat-body">
 						<span className="sidebar-chat-title">{name}</span>
 						<span className="sidebar-chat-meta">
-							{project.ySquaredId || hasThreads
+							{hasThreads
 								? "Loading…"
-								: "Appears with its first thread"}
+								: project.ySquaredId
+									? "No threads yet"
+									: "Getting ready"}
 						</span>
 					</span>
 				</button>

@@ -40,8 +40,9 @@ function projectFromRow(row: Project): Project {
 
 /**
  * One statement commits the project and its complete, pre-authorized
- * repository set. A new project is a Y project: its Y² (the super agent) is
- * created beside its first thread (the setup chat) when the sidebar lists it.
+ * repository set. A new project is a Y project unless the user turned Y² off
+ * for everything: its Y² (the super agent) is created when it is added
+ * (services/projects.ts, \`createProjectYSquared\`).
  */
 export async function saveProjectGroup(
 	userId: string,
@@ -54,7 +55,7 @@ export async function saveProjectGroup(
 	await database().query(
 		`with saved as (
     insert into project(id,user_id,repository_id,installation_id,full_name,branch,name,repository_set_key,y_enabled)
-    values($1,$2,$3,$4,$5,$6,$7,$9,true) returning id
+    values($1,$2,$3,$4,$5,$6,$7,$9,coalesce((select enabled from user_y_setting where user_id=$2),true)) returning id
   ) insert into project_repository(project_id,repository_id,installation_id,full_name,branch,position)
     select saved.id,r."repositoryId",r."installationId",r."fullName",r.branch,r.position
     from saved,jsonb_to_recordset($8::jsonb) as r("repositoryId" bigint,"installationId" bigint,"fullName" text,branch text,position integer)`,
@@ -154,7 +155,7 @@ export async function saveProject(
 	branch: string,
 ): Promise<Project> {
 	const result = await database().query(
-		'insert into project(id,user_id,repository_id,installation_id,full_name,branch) values($1,$2,$3,$4,$5,$6) on conflict(user_id,repository_id,repository_set_key) do update set installation_id=excluded.installation_id,full_name=excluded.full_name,branch=excluded.branch,archived_at=null returning id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch',
+		'insert into project(id,user_id,repository_id,installation_id,full_name,branch,y_enabled) values($1,$2,$3,$4,$5,$6,coalesce((select enabled from user_y_setting where user_id=$2),true)) on conflict(user_id,repository_id,repository_set_key) do update set installation_id=excluded.installation_id,full_name=excluded.full_name,branch=excluded.branch,archived_at=null returning id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch',
 		[
 			randomUUID(),
 			userId,

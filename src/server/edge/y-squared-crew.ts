@@ -19,6 +19,7 @@ import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import type { YSquaredScheduleResult } from "../adapters/y-squared-crew-client";
 import { sendComposerMessage } from "../services/queued-user-messages";
+import { yWakeGate } from "../services/y-wake-gate";
 import { runCrewAlarm } from "./crew-alarm";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { SqliteYSquaredCrew } from "./y-squared-crew-store";
@@ -158,7 +159,15 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 					target.userId,
 					target.sessionId,
 				);
-				if (!chat?.listedModelId) return false;
+				if (!chat) return false;
+				// Dormant until the person has a connected model that can run
+				// Y² (their own plan or key): no turn, no error, no cost.
+				const gate = await yWakeGate({
+					userId: target.userId,
+					harnessId: chat.harness === "codex" ? "codex" : "api",
+					listedModelId: chat.listedModelId ?? null,
+				});
+				if (!gate.ok) return { skipped: gate.reason };
 				await Effect.runPromise(
 					sendComposerMessage(
 						createFreestyleWorkspaceMachines(
@@ -168,12 +177,12 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 							userId: target.userId,
 							projectId: chat.projectId,
 							sessionId: chat.id,
-							harnessId: chat.harness,
+							harnessId: gate.harnessId,
 							createNew: false,
 						},
 						{
 							text: `${childTaskEventQueueText(`y2:${at}`)}\n${body}`,
-							modelId: chat.listedModelId,
+							modelId: gate.modelId,
 							idempotencyKey: wakeMessageId(`y2:${target.sessionId}:${at}`),
 						},
 					),

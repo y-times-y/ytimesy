@@ -13,12 +13,17 @@ import type { SqliteYSquaredCrew } from "./y-squared-crew-store";
 export async function runCrewAlarm(input: {
 	store: SqliteYSquaredCrew;
 	now: number;
-	/** Resolves true when the wake was enqueued into Y²'s chat (idle: it starts; busy: it queues behind the running turn). */
+	/**
+	 * Resolves true when the wake was enqueued into Y²'s chat (idle: it starts;
+	 * busy: it queues behind the running turn), or \`{ skipped }\` when Y² is
+	 * dormant for this person (no connected model, a nearly full plan, the
+	 * daily cap): no model turn, no error, the wake's changes are dropped.
+	 */
 	enqueue: (
 		target: { userId: string; sessionId: string },
 		at: number,
 		body: string,
-	) => Promise<boolean>;
+	) => Promise<boolean | { readonly skipped: string }>;
 	setAlarm: (at: number) => Promise<void>;
 	log: (line: string) => void;
 	/**
@@ -84,6 +89,13 @@ export async function runCrewAlarm(input: {
 			decided.next.lastWakeAt,
 			decided.body,
 		);
+		if (typeof sent === "object") {
+			store.wakeSent(decided.eventsUpTo, decided.delivered, now);
+			log({ enqueued: false, skipped: sent.skipped });
+			const next = store.rearmAfterSend(now);
+			if (next !== null) await input.setAlarm(next);
+			return;
+		}
 		if (sent) {
 			store.wakeSent(decided.eventsUpTo, decided.delivered, now);
 			log({

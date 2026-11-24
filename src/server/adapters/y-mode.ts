@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { claudeRunnerFor } from "#/domain/claude-runner";
+import { Y_SQUARED_WELCOME } from "#/domain/y-default";
 import { Y_SQUARED_TITLE } from "#/domain/y-squared";
 import { database } from "./database";
 
@@ -108,31 +109,96 @@ export async function setProjectYMode(
 	projectId: string,
 	enabled: boolean,
 ) {
+	// The choice is recorded: a backfill never overrides a project the person set.
 	const result = await database().query(
-		"update project set y_enabled=$3 where id=$1 and user_id=$2 returning id",
+		`update project set y_enabled=$3, y_choice=case when $3 then 'on' else 'off' end
+		 where id=$1 and user_id=$2 returning id`,
 		[projectId, userId, enabled],
 	);
 	if (!result.rowCount) throw new Error("Project is not available.");
 }
 
+/** The user-level switch (default on): false means Y² is off for their projects and new ones. */
+export async function readUserYDefault(userId: string): Promise<boolean> {
+	const result = await database().query<{ enabled: boolean }>(
+		"select enabled from user_y_setting where user_id=$1",
+		[userId],
+	);
+	return result.rows[0]?.enabled ?? true;
+}
+
+/** Sets the user-level switch and moves every live project of the user with it, recording the choice. */
+export async function setUserYDefault(userId: string, enabled: boolean) {
+	await database().query(
+		`insert into user_y_setting(user_id,enabled) values($1,$2)
+		 on conflict(user_id) do update set enabled=excluded.enabled, updated_at=now()`,
+		[userId, enabled],
+	);
+	await database().query(
+		`update project set y_enabled=$2, y_choice=case when $2 then 'on' else 'off' end
+		 where user_id=$1 and archived_at is null`,
+		[userId, enabled],
+	);
+}
+
 /**
- * The project's Y² chat, created on first need beside an existing thread
- * (same workspace and harness), never twice: the partial unique index
- * decides a race. Null when the project has no thread to stand beside yet.
+ * Counts one proactive wake against the user's daily cap across all their
+ * projects. False once the cap is reached (the wake is skipped); a failed
+ * write lets the wake through, as bookkeeping never blocks the user.
+ */
+export async function consumeUserWake(
+	userId: string,
+	cap: number,
+): Promise<boolean> {
+	try {
+		const result = await database().query<{ wakes: number }>(
+			`insert into y_wake_day(user_id,day,wakes) values($1,(now() at time zone 'utc')::date,1)
+			 on conflict(user_id,day) do update set wakes=y_wake_day.wakes+1
+			 returning wakes`,
+			[userId],
+		);
+		return (result.rows[0]?.wakes ?? 1) <= cap;
+	} catch (error) {
+		console.error("y_squared.user_wake_count_failed", error);
+		return true;
+	}
+}
+
+/**
+ * The project's Y² chat, created on first need, never twice: the partial
+ * unique index decides a race. It stands beside the project's newest thread
+ * (same workspace, harness and model) or, when the project has none yet (it
+ * was just added), beside the project's workspace row with the connected
+ * `route` (none: the chat is dormant until a model is connected). A new chat
+ * starts with the welcome line. Null when the project has no workspace row.
  */
 export async function ensureYSquaredChat(
 	userId: string,
 	projectId: string,
+	route?: { readonly harnessId: string; readonly modelId: string } | null,
 ): Promise<string | null> {
+	const welcome = [
+		{
+			kind: "agentMessage",
+			id: `welcome-${randomUUID()}`,
+			text: Y_SQUARED_WELCOME,
+			phase: "final_answer",
+		},
+	];
 	const result = await database().query<{ id: string }>(
 		`with reference as (
 		   select workspace_id, harness, listed_model_id from agent_session
 		   where user_id=$2 and project_id=$3 and parent_session_id is null
 		     and chat_role is null and archived_at is null
 		   order by updated_at desc limit 1
+		 ), standing_beside as (
+		   select * from reference
+		   union all
+		   select w.id, coalesce($5::text,'api'), $6::text from workspace w
+		   where w.project_id=$3 and w.user_id=$2 and not exists(select 1 from reference)
 		 ), inserted as (
-		   insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,chat_role)
-		   select $1,$2,$3,workspace_id,harness,$4,listed_model_id,'starting','y2' from reference
+		   insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,chat_role,items)
+		   select $1,$2,$3,workspace_id,harness,$4,listed_model_id,'starting','y2',$7::jsonb from standing_beside
 		   on conflict (user_id, project_id) where chat_role='y2' and archived_at is null do nothing
 		   returning id
 		 )
@@ -141,7 +207,15 @@ export async function ensureYSquaredChat(
 		 select id from agent_session
 		 where user_id=$2 and project_id=$3 and chat_role='y2' and archived_at is null
 		 limit 1`,
-		[randomUUID(), userId, projectId, Y_SQUARED_TITLE],
+		[
+			randomUUID(),
+			userId,
+			projectId,
+			Y_SQUARED_TITLE,
+			route?.harnessId ?? null,
+			route?.modelId ?? null,
+			JSON.stringify(welcome),
+		],
 	);
 	return result.rows[0]?.id ?? null;
 }

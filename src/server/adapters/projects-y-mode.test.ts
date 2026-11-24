@@ -26,6 +26,8 @@ describe("a new project", () => {
 			String(sql).includes("insert into project("),
 		)?.[0] as string;
 		expect(insert).toMatch(/repository_set_key,y_enabled\)/);
-		expect(insert).toMatch(/\$9,true\)/);
+		expect(insert).toMatch(
+			/\$9,coalesce\(\(select enabled from user_y_setting where user_id=\$2\),true\)\)/,
+		);
 	});
 });
