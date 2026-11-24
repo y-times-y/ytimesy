@@ -372,7 +372,7 @@ describe("Y² cleans up after failed threads (instructions)", () => {
 		expect(text).toContain("a second failure for the same reason is a blocker");
 		expect(text).toContain("`archive_thread`");
 		expect(text).toContain(
-			"no pull request, not working and not waiting on the person",
+			"not working, not waiting on the person, no open pull request",
 		);
 		expect(text).toContain("Archived 5 old failed threads.");
 	});

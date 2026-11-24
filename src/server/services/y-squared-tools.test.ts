@@ -74,6 +74,15 @@ function fixture(seed: (crew: SqliteYSquaredCrew) => void = () => {}) {
 			updatedAt: null,
 			unused: true,
 		},
+		// Root threads the crew rows below belong to; a crew row of a chat the
+		// list leaves out (a helper chat, an archived thread) is not listed.
+		...["t2", "t4"].map((id) => ({
+			id,
+			title: id,
+			waitingOn: null,
+			workingSince: null,
+			updatedAt: null,
+		})),
 	]);
 	const tools = ySquaredTools({
 		userId: "u",
@@ -145,7 +154,51 @@ describe("ySquaredTools", () => {
 		expect(text).toContain("working for 5 min");
 		expect(text).toContain("pull request: https://github.com/a/b/pull/8");
 		expect(requests).toEqual({ list: 1, thread: 0, reconcile: 0 });
-		expect(list).not.toHaveBeenCalled();
+		// One metadata read (which chats are root threads), no transcript.
+		expect(list).toHaveBeenCalledTimes(1);
+	});
+
+	it("threads: leaves out crew rows of helper chats and archived threads", async () => {
+		const crew = store();
+		seeded(crew);
+		crew.noteThread(
+			{
+				userId: "u",
+				projectId: "p",
+				ySquaredId: "y2",
+				prUrl: null,
+				lastReply: null,
+				waitingOn: null,
+				sessionId: "builder-1",
+				title: "Old builder",
+				state: "failed",
+			},
+			NOW - 60_000,
+		);
+		const client = { list: async () => crew.list() };
+		const tools = ySquaredTools({
+			userId: "u",
+			projectId: "p",
+			selfId: "y2",
+			deps: {
+				// builder-1 is a child chat: the root list does not have it.
+				list: (async () => [
+					{
+						id: "t1",
+						title: "Verbose flag",
+						waitingOn: null,
+						workingSince: null,
+						updatedAt: null,
+					},
+				]) as never,
+				crew: () => client as never,
+				now: () => NOW,
+			},
+		});
+		const text = await run(tools, "threads", {});
+		expect(text).toContain("Verbose flag");
+		expect(text).not.toContain("Old builder");
+		expect(text).not.toContain("builder-1");
 	});
 
 	it("thread: one row in one request; another project's id and Y² are refused", async () => {
@@ -171,7 +224,8 @@ describe("ySquaredTools", () => {
 		expect(list).toHaveBeenCalledTimes(1);
 		expect(requests.reconcile).toBe(1);
 		await run(tools, "threads", {});
-		expect(list).toHaveBeenCalledTimes(1);
+		// The root list is read each time (to drop helper chats); the crew is filled once.
+		expect(list).toHaveBeenCalledTimes(2);
 		expect(requests.reconcile).toBe(1);
 	});
 
@@ -383,12 +437,29 @@ describe("ySquaredTools write tools", () => {
 		);
 	});
 
-	it("archive_thread archives idle or failed threads and refuses working, waiting and pull-request ones", async () => {
+	it("archive_thread: failed and merged-PR threads go; open PRs, waiting, working and helper chats are refused with a reason", async () => {
 		const archive = vi.fn(async () => undefined);
+		const prOpen = vi.fn(async (_u: string, _p: string, url: string) =>
+			url.endsWith("/1") ? true : url.endsWith("/2") ? false : null,
+		);
 		const rows: Record<string, unknown> = {
 			t1: { waitingOn: "failed", prUrl: null },
 			t2: { waitingOn: "question", prUrl: null },
-			t3: { waitingOn: null, prUrl: "https://github.com/o/r/pull/1" },
+			open: { waitingOn: null, prUrl: "https://github.com/o/r/pull/1" },
+			merged: { waitingOn: null, prUrl: "https://github.com/o/r/pull/2" },
+			unknown: { waitingOn: null, prUrl: "https://github.com/o/r/pull/3" },
+		};
+		const chats: Record<string, unknown> = {
+			w: chat({ id: "w", turnStatus: "running" }),
+			builder: chat({
+				id: "builder",
+				parentSessionId: "t1",
+				agentRole: "writer",
+			}),
+			other: chat({ id: "other", projectId: "q" }),
+			...Object.fromEntries(
+				Object.keys(rows).map((id) => [id, chat({ id, turnStatus: "failed" })]),
+			),
 		};
 		const tools = ySquaredTools({
 			userId: "u",
@@ -396,26 +467,28 @@ describe("ySquaredTools write tools", () => {
 			selfId: "y2",
 			deps: {
 				metadata: (async (_u: string, id: string) =>
-					id === "w"
-						? chat({ id, turnStatus: "running" })
-						: id in rows
-							? chat({ id, turnStatus: "failed" })
-							: null) as never,
+					chats[id] ?? null) as never,
 				crew: (() => ({
 					thread: async (id: string) => rows[id] ?? null,
 				})) as never,
 				archive,
+				prOpen,
 			},
 		});
-		expect(await run(tools, "archive_thread", { id: "t1" })).toContain(
-			"Archived",
-		);
-		expect(archive).toHaveBeenCalledWith("u", "t1");
-		for (const id of ["t2", "t3", "w"])
-			expect(await run(tools, "archive_thread", { id })).toContain(
-				id === "w" ? "working" : "not archived",
-			);
-		expect(archive).toHaveBeenCalledTimes(1);
+		const go = (id: string) => run(tools, "archive_thread", { id });
+		expect(await go("t1")).toContain("Archived");
+		expect(await go("merged")).toContain("Archived");
+		expect(archive.mock.calls.map((c) => c[1])).toEqual(["t1", "merged"]);
+		expect(await go("open")).toContain("open pull request");
+		expect(await go("unknown")).toContain("could not be checked");
+		expect(await go("t2")).toContain("waiting on the person");
+		expect(await go("w")).toContain("is working");
+		// A helper chat is explained, never reported as missing.
+		expect(await go("builder")).toContain("helper chat");
+		expect(await go("builder")).not.toContain("No such thread");
+		for (const id of ["other", "nope", "y2"])
+			expect(await go(id)).toBe("No such thread in this project.");
+		expect(archive).toHaveBeenCalledTimes(2);
 	});
 
 	it("reads no sidebar and no crew for any write tool", async () => {

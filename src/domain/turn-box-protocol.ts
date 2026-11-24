@@ -291,6 +291,8 @@ export const Y_SQUARED_PORT_DEPS = [
 	"download",
 	"send",
 	"stop",
+	"archive",
+	"prOpen",
 	"crewList",
 	"crewThread",
 	"crewReconcile",
