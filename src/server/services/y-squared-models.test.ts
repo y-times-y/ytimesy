@@ -210,6 +210,29 @@ describe("the models Y² can choose from", () => {
 });
 
 describe("codexPlanState", () => {
+	it("ignores expired windows for both spent and nearly spent state", () => {
+		const usage = (primary: unknown, secondary?: unknown) => ({
+			limits: { rateLimitsByLimitId: { codex: { primary, secondary } } },
+		});
+		for (const usedPercent of [90, 95, 100, 120]) {
+			expect(
+				codexPlanState(usage({ usedPercent, resetsAt: NOW - 1 }), NOW),
+			).toEqual({ spentUntil: null, nearly: false });
+		}
+		expect(
+			codexPlanState(usage({ usedPercent: 100, resetsAt: NOW }), NOW),
+		).toEqual({ spentUntil: null, nearly: false });
+		expect(
+			codexPlanState(
+				usage(
+					{ usedPercent: 100, resetsAt: Math.floor(NOW / 1000) - 1 },
+					{ usedPercent: 93, resetsAt: NOW + 120_000 },
+				),
+				NOW,
+			),
+		).toEqual({ spentUntil: null, nearly: true });
+	});
+
 	it("only uses the global codex bucket for spent and nearly spent state", () => {
 		const usage = (codex: unknown, featurePercent: number) => ({
 			limits: {
