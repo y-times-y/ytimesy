@@ -129,6 +129,10 @@ import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { startedByPeerMessage } from "#/domain/thread-peer";
 import { withStoppedNotice } from "#/domain/turn-end";
 import {
+	isEdgeOutage,
+	isTransientInfrastructureFailure,
+} from "#/domain/turn-interruption";
+import {
 	savingChangesItem,
 	turnMayHaveChangedWorkspace,
 	withoutSavingChanges,
@@ -237,6 +241,7 @@ import {
 	lifecycleConfigFromFile,
 	lifecycleHookConfig,
 } from "../services/harness-lifecycle-hooks";
+import { reportInterruption } from "../services/interruption-monitoring";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { registerLiveTurn } from "../services/live-turn-abort";
 import { cancellableMachines } from "../services/machine-call-signal";
@@ -318,7 +323,6 @@ import {
 } from "../services/workspace-replaced-note";
 import { ySquaredTools } from "../services/y-squared-tools";
 import { yTools } from "../services/y-tools";
-
 import type { TurnPorts } from "./turn-ports";
 
 /**
@@ -410,14 +414,6 @@ const TURN_START_PATIENCE_MS = 10 * 60_000;
  * the edge was briefly unavailable (2026-11-22/23: 4 box turns failed this
  * way, reported as "the model request failed"). The box retries the step.
  */
-function isEdgeOutage(error: unknown) {
-	const refused = error as { name?: unknown; status?: unknown } | null;
-	return (
-		refused?.name === "TurnBoxVmRefused" &&
-		typeof refused.status === "number" &&
-		refused.status >= 500
-	);
-}
 
 /** The person pressed Stop: that ends the turn even if a connection was cut too. */
 function userStopped(reason: unknown) {
@@ -3671,14 +3667,19 @@ async function runApiTurnAttempt(
 		// provider stream may report only "Model run cancelled" after the abort.
 		// A cut connection resumes only where an executor retries the step
 		// (a chat object or a box), and never over the person's own Stop.
-		const platformRestart = [error, abort.signal.reason].find(
+		const platformRestart = [
+			error,
+			abort.signal.reason,
+			coordinationFailure,
+		].find(
 			(cause) =>
 				isPlatformRestart(cause) ||
 				(!!step &&
 					!userStopped(abort.signal.reason) &&
 					(isCutConnection(cause) ||
 						isEdgeOutage(cause) ||
-						cause instanceof TurnNotStarted)),
+						cause instanceof TurnNotStarted ||
+						isTransientInfrastructureFailure(cause))),
 		);
 		if (platformRestart) {
 			// One line per interruption, so they are counted without anyone
@@ -3693,10 +3694,27 @@ async function runApiTurnAttempt(
 						? "reset"
 						: isEdgeOutage(platformRestart)
 							? "edge-outage"
-							: "connection",
+							: isTransientInfrastructureFailure(platformRestart)
+								? "coordination"
+								: "connection",
 					executor: step ? "step" : "local",
 				}),
 			);
+			// Counted in the database where this process has one (not on a box,
+			// whose edge counts the turn's takeovers); bookkeeping, never awaited.
+			if (!ports.modelAccess)
+				void reportInterruption({
+					kind: "turn.interrupted",
+					turnId: turn.id,
+					sessionId: turn.session_id,
+					cause: isPlatformRestart(platformRestart)
+						? "reset"
+						: isEdgeOutage(platformRestart)
+							? "edge-outage"
+							: "connection-or-coordination",
+					recovered: true,
+					userVisible: false,
+				}).catch(() => {});
 			throw platformRestart;
 		}
 		// The step's soft deadline passed while its model call was still running and

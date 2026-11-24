@@ -100,6 +100,7 @@ const sse = (step: ModelStep) => {
 
 async function scenario(input: {
 	model: ModelStep[];
+	stuckSocket?: boolean;
 	/** Called when the n-th (1-based) model request reaches the upstream. */
 	onModel?: (n: number, edge: Awaited<ReturnType<typeof fakeEdge>>) => void;
 	env?: Record<string, string>;
@@ -288,6 +289,7 @@ async function scenario(input: {
 		fetch: counted,
 		now: () => edge.state.now,
 		socket: async () => {
+			if (input.stuckSocket) return new Promise(() => {});
 			throw new Error("no socket in this test");
 		},
 	});
@@ -344,6 +346,16 @@ beforeEach(() => {
 });
 
 describe("a coding turn on a box, claim to finalize", () => {
+	it("starts and finishes once when the pre-start socket handshake never answers", async () => {
+		const test = await scenario({
+			model: [{ text: "Done with the calculation." }],
+			stuckSocket: true,
+		});
+		await test.run();
+		expect(test.modelCalls()).toBe(1);
+		expect(test.finalizes).toHaveLength(1);
+		expect(test.requests).toContain("history");
+	}, 30_000);
 	it("answers with text: completes, no database, no secret read", async () => {
 		const s = await scenario({ model: [{ text: "Done." }] });
 		await s.run();

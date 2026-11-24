@@ -64,6 +64,12 @@ import {
 	TURN_BOX_PATHS,
 } from "../../domain/turn-box-protocol";
 import {
+	isEdgeOutage,
+	isTransientInfrastructureFailure,
+	shouldRetryStep,
+	stepRetryDelayMs,
+} from "../../domain/turn-interruption";
+import {
 	parseHubNote,
 	settledHubTurnStatus,
 	userHubEnabledFor,
@@ -112,6 +118,10 @@ import { withDatabaseScope } from "../adapters/database-scope";
 import { registerAuthEmailBinding } from "../adapters/email";
 import { withExecutorBinding } from "../adapters/executor-fetch";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
+import {
+	isCutConnection,
+	isPlatformRestart,
+} from "../adapters/freestyle/provider-retry";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
 import { registerMemoryRepos } from "../adapters/memory-repos";
@@ -249,8 +259,6 @@ const environmentSecrets = z.object({
 	ENVIRONMENT_EXECUTION_ENABLED: z.literal("1"),
 });
 
-/** Consecutive unfinished attempts (restarts or infrastructure errors) of one step before the turn is abandoned. */
-const MAX_STEP_RESUMES = 3;
 /** Well inside the 45 seconds after which a turn's lease counts as stale. */
 const WAITING_TURN_REFRESH_MS = 15_000;
 
@@ -1144,6 +1152,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		this.queue.remove(control.turnId, control.leaseId);
 		return true;
 	}
+	/** Kind and start of the current run of failed attempts of one step (null: none, or this object restarted). */
+	private stepFailureTransient: boolean | null = null;
+	private stepFailuresSince: number | null = null;
 	private async advanceTurn(alarmDelayMs = 0) {
 		const active = this.activeTurn();
 		if (!active) return this.wake("turn", null);
@@ -1165,7 +1176,20 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			leaseId: active.leaseId,
 			index: active.stepIndex,
 		};
-		if (active.resumes >= MAX_STEP_RESUMES) {
+		// Infrastructure trouble (the coordinator, the edge, a cut connection) is
+		// waited out with backoff for a long window, never failed; only a step
+		// that keeps failing for another reason is abandoned (turn-interruption.ts).
+		// A restart of this object forgets the kind: it then gets the long window
+		// too (a platform reset is not the turn's fault).
+		const transientFailing = this.stepFailureTransient !== false;
+		if (
+			!shouldRetryStep({
+				transient: transientFailing,
+				failures: active.resumes + 1,
+				firstFailureAt: this.stepFailuresSince ?? Date.now(),
+				now: Date.now(),
+			})
+		) {
 			// Stop driving it and fail it now, so the chat is free and the user is
 			// told why. If that write fails, lease expiry still marks it failed.
 			console.warn("Chat step kept failing; turn abandoned.", {
@@ -1255,12 +1279,27 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				index: step.index,
 				cause: stepFailureCause(error),
 			});
-			return this.wake("turn", Date.now() + 5_000 * (active.resumes + 1));
+			const transient =
+				isTransientInfrastructureFailure(error) ||
+				isCutConnection(error) ||
+				isPlatformRestart(error) ||
+				isEdgeOutage(error);
+			this.stepFailureTransient = transient;
+			this.stepFailuresSince ??= Date.now();
+			return this.wake(
+				"turn",
+				Date.now() +
+					(transient
+						? stepRetryDelayMs(active.resumes + 1)
+						: 5_000 * (active.resumes + 1)),
+			);
 		} finally {
 			stopRefreshing();
 			unregister();
 			this.settleVmQuiet(step.turnId);
 		}
+		this.stepFailureTransient = null;
+		this.stepFailuresSince = null;
 		// The step's checkpoint is saved: so is where it read the run's feed.
 		feed?.commit();
 		// The lines that arrived during the step were read: the next batch's

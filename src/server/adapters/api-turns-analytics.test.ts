@@ -79,7 +79,7 @@ it("captures a stopped queued turn as cancelled and a lost worker as failed", as
 	const lost = randomUUID();
 	await db.query(
 		// Its box's takeovers are used up (requeueInterruptedBoxTurns): it fails.
-		`insert into api_turn(id,session_id,user_id,state,heartbeat_at,executor,run_attempts) values($1,$2,'alice','running',now()-interval '1 hour','node',3)`,
+		`insert into api_turn(id,session_id,user_id,state,heartbeat_at,executor,run_attempts) values($1,$2,'alice','running',now()-interval '1 hour','node',10)`,
 		[lost, child],
 	);
 	await expireApiTurnLeases();

@@ -121,10 +121,13 @@ export type BoxSocket = {
 export type BoxSocketFactory = (
 	url: string,
 	grant: string,
+	signal?: AbortSignal,
 ) => Promise<BoxSocket>;
 
+export const TURN_BOX_SOCKET_OPEN_TIMEOUT_MS = 5_000;
+
 /** The runtime's WebSocket (Node 22+, Bun, Deno), with the grant as the bearer. Not run against a real edge yet. */
-export const runtimeBoxSocket: BoxSocketFactory = (url, grant) =>
+export const runtimeBoxSocket: BoxSocketFactory = (url, grant, signal) =>
 	new Promise((resolve, reject) => {
 		const socket = new (
 			WebSocket as unknown as new (
@@ -134,24 +137,38 @@ export const runtimeBoxSocket: BoxSocketFactory = (url, grant) =>
 		)(url.replace(/^http/, "ws"), {
 			headers: { authorization: `Bearer ${grant}` },
 		});
+		const abort = () => {
+			try {
+				socket.close();
+			} catch {}
+			reject(new Error("socket opening aborted"));
+		};
+		if (signal?.aborted) abort();
+		else signal?.addEventListener("abort", abort, { once: true });
 		const messages: ((data: string) => void)[] = [];
 		const closes: (() => void)[] = [];
-		socket.addEventListener("open", () =>
+		socket.addEventListener("open", () => {
+			signal?.removeEventListener("abort", abort);
 			resolve({
 				send: (data) => socket.send(data),
 				close: () => socket.close(),
 				onMessage: (handler) => messages.push(handler),
 				onClose: (handler) => closes.push(handler),
-			}),
-		);
+			});
+		});
 		socket.addEventListener("message", (event) => {
 			if (typeof event.data === "string")
 				for (const handler of messages) handler(event.data);
 		});
 		socket.addEventListener("close", () => {
+			signal?.removeEventListener("abort", abort);
+			reject(new Error("socket closed before opening"));
 			for (const handler of closes) handler();
 		});
-		socket.addEventListener("error", () => reject(new Error("socket failed")));
+		socket.addEventListener("error", () => {
+			signal?.removeEventListener("abort", abort);
+			reject(new Error("socket failed"));
+		});
 	});
 
 type ClientOptions = {
@@ -383,26 +400,53 @@ export class TurnBoxTurnSession {
 	}
 
 	/** Opens the turn's ONE socket (progress, renewals, Stop); falls back to HTTP when it cannot. */
-	async openSocket() {
+	async openSocket(stillNeeded: () => boolean = () => true) {
 		const factory = this.options.socket ?? runtimeBoxSocket;
+		let timedOut = false;
+		const openingAbort = new AbortController();
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			const socket = await factory(
+			const opening = factory(
 				new URL(TURN_BOX_PATHS.socket, this.options.edgeUrl).href,
 				this.grantToken,
-			);
-			socket.onMessage((data) => this.socketMessage(data));
-			socket.onClose(() => {
-				if (this.socket === socket) this.socket = null;
-				for (const done of this.waiting.values()) done(false);
-				this.waiting.clear();
-				// A Claude Code turn hears its tool calls only over the socket.
-				if (this.claudeHandler) this.reconnectSoon();
+				openingAbort.signal,
+			).then((socket) => {
+				if (
+					timedOut ||
+					this.finished ||
+					this.lost ||
+					this.cancelled ||
+					!stillNeeded()
+				) {
+					socket.close();
+					return false;
+				}
+				socket.onMessage((data) => this.socketMessage(data));
+				socket.onClose(() => {
+					if (this.socket === socket) this.socket = null;
+					for (const done of this.waiting.values()) done(false);
+					this.waiting.clear();
+					// A Claude Code turn hears its tool calls only over the socket.
+					if (this.claudeHandler) this.reconnectSoon();
+				});
+				this.socket = socket;
+				this.flushClaudeBacklog();
+				return true;
 			});
-			this.socket = socket;
-			this.flushClaudeBacklog();
-			return true;
+			return await Promise.race([
+				opening,
+				new Promise<false>((resolve) => {
+					timer = setTimeout(() => {
+						timedOut = true;
+						resolve(false);
+						openingAbort.abort();
+					}, TURN_BOX_SOCKET_OPEN_TIMEOUT_MS);
+				}),
+			]);
 		} catch {
 			return false;
+		} finally {
+			if (timer) clearTimeout(timer);
 		}
 	}
 
@@ -638,11 +682,20 @@ export class TurnBoxTurnSession {
 		this.reconnecting = true;
 		const attempt = (wait: number) =>
 			setTimeout(async () => {
-				if (this.finished || this.lost || !this.claudeHandler) {
+				if (
+					this.finished ||
+					this.lost ||
+					this.cancelled ||
+					!this.claudeHandler
+				) {
 					this.reconnecting = false;
 					return;
 				}
-				if (this.socket || (await this.openSocket())) {
+				const handler = this.claudeHandler;
+				if (
+					this.socket ||
+					(await this.openSocket(() => this.claudeHandler === handler))
+				) {
 					this.reconnecting = false;
 					return;
 				}

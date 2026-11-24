@@ -35,6 +35,7 @@ import {
 	childTaskAnchorId,
 	childTaskPublicItems,
 	startsTurn,
+	turnStartTiming,
 	withoutWakeTurnStarts,
 } from "#/domain/child-task-activity";
 import {
@@ -152,6 +153,7 @@ import { ReplyMarkdown } from "./settled-markdown";
 import { ShellCommandCode } from "./shell-command-code";
 import { useSmoothText } from "./smooth-text";
 import { useStableActions, useStableCallback } from "./stable-callbacks";
+import { StartingTurn } from "./starting-turn";
 import { TodoList } from "./todo-list";
 import {
 	AgentCallView,
@@ -491,12 +493,21 @@ export function SessionTimeline({
 		addHelperStart(task);
 	for (const { task } of helperMarks.filter((mark) => mark.finish === null))
 		addHelperFinish(task);
-	if (showTurnWorking(items, turnStatus))
+	const lastItem = presented.at(-1);
+	const awaitingFirstActivity = !lastItem || startsTurn(lastItem);
+	if (showTurnWorking(presented, turnStatus))
 		add({
 			key: "working",
 			kind: "working",
 			estimate: 30,
-			content: (
+			content: awaitingFirstActivity ? (
+				<StartingTurn
+					key={lastItem?.id ?? "empty"}
+					startedAt={
+						lastItem ? turnStartTiming(lastItem)?.startedAt : undefined
+					}
+				/>
+			) : (
 				<p className="session-working session-shimmer">
 					{compactingContext(items) ? "Compacting context" : "Thinking"}
 				</p>

@@ -348,7 +348,10 @@ export async function restoreQueuedUserMessage(
  * ahead of everything waiting: their rows are still there (taking only claimed
  * them), so the claim is lifted; a row that is gone (an older take deleted it)
  * is inserted again, the first at the head of the queue and the rest just
- * after it in the order they were taken.
+ * after it in the order they were taken. A message the chat's transcript
+ * already holds (another drain took it after this claim lapsed, and its turn
+ * exists) is never inserted again: a late restore from a slow or dead
+ * delivery would otherwise answer the person twice.
  */
 export async function restoreQueuedUserMessages(
 	sessionId: string,
@@ -362,6 +365,9 @@ export async function restoreQueuedUserMessages(
 		  select x.id,$1,x.message,x.stored::jsonb,
 		   case when x.n=1 then '-infinity'::timestamptz else timestamptz 'epoch' + (x.n * interval '1 millisecond') end
 		  from unnest($2::text[],$3::text[],$4::text[]) with ordinality as x(id,message,stored,n)
+		  where not exists(select 1 from agent_session s where s.id=$1
+		   and jsonb_typeof(s.items)='array'
+		   and s.items @> jsonb_build_array(jsonb_build_object('id',x.stored::jsonb->'item'->>'id')))
 		  on conflict(id) do nothing returning recipient_id),
 		 lifted as (
 		  update agent_peer_inbox set queued_send=queued_send - 'claimedAt'
