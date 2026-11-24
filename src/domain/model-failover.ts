@@ -809,3 +809,27 @@ export function forcedDevelopmentOutage(
 	const first = from ? Number.parseInt(from, 10) : 1;
 	return key === connectionKey && Number.isFinite(first) && step >= first;
 }
+
+/**
+ * The fallback a new turn starts on, or null: the chat's last turn already
+ * moved off this same route (its plan ran out) and that plan is still spent
+ * (`spentUntil`, the provider's reset time), so asking it again would only
+ * fail and add the same "continued on …" line to every turn (2026-11-23: one
+ * Y² chat showed 338 such lines in 275 turns). Once the plan resets, turns
+ * start on the chosen route again. Failover switched off: never.
+ */
+export function stickyFallbackKey(input: {
+	readonly enabled: boolean;
+	readonly original: ModelRoute;
+	readonly previous: TurnFailover | null;
+	readonly spentUntil: number | null;
+	readonly now: number;
+}): string | null {
+	const { previous } = input;
+	if (!input.enabled || !previous) return null;
+	if (input.spentUntil === null || input.spentUntil <= input.now) return null;
+	const original = routeKey(input.original);
+	const fallback = routeKey(previous.route);
+	if (fallback === original || !previous.tried.includes(original)) return null;
+	return fallback;
+}
