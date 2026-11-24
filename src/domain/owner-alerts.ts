@@ -4,7 +4,10 @@ export type OwnerAlertKind =
 	| "cron-failure"
 	| "email-failed"
 	| "codex-egress"
-	| "chat-wake-failed";
+	| "chat-wake-failed"
+	| "interruption"
+	| "interruption-digest"
+	| "canary-failed";
 
 export type OwnerAlert = {
 	readonly kind: OwnerAlertKind;

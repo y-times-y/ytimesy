@@ -1077,7 +1077,7 @@ export class LifecycleHookRefusal extends Error {
 export const TURN_NOT_STARTED =
 	"The conversation is already running or was stopped.";
 export const TURN_NOT_STARTED_MESSAGE =
-	"This turn did not start: the chat was still busy with its previous turn (or moving this one between servers) for too long. Nothing ran and nothing was lost. Send your message again.";
+	"ytimesy kept trying for 15 minutes to start this turn while the chat was busy, and could not. Nothing ran and your message is saved above; use Retry when you are ready.";
 
 export function apiTurnFailureMessage(
 	stage: ApiTurnFailureStage,
