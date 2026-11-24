@@ -6,14 +6,14 @@ Status: proposal, 2026-11-24. No tag, release, npm publish or deploy has been ma
 
 **v0.18.x** (v0.18.1 at the last weekly patch point, 2026-11-22; main tip 2026-11-24, 2185 commits).
 Confidence: medium. The milestone order and dates come from commit messages and dates;
-which changes count as "major" is a judgement. Nineteen milestones (v0.0.0 to v0.18.0) is the likely range
+which changes count as "major" is a judgement. Nineteen milestones (v0.0.1 to v0.18.0) is the likely range
 18 to 21 depending on how a reviewer splits them (for example the Y² work, Nov 16 to 24).
 Pace: 19 milestones in 73 days, about one every 3.8 days and about 115 commits per minor.
 The Y² work and the desktop app (see below) will keep that pace up.
 
 ## Rules (pre-1.0)
 
-- Counting starts at v0.0.0 (the first milestone) as the owner asked. One version for the whole monorepo: the product version in `package.json` and the git tag.
+- The first tag is v0.0.1 (the first milestone), as the owner asked; every later milestone is a minor bump from there (v0.1.0, v0.2.0, ...). One version for the whole monorepo: the product version in `package.json` and the git tag.
 - **Minor** (0.N.0): a milestone a user would name: a new capability, route, integration or
   platform move (for example a new model route, a new surface, moving the harness to new infrastructure).
 - **Patch** (0.N.P): everything else shipped between two milestones. Cut weekly (Monday) when at
@@ -40,7 +40,7 @@ Hashes are the current main hashes (history was rewritten on 2026-11-24; do not 
 
 | Version | Date | Commit | Milestone |
 |---|---|---|---|
-| v0.0.0 | 2026-09-13 | 5aaa0308 | GitHub sign-in and project onboarding (first tag; first commit 2026-09-12 afabb045 is "hello world") |
+| v0.0.1 | 2026-09-13 | 5aaa0308 | GitHub sign-in and project onboarding (first tag; first commit 2026-09-12 afabb045 is "hello world") |
 | v0.1.0 | 2026-09-13 | 917317b0 | Freestyle cloud VMs and Codex device login (first agent chat in a cloud VM) |
 | v0.2.0 | 2026-09-14 | d1e4be08 | Pull requests from the app |
 | v0.3.0 | 2026-09-14 | 48ecdaa5 | Claude and OpenCode harnesses, parallel chats |
