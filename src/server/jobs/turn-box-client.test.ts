@@ -9,6 +9,7 @@ import { fakeEdge } from "../edge/turn-box-fake-edge";
 import { answerTurnBoxSocketMessage } from "../edge/turn-box-socket";
 import {
 	type BoxSocket,
+	TURN_BOX_SOCKET_OPEN_TIMEOUT_MS,
 	TurnBoxEdgeClient,
 	TurnBoxIdentityRejected,
 	TurnBoxLeaseLost,
@@ -80,6 +81,51 @@ async function setup() {
 }
 
 describe("turn box client against the edge", () => {
+	it("bounds a stuck socket handshake and falls back to HTTP without adopting a late socket", async () => {
+		const edge = await fakeEdge();
+		edge.queue.push({ ...edge.row });
+		let finishOpening!: (socket: BoxSocket) => void;
+		let openingSignal: AbortSignal | undefined;
+		const client = new TurnBoxEdgeClient({
+			edgeUrl: "https://edge.test",
+			identity: edge.identity,
+			fetch: edge.fetchEdge,
+			now: () => edge.state.now,
+			socket: (_url, _grant, signal) => {
+				openingSignal = signal;
+				return new Promise((resolve) => {
+					finishOpening = resolve;
+				});
+			},
+		});
+		const session = await client.claim();
+		if (!session) throw new Error("no turn claimed");
+		vi.useFakeTimers();
+		try {
+			const opening = session.openSocket();
+			await vi.advanceTimersByTimeAsync(TURN_BOX_SOCKET_OPEN_TIMEOUT_MS - 1);
+			expect(openingSignal?.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			await expect(opening).resolves.toBe(false);
+			expect(openingSignal?.aborted).toBe(true);
+			await expect(session.history()).resolves.toMatchObject({
+				messages: edge.row.messages,
+			});
+			await expect(session.renew()).resolves.toBe("renewed");
+			const socket: BoxSocket = {
+				send: vi.fn(),
+				close: vi.fn(),
+				onMessage: vi.fn(),
+				onClose: vi.fn(),
+			};
+			finishOpening(socket);
+			await Promise.resolve();
+			expect(socket.close).toHaveBeenCalledOnce();
+			expect(socket.onMessage).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it("distinguishes an expired identity from a deferred registration", async () => {
 		const { client, tick } = await setup();
 		const registration = { capacity: 2, running: 0 };

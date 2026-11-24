@@ -1,7 +1,11 @@
 import { runInNewContext } from "node:vm";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
-import { remainingStartWait, StartingTurn } from "./starting-turn";
+import {
+	remainingStartWait,
+	StartingTurn,
+	scheduleStartingTurnWait,
+} from "./starting-turn";
 
 afterEach(() => vi.useRealTimers());
 
@@ -18,6 +22,28 @@ it("counts from the turn start, including across a reload", () => {
 	vi.advanceTimersByTime(60_000);
 	expect(remainingStartWait(startedAt, Date.now())).toBe(0);
 	expect(remainingStartWait(undefined, Date.now())).toBeUndefined();
+});
+
+it("times an untimed turn from mount and resets when the timestamp changes", () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(50_000);
+	const update = vi.fn();
+	const cancel = scheduleStartingTurnWait(undefined, Date.now(), update);
+	expect(update).toHaveBeenLastCalledWith(false);
+	vi.advanceTimersByTime(19_999);
+	expect(update).toHaveBeenCalledTimes(1);
+	vi.advanceTimersByTime(1);
+	expect(update).toHaveBeenLastCalledWith(true);
+	cancel?.();
+	const cancelNew = scheduleStartingTurnWait(65_000, Date.now(), update);
+	expect(update).toHaveBeenLastCalledWith(false);
+	vi.advanceTimersByTime(14_999);
+	expect(update).toHaveBeenLastCalledWith(false);
+	vi.advanceTimersByTime(1);
+	expect(update).toHaveBeenLastCalledWith(true);
+	cancelNew?.();
+	scheduleStartingTurnWait(1_000, Date.now(), update);
+	expect(update).toHaveBeenLastCalledWith(true);
 });
 
 it("corrects the server markup before paint on reload, but not for a new or untimed turn", () => {

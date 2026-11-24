@@ -10,6 +10,18 @@ export function remainingStartWait(startedAt: number | undefined, now: number) {
 		: Math.max(0, startedAt + WAIT_MS - now);
 }
 
+export function scheduleStartingTurnWait(
+	startedAt: number | undefined,
+	now: number,
+	setWaiting: (waiting: boolean) => void,
+) {
+	const remaining = remainingStartWait(startedAt, now);
+	setWaiting(remaining === 0);
+	if (remaining === 0) return;
+	const timer = setTimeout(() => setWaiting(true), remaining ?? WAIT_MS);
+	return () => clearTimeout(timer);
+}
+
 // Runs during parsing, before paint. Keep its threshold and text in sync above.
 function prepareStartingTurn(id: string, startedAt: number | null) {
 	const element = document.getElementById(id);
@@ -29,14 +41,7 @@ export function StartingTurn({ startedAt }: { startedAt?: number }) {
 			: remainingStartWait(startedAt, Date.now()) === 0;
 	});
 	useEffect(() => {
-		const remaining = remainingStartWait(startedAt, Date.now());
-		if (remaining === undefined) return;
-		if (remaining === 0) {
-			setWaiting(true);
-			return;
-		}
-		const timer = setTimeout(() => setWaiting(true), remaining);
-		return () => clearTimeout(timer);
+		return scheduleStartingTurnWait(startedAt, Date.now(), setWaiting);
 	}, [startedAt]);
 	return (
 		<>
