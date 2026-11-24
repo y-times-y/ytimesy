@@ -68,8 +68,10 @@ export type BoxTurnPorts = TurnPorts & {
 };
 
 const ANALYTICS_BATCH = 20;
-/** A port call on the chat's lock gives up after this, well inside its 30 s lease. */
-export const COORDINATION_PORT_TIMEOUT_MS = 8_000;
+/** One attempt at a call on the chat's lock; the attempts together stay inside its 30 s lease. */
+export const COORDINATION_PORT_TIMEOUT_MS = 6_000;
+export const COORDINATION_PORT_ATTEMPTS = 3;
+const COORDINATION_PORT_BACKOFF_MS = [300, 1_000];
 /** The edge confirmed the lease this recently (a renewal, or a checkpoint's own): no renewal request. */
 const RENEW_SKIP_MS = 5_000;
 /** An empty peer inbox is read again after this long. */
@@ -125,46 +127,59 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 	 * failed on "Turn port coordinateTurn failed (503)").
 	 */
 	const coordinateTurn = async (action: TurnControlAction) => {
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		try {
-			// Bounded: a renewal that hangs held the heartbeat's next renewals
-			// back until the room's 30 s lease lapsed and the turn was stopped.
-			return await Promise.race([
-				call<boolean>("coordinateTurn", { action }),
-				new Promise<never>((_, reject) => {
-					timer = setTimeout(
-						() =>
-							reject(
-								new CoordinationFailure(
-									action,
-									{ kind: "transport", category: "timeout" },
-									1,
+		// One slow answer never ends the turn: each call is tried a few times
+		// (all of them repeat safely under one lease), the whole inside the
+		// room's 30 s lease. A call that hung held the next renewals back until
+		// the lease lapsed and the turn was stopped; one that timed out once
+		// and was never repeated killed two healthy turns (2026-11-24).
+		let failure: CoordinationFailure | undefined;
+		for (let attempt = 1; attempt <= COORDINATION_PORT_ATTEMPTS; attempt++) {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				return await Promise.race([
+					call<boolean>("coordinateTurn", { action }),
+					new Promise<never>((_, reject) => {
+						timer = setTimeout(
+							() =>
+								reject(
+									new CoordinationFailure(
+										action,
+										{ kind: "transport", category: "timeout" },
+										attempt,
+									),
 								),
-							),
-						COORDINATION_PORT_TIMEOUT_MS,
+							COORDINATION_PORT_TIMEOUT_MS,
+						);
+					}),
+				]);
+			} catch (error) {
+				failure =
+					error instanceof CoordinationFailure
+						? error
+						: error instanceof TurnPortFailed &&
+								(error.status === 429 || error.status >= 500)
+							? new CoordinationFailure(
+									action,
+									{ kind: "http", status: error.status },
+									attempt,
+								)
+							: error instanceof TypeError
+								? new CoordinationFailure(
+										action,
+										{ kind: "transport", category: "network" },
+										attempt,
+									)
+								: undefined;
+				if (!failure) throw error;
+				if (attempt < COORDINATION_PORT_ATTEMPTS)
+					await new Promise((resolve) =>
+						setTimeout(resolve, COORDINATION_PORT_BACKOFF_MS[attempt - 1]),
 					);
-				}),
-			]);
-		} catch (error) {
-			if (
-				error instanceof TurnPortFailed &&
-				(error.status === 429 || error.status >= 500)
-			)
-				throw new CoordinationFailure(
-					action,
-					{ kind: "http", status: error.status },
-					1,
-				);
-			if (error instanceof TypeError)
-				throw new CoordinationFailure(
-					action,
-					{ kind: "transport", category: "network" },
-					1,
-				);
-			throw error;
-		} finally {
-			clearTimeout(timer);
+			} finally {
+				clearTimeout(timer);
+			}
 		}
+		throw failure;
 	};
 	const sdk = session.modelSdkSettings();
 	const adapters = session.adapters();

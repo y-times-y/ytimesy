@@ -90,6 +90,16 @@ export async function fakeEdge(
 		releaseClaim: async () => {
 			calls.push("release");
 		},
+		loadOwnedIdentity: async (grant) => {
+			calls.push("loadOwnedIdentity");
+			return row.state === "running" &&
+				row.id === grant.turnId &&
+				row.lease_id === grant.leaseId &&
+				row.user_id === grant.userId &&
+				row.session_id === grant.sessionId
+				? { ...row, messages: [], items: [] }
+				: null;
+		},
 		loadOwned: async (grant) => {
 			calls.push("loadOwned");
 			return row.state === "running" &&

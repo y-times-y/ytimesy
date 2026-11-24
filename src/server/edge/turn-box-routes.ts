@@ -452,7 +452,17 @@ export async function routeTurnBoxEdge(
 	try {
 		// The lease check every endpoint starts with: the turn must be running
 		// under exactly the grant's lease and belong to the grant's user and chat.
-		const turn = await deps.ops.loadOwned(grant);
+		// The chat's lock calls (a renewal every few seconds) need only who the
+		// turn is, never its messages and items (megabytes on a long chat): read
+		// whole they held the edge's two database connections for seconds and a
+		// renewal waited past its timeout (2026-11-24: two turns died on it).
+		const light =
+			path === TURN_BOX_PATHS.port &&
+			opOf(body) === "coordinateTurn" &&
+			deps.ops.loadOwnedIdentity;
+		const turn = await (light
+			? deps.ops.loadOwnedIdentity?.(grant)
+			: deps.ops.loadOwned(grant));
 		if (!turn) return refuse("lease-lost", 409);
 
 		if (path === TURN_BOX_PATHS.renew) {

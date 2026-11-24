@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import { TURN_ALREADY_RUNNING } from "../adapters/api-turns";
+import { TURN_ALREADY_RUNNING } from "#/domain/api-turn-failure";
 import { sendQueuingBehindRace } from "./send-race";
 
 const refusal = () => new Error(TURN_ALREADY_RUNNING);

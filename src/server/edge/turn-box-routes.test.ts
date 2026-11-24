@@ -182,6 +182,38 @@ describe("turn box edge: lease and user checks", () => {
 		expect(renewed).toMatchObject({ renewed: false, cancelRequested: true });
 	});
 
+	it("answers the chat's lock calls from the turn's identity alone, never loading its messages and items (2026-11-24: whole-row reads starved the edge's pool and two turns died on a renewal timeout)", async () => {
+		const edge = await fakeEdge();
+		const grant = await grantFor(edge);
+		edge.state.ports.coordinateTurn = () => true;
+		edge.calls.length = 0;
+		const lock = await post(edge, TURN_BOX_PATHS.port, grant, {
+			op: "coordinateTurn",
+			args: { action: "renew" },
+		});
+		expect(lock.status).toBe(200);
+		expect(edge.calls).toContain("loadOwnedIdentity");
+		expect(edge.calls).not.toContain("loadOwned");
+		// Any other port still reads the turn whole.
+		edge.state.ports.harnessVariant = () => ({}) as never;
+		edge.calls.length = 0;
+		await post(edge, TURN_BOX_PATHS.port, grant, {
+			op: "harnessVariant",
+			args: {},
+		});
+		expect(edge.calls).toContain("loadOwned");
+		// A stale lease is refused as before.
+		edge.row.lease_id = "66666666-6666-4666-8666-666666666666";
+		expect(
+			(
+				await post(edge, TURN_BOX_PATHS.port, grant, {
+					op: "coordinateTurn",
+					args: { action: "renew" },
+				})
+			).status,
+		).toBe(409);
+	});
+
 	it("a successful write lands, and finalize reports the effective state", async () => {
 		const edge = await fakeEdge();
 		const grant = await grantFor(edge);
