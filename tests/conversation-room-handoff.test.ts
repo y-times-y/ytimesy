@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ConversationRoom } from "../src/realtime/worker";
 import { durableObjectState } from "./support/durable-object-state";
 
@@ -16,11 +16,18 @@ function control(
 	conversation: ConversationRoom,
 	action: string,
 	leaseId: string,
+	extra: Record<string, string> = {},
 ) {
 	return conversation.fetch(
 		new Request(`https://chat.internal/turn/${action}`, {
 			method: "POST",
-			body: JSON.stringify({ userId: "u", sessionId, turnId, leaseId }),
+			body: JSON.stringify({
+				userId: "u",
+				sessionId,
+				turnId,
+				leaseId,
+				...extra,
+			}),
 		}),
 	);
 }
@@ -122,4 +129,66 @@ it("lets a running turn take back its lapsed lease, but never from a live holder
 	// Stopped: no resume.
 	await control(conversation, "cancel", objectLease);
 	expect((await control(conversation, "resume", objectLease)).status).toBe(409);
+});
+
+// 2026-11-24: a turn ran 14 minutes, then a step could not take the chat's
+// lock back and the turn ended with "This turn did not start". The database
+// allows one active turn per chat, so a holder the room still names is stale.
+describe("a turn taking over the chat's lock", () => {
+	const otherTurn = { turnId: "00000000-0000-4000-8000-0000000000c1" };
+
+	it("takes it from a stale turn whose lease the room still holds, and the stale one is refused from then on", async () => {
+		const conversation = room();
+		expect(
+			(await control(conversation, "acquire", boxLease, otherTurn)).status,
+		).toBe(204);
+		// New turn: refused by acquire while the old lease is live, takes over.
+		expect((await control(conversation, "acquire", objectLease)).status).toBe(
+			409,
+		);
+		expect((await control(conversation, "takeover", objectLease)).status).toBe(
+			204,
+		);
+		expect((await control(conversation, "renew", objectLease)).status).toBe(
+			204,
+		);
+		expect(
+			(await control(conversation, "renew", boxLease, otherTurn)).status,
+		).toBe(409);
+	});
+
+	it("takes back its own lapsed or retired lease", async () => {
+		const conversation = room();
+		await control(conversation, "acquire", boxLease);
+		await control(conversation, "release", boxLease);
+		expect((await control(conversation, "acquire", boxLease)).status).toBe(409);
+		expect((await control(conversation, "takeover", boxLease)).status).toBe(
+			204,
+		);
+	});
+
+	it("never takes it from a live code restore, and does once the restore's lease has lapsed", async () => {
+		const { conversation, storage } = roomWithState();
+		await control(conversation, "acquire", boxLease, {
+			...otherTurn,
+			hold: "restore",
+		});
+		expect((await control(conversation, "takeover", objectLease)).status).toBe(
+			409,
+		);
+		const held = await storage.get<{ expiresAt: number }>("active-turn");
+		await storage.put("active-turn", { ...held, expiresAt: Date.now() - 1 });
+		expect((await control(conversation, "takeover", objectLease)).status).toBe(
+			204,
+		);
+	});
+
+	it("never takes it for a turn that was stopped", async () => {
+		const conversation = room();
+		await control(conversation, "acquire", boxLease);
+		await control(conversation, "cancel", boxLease);
+		expect((await control(conversation, "takeover", objectLease)).status).toBe(
+			409,
+		);
+	});
 });

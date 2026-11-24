@@ -389,7 +389,14 @@ export const boxPortArgs = {
 	peerInboxRead: z.object({}),
 	peerInboxAccept: z.object({ ids: z.array(portText).min(1).max(16) }),
 	coordinateTurn: z.object({
-		action: z.enum(["acquire", "renew", "release", "resume", "cancel"]),
+		action: z.enum([
+			"acquire",
+			"renew",
+			"release",
+			"resume",
+			"takeover",
+			"cancel",
+		]),
 	}),
 	/**
 	 * The edge writes the turn's project secrets (env file) onto the chat's

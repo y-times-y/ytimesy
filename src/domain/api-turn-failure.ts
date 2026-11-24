@@ -1073,11 +1073,21 @@ export class LifecycleHookRefusal extends Error {
 	}
 }
 
-/** Raised when a turn could not take its chat's coordination lease at startup. */
+/** Raised when a turn could not take its chat's coordination lease: it is retried by its executor, never shown. */
 export const TURN_NOT_STARTED =
 	"The conversation is already running or was stopped.";
+/**
+ * If it is ever shown (the chat stayed locked through every retry, about half
+ * an hour), it says what is happening and that nothing is asked of the person.
+ */
 export const TURN_NOT_STARTED_MESSAGE =
-	"This turn did not start: the chat was still busy with its previous turn (or moving this one between servers) for too long. Nothing ran and nothing was lost. Send your message again.";
+	"This chat was still locked by earlier work that never released it, so this message has been waiting. It is saved and will run by itself as soon as the chat is free.";
+export class TurnNotStarted extends Error {
+	constructor() {
+		super(TURN_NOT_STARTED);
+		this.name = "TurnNotStarted";
+	}
+}
 
 export function apiTurnFailureMessage(
 	stage: ApiTurnFailureStage,

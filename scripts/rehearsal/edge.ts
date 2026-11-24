@@ -220,6 +220,9 @@ export class RehearsalEdge {
 				return true;
 			case "renew":
 				return Boolean(same);
+			case "takeover":
+				this.rooms.set(turn.sessionId, turn);
+				return true;
 			case "resume":
 				if (held && !same) return false;
 				this.rooms.set(turn.sessionId, turn);

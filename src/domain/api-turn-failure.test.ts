@@ -695,13 +695,14 @@ it("says what happened when a Y² turn reached for a workspace, not that the pro
 	).toContain("Y² reached for a workspace");
 });
 
-it("tells a turn that could not take its chat's lease nothing ran, and to send again", () => {
+it("tells a turn blocked by an old lock that it is saved and will run by itself", () => {
 	const message = apiTurnFailureMessage(
 		"coordination",
 		new Error(TURN_NOT_STARTED),
 	);
 	expect(message).toBe(TURN_NOT_STARTED_MESSAGE);
-	expect(message).toContain("Nothing ran");
+	expect(message).toContain("will run by itself");
+	expect(message).not.toMatch(/send|resend/i);
 	expect(apiTurnFailureMessage("coordination", new Error("other"))).toContain(
 		"could not confirm",
 	);

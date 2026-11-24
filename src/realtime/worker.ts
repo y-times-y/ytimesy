@@ -593,6 +593,37 @@ export class ConversationRoom {
 				if (expiry <= Date.now()) delete retired[id];
 			const same =
 				current?.turnId === input.turnId && current?.leaseId === input.leaseId;
+			if (action === "takeover") {
+				const live = current && current.expiresAt > Date.now();
+				if (
+					current &&
+					((live && !same && current.hold === "restore") ||
+						(current.turnId === input.turnId && current.cancelled))
+				)
+					return new Response(null, { status: 409 });
+				if (current && !same) {
+					retired[retiredLeaseKey(current)] = Date.now() + RETIRED_TURN_MS;
+					console.warn(
+						JSON.stringify({
+							event: "lock.takeover",
+							from: current.turnId,
+							fromHold: current.hold ?? "turn",
+							fromExpiresInMs: current.expiresAt - Date.now(),
+							to: input.turnId,
+						}),
+					);
+				}
+				delete retired[retiredLeaseKey(input)];
+				await storage.put("retired-turns", retired);
+				const next: ActiveConversationTurn = {
+					...input,
+					expiresAt: Date.now() + TURN_COORDINATION_LEASE_MS,
+					cancelled: false,
+				};
+				await storage.put("active-turn", next);
+				await this.schedule(next.expiresAt);
+				return new Response(null, { status: 204 });
+			}
 			if (action === "resume") {
 				if (
 					current &&
@@ -780,7 +811,7 @@ export default {
 
 /** Turn coordination paths of a chat's room; other /turn/* paths are not the room's. */
 const ROOM_TURN_PATH =
-	/^\/turn\/(acquire|renew|release|handoff|resume|cancel)$/;
+	/^\/turn\/(acquire|renew|release|handoff|resume|takeover|cancel)$/;
 
 /**
  * Whether a path is the chat room's (snapshots, the stream, purge and turn
