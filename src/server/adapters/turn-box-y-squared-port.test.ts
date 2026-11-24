@@ -72,6 +72,8 @@ function world(options: { yEnabled?: boolean; ySquaredId?: string } = {}) {
 		download: record("download", "AAAA"),
 		send: record("send", { turnStatus: "running" }),
 		stop: record("stop", { turnStatus: "idle" }),
+		archive: record("archive"),
+		prOpen: record("prOpen", false),
 	} as never;
 	const turn = { id: "t1", user_id: "u1", session_id: Y2 } as ApiTurn;
 	return {
@@ -148,6 +150,25 @@ describe("ySquared port: a box's Y² reaches only its own project's threads", ()
 				}
 			).harnessId,
 		).toBe("api");
+	});
+
+	it("archives only a root thread of the project and checks only the project's pull requests", async () => {
+		const w = world();
+		await w.call("archive", ["u1", THREAD]);
+		expect(w.calls.find((c) => c.dep === "archive")?.args).toEqual([
+			"u1",
+			THREAD,
+		]);
+		await refused(w.call("archive", ["u1", HELPER]));
+		await refused(w.call("archive", ["u1", OTHER_PROJECT]));
+		await refused(w.call("archive", ["u1", Y2]));
+		await refused(w.call("archive", ["u2", THREAD]));
+		expect(
+			await w.call("prOpen", ["u1", "p1", "https://github.com/o/r/pull/1"]),
+		).toBe(false);
+		await refused(
+			w.call("prOpen", ["u1", "p2", "https://github.com/o/r/pull/1"]),
+		);
 	});
 
 	it("stops only a thread of the project; a schedule is always this Y² chat's", async () => {
