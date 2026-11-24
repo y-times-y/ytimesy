@@ -31,7 +31,7 @@ Researched 2026-10-17 from vendor source and docs (primary sources unless noted)
 |---|---|---|
 | **Codex** | GPT-6.1 Sol, GPT-6 Luna, GPT-6 Astra | `exec_command{cmd, workdir, tty, yield_time_ms, max_output_tokens}` + `write_stdin{session_id, chars, yield_time_ms}` (session shell); `apply_patch` as a **freeform tool** with a grammar on the Responses API (JSON `{input}` fallback elsewhere); `update_plan`; `view_image` |
 | **Claude Code** | Claude Opus/Sonnet/Haiku 5.5, Fable 5.1; Kimi K3 (Kimi Code copies these tools); Grok 4.7/4.6 (Grok Build uses these names; arguments unpublished); DeepSeek V4 / V4.1 and GLM 5.3 (vendors route coding through Claude Code; secondary sources); Muse (low-confidence guess) | `Bash{command, timeout, run_in_background}`, `Read`, `Write`, `Edit{file_path, old_string, new_string, replace_all}`, `Glob`, `Grep` |
-| **Gemini CLI** | Gemini 4 Argon, 3.8 Flash, 3.7 Flash; Qwen3.8 Max (Qwen Code is a Gemini CLI fork) | `run_shell_command{command, dir_path, is_background}`, `read_file{file_path, start_line, end_line}`, `write_file`, `replace{file_path, old_string, new_string, allow_multiple}` (Qwen: `edit` with `replace_all`), `glob`, `grep_search` |
+| **Gemini CLI** | Gemini 4 Neon, Gemini 4 Argon, 3.8 Flash, 3.7 Flash; Qwen3.8 Max (Qwen Code is a Gemini CLI fork) | `run_shell_command{command, dir_path, is_background}`, `read_file{file_path, start_line, end_line}`, `write_file`, `replace{file_path, old_string, new_string, allow_multiple}` (Qwen: `edit` with `replace_all`), `glob`, `grep_search` |
 
 No model in the selector names the SWE-agent shape as its native harness.
 

@@ -197,6 +197,8 @@ export const KNOWN_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
 	"google/gemini-4-hydrogen": { input: 1.5, output: 7.5, cacheRead: 0.075 },
 	"google/gemini-4-argon": { input: 2, output: 10, cacheRead: 0.1 },
 	"google/gemini-4-carbon": { input: 2, output: 10, cacheRead: 0.1 },
+	// Google list price (aistudio.google.com/docs/models/gemini-4-neon, 2026-11).
+	"google/gemini-4-neon": { input: 3, output: 15, cacheRead: 0.15 },
 	"deepseek/deepseek-v4.1-flash": {
 		input: 0.45,
 		output: 1.8,
