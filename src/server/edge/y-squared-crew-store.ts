@@ -72,6 +72,7 @@ type WakeRow = {
 	proactive_today: number;
 	proactive_hold_until: number;
 	stall_nudges: number;
+	model_choice: number;
 	timezone: string | null;
 };
 
@@ -179,6 +180,7 @@ export class SqliteYSquaredCrew {
 			["proactive_today", "integer not null default 0"],
 			["proactive_hold_until", "integer not null default 0"],
 			["stall_nudges", "integer not null default 1"],
+			["model_choice", "integer not null default 1"],
 			["timezone", "text"],
 		] as const)
 			if (!wakeColumns.has(column))
@@ -706,7 +708,11 @@ export class SqliteYSquaredCrew {
 
 	settings(): YSquaredSettings {
 		const row = this.wakeRow();
-		return { stallNudges: row.stall_nudges === 1, timezone: row.timezone };
+		return {
+			stallNudges: row.stall_nudges === 1,
+			modelChoice: row.model_choice !== 0,
+			timezone: row.timezone,
+		};
 	}
 
 	saveSettings(patch: Partial<YSquaredSettings>, now: number) {
@@ -714,6 +720,11 @@ export class SqliteYSquaredCrew {
 			this.sql.exec(
 				"update wake_state set stall_nudges=? where id=1",
 				patch.stallNudges ? 1 : 0,
+			);
+		if (patch.modelChoice !== undefined)
+			this.sql.exec(
+				"update wake_state set model_choice=? where id=1",
+				patch.modelChoice ? 1 : 0,
 			);
 		if (patch.timezone !== undefined)
 			this.sql.exec(

@@ -218,6 +218,10 @@ describe("settings patch", () => {
 		expect(
 			parseSettingsPatch({ stallNudges: "no", timezone: "Bad/Zone" }),
 		).toEqual({});
+		expect(parseSettingsPatch({ modelChoice: false })).toEqual({
+			modelChoice: false,
+		});
+		expect(parseSettingsPatch({ modelChoice: "off" })).toEqual({});
 		expect(parseSettingsPatch(null)).toEqual({});
 	});
 });

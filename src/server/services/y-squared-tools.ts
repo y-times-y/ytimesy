@@ -23,6 +23,7 @@ import {
 	isViewableImage,
 	type MessageAttachment,
 } from "#/domain/message-attachment";
+import { harnessForModelId } from "#/domain/model-harness";
 import { wakeMessageId } from "#/domain/pull-request-wake";
 import type { SessionItem } from "#/domain/session-item";
 import { threadOutcomeLines } from "#/domain/thread-outcome";
@@ -70,6 +71,22 @@ import {
 	Y_SQUARED_VIEW_IMAGE_TOOL,
 } from "#/domain/y-squared-images";
 import {
+	canonicalReasoning,
+	checkThreadModelSettings,
+	listModelsInput,
+	modelListText,
+	resolveThreadModel,
+	setThreadModelInput,
+	THREAD_MODEL_LINE,
+	type ThreadModel,
+	type ThreadModelChoices,
+	Y_SQUARED_LIST_MODELS_DESCRIPTION,
+	Y_SQUARED_LIST_MODELS_TOOL,
+	Y_SQUARED_MODEL_CHOICE_OFF,
+	Y_SQUARED_SET_THREAD_MODEL_DESCRIPTION,
+	Y_SQUARED_SET_THREAD_MODEL_TOOL,
+} from "#/domain/y-squared-models";
+import {
 	describeSpec,
 	formatLocal,
 	scheduleInput,
@@ -86,6 +103,7 @@ import {
 	latestCanvasForOwner,
 } from "../adapters/canvas-read";
 import { downloadMessageAttachment } from "../adapters/checkpoints/storage";
+import type { ThreadModelChange } from "../adapters/thread-model";
 import { threadOutcomeForOwner } from "../adapters/thread-outcome";
 import {
 	type YSquaredCrewClient,
@@ -134,6 +152,15 @@ type Deps = {
 	) => Promise<boolean | null>;
 	/** Archives a root chat (stops its turn, keeps everything; Settings > Archived restores it). */
 	readonly archive: (userId: string, sessionId: string) => Promise<void>;
+	/** The models this person can run now, and whether Y² may choose (one read per call). */
+	readonly models: (
+		userId: string,
+		projectId: string,
+	) => Promise<ThreadModelChoices>;
+	/** Points a thread at another model from its next turn (one statement). */
+	readonly setModel: (
+		change: ThreadModelChange,
+	) => Promise<{ readonly found: boolean; readonly lineWritten: boolean }>;
 	/** The Stop button's path. */
 	readonly stop: (
 		machines: WorkspaceMachines,
@@ -171,6 +198,13 @@ const defaultDeps: Deps = {
 		const { pullRequestIsOpen } = await import("./y-squared-pr-state");
 		return pullRequestIsOpen({ userId, projectId, url });
 	},
+	models: async (userId, projectId) =>
+		(await import("./y-squared-models")).ySquaredThreadModels(
+			userId,
+			projectId,
+		),
+	setModel: async (change) =>
+		(await import("../adapters/thread-model")).setThreadModel(change),
 	archive: async (userId, sessionId) => {
 		// Lazy: the archive service pulls in the machine and project services.
 		const { archiveOwned } = await import("./archive");
@@ -329,6 +363,43 @@ export function ySquaredTools(input: {
 			})),
 		);
 		return { files };
+	};
+	/** A thread's own route: its recorded model decides its harness (a change of model may cross runtimes). */
+	const routeOf = (chat: {
+		listedModelId: string | null;
+		harness: AgentProviderId;
+	}) => ({
+		modelId: chat.listedModelId ?? input.modelId ?? "",
+		harnessId:
+			(chat.listedModelId && harnessForModelId(chat.listedModelId)) ||
+			chat.harness,
+	});
+	/** The send settings a chosen model and its optional reasoning / speed make. */
+	const modelSettings = (
+		model: ThreadModel,
+		settings: { reasoning?: string; speed?: string },
+	) => ({
+		modelId: model.id,
+		...(settings.reasoning
+			? { variant: canonicalReasoning(model, settings.reasoning) }
+			: {}),
+		...(settings.speed
+			? model.harness === "codex"
+				? { fast: true }
+				: { speed: settings.speed.trim().toLowerCase() as "fast" | "ultrafast" }
+			: {}),
+	});
+	/** A requested model checked against what the person can run now; an error says what is valid. */
+	const pickModel = async (
+		request: string,
+		settings: { reasoning?: string; speed?: string },
+	): Promise<{ model: ThreadModel } | { error: string }> => {
+		const choices = await deps.models(input.userId, input.projectId);
+		if (!choices.enabled) return { error: Y_SQUARED_MODEL_CHOICE_OFF };
+		const picked = resolveThreadModel(request, choices.models);
+		if (!picked.ok) return { error: picked.error };
+		const invalid = checkThreadModelSettings(picked.model, settings);
+		return invalid ? { error: invalid } : { model: picked.model };
 	};
 	const noThread = "No such thread in this project.";
 	const noMachines = "Threads cannot be run here.";
@@ -556,9 +627,25 @@ export function ySquaredTools(input: {
 		[Y_SQUARED_START_THREAD_TOOL]: tool({
 			description: Y_SQUARED_START_THREAD_DESCRIPTION,
 			inputSchema: startThreadInput,
-			execute: async ({ title, brief, attachments }) => {
+			execute: async ({
+				title,
+				brief,
+				attachments,
+				model: requested,
+				reasoning,
+				speed,
+			}) => {
 				if (!input.machines || !input.modelId || !input.harnessId)
 					return noMachines;
+				if (requested === undefined && (reasoning || speed))
+					return "Not started: reasoning and speed belong to a model: pass model too (see list_models).";
+				// Checked before anything starts: a bad model never starts a thread
+				// on a different one.
+				const chosen =
+					requested === undefined
+						? null
+						: await pickModel(requested, { reasoning, speed });
+				if (chosen && "error" in chosen) return `Not started: ${chosen.error}`;
 				const forward = await forwarded(attachments);
 				if (forward.error) return `Not started: ${forward.error}`;
 				if (starts >= Y_SQUARED_MAX_STARTS_PER_TURN)
@@ -570,13 +657,15 @@ export function ySquaredTools(input: {
 					{
 						userId: input.userId,
 						projectId: input.projectId,
-						harnessId: input.harnessId,
+						harnessId: chosen ? chosen.model.harness : input.harnessId,
 						createNew: true,
 					},
 					{
 						// The first line names the chat (sessionTitleFromText).
 						text: `${title}\n\n${brief}`,
-						modelId: input.modelId,
+						...(chosen
+							? modelSettings(chosen.model, { reasoning, speed })
+							: { modelId: input.modelId }),
 						idempotencyKey: sendKey(
 							"start",
 							title,
@@ -589,9 +678,12 @@ export function ySquaredTools(input: {
 				if (sent.failed) return `Not started: ${sent.failed}`;
 				// Its id, so Y² can open, message or link the thread at once.
 				const named = `"${crewTitle(title) || title}"${sent.sessionId ? ` (id ${sent.sessionId})` : ""}`;
+				const on = chosen
+					? ` on ${chosen.model.label} (${chosen.model.route})`
+					: "";
 				return sent.turnStatus === "running"
-					? `Started ${named}. You wake when it finishes or needs the person.`
-					: `Queued ${named} behind the budget/concurrency limit; it starts by itself when there is room. You wake when it finishes or needs the person.`;
+					? `Started ${named}${on}. You wake when it finishes or needs the person.`
+					: `Queued ${named}${on} behind the budget/concurrency limit; it starts by itself when there is room. You wake when it finishes or needs the person.`;
 			},
 		}),
 		[Y_SQUARED_MESSAGE_THREAD_TOOL]: tool({
@@ -604,6 +696,7 @@ export function ySquaredTools(input: {
 				const forward = await forwarded(attachments);
 				if (forward.error) return `Not sent: ${forward.error}`;
 				await markSent(chat.id);
+				const route = routeOf(chat);
 				const interrupted =
 					mode === "interrupt" && chat.turnStatus === "running";
 				const steered = mode === "steer" && chat.turnStatus === "running";
@@ -621,12 +714,12 @@ export function ySquaredTools(input: {
 						userId: input.userId,
 						projectId: input.projectId,
 						sessionId: chat.id,
-						harnessId: chat.harness,
+						harnessId: route.harnessId,
 						createNew: false,
 					},
 					{
 						text,
-						modelId: chat.listedModelId ?? input.modelId,
+						modelId: route.modelId,
 						idempotencyKey: sendKey(
 							"message",
 							chat.id,
@@ -655,6 +748,83 @@ export function ySquaredTools(input: {
 					: sent.turnStatus === "running"
 						? `Sent to "${chat.title}": its turn started.`
 						: `Queued the message for "${chat.title}" behind the budget/concurrency limit; it starts by itself when there is room.`;
+			},
+		}),
+		[Y_SQUARED_LIST_MODELS_TOOL]: tool({
+			description: Y_SQUARED_LIST_MODELS_DESCRIPTION,
+			inputSchema: listModelsInput,
+			execute: async () =>
+				modelListText(await deps.models(input.userId, input.projectId)),
+		}),
+		[Y_SQUARED_SET_THREAD_MODEL_TOOL]: tool({
+			description: Y_SQUARED_SET_THREAD_MODEL_DESCRIPTION,
+			inputSchema: setThreadModelInput,
+			execute: async ({
+				id,
+				model: requested,
+				reasoning,
+				speed,
+				interrupt,
+			}) => {
+				if (!input.machines) return noMachines;
+				if (id === input.selfId)
+					return "That is the Super agent itself (you): its model is the person's choice in the composer, not yours.";
+				const chat = await ownThread(id);
+				if (!chat) return noThread;
+				const chosen = await pickModel(requested, { reasoning, speed });
+				if ("error" in chosen) return `Not changed: ${chosen.error}`;
+				const { model } = chosen;
+				if (chat.turnStatus === "running" && !interrupt)
+					return `Not changed: "${chat.title}" is working, and its running turn finishes on its current model. Wait for it to finish (you wake when it does) and call ${Y_SQUARED_SET_THREAD_MODEL_TOOL} again, or pass interrupt true to stop the running turn first (what it did stays in the thread).`;
+				if (
+					chat.listedModelId === model.id &&
+					!reasoning &&
+					!speed &&
+					chat.turnStatus !== "running"
+				)
+					return `"${chat.title}" already uses ${model.label}; nothing changed.`;
+				const interrupted = chat.turnStatus === "running";
+				if (interrupted)
+					await deps.stop(input.machines, {
+						userId: input.userId,
+						projectId: input.projectId,
+						sessionId: chat.id,
+						harnessId: chat.harness,
+						createNew: false,
+					});
+				const settings = modelSettings(model, { reasoning, speed });
+				const changed = await deps.setModel({
+					userId: input.userId,
+					projectId: input.projectId,
+					sessionId: chat.id,
+					modelId: model.id,
+					harness: model.harness,
+					...(settings.variant ? { variant: settings.variant } : {}),
+					...("speed" in settings && settings.speed
+						? { speed: settings.speed }
+						: "fast" in settings
+							? { speed: "fast" as const }
+							: {}),
+					line: THREAD_MODEL_LINE(model.label),
+					changeId: sendKey(
+						"model",
+						chat.id,
+						model.id,
+						reasoning ?? "",
+						speed ?? "",
+					),
+				});
+				if (!changed.found) return noThread;
+				const on = `${model.label} (${model.route})${reasoning ? `, reasoning ${reasoning}` : ""}${speed ? `, ${speed} speed` : ""}`;
+				return [
+					`"${chat.title}" will use ${on} from its next turn; its conversation and checkpoint stay.`,
+					interrupted ? "Its running turn was stopped first." : "",
+					changed.lineWritten
+						? "A quiet line in the thread says so."
+						: "A turn had already started again, so the thread's own line was left out; that turn finishes on its previous model.",
+				]
+					.filter(Boolean)
+					.join(" ");
 			},
 		}),
 		[Y_SQUARED_SCHEDULE_TOOL]: tool({
@@ -709,12 +879,12 @@ export function ySquaredTools(input: {
 						userId: input.userId,
 						projectId: input.projectId,
 						sessionId: chat.id,
-						harnessId: chat.harness,
+						harnessId: routeOf(chat).harnessId,
 						createNew: false,
 					},
 					{
 						text,
-						modelId: chat.listedModelId ?? input.modelId,
+						modelId: routeOf(chat).modelId,
 						idempotencyKey: sendKey("retry", chat.id, text),
 					},
 				);

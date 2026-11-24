@@ -260,7 +260,7 @@ describe("ySquaredTools write tools", () => {
 		projectId: "p",
 		title: "Verbose flag",
 		harness: "api",
-		listedModelId: "m-thread",
+		listedModelId: "claude-code/m-thread",
 		parentSessionId: null,
 		agentRole: null,
 		turnStatus: "idle",
@@ -427,7 +427,7 @@ describe("ySquaredTools write tools", () => {
 			{ text: string; modelId: string },
 		];
 		expect(sent.text).toContain("Your last turn failed");
-		expect(sent.modelId).toBe("m-thread");
+		expect(sent.modelId).toBe("claude-code/m-thread");
 		expect(await run(f.tools, "retry_thread", { id: "t2" })).toContain(
 			"nothing to retry",
 		);

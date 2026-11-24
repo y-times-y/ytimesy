@@ -55,11 +55,14 @@ const WORKING_MAX_MS = 6 * 60 * 60 * 1000;
 export type YSquaredSettings = {
 	/** Stall nudges and waiting reminders (default on). */
 	readonly stallNudges: boolean;
+	/** Y² may choose and change a thread's model (default on; src/domain/y-squared-models.ts). */
+	readonly modelChoice: boolean;
 	/** The person's IANA time zone; null until one was saved (schedules then use UTC). */
 	readonly timezone: string | null;
 };
 export const Y_SQUARED_DEFAULT_SETTINGS: YSquaredSettings = {
 	stallNudges: true,
+	modelChoice: true,
 	timezone: null,
 };
 
@@ -67,8 +70,13 @@ export const Y_SQUARED_DEFAULT_SETTINGS: YSquaredSettings = {
 export function parseSettingsPatch(value: unknown): Partial<YSquaredSettings> {
 	if (!value || typeof value !== "object") return {};
 	const raw = value as Record<string, unknown>;
-	const patch: { stallNudges?: boolean; timezone?: string | null } = {};
+	const patch: {
+		stallNudges?: boolean;
+		modelChoice?: boolean;
+		timezone?: string | null;
+	} = {};
 	if (typeof raw.stallNudges === "boolean") patch.stallNudges = raw.stallNudges;
+	if (typeof raw.modelChoice === "boolean") patch.modelChoice = raw.modelChoice;
 	if (raw.timezone !== undefined) {
 		const zone = validTimeZone(raw.timezone);
 		if (zone) patch.timezone = zone;

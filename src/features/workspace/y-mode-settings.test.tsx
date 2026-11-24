@@ -5,7 +5,7 @@ import { YProactiveView } from "./y-mode-settings";
 const text = (html: string) => html.replace(/<[^>]+>/g, "");
 const noop = () => undefined;
 const base = {
-	settings: { stallNudges: true, timezone: "Europe/Berlin" },
+	settings: { stallNudges: true, modelChoice: true, timezone: "Europe/Berlin" },
 	schedules: [
 		{
 			id: "ab12cd34",
@@ -27,6 +27,7 @@ it("shows the nudge switch, the daily wake count and each schedule with its next
 			data={base as never}
 			pending={false}
 			onStallNudges={noop}
+			onModelChoice={noop}
 			onCancel={noop}
 		/>,
 	);
@@ -46,12 +47,13 @@ it("says UTC is used until a time zone is saved, and shows an empty list", () =>
 			data={
 				{
 					...base,
-					settings: { stallNudges: false, timezone: null },
+					settings: { stallNudges: false, modelChoice: false, timezone: null },
 					schedules: [],
 				} as never
 			}
 			pending={false}
 			onStallNudges={noop}
+			onModelChoice={noop}
 			onCancel={noop}
 		/>,
 	);

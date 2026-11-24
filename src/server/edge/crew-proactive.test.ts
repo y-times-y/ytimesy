@@ -279,12 +279,23 @@ describe("scheduled check-ins", () => {
 describe("settings", () => {
 	it("default stall nudges on, no time zone, and persist a patch", () => {
 		const w = world();
-		expect(w.store.settings()).toEqual({ stallNudges: true, timezone: null });
+		expect(w.store.settings()).toEqual({
+			stallNudges: true,
+			modelChoice: true,
+			timezone: null,
+		});
 		w.store.saveSettings({ stallNudges: false, timezone: "Asia/Tokyo" }, T0);
 		expect(w.store.settings()).toEqual({
 			stallNudges: false,
+			modelChoice: true,
 			timezone: "Asia/Tokyo",
 		});
+		// Letting Y² choose models is its own switch and survives other patches.
+		w.store.saveSettings({ modelChoice: false }, T0);
+		expect(w.store.settings().modelChoice).toBe(false);
+		w.store.saveSettings({ stallNudges: true }, T0);
+		expect(w.store.settings().modelChoice).toBe(false);
+		w.store.saveSettings({ modelChoice: true }, T0);
 		w.store.saveSettings({ stallNudges: true }, T0);
 		expect(w.store.settings().timezone).toBe("Asia/Tokyo");
 	});

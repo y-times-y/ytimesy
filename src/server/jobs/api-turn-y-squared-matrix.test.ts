@@ -1028,10 +1028,12 @@ describe("Y² on the Claude Code route", () => {
 			[
 				"archive_thread",
 				"ask_user",
+				"list_models",
 				"message_thread",
 				"read_canvas",
 				"retry_thread",
 				"schedule",
+				"set_thread_model",
 				"show_canvas",
 				"start_thread",
 				"stop_thread",
