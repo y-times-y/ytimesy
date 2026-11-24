@@ -53,6 +53,7 @@ vi.mock("node:child_process", async (load) => {
 });
 
 import { execFile } from "node:child_process";
+import { managedGitSetupCommand } from "../managed-git-identity";
 import {
 	pushBrokeredRepository,
 	receiveBrokeredRepository,
@@ -145,6 +146,49 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 		await expect(pushBrokeredRepository(host, publish)).rejects.toThrow(
 			/managed Git identity/,
 		);
+		// Rehearse recovery on the very checkout the broker refused, without
+		// touching the blocked branch or contacting a hosted installation.
+		const guestGit = (...args: string[]) =>
+			execute("git", ["-C", guest, ...args]);
+		const blockedTip = (await guestGit("rev-parse", "HEAD")).stdout.trim();
+		const recovery = join(temp, "recovery");
+		await execute("sh", ["-ec", managedGitSetupCommand(guest)]);
+		await guestGit(
+			"fetch",
+			"--no-tags",
+			"--refmap=",
+			source,
+			"refs/heads/main",
+		);
+		await guestGit(
+			"worktree",
+			"add",
+			"-b",
+			"recovery/feature",
+			recovery,
+			"FETCH_HEAD",
+		);
+		const recoveryGit = (...args: string[]) =>
+			execute("git", ["-C", recovery, ...args]);
+		await recoveryGit("merge", "--squash", blockedTip);
+		await recoveryGit("commit", "-m", "Recover changes for review");
+		await pushBrokeredRepository(host, {
+			...publish,
+			branch: "recovery/feature",
+			directory: recovery,
+		});
+		expect((await git("show", "recovery/feature:file")).stdout).toBe("changed");
+		expect(
+			(
+				await git("rev-list", "main..recovery/feature", "--count")
+			).stdout.trim(),
+		).toBe("1");
+		expect((await guestGit("rev-parse", "HEAD")).stdout.trim()).toBe(
+			blockedTip,
+		);
+		expect((await guestGit("status", "--porcelain")).stdout).toBe("");
+		// The remaining cases fabricate malformed commit objects in this fixture.
+		await guestGit("config", "--local", "--unset", "core.hooksPath");
 		const bot =
 			"ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>";
 		const amend = [
@@ -238,7 +282,7 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 		);
 		expect(
 			authenticated.filter(({ args }) => args.includes("push")),
-		).toHaveLength(3);
+		).toHaveLength(4);
 		for (const command of authenticated) {
 			expect(JSON.stringify(command.args)).not.toContain(
 				"broker-token-fixture",
