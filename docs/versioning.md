@@ -18,18 +18,18 @@ Pace: 11 milestones in 73 days, about one every 6.6 days and about 200 commits e
   shipping). Never automatic.
 - Work that is not a milestone is not versioned; it is covered by the next release's notes.
 - 1.0.0 is a deliberate decision by the owner.
-- The product version must never be lower than a published package version (see below).
+- Packages that were published before the product was versioned (the CLI) keep their own line until the product passes them (see below).
 
-## npm packages (open conflict)
+## npm packages
 
 `ytimesy` (packages/ytimesy-cli) is published as 0.0.0-stage (2026-11-01), 0.1.0 (2026-11-01),
 0.1.1 (2026-11-02), 0.1.2 (2026-11-07); the repo's package.json says 0.1.1, so 0.1.2 was published
-without a committed bump. npm versions cannot go down, and **0.1.2 is above v0.0.11**, which breaks
-the rule that the product version is never lower than a published package. Options:
-(a) the CLI keeps its own number (0.1.x) and release notes record which product version it ships
-with, until the product passes it; (b) take the first minor bump at the next milestone, v0.2.0, which
-is above 0.1.2, and align the CLI to the product from then on. Recommendation: (b). The desktop app
-(Electron) has no commits in this repository yet, so it takes the product version when it lands.
+without a committed bump. npm versions cannot go down, so the CLI keeps its own 0.1.x line, which is
+above the product version (v0.0.11). Decision (owner): the CLI is versioned separately until the
+product version passes it. Release notes for each product version record the CLI version it ships
+with, and the CLI's package.json is bumped in the same commit as any publish. The "never lower than a
+package" rule applies from the time the product passes 0.1.x. The desktop app (Electron) has no
+commits in this repository yet; it will take the product version when it lands.
 
 ## Milestone to version table
 
