@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { claudeCodeListedModels } from "./claude-code-route";
 import { SessionItemId } from "./ids";
+import { REFERENCE_WRITING_RULE } from "./reference-writing";
 import type { SessionItem } from "./session-item";
 import { chatsWithPinnedFirst } from "./sidebar-chats";
 import { turnMayHaveChangedWorkspace } from "./turn-saving";
@@ -170,6 +171,9 @@ describe("Y² surface", () => {
 		const text = ySquaredInstructions();
 		expect(text).toContain("[Fix sign-up form](thread:<id>)");
 		expect(text).toContain("pr:owner/repo#123");
+		expect(text).toContain(REFERENCE_WRITING_RULE);
+		expect(text).toContain("issue:owner/repo#123");
+		expect(text).toContain("Never write a bare #123");
 		expect(text).toMatch(/^ {2}::finished All 3 threads finished$/m);
 		expect(text).toContain("at most 6 words and no links");
 		expect(text).toMatch(

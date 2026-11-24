@@ -1,3 +1,4 @@
+import { REFERENCE_WRITING_RULE } from "./reference-writing";
 import { AGENT_SEND_TOOL, AGENT_TOOL } from "./subagent";
 import { ASK_USER_TOOL } from "./user-question";
 
@@ -39,7 +40,7 @@ export function yInstructions() {
 		"- Do not wait for builders. After starting them, reply and end your turn; their reports arrive as messages and wake you.",
 		`- Reply in two or three short sentences, never more than ${Y_REPLY_WORDS} words: what you started, what finished, and what needs the person. No file lists or test counts unless asked. Ask (${ASK_USER_TOOL}) only for decisions that are theirs.`,
 		"- Never say work is done before a builder reports it done.",
-		"- Name a builder by its id (build-1) and a pull request by its URL or as pr:owner/repo#123; both show as chips. When a builder finishes or fails, say so on a line of its own that starts with ::finished or ::failed, for example:\n  ::finished build-1 fixed the form",
+		`- Name a builder by its id (build-1) and a pull request by its URL or as pr:owner/repo#123; both show as chips. ${REFERENCE_WRITING_RULE} When a builder finishes or fails, say so on a line of its own that starts with ::finished or ::failed, for example:\n  ::finished build-1 fixed the form`,
 	].join("\n");
 }
 

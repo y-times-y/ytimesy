@@ -3503,6 +3503,9 @@ export function WorkspaceHome({
 				`${chat.role === "y2" ? "y2" : ""}${chat.id}\u0000${chat.title}\u0000${chat.threadNumber ?? ""}`,
 		)
 		.join("\n");
+	const repositoriesKey = projectRepositories
+		.map((repository) => `${repository.fullName}#${repository.repositoryId}`)
+		.join("\n");
 	const pullRequestUrlsKey = listedPullRequests.map((pr) => pr.url).join("\n");
 	// Chips in replies read these: the project's repository, its pull
 	// requests (a `#12` that is one gets the PR icon) and its threads' labels.
@@ -3516,12 +3519,28 @@ export function WorkspaceHome({
 					return ref ? [referenceKey(ref)] : [];
 				}),
 			),
+			repositories: new Map(
+				projectRepositories.flatMap((repository) =>
+					repository.installationId && repository.repositoryId
+						? [
+								[
+									repository.fullName.toLowerCase(),
+									{
+										installationId: repository.installationId,
+										repositoryId: repository.repositoryId,
+									},
+								] as const,
+							]
+						: [],
+				),
+			),
 			threads: threadDirectory(
 				labelProjectName,
 				sidebarChats.filter((chat) => chat.role !== "y2"),
 			),
 		}),
 		[
+			repositoriesKey,
 			selectedProject?.fullName,
 			labelProjectName,
 			threadsKey,

@@ -139,9 +139,11 @@ describe("referenceSegments", () => {
 				? s.text
 				: s.kind === "issue"
 					? `issue:${referenceKey(s.issue)}`
-					: s.kind === "pullRequest"
-						? `pr:${referenceKey(s.pullRequest)}`
-						: `thread:${s.label}`,
+					: s.kind === "number"
+						? `number:${referenceKey(s.number)}`
+						: s.kind === "pullRequest"
+							? `pr:${referenceKey(s.pullRequest)}`
+							: `thread:${s.label}`,
 		);
 
 	it("links bare numbers, qualified numbers, pr: and thread labels", () => {
@@ -149,9 +151,9 @@ describe("referenceSegments", () => {
 			kinds("Fixed #12, see org/repo#3 and pr:acme/web#8 via WEB-3F9A."),
 		).toEqual([
 			"Fixed ",
-			"issue:acme/web#12",
+			"number:acme/web#12",
 			", see ",
-			"issue:org/repo#3",
+			"number:org/repo#3",
 			" and ",
 			"pr:acme/web#8",
 			" via ",

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { REFERENCE_WRITING_RULE } from "./reference-writing";
 import { AGENT_SEND_TOOL, AGENT_TOOL } from "./subagent";
 import { ASK_USER_TOOL } from "./user-question";
 import {
@@ -46,6 +47,8 @@ describe("yInstructions", () => {
 	});
 	it("tells Y to name builders and pull requests and to report events on their own line", () => {
 		expect(text).toContain("pr:owner/repo#123");
+		expect(text).toContain(REFERENCE_WRITING_RULE);
+		expect(text).toContain("never guess the type");
 		expect(text).toMatch(/^ {2}::finished build-1 fixed the form$/m);
 	});
 });

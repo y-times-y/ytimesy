@@ -38,6 +38,7 @@ import { AgentChip, AgentMentionContext } from "./agent-chip";
 import {
 	EventLine,
 	IssueChip,
+	NumberChip,
 	PullRequestChip,
 	ReferenceContext,
 	StatusParagraph,
@@ -49,9 +50,10 @@ import {
 	ISSUE_SCHEME,
 	isEventKind,
 	issueReference,
+	NUMBER_SCHEME,
+	numberReference,
 	PULL_REQUEST_SCHEME,
 	pullRequestReference,
-	referenceKey,
 	referenceSegments,
 	statusMarker,
 	THREAD_SCHEME,
@@ -80,6 +82,7 @@ function sanitizeKeepingReferences() {
 					THREAD_SCHEME,
 					PULL_REQUEST_SCHEME,
 					ISSUE_SCHEME,
+					NUMBER_SCHEME,
 				],
 			},
 		},
@@ -91,7 +94,7 @@ function sanitizeKeepingReferences() {
 const markdownPlugins = [defaultRehypePlugins.raw, sanitizeKeepingReferences()];
 
 const REFERENCE_LINK = new RegExp(
-	`^(${THREAD_SCHEME}|${PULL_REQUEST_SCHEME}|${ISSUE_SCHEME}):`,
+	`^(${THREAD_SCHEME}|${PULL_REQUEST_SCHEME}|${ISSUE_SCHEME}|${NUMBER_SCHEME}):`,
 	"i",
 );
 
@@ -224,7 +227,12 @@ function rehypeReferences(options: ReferenceOptions = {}) {
 							? [segment.pullRequest.url, segment.pullRequest.url]
 							: segment.kind === "issue"
 								? [segment.issue.url, issueName(segment.issue)]
-								: [`${THREAD_SCHEME}:${segment.id}`, segment.label];
+								: segment.kind === "number"
+									? [
+											`${NUMBER_SCHEME}:${issueName(segment.number)}`,
+											issueName(segment.number),
+										]
+									: [`${THREAD_SCHEME}:${segment.id}`, segment.label];
 					return {
 						type: "element",
 						tagName: "a",
@@ -302,7 +310,6 @@ export function AgentMarkdown({
 		() => withoutAgentNames(allThreads, agents),
 		[allThreads, agents],
 	);
-	const projectPullRequests = references?.pullRequests;
 	const rehypePlugins = useMemo<RehypePlugins>(
 		() => [
 			...markdownPlugins,
@@ -358,9 +365,16 @@ export function AgentMarkdown({
 						/>
 					);
 				}
+				const bare = numberReference(href);
+				if (bare)
+					return (
+						<NumberChip
+							number={bare}
+							label={label && label !== issueName(bare) ? children : undefined}
+						/>
+					);
 				const issue = issueReference(href);
 				if (issue) {
-					const asPullRequest = projectPullRequests?.has(referenceKey(issue));
 					const text =
 						label &&
 						label !== href &&
@@ -368,17 +382,7 @@ export function AgentMarkdown({
 						label !== issueName(issue)
 							? children
 							: undefined;
-					return asPullRequest ? (
-						<PullRequestChip
-							pullRequest={{
-								...issue,
-								url: `https://github.com/${issue.owner}/${issue.repo}/pull/${issue.number}`,
-							}}
-							label={text}
-						/>
-					) : (
-						<IssueChip issue={issue} label={text} />
-					);
+					return <IssueChip issue={issue} label={text} />;
 				}
 				const pullRequest = pullRequestReference(href);
 				if (pullRequest)
@@ -470,7 +474,6 @@ export function AgentMarkdown({
 		onOpenAgent,
 		sharedNames,
 		allThreads,
-		projectPullRequests,
 	]);
 	return (
 		<Streamdown

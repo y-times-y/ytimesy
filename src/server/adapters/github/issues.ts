@@ -143,6 +143,21 @@ async function issuePullRequestLinks(
 	return links;
 }
 
+/** Whether a number is an issue or a pull request: one cheap read, no comments. */
+export async function referenceKind(
+	token: string,
+	fullName: string,
+	number: number,
+): Promise<{ kind: "issue" | "pull-request" }> {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	const { data } = await githubClient(token).issues.get({
+		owner,
+		repo,
+		issue_number: number,
+	});
+	return { kind: data.pull_request ? "pull-request" : "issue" };
+}
+
 /** Everything the Issues panel shows for one issue. */
 export async function issueDetail(
 	token: string,
