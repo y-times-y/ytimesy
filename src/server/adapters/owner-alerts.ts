@@ -57,11 +57,27 @@ export async function alertOwner(
  * cache (shared across isolates), so the owner is alerted once per key
  * rather than never or on every tick.
  */
+/**
+ * The interruption alerts share the existing 'abandoned-turns' row kind with
+ * their own key prefix, so adding them needs no change to owner_alert's check
+ * constraint (a migration that only adds tables stays additive).
+ */
+const OWN_ROW_KINDS = new Set([
+	"interruption",
+	"interruption-digest",
+	"canary-failed",
+]);
+function storedAlertClaim(alert: OwnerAlert): [string, string] {
+	return OWN_ROW_KINDS.has(alert.kind)
+		? ["abandoned-turns", `${alert.kind}:${alert.key}`.slice(0, 200)]
+		: [alert.kind, alert.key.slice(0, 200)];
+}
+
 export async function claimAlert(alert: OwnerAlert) {
 	try {
 		const result = await database().query(
 			"insert into owner_alert(kind,dedupe_key,subject) values($1,$2,$3) on conflict do nothing returning 1",
-			[alert.kind, alert.key.slice(0, 200), alert.subject.slice(0, 200)],
+			[...storedAlertClaim(alert), alert.subject.slice(0, 200)],
 		);
 		return (result.rowCount ?? result.rows.length) > 0;
 	} catch (error) {
