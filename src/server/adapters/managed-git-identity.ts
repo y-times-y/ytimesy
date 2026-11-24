@@ -11,7 +11,7 @@ export const MANAGED_GIT_TRAILER = commitCoAuthorTrailer(MANAGED_GIT_BOT);
 export const MANAGED_PUSH_METADATA_FORMAT =
 	"%an <%ae>%x09%cn <%ce>%n%(trailers:key=Co-authored-by,valueonly,unfold,separator=%x0a)";
 export const MANAGED_PUSH_REFUSED =
-	"Push refused: an unpublished commit does not have the managed Git identity and Co-authored-by trailer required for publication. Keep the original branch and apply its changes as new commits on a fresh managed branch based on a published branch.";
+	"Push refused: an unpublished commit does not have the managed Git identity and Co-authored-by trailer required for publication. Keep the original branch. To publish its committed changes without rewriting it, follow docs/managed-git-recovery.md from the ytimesy repository.";
 const identity = `${MANAGED_GIT_BOT.name} <${MANAGED_GIT_BOT.email}>`;
 const bothIdentities = `${identity}	${identity}`;
 const name = quote(MANAGED_GIT_BOT.name);
@@ -35,6 +35,13 @@ const prePush = `#!/bin/sh
 set -eu
 pending=''
 while read -r local_ref local_oid remote_ref remote_oid; do
+  if [ -n "\${YTIMESY_CREATE_RECOVERY_REF:-}" ]; then
+    if [ "$remote_ref" != "$YTIMESY_CREATE_RECOVERY_REF" ]; then
+      echo 'Recovery push refused: unexpected destination ref.' >&2; exit 1
+    fi
+    case "$remote_oid" in *[!0]*) echo 'Recovery push refused: destination branch already exists.' >&2; exit 1 ;; esac
+    case "$local_oid" in *[!0]*) ;; *) echo 'Recovery push refused: cannot delete a branch.' >&2; exit 1 ;; esac
+  fi
   case "$local_oid" in *[!0]*) pending="$pending $local_oid" ;; esac
 done
 [ -n "$pending" ] || exit 0

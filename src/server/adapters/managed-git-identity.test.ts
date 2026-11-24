@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { managedGitSetupCommand } from "./managed-git-identity";
 
-it("configures fresh managed repos, shares identity with worktrees, and rejects overrides", () => {
+function withDisposableGit(test: (git: GitFixture) => void) {
 	const root = mkdtempSync(join(tmpdir(), "ytimesy git identity-"));
 	const env = {
 		...process.env,
@@ -23,9 +23,27 @@ it("configures fresh managed repos, shares identity with worktrees, and rejects 
 			encoding: "utf8",
 			stdio: "pipe",
 		});
-	const identity =
-		"ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>";
 	try {
+		test({ root, run });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+type GitFixture = {
+	root: string;
+	run: (
+		command: string,
+		args: string[],
+		overrides?: Record<string, string>,
+	) => string;
+};
+
+const identity =
+	"ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>";
+
+it("configures fresh managed repos, shares identity with worktrees, and rejects overrides", () => {
+	withDisposableGit(({ root, run }) => {
 		run("git", ["init", "-q"]);
 		const commit = ["commit", "--allow-empty", "-m", "Agent commit"];
 		expect(() => run("git", commit)).toThrow();
@@ -107,7 +125,127 @@ it("configures fresh managed repos, shares identity with worktrees, and rejects 
 		expect(run("git", ["-C", linked, ...log]).trim()).toBe(
 			`${identity}\n${identity}\nCo-authored-by: ${identity}`,
 		);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
+	});
+});
+
+it("recovers a resumed branch without rewriting it or replacing a remote ref", () => {
+	withDisposableGit(({ root, run }) => {
+		const git = (...args: string[]) => run("git", args).trim();
+		const upstream = join(root, "upstream.git");
+		const original = join(root, "original");
+		const recovery = join(root, "recovery");
+		git("init", "--bare", "-q", upstream);
+		git("init", "-q", "-b", "main", original);
+		const source = (...args: string[]) => git("-C", original, ...args);
+		const recovered = (...args: string[]) => git("-C", recovery, ...args);
+		const legacyCommit = (message: string) =>
+			source(
+				"-c",
+				"user.name=Historical Author",
+				"-c",
+				"user.email=historic@example.test",
+				"commit",
+				"-qm",
+				message,
+			);
+		const remoteTip = (branch: string) =>
+			git(
+				"--git-dir",
+				upstream,
+				"rev-parse",
+				"--verify",
+				`refs/heads/${branch}`,
+			);
+		source("remote", "add", "origin", upstream);
+		writeFileSync(join(original, "shared.txt"), "base\n");
+		source("add", ".");
+		legacyCommit("Published base");
+		source("push", "origin", "main");
+		source("switch", "-c", "legacy-work");
+		source("push", "origin", "legacy-work");
+		const originalRemoteTip = remoteTip("legacy-work");
+		writeFileSync(join(original, "shared.txt"), "original change\n");
+		writeFileSync(join(original, "new.txt"), "recover me\n");
+		source("add", ".");
+		legacyCommit("Unpublished legacy work");
+		const blockedTip = source("rev-parse", "HEAD");
+		run("sh", ["-ec", managedGitSetupCommand(original)]);
+		source("switch", "main");
+		writeFileSync(join(original, "shared.txt"), "published change\n");
+		source("commit", "-qam", "Published base moved");
+		source("push", "origin", "main");
+		source("switch", "legacy-work");
+		expect(() => source("push", "origin", "legacy-work")).toThrow(
+			/unpublished commit/,
+		);
+		writeFileSync(join(original, "staged.txt"), "staged only\n");
+		source("add", "staged.txt");
+		writeFileSync(join(original, "staged.txt"), "staged and modified\n");
+		writeFileSync(join(original, "untracked.txt"), "untracked only\n");
+		const originalStatus = source("status", "--porcelain");
+		const originalStaged = source("diff", "--cached");
+		const originalUnstaged = source("diff");
+		source("fetch", "--no-tags", "--refmap=", "origin", "refs/heads/main");
+		const base = source("rev-parse", "FETCH_HEAD");
+		source("worktree", "add", "-b", "recover/work", recovery, base);
+		expect(() => recovered("merge", "--squash", blockedTip)).toThrow();
+		expect(recovered("diff", "--name-only", "--diff-filter=U")).toBe(
+			"shared.txt",
+		);
+		expect(recovered("status", "--porcelain")).not.toMatch(
+			/staged\.txt|untracked\.txt/,
+		);
+		writeFileSync(
+			join(recovery, "shared.txt"),
+			"published and original changes\n",
+		);
+		recovered("add", "shared.txt");
+		recovered("commit", "-qm", "Recover changes for review");
+		expect(recovered("rev-list", `${base}..HEAD`)).toBe(
+			recovered("rev-parse", "HEAD"),
+		);
+		expect(recovered("show", "HEAD:new.txt")).toBe("recover me");
+		expect(
+			recovered(
+				"log",
+				"-1",
+				"--format=%an <%ae>%n%cn <%ce>%n%(trailers:key=Co-authored-by)",
+			),
+		).toBe(`${identity}\n${identity}\nCo-authored-by: ${identity}`);
+		const pushRecovery = (branch: string) => {
+			const ref = `refs/heads/${branch}`;
+			return run(
+				"git",
+				[
+					"-C",
+					recovery,
+					"-c",
+					"push.followTags=false",
+					"push",
+					"origin",
+					`HEAD:${ref}`,
+				],
+				{ YTIMESY_CREATE_RECOVERY_REF: ref },
+			);
+		};
+		expect(() => pushRecovery("main")).toThrow(
+			/destination branch already exists/,
+		);
+		pushRecovery("recover/work");
+		pushRecovery("recover/work");
+		const published = remoteTip("recover/work");
+		expect(published).toBe(recovered("rev-parse", "HEAD"));
+		recovered("commit", "--allow-empty", "-qm", "Later changes");
+		expect(() => pushRecovery("recover/work")).toThrow(
+			/destination branch already exists/,
+		);
+		expect(remoteTip("recover/work")).toBe(published);
+		expect(remoteTip("main")).toBe(base);
+		expect(remoteTip("legacy-work")).toBe(originalRemoteTip);
+		expect(source("symbolic-ref", "--short", "HEAD")).toBe("legacy-work");
+		expect(source("rev-parse", "HEAD")).toBe(blockedTip);
+		expect(source("status", "--porcelain")).toBe(originalStatus);
+		expect(source("diff", "--cached")).toBe(originalStaged);
+		expect(source("diff")).toBe(originalUnstaged);
+	});
 });
