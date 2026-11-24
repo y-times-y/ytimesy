@@ -5,7 +5,11 @@ import {
 	workspacePtyCommand,
 } from "#/domain/workspace-terminal";
 import { boundedFreestyleFetch } from "./bounded-fetch";
-import { admitVmResume, recentAdmissionCovers } from "./usage-admission";
+import {
+	admitVmResume,
+	recentAdmissionCovers,
+	startAdmittedVm,
+} from "./usage-admission";
 import { waitUntilGuestReady } from "./wait-until-running";
 
 /** Runs one shell command on a workspace VM (the terminal's git setup); a missing status is a timeout. */
@@ -39,7 +43,7 @@ export async function openWorkspacePty(input: {
 	if (!(data.state === "running" && recentAdmissionCovers(data, 60)))
 		await admitVmResume(vm, data);
 	if (data.state === "paused" || data.state === "stopped") {
-		await vm.start();
+		await startAdmittedVm(vm);
 	}
 	// A machine that was not running yet has a guest that may not answer yet;
 	// a running one was just read as running.

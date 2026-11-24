@@ -123,7 +123,7 @@ describe("Claude box tool grants", () => {
 		});
 		const probe = (probing.value.exec as ReturnType<typeof vi.fn>).mock
 			.calls[1]?.[1] as string;
-		expect(probe).toContain("/tmp/ytimesy-secrets/agent.env");
+		expect(probe).toContain("/var/tmp/ytimesy-secrets/agent.env");
 		// No secrets: no probe, granted as before.
 		const plain = machines();
 		await grantClaudeBoxTools({

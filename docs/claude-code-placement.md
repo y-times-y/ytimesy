@@ -392,7 +392,7 @@ VM, and the object is not woken for them.
 
 **Runtime secrets are redacted on the VM** (`src/domain/vm-secret-redaction.ts`,
 2026-11-16). Their values are already on the VM, in the env file every
-command sources (`/tmp/ytimesy-secrets/agent.env`: `export NAME='value'`
+command sources (`/var/tmp/ytimesy-secrets/agent.env`: `export NAME='value'`
 lines and `YTIMESY_REDACTED_SECRETS` naming the runtime ones), and never go
 to the box, nor a hash of them. For a turn with runtime secrets the grant
 first probes the VM (the env file is readable and names runtime secrets,

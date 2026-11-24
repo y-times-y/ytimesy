@@ -11,6 +11,7 @@ import {
 	recentAdmissionCovers,
 	reconcileInfrastructureVms,
 	reconcilePausedVm,
+	START_GRACE_SECONDS,
 } from "../src/server/adapters/freestyle/usage-admission";
 import {
 	adjustInfrastructureAllowance,
@@ -399,6 +400,9 @@ it("resolves setup ownership through the workspace and funds long preparation wi
 	);
 });
 
+/** A reconcile run after a fresh admission's start grace (START_GRACE_SECONDS). */
+const pastStartGrace = () => Date.now() + (START_GRACE_SECONDS + 1) * 1000;
+
 it("retains a paused hold if the provider fails to confirm revocation", async () => {
 	enableVmAllowance();
 	await admitVmCreate(
@@ -416,7 +420,10 @@ it("retains a paused hold if the provider fails to confirm revocation", async ()
 	} as VmData;
 	const vm = { data: async () => data, update: async () => {} };
 	await expect(
-		reconcilePausedVm(vm as unknown as ReturnType<Freestyle["vms"]["ref"]>),
+		reconcilePausedVm(
+			vm as unknown as ReturnType<Freestyle["vms"]["ref"]>,
+			pastStartGrace(),
+		),
 	).rejects.toThrow("confirmed");
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
 });
@@ -447,6 +454,7 @@ it.each([0, 23])(
 		};
 		await reconcilePausedVm(
 			vm as unknown as ReturnType<Freestyle["vms"]["ref"]>,
+			pastStartGrace(),
 		);
 		expect(data.maxRunTotalSeconds).toBe(runtime);
 		expect(await userInfrastructureUsage("alice")).toMatchObject({
@@ -795,6 +803,33 @@ it("uses UTC month boundaries and keeps infrastructure tables unavailable to bro
 	).toEqual([{ allowed: false }]);
 });
 
+it("leaves a just-admitted paused VM's cap alone while its start is still in flight", async () => {
+	// 2026-11-19: the minute sweep revoked a fresh cap 66 s into a 93 s start,
+	// and the start failed on "used its total runtime budget of 188s".
+	enableVmAllowance();
+	await admitVmCreate(
+		{} as Freestyle,
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
+		"freestyle/ubuntu-sm",
+		async () => "vm",
+	);
+	const data = {
+		id: "vm",
+		slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
+		state: "paused",
+		resources: { cpu: 2, memory: 4096, storage: 16384 },
+		totalRunSeconds: 0,
+		maxRunTotalSeconds: 300,
+	} as VmData;
+	const vm = { data: async () => data, update: vi.fn() };
+	await reconcileInfrastructureVms({
+		vms: { ref: () => vm },
+	} as unknown as Freestyle);
+	expect(vm.update).not.toHaveBeenCalled();
+	expect(data.maxRunTotalSeconds).toBe(300);
+	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
+});
+
 it("settles stopped VMs like paused ones and converts a deleted VM's hold into usage", async () => {
 	enableVmAllowance();
 	await admitVmCreate(
@@ -834,7 +869,7 @@ it("settles stopped VMs like paused ones and converts a deleted VM's hold into u
 			}),
 		},
 	} as unknown as Freestyle;
-	await reconcileInfrastructureVms(client);
+	await reconcileInfrastructureVms(client, pastStartGrace());
 	const usage = await userInfrastructureUsage("alice");
 	expect(usage.reservedMicroUsd).toBe(0);
 	// The stopped VM pays for its 10 seconds; the deleted one keeps its whole hold.

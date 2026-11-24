@@ -20,6 +20,7 @@ import {
 	AGENT_SECRETS_ENV_PATH,
 	type AgentSecretName,
 	agentSecretsEnvFile,
+	LINK_LEGACY_AGENT_SECRETS,
 	ProjectSecretsPreparationFailure,
 	type PublicProjectSecret,
 	parseProjectSecretKind,
@@ -212,6 +213,7 @@ export async function writeAgentProjectSecrets(
 		vm,
 		"directory",
 		`${privateDirectoryShell(AGENT_SECRETS_DIRECTORY)}
+${LINK_LEGACY_AGENT_SECRETS}
 ${agentSecretsDigestShell()}`,
 	);
 	if (
