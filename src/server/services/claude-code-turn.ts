@@ -30,7 +30,10 @@ import {
 	readClaudeCodeSession,
 	saveClaudeCodeSession,
 } from "../adapters/claude-subscription";
-import { isPlatformRestart } from "../adapters/freestyle/provider-retry";
+import {
+	isCutConnection,
+	isPlatformRestart,
+} from "../adapters/freestyle/provider-retry";
 import { gitProxyConfiguration } from "../adapters/github/git-proxy-transfer";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
@@ -526,7 +529,12 @@ export function withMessagesSentDuringRun(
  * to the process; a user's Stop and the turn's deadline still stop it.
  */
 export function leavesClaudeCodeRunning(reasons: readonly unknown[]) {
-	return reasons.some((reason) => isPlatformRestart(reason));
+	// A connection a deploy cut (isCutConnection) resumes the step too: the
+	// run must still be there to re-attach to (2026-11-23: a Claude turn
+	// failed on "Network connection lost." a second before its object reset).
+	return reasons.some(
+		(reason) => isPlatformRestart(reason) || isCutConnection(reason),
+	);
 }
 
 /**

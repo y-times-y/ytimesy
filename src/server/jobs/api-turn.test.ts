@@ -2327,9 +2327,11 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		mocks.lean = null;
 		const [y2] = seen;
 		expect(y2?.tools).toEqual([
+			"archive_thread",
 			"ask_user",
 			"message_thread",
 			"read_canvas",
+			"retry_thread",
 			"schedule",
 			"show_canvas",
 			"start_thread",
@@ -3827,6 +3829,85 @@ describe("a turn that cannot take its chat's lease at once (2026-11-23)", () => 
 			expect(items()).not.toContain('"kind":"error"');
 		} finally {
 			vi.useRealTimers();
+			warn.mockRestore();
+		}
+	});
+});
+
+describe("a deploy cutting a running step's connection (2026-11-23)", () => {
+	const step = () => ({ index: 1, signal: new AbortController().signal });
+	beforeEach(() => {
+		mocks.runtime.mockReset();
+		mocks.stepRuntime.mockReset();
+	});
+
+	it("resumes a step whose model call lost its connection, instead of failing the turn", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mocks.stepRuntime.mockRejectedValue(
+				new Error("Network connection lost."),
+			);
+			await expect(
+				runApiTurn({} as WorkspaceMachines, childTurn, step()),
+			).rejects.toThrow("Network connection lost.");
+			expect(mocks.finalize).not.toHaveBeenCalled();
+			expect(JSON.stringify(warn.mock.calls)).toContain("turn.interrupted");
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("resumes a box step whose request to the edge was reset while preparing its machine", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const reset = Object.assign(new Error("read ECONNRESET"), {
+				code: "ECONNRESET",
+			});
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.tools.workspace();
+				return { messages: input.messages, outcome: "completed" };
+			});
+			mocks.workspace.mockRejectedValue(
+				new TypeError("fetch failed", { cause: reset }),
+			);
+			await expect(
+				runApiTurn({} as WorkspaceMachines, childTurn, step()),
+			).rejects.toThrow("fetch failed");
+			expect(mocks.finalize).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("retries a box step the edge answered 503 for its machine, instead of 'the model request failed'", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const refused = Object.assign(
+				new Error("The edge refused the workspace request (unavailable)."),
+				{ name: "TurnBoxVmRefused", status: 503, code: "unavailable" },
+			);
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.tools.workspace();
+				return { messages: input.messages, outcome: "completed" };
+			});
+			mocks.workspace.mockRejectedValue(refused);
+			await expect(
+				runApiTurn({} as WorkspaceMachines, childTurn, step()),
+			).rejects.toThrow("unavailable");
+			expect(mocks.finalize).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("still settles a turn outside a step (nothing would retry it)", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mocks.runtime.mockRejectedValue(new Error("Network connection lost."));
+			expect(await runApiTurn({} as WorkspaceMachines, childTurn)).toBe(
+				"failed",
+			);
+		} finally {
 			warn.mockRestore();
 		}
 	});

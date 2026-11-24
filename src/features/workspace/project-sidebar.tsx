@@ -44,7 +44,6 @@ import {
 import {
 	CHAT_SEEN_SINCE_STORAGE_KEY,
 	CHAT_SEEN_STORAGE_KEY,
-	collapsedProjectStorageValue,
 	compactRelativeAge,
 	newChatIsActive,
 	type ProjectChats,
@@ -52,9 +51,8 @@ import {
 	parseSeenSince,
 	pinnedChatStorageValue,
 	projectColor,
-	projectsByRecentActivity,
-	recentSections,
-	SIDEBAR_COLLAPSED_PROJECTS_KEY,
+	recentSidebarChats,
+	recentY2Chats,
 	SIDEBAR_PINNED_CHATS_KEY,
 	type SidebarChat,
 	type SidebarStatusGroup,
@@ -62,10 +60,8 @@ import {
 	sidebarChatIsRunning,
 	sidebarChatSeenKey,
 	sidebarStatusGroup,
-	toggleCollapsedProjectIds,
 	togglePinnedChatIds,
 	trimmedSeenChatKeys,
-	withProjectExpanded,
 } from "#/domain/sidebar-chats";
 import {
 	threadSections,
@@ -90,6 +86,16 @@ import { requestJson } from "../projects/api";
 import { ThreadHoverCard } from "./thread-hover-card";
 import { ThreadMark } from "./thread-mark";
 import { YSquaredMark } from "./y-squared-mark";
+
+/** The Threads list's groups, in order: what needs the person comes first. */
+const THREAD_GROUPS: readonly {
+	readonly status: SidebarStatusGroup;
+	readonly label: string;
+}[] = [
+	{ status: "needs-you", label: "Needs you" },
+	{ status: "working", label: "Working" },
+	{ status: "done", label: "Recently finished" },
+];
 
 /** Who is signed in, as the account button shows them. */
 export type SidebarAccount = {
@@ -199,9 +205,6 @@ export function ProjectSidebar({
 		writeStorage(CHAT_SEEN_SINCE_STORAGE_KEY, String(now));
 		return now;
 	});
-	const [collapsedProjectIds, setCollapsedProjectIds] = useState(
-		firstPaint.choices.collapsedProjectIds,
-	);
 	const [pinnedChatIds, setPinnedChatIds] = useState(
 		firstPaint.choices.pinnedChatIds,
 	);
@@ -210,7 +213,6 @@ export function ProjectSidebar({
 	// choices meanwhile (src/features/app/first-paint.ts).
 	const hydrated = firstPaint.hydrated;
 	const shownPinnedIds = hydrated ? pinnedChatIds : [];
-	const shownCollapsedIds = hydrated ? collapsedProjectIds : [];
 	const shownSeenKeys = hydrated ? seenKeys : [];
 	const shownSeenSinceMs = hydrated ? seenSinceMs : null;
 	// The open project's chats are the freshest list; the others come from projectChats.
@@ -222,37 +224,37 @@ export function ProjectSidebar({
 				: (projectChats.find((group) => group.project.id === project.id)
 						?.chats ?? []),
 	}));
-	const recent = recentSections(groups, shownPinnedIds);
 	const [settledExpanded, setSettledExpanded] = useState(false);
-	// Plain projects whose Settled group is open (Y threads have their own).
-	const [settledProjectIds, setSettledProjectIds] = useState<readonly string[]>(
-		[],
+	// The Threads list shows every project's threads, or one project's.
+	const [filterProjectId, setFilterProjectId] = useState<string | null>(null);
+	const filterProject = projects.find(
+		(project) => project.id === filterProjectId,
 	);
-	// Y projects (their Y² chat is listed) live in the Y² and Threads sections;
-	// every other project is its own section below them.
+	// Super agents (the Y² chats) are one row per project with Y on; every
+	// other chat is a thread in the one Threads list, newest activity first
+	// (pins on top), the project named on its row.
+	const y2Chats = recentY2Chats(groups);
+	const allThreads = recentSidebarChats(groups, shownPinnedIds);
+	const threadRows = filterProject
+		? allThreads.filter((row) => row.project.id === filterProject.id)
+		: allThreads;
 	const yRows = y2Rows({
-		y2: recent.y2,
-		threads: recent.y,
+		y2: y2Chats,
+		threads: allThreads,
 		statusOf: chatStatus,
 	});
-	// A Y project is known from the project itself, not from its chat list: a
-	// list that has not arrived (or failed) must not draw it as a plain
-	// project, which is the old sidebar until the list shows up.
+	// A project with Y on always has its Super agent row, from the project
+	// itself, not from its chat list: a list that has not arrived (or has no
+	// Y² chat yet) must not make the row vanish.
 	const yPending = projects.filter(
 		(project) =>
 			project.yEnabled && !yRows.some((row) => row.project.id === project.id),
 	);
-	const yProjectIds = new Set([
-		...yRows.map(({ project }) => project.id),
-		...yPending.map((project) => project.id),
-	]);
-	// One Y project keeps the Super agent and Threads sections. With several,
-	// each project is its own group (its Super agent row, its threads, its own
-	// Settled), so threads of different projects are never mixed in one list.
-	const groupedByProject = yProjectIds.size > 1;
-	const orderedProjects = projectsByRecentActivity(projects, groups).filter(
-		(project) => groupedByProject || !yProjectIds.has(project.id),
-	);
+	// "+" starts a chat in the filtered project, else the open one.
+	const newChatProject =
+		filterProject ??
+		projects.find((project) => project.id === selectedProjectId) ??
+		projects[0];
 	const selected = projects.find((project) => project.id === selectedProjectId);
 	const newChatActive = newChatIsActive({
 		projectSelected: Boolean(selected),
@@ -284,26 +286,9 @@ export function ProjectSidebar({
 		});
 	}, [selectedChatId, openTurnStatus, chats]);
 
-	function persistCollapsed(next: readonly string[]) {
-		setCollapsedProjectIds(next);
-		writeStorage(
-			SIDEBAR_COLLAPSED_PROJECTS_KEY,
-			collapsedProjectStorageValue(next),
-		);
-	}
-
 	function persistPinned(next: readonly string[]) {
 		setPinnedChatIds(next);
 		writeStorage(SIDEBAR_PINNED_CHATS_KEY, pinnedChatStorageValue(next));
-	}
-
-	function openProject(projectId: string) {
-		if (projectId !== selectedProjectId) onSelectProject(projectId);
-		persistCollapsed(withProjectExpanded(collapsedProjectIds, projectId));
-	}
-
-	function toggleProjectSection(projectId: string) {
-		persistCollapsed(toggleCollapsedProjectIds(collapsedProjectIds, projectId));
 	}
 
 	function toggleProjects() {
@@ -432,6 +417,7 @@ export function ProjectSidebar({
 	/** A Y project whose chats have not loaded: its place and name, until its Super agent row arrives. */
 	function y2PendingRow(project: Project) {
 		const name = projectDisplayName(project);
+		const hasThreads = allThreads.some((row) => row.project.id === project.id);
 		return (
 			<li
 				key={`pending-${project.id}`}
@@ -442,42 +428,40 @@ export function ProjectSidebar({
 				aria-busy="true"
 			>
 				{/* The Super agent's id comes with the project: the row opens it
-				    before the chat list has arrived. */}
-				{project.ySquaredId ? (
-					<button
-						type="button"
-						className="sidebar-chat"
-						title={name}
-						aria-current={
-							project.ySquaredId === selectedChatId ? "page" : undefined
+				    before the chat list has arrived. Without one (Y on, no thread
+				    yet) the row opens the project, where its first thread starts. */}
+				<button
+					type="button"
+					className="sidebar-chat"
+					title={name}
+					aria-current={
+						project.ySquaredId && project.ySquaredId === selectedChatId
+							? "page"
+							: undefined
+					}
+					onClick={() => {
+						const id = project.ySquaredId;
+						if (!id) {
+							if (project.id !== selectedProjectId) onSelectProject(project.id);
+							return;
 						}
-						onClick={() => {
-							const id = project.ySquaredId;
-							if (!id) return;
-							if (project.id !== selectedProjectId && onSelectChatInProject)
-								onSelectChatInProject(project.id, id);
-							else onSelectChat?.(id);
-						}}
-					>
-						<span className="sidebar-chat-lead" aria-hidden="true">
-							<YSquaredMark size={16} />
+						if (project.id !== selectedProjectId && onSelectChatInProject)
+							onSelectChatInProject(project.id, id);
+						else onSelectChat?.(id);
+					}}
+				>
+					<span className="sidebar-chat-lead" aria-hidden="true">
+						<YSquaredMark size={16} />
+					</span>
+					<span className="sidebar-chat-body">
+						<span className="sidebar-chat-title">{name}</span>
+						<span className="sidebar-chat-meta">
+							{project.ySquaredId || hasThreads
+								? "Loading…"
+								: "Appears with its first thread"}
 						</span>
-						<span className="sidebar-chat-body">
-							<span className="sidebar-chat-title">{name}</span>
-							<span className="sidebar-chat-meta">Loading…</span>
-						</span>
-					</button>
-				) : (
-					<div className="sidebar-chat" title={name}>
-						<span className="sidebar-chat-lead" aria-hidden="true">
-							<YSquaredMark size={16} />
-						</span>
-						<span className="sidebar-chat-body">
-							<span className="sidebar-chat-title">{name}</span>
-							<span className="sidebar-chat-meta">Loading…</span>
-						</span>
-					</div>
-				)}
+					</span>
+				</button>
 			</li>
 		);
 	}
@@ -514,8 +498,16 @@ export function ProjectSidebar({
 					data-status={shown.kind}
 					title={`${name} · ${summary}`}
 					aria-current={selected ? "page" : undefined}
-					onPointerEnter={() => onChatIntent?.(chat.id)}
-					onFocus={() => onChatIntent?.(chat.id)}
+					onPointerEnter={() => {
+						onChatIntent?.(chat.id);
+						if (project && project.id !== selectedProjectId)
+							onProjectIntent?.(project.id);
+					}}
+					onFocus={() => {
+						onChatIntent?.(chat.id);
+						if (project && project.id !== selectedProjectId)
+							onProjectIntent?.(project.id);
+					}}
 					onClick={() =>
 						project.id !== selectedProjectId && onSelectChatInProject
 							? onSelectChatInProject(project.id, chat.id)
@@ -536,20 +528,14 @@ export function ProjectSidebar({
 							status={shown}
 							label={sidebarChatStatusLabel(shown, nowMs)}
 							age={null}
+							askingAsDot
 						/>
 					) : needsYou ? (
 						<span
-							className="sidebar-chat-status"
-							data-status="asking"
+							className="sidebar-chat-needs-you"
 							role="img"
 							aria-label={y2NeedsYouLabel(needsYou)}
-						>
-							<MessageCircleQuestion
-								size={14}
-								strokeWidth={2}
-								aria-hidden="true"
-							/>
-						</span>
+						/>
 					) : age ? (
 						<span className="sidebar-chat-age">{age}</span>
 					) : null}
@@ -582,15 +568,30 @@ export function ProjectSidebar({
 		const settledOpen = settledShown || !hydrated;
 		return (
 			<>
-				{list.length ? (
-					<ul className="sidebar-chats sidebar-threads">
-						{list.map(({ chat, project }) =>
-							chatRow(chat, { project, thread: true }),
-						)}
-					</ul>
-				) : settled.length ? null : (
+				{THREAD_GROUPS.map(({ status, label }) => {
+					const inGroup = list.filter((row) => chatStatus(row.chat) === status);
+					if (!inGroup.length) return null;
+					return (
+						<div
+							key={status}
+							className="sidebar-thread-group"
+							data-group-name={status}
+						>
+							<h4 className="sidebar-thread-group-title">
+								{label}
+								<span className="sidebar-status-count">{inGroup.length}</span>
+							</h4>
+							<ul className="sidebar-chats sidebar-threads">
+								{inGroup.map(({ chat, project }) =>
+									chatRow(chat, { project, thread: true }),
+								)}
+							</ul>
+						</div>
+					);
+				})}
+				{!list.length && !settled.length ? (
 					<p className="sidebar-empty">{empty}</p>
-				)}
+				) : null}
 				{settled.length ? (
 					<div className="sidebar-settled" data-open={settledOpen}>
 						<button
@@ -630,139 +631,74 @@ export function ProjectSidebar({
 		);
 	}
 
-	function threadsSection(
-		rows: readonly { chat: SidebarChat; project: Project }[],
-	) {
-		if (!yRows.length) return null;
+	function threadsSection() {
+		if (!projects.length) return null;
+		const name = newChatProject ? projectDisplayName(newChatProject) : "";
 		return (
 			<section
 				className="sidebar-y-section sidebar-threads-section"
 				data-section="threads"
 				aria-labelledby="sidebar-section-threads"
 			>
-				{sectionHeader("threads", "Threads")}
-				{threadBlocks(rows, {
-					listId: "sidebar-settled-list",
-					settledShown: settledExpanded,
-					onToggleSettled: () => setSettledExpanded((value) => !value),
-					empty: "No threads yet.",
-				})}
-			</section>
-		);
-	}
-
-	/**
-	 * A project that is not a Y project, as its own section in the Threads
-	 * look: the name (opens the project), the archive, fold and new-chat
-	 * actions, then its chats as flat thread rows with the same Settled fold.
-	 * The Y² and Threads sections are above; nothing else is nested.
-	 */
-	function projectSection(project: Project) {
-		const yRow = groupedByProject
-			? yRows.find((row) => row.project.id === project.id)
-			: undefined;
-		// A Y project whose chats have not loaded: its Super agent row's place.
-		const yLoading = groupedByProject && yPending.includes(project);
-		const name = projectDisplayName(project);
-		const selected = project.id === selectedProjectId;
-		const open = !shownCollapsedIds.includes(project.id);
-		const bodyId = `sidebar-project-body-${project.id}`;
-		const rows = (yRow ? recent.y : recent.plain).filter(
-			(row) => row.project.id === project.id,
-		);
-		const settledShown = settledProjectIds.includes(project.id);
-		return (
-			<section
-				key={project.id}
-				className="sidebar-y-section sidebar-plain-section"
-				data-section="project"
-				data-project-id={project.id}
-				data-selected={selected}
-				data-open={open}
-				aria-labelledby={`sidebar-section-project-${project.id}`}
-			>
 				{sectionHeader(
-					`project-${project.id}`,
-					<button
-						type="button"
-						className="sidebar-project-name"
-						aria-current={selected ? "page" : undefined}
-						onPointerEnter={
-							selected ? undefined : () => onProjectIntent?.(project.id)
-						}
-						onFocus={selected ? undefined : () => onProjectIntent?.(project.id)}
-						onClick={() => openProject(project.id)}
-					>
-						<span
-							className="sidebar-project-dot"
-							style={{ background: projectColor(project.id) }}
-							aria-hidden="true"
-						/>
-						<span className="sidebar-project-name-text">{name}</span>
-					</button>,
+					"threads",
+					"Threads",
 					<>
-						{onDeleteProject ? (
+						{projects.length > 1 ? (
+							<select
+								className="sidebar-thread-filter"
+								aria-label="Show threads of"
+								value={filterProject?.id ?? ""}
+								onChange={(event) =>
+									setFilterProjectId(event.target.value || null)
+								}
+							>
+								<option value="">All projects</option>
+								{projects.map((project) => (
+									<option key={project.id} value={project.id}>
+										{projectDisplayName(project)}
+									</option>
+								))}
+							</select>
+						) : null}
+						{filterProject && onDeleteProject ? (
 							<button
 								type="button"
 								className="sidebar-section-action sidebar-section-archive"
 								aria-label={`Archive ${name}`}
 								title="Archive project"
-								onClick={() => onDeleteProject(project.id)}
+								onClick={() => {
+									setFilterProjectId(null);
+									onDeleteProject(filterProject.id);
+								}}
 							>
 								<Archive size={14} strokeWidth={1.5} />
 							</button>
 						) : null}
-						<button
-							type="button"
-							className="sidebar-section-action sidebar-section-collapse"
-							aria-label={open ? `Collapse ${name}` : `Expand ${name}`}
-							aria-expanded={open}
-							aria-controls={bodyId}
-							onClick={() => toggleProjectSection(project.id)}
-						>
-							<ChevronRight size={14} strokeWidth={1.5} />
-						</button>
-						<button
-							type="button"
-							className="sidebar-section-add"
-							aria-label={`New chat in ${name}`}
-							title={titleWithShortcut("New chat", newChatHint)}
-							data-active={selected && newChatActive ? "true" : undefined}
-							onClick={() => {
-								persistCollapsed(
-									withProjectExpanded(collapsedProjectIds, project.id),
-								);
-								onNewChat(project.id);
-							}}
-						>
-							<Plus size={14} strokeWidth={1.5} />
-						</button>
+						{newChatProject ? (
+							<button
+								type="button"
+								className="sidebar-section-add"
+								aria-label={`New chat in ${name}`}
+								title={titleWithShortcut("New chat", newChatHint)}
+								data-active={
+									newChatProject.id === selectedProjectId && newChatActive
+										? "true"
+										: undefined
+								}
+								onClick={() => onNewChat(newChatProject.id)}
+							>
+								<Plus size={14} strokeWidth={1.5} />
+							</button>
+						) : null}
 					</>,
-					"sidebar-status-heading sidebar-section-header sidebar-plain-header",
 				)}
-				<div className="sidebar-plain-body" id={bodyId}>
-					{open && yRow ? (
-						<ul className="sidebar-chats sidebar-y2-list">{y2Row(yRow)}</ul>
-					) : null}
-					{open && yLoading ? (
-						<ul className="sidebar-chats sidebar-y2-list">
-							{y2PendingRow(project)}
-						</ul>
-					) : null}
-					{open && !yLoading
-						? threadBlocks(rows, {
-								listId: `sidebar-settled-list-${project.id}`,
-								settledShown,
-								onToggleSettled: () =>
-									setSettledProjectIds((current) =>
-										current.includes(project.id)
-											? current.filter((id) => id !== project.id)
-											: [...current, project.id],
-									),
-								empty: yRow ? "No threads yet." : "No chats yet.",
-							})
-						: null}
-				</div>
+				{threadBlocks(threadRows, {
+					listId: "sidebar-settled-list",
+					settledShown: settledExpanded,
+					onToggleSettled: () => setSettledExpanded((value) => !value),
+					empty: "No threads yet.",
+				})}
 			</section>
 		);
 	}
@@ -830,8 +766,16 @@ export function ProjectSidebar({
 							: [chat.title, projectName].filter(Boolean).join(" · ")
 					}
 					aria-current={chat.id === selectedChatId ? "page" : undefined}
-					onPointerEnter={() => onChatIntent?.(chat.id)}
-					onFocus={() => onChatIntent?.(chat.id)}
+					onPointerEnter={() => {
+						onChatIntent?.(chat.id);
+						if (project && project.id !== selectedProjectId)
+							onProjectIntent?.(project.id);
+					}}
+					onFocus={() => {
+						onChatIntent?.(chat.id);
+						if (project && project.id !== selectedProjectId)
+							onProjectIntent?.(project.id);
+					}}
 					onClick={() =>
 						project && project.id !== selectedProjectId && onSelectChatInProject
 							? onSelectChatInProject(project.id, chat.id)
@@ -1142,15 +1086,10 @@ export function ProjectSidebar({
 							</button>
 						</nav>
 					) : null}
-					{(yRows.length || yPending.length) && !groupedByProject ? (
+					{projects.length ? (
 						<div className="sidebar-y-sections">
 							{y2Section(yRows, yPending)}
-							{yRows.length ? threadsSection(recent.y) : null}
-						</div>
-					) : null}
-					{orderedProjects.length ? (
-						<div className="sidebar-plain-sections">
-							{orderedProjects.map((project) => projectSection(project))}
+							{threadsSection()}
 						</div>
 					) : null}
 					{projects.length || projectsLoading ? null : (

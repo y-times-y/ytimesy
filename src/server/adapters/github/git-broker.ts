@@ -13,6 +13,10 @@ import { posixShellQuoted as quote } from "#/domain/posix-command";
 export { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
 
 import {
+	allManagedGitIdentities,
+	GIT_IDENTITY_FORMAT,
+} from "../managed-git-identity";
+import {
 	gitProxyConfiguration,
 	pushProxiedRepository,
 	receiveProxiedRepository,
@@ -297,6 +301,31 @@ base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
 			bundle,
 			`${revision}:refs/heads/publish`,
 		]);
+		await git(
+			[
+				"-C",
+				"repo.git",
+				"fetch",
+				"--no-tags",
+				url,
+				"refs/heads/*:refs/ytimesy/upstream/*",
+			],
+			token,
+		);
+		const identities = await git([
+			"-C",
+			"repo.git",
+			"--no-replace-objects",
+			"log",
+			`--format=${GIT_IDENTITY_FORMAT}`,
+			"refs/heads/publish",
+			"--not",
+			"--glob=refs/ytimesy/upstream/*",
+		]);
+		if (!allManagedGitIdentities(identities))
+			throw new Error(
+				"Push refused: an unpublished commit does not have the managed Git identity.",
+			);
 		await git(
 			[
 				"-C",

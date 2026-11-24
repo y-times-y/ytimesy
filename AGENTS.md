@@ -1,5 +1,7 @@
 # ytimesy
 
+Never invent a Git identity or impersonate a person, including Het. Managed agent commits use `ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>` as both author and committer and include the same identity in a `Co-authored-by` trailer. Do not change Git identity in user-owned local repositories. If the authorized identity cannot be verified, stop rather than guessing.
+
 Before implementation or architectural changes, read [PLAN.md](PLAN.md) for the product scope, accepted stack, module boundaries, and acceptance criteria.
 
 Before writing or reviewing code, apply [.agents/skills/self-documenting-code/SKILL.md](.agents/skills/self-documenting-code/SKILL.md). Keep routes thin, models focused, and provider details behind explicit adapters.
@@ -24,7 +26,7 @@ Production deploys: run only `node --import tsx scripts/deploy-production-from-s
 
 Deploys and open tabs: a tab keeps running the old page until it reloads onto the new build (`src/features/app/new-build-reload.ts`), so for one deploy it calls the new server with the old client. When you change a server function's or API route's input shape, accept both the old and the new shape for one deploy, and drop the old one in a later deploy.
 
-Public copy of the harness: the open-source harness and CLI live in the public repo `y-times-y/harness`, published to npm as `@ytimesy/harness` and `ytimesy`. It is a snapshot, not a mirror: nothing here reaches it unless it is copied and published, so the two drift. When you change the model loop, the tools, the agent instructions, the local runner or `packages/ytimesy-cli`, say in your final report whether the public harness needs the same change. Port it only with the user's go: pushing to the public repo and publishing to npm are theirs to decide. Never copy product-only code into it (Freestyle, Cloudflare, the database, billing, secrets); its boundary test lists what it may not import. `packages/ytimesy-cli` is the source of the published `ytimesy` package, and the product's hand-off prompt runs `npx -y ytimesy@latest`, so a CLI change reaches live users on the next npm publish: bump the version, run a plan-only hand-off first, and leave the publish to the user. The shared layout and the export script (`scripts/export-open-source.ts`) exist only on branch `ytimesy/machine-git-test-3437` (closed PR #22) until it is merged, so until then a port is by hand.
+Public harness: this monorepo is the public one. The separate `y-times-y/harness` repo is private and is not maintained; do not port changes to it, publish it, or flag it in reports. `packages/ytimesy-cli` is the source of the published `ytimesy` package, and the product's hand-off prompt runs `npx -y ytimesy@latest`, so a CLI change reaches live users on the next npm publish: bump the version, run a plan-only hand-off first, and leave the publish to the user. Never copy product-only code (Freestyle, Cloudflare, the database, billing, secrets) into anything published.
 
 Before starting or changing any benchmark run, read [docs/benchmark-lessons.md](docs/benchmark-lessons.md): its checklist exists because each item cost real GPU hours or results.
 

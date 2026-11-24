@@ -160,6 +160,14 @@ export async function ySquaredPort(
 				createNew: false,
 			} as never);
 		}
+		case "archive": {
+			ownUser(args[0]);
+			await run.archive(user, (await thread(args[1])).id);
+			return null;
+		}
+		case "prOpen":
+			ownUser(args[0]);
+			return run.prOpen(user, ownProject(args[1]), text(args[2], dep, 400));
 		case "crewList":
 			return (await crew()?.list()) ?? null;
 		case "crewThread":

@@ -1,8 +1,5 @@
 import { expect, it } from "vitest";
-import {
-	activateGithubBotCommitHookArgv,
-	installArgv,
-} from "../src/server/adapters/repository-setup";
+import { installArgv } from "../src/server/adapters/repository-setup";
 
 it("selects the lockfile install command", () => {
 	expect(
@@ -18,10 +15,4 @@ it("selects the lockfile install command", () => {
 		installArgv("/repo", ["package.json", "package-lock.json"]).at(-1),
 	).toContain("npm ci");
 	expect(installArgv("/repo", ["README.md"]).at(-1)).not.toContain("npm");
-});
-
-it("activates an installation-written Git hook even when it is root-owned", () => {
-	expect(activateGithubBotCommitHookArgv("/repo")[2]).toContain(
-		"sudo -n chmod +x '/repo/.git/hooks/commit-msg'",
-	);
 });

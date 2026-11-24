@@ -125,10 +125,10 @@ it("commits a root chat's turn without the verification gate and returns where i
 		"Agent: Fix parser\n\nRequest: Fix parser",
 	);
 	expect(runtime.commands[0].argv[5]).toContain(
-		"GIT_AUTHOR_EMAIL='7+het@users.noreply.github.com'",
+		"GIT_AUTHOR_EMAIL='328807657+ytimesy-agent[bot]@users.noreply.github.com'",
 	);
 	expect(runtime.commands[0].argv[5]).toContain(
-		"GIT_COMMITTER_EMAIL='7+het@users.noreply.github.com'",
+		"GIT_COMMITTER_EMAIL='328807657+ytimesy-agent[bot]@users.noreply.github.com'",
 	);
 	expect(publication.publish).toHaveBeenCalledWith(
 		chat,
@@ -182,45 +182,29 @@ it("neither commits nor pushes a root chat of an eval user or evaluation run", a
 	expect(publication.publish).not.toHaveBeenCalled();
 });
 
-it("credits the GitHub App as Co-authored-by on a turn commit when its identity is configured", async () => {
-	vi.stubEnv("GITHUB_APP_SLUG", "ytimesy-agent");
-	vi.stubEnv("GITHUB_APP_BOT_USER_ID", "328807657");
-	try {
-		lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
-		publication.publish.mockResolvedValue({
-			branch: "ytimesy/fix-parser-0c4a1e",
-			pullRequestUrl: null,
-		});
-		const runtime = new MemoryWorkspaceRuntime();
-		await commitCompletedSessionTurn(chat, items, runtime);
-		expect(runtime.commands).toHaveLength(1);
-		expect(runtime.commands[0].argv[5]).toContain(
-			"-m 'Co-authored-by: ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>'",
-		);
-		expect(runtime.commands[0].argv[5]).toContain(
-			"GIT_AUTHOR_EMAIL='7+het@users.noreply.github.com'",
-		);
-	} finally {
-		vi.unstubAllEnvs();
-	}
+it("credits the bot and the authenticated GitHub user without using the human as author or committer", async () => {
+	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+	const runtime = new MemoryWorkspaceRuntime();
+	await commitCompletedSessionTurn(chat, items, runtime);
+	expect(runtime.commands[0].argv[5]).toContain(
+		"Co-authored-by: ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>",
+	);
+	expect(runtime.commands[0].argv[5]).toContain(
+		"Co-authored-by: Het <7+het@users.noreply.github.com>",
+	);
 });
 
-it("says why a commit kept the ytimesy author when GitHub returned no login", async () => {
+it("uses the bot alone when GitHub cannot verify a human co-author", async () => {
 	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
 	identity.forToken.mockResolvedValue(null);
-	publication.publish.mockResolvedValue({
-		branch: "ytimesy/fix-parser-0c4a1e",
-		pullRequestUrl: "https://github.com/owner/primary/pull/3",
-	});
-	const outcome = await commitCompletedSessionTurn(
-		chat,
-		items,
-		new MemoryWorkspaceRuntime(),
+	const runtime = new MemoryWorkspaceRuntime();
+	await commitCompletedSessionTurn(chat, items, runtime);
+	expect(runtime.commands[0].argv[5]).toContain(
+		"Co-authored-by: ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>",
 	);
-	expect(outcome?.publication?.pullRequestUrl).toContain("/pull/3");
-	expect(outcome?.notice).toMatch(/ytimesy author/);
-	expect(outcome?.notice).toMatch(/login/);
-	expect(outcome?.notice).not.toMatch(/noreply@ytimesy.com/);
+	expect(runtime.commands[0].argv[5]).not.toContain(
+		"7+het@users.noreply.github.com",
+	);
 });
 
 it("keeps a chat's turn successful and explains when GitHub refuses the push", async () => {

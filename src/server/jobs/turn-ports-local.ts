@@ -159,6 +159,15 @@ export const localTurnPorts: TurnPorts = {
 	machineGit: undefined,
 	// The Y² tools, a helper's step guard and its report read the database here.
 	ySquaredToolDeps: undefined,
+	peerThreadSend: async (input) => {
+		if (!input.machines) return "Threads cannot be messaged here.";
+		return (await import("../services/thread-peer-read")).sendPeerMessage({
+			...input,
+			machines: input.machines,
+		});
+	},
+	peerThreadRead: async (input) =>
+		(await import("../services/thread-peer-read")).readPeerThread(input),
 	// The failover plan reads the database here.
 	planFailover: undefined,
 	helperStepDeps: undefined,

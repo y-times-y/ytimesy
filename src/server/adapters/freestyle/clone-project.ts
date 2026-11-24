@@ -1,4 +1,5 @@
 import { posixShellQuoted } from "#/domain/posix-command";
+import { setupManagedGitForQuotedDirectory } from "../managed-git-identity";
 
 export const PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd";
 
@@ -10,7 +11,8 @@ export const PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd";
 export function reusePreparedCheckoutCommand(repoName: string) {
 	return `HOME="\${HOME:-/home/ubuntu}"
 DEST="$HOME/"${posixShellQuoted(repoName)}
-if [ -d "$DEST/.git" ]; then
+if [ -e "$DEST/.git" ]; then
+  ${setupManagedGitForQuotedDirectory('"$DEST"')} || exit 1
   echo present
   echo "$DEST"
   printf 'branch:%s\\n' "$(git -C "$DEST" branch --show-current 2>/dev/null)"

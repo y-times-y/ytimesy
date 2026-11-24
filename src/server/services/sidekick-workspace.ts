@@ -2,6 +2,10 @@ import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { sidekickRoundRef } from "#/domain/sidekick";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import {
+	MANAGED_GIT,
+	MANAGED_GIT_TRAILER,
+} from "../adapters/managed-git-identity";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
@@ -15,9 +19,6 @@ import type { WorkspaceMachines } from "./workspace-machines";
  * tree, the index nor HEAD changes: the sidekick's work stays the lead's
  * uncommitted work, and the turn's usual commit publishes it.
  */
-
-const GIT =
-	"git -c user.name=ytimesy-agent -c user.email=agent@ytimesy.invalid";
 
 /** Commits the working tree as it is (on top of HEAD) and points `ref` at it. */
 export function checkoutSnapshotScript(input: {
@@ -34,7 +35,7 @@ export function checkoutSnapshotScript(input: {
 		'GIT_INDEX_FILE="$index" git add -A',
 		'tree=$(GIT_INDEX_FILE="$index" git write-tree)',
 		'rm -f "$index"',
-		`commit=$(${GIT} commit-tree "$tree" \${head:+-p "$head"} -m ${quote(input.message)})`,
+		`commit=$(${MANAGED_GIT} commit-tree "$tree" \${head:+-p "$head"} -m ${quote(input.message)} -m ${quote(MANAGED_GIT_TRAILER)})`,
 		`git update-ref ${quote(input.ref)} "$commit"`,
 		'echo "SNAPSHOT $commit"',
 	].join("\n");

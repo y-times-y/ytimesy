@@ -473,6 +473,17 @@ describe("the super agent (Y²) and helpers on a box", () => {
 		const deps: string[] = [];
 		ports.ySquared = async (a: { dep: string; args: unknown[] }) => {
 			deps.push(a.dep);
+			// The root threads of the project: crew rows of helper chats are not listed.
+			if (a.dep === "list")
+				return [
+					{
+						id: THREAD,
+						title: "Fix login",
+						waitingOn: null,
+						workingSince: null,
+						updatedAt: null,
+					},
+				];
 			if (a.dep === "crewList")
 				return {
 					reconciled: true,
@@ -508,7 +519,13 @@ describe("the super agent (Y²) and helpers on a box", () => {
 		expect(s.edge.row.state).toBe("completed");
 		expect(dbCalls.stacks).toEqual([]);
 		expect(s.reads).toEqual([]);
-		expect(deps).toEqual(["crewList", "metadata", "crewNoteY2Sent", "send"]);
+		expect(deps).toEqual([
+			"list",
+			"crewList",
+			"metadata",
+			"crewNoteY2Sent",
+			"send",
+		]);
 		const result = JSON.stringify(s.edge.row.items);
 		expect(result).toContain("Fix login");
 		expect(result).toContain("its turn started");
@@ -1000,6 +1017,9 @@ describe("every product tool on a box (a real shell as the VM, the database bloc
 			return null;
 		};
 		ports.canvasRevision = async () => 0;
+		ports.peerThread = async ({ id }: { id: string }) => `read ${id}`;
+		ports.peerSend = async ({ id, mode }: { id: string; mode: string }) =>
+			`sent ${id} ${mode}`;
 		const remote: string[] = [];
 		ports.remoteTool = async (args: { tool: string }) => {
 			remote.push(args.tool);
@@ -1046,9 +1066,21 @@ describe("every product tool on a box (a real shell as the VM, the database bloc
 				"update_plan",
 				"goal",
 				"run_code",
+				"read_thread",
+				"message_thread",
 			].sort(),
 		);
 	}, 60_000);
+
+	it("reads and messages another thread through the edge's ports", async () => {
+		expect((await run("read_thread", { id: "t2" })).call?.output).toContain(
+			"read t2",
+		);
+		expect(
+			(await run("message_thread", { id: "t2", text: "hi", mode: "steer" }))
+				.call?.output,
+		).toContain("sent t2 steer");
+	}, 120_000);
 
 	it("reads, writes and edits files on the VM, with receipts at the edge", async () => {
 		const read = await run("read", { path: "README.md" });

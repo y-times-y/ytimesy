@@ -827,6 +827,19 @@ progress write, last renewal) before calling a thread stuck (docs/y.md,
 
 ## Deploying while turns run (2026-11-23)
 
+- **Cut connections resume, they do not fail** (2026-11-23 evening): a deploy
+  cuts a chat object's outbound calls about a second before resetting it
+  ("Network connection lost."), and resets a box's requests to the edge
+  (ECONNRESET, "fetch failed"); the edge answers a box's workspace request
+  503 while the machine provider is briefly down. A step that hits any of
+  these (`isCutConnection`, `isEdgeOutage` in api-turn.ts) is not settled: it
+  rethrows like a platform reset, its executor retries it from the checkpoint
+  (3 times), and a Claude Code run is left running for the resumed step to
+  re-attach to (`leavesClaudeCodeRunning`). Each logs `turn.interrupted`
+  (cause reset, connection or edge-outage). Measured before the fix: 3 turns
+  failed at deploys in 48 h (21:03, 21:16, 21:31 on Nov 23) and 4 box turns
+  on edge 503s.
+
 - **Edge and web deploys** restart chat objects (each moves to the new code
   once idle or after a delay). A turn rides that out: a failed coordination
   renewal is retried for up to 20 s of the 30 s lease

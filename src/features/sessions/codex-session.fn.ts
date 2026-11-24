@@ -36,7 +36,10 @@ import { markFirstRunFinished } from "#/server/adapters/first-run";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listProjects } from "#/server/adapters/projects";
 import { consumeUserAction } from "#/server/adapters/user-action-rate";
-import { ySquaredChatsByProject } from "#/server/adapters/y-mode";
+import {
+	ensureYSquaredChat,
+	ySquaredChatsByProject,
+} from "#/server/adapters/y-mode";
 import { requireUser } from "#/server/auth/auth";
 import {
 	advanceCodexDeviceLogin,
@@ -385,13 +388,24 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 		// project as a plain one.
 		const ySquaredChats = ySquaredChatsByProject(user.id);
 		ySquaredChats.catch(() => undefined);
-		const sidebarChats = (projectId: string) =>
-			listSidebarAgentSessions(user.id, projectId).then(async (sessions) =>
-				pinnedYSquared(
-					chatsFromAgentSessions(sessions),
-					(await ySquaredChats).get(projectId),
-				),
-			);
+		const sidebarChats = async (projectId: string) => {
+			// A Y project that has threads but no Y² chat yet gets it here, as
+			// the browser's own list read does (listProjectAgentSessions), so a
+			// page that loaded before the chat existed still draws its row.
+			const known = (await ySquaredChats).get(projectId);
+			const ySquaredId =
+				known ??
+				((await listed)?.find((project) => project.id === projectId)?.yEnabled
+					? await ensureYSquaredChat(user.id, projectId).catch(
+							(error: unknown) => {
+								console.error("y_squared.ensure_failed", error);
+								return undefined;
+							},
+						)
+					: undefined);
+			const sessions = await listSidebarAgentSessions(user.id, projectId);
+			return pinnedYSquared(chatsFromAgentSessions(sessions), ySquaredId);
+		};
 		const projectChatReads = listed.then(
 			(projects) =>
 				new Map(

@@ -457,6 +457,10 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		machineGit: () => boxMachineGit(call),
 		claudeBox: boxClaudeHost(session, call),
 		ySquaredToolDeps: boxYSquaredToolDeps(call),
+		// The edge reads from the grant's own user, project and chat.
+		peerThreadSend: ({ id, text, mode }) =>
+			call<string>("peerSend", { id, text, mode }),
+		peerThreadRead: ({ id }) => call<string>("peerThread", { id }),
 		planFailover: (input) => call("planFailover", input),
 		helperStepDeps: {
 			recordStep: async () =>
@@ -901,6 +905,10 @@ export function boxYSquaredToolDeps(
 		download: (userId, sessionId, id) => dep("download", userId, sessionId, id),
 		send: (_machines, scope, input) => dep("send", scope, input),
 		stop: (_machines, scope) => dep("stop", scope),
+		archive: async (userId, sessionId) => {
+			await dep("archive", userId, sessionId);
+		},
+		prOpen: (userId, projectId, url) => dep("prOpen", userId, projectId, url),
 		// A crew answers through the edge; one that is missing there answers null.
 		crew: () => crew,
 	};

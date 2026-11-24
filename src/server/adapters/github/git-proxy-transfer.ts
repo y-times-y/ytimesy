@@ -6,6 +6,11 @@ import {
 import { issueGitProxyGrant } from "#/domain/github-git-proxy";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecrets } from "#/domain/redact-secrets";
+import {
+	MANAGED_GIT_ENV,
+	MANAGED_GIT_TRAILER,
+	managedPushIdentityCheck,
+} from "../managed-git-identity";
 import type { GitTransferHost } from "./git-broker";
 
 type Repository = {
@@ -521,7 +526,9 @@ commit=$(git -C ${directory} rev-parse --verify ${quote(`${input.commit || input
 ${git} init -q --bare ${publish}
 printf '%s\n' "$objects" > ${quote(`${temporary}/push.git/objects/info/alternates`)}
 ${git} --git-dir=${publish} update-ref refs/heads/publish "$commit") || exit ${PUSH_EXIT.commit}
-${reconcile ? mergeRemoteBranchScript(git, publish, url, input.branch) : ""}${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/heads/${input.branch}`)} || exit ${PUSH_EXIT.push}`,
+${reconcile ? mergeRemoteBranchScript(git, publish, url, input.branch) : ""}${git} --git-dir=${publish} fetch -q --no-tags ${quote(url)} 'refs/heads/*:refs/ytimesy/upstream/*' || exit ${PUSH_EXIT.prepare}
+${managedPushIdentityCheck(`${git} --git-dir=${publish}`, "refs/heads/publish", "--glob=refs/ytimesy/upstream/*", PUSH_EXIT.identity)}
+${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/heads/${input.branch}`)} || exit ${PUSH_EXIT.push}`,
 			NETWORK_GIT_TIMEOUT_MS,
 		);
 		ran = true;
@@ -560,11 +567,13 @@ ${reconcile ? mergeRemoteBranchScript(git, publish, url, input.branch) : ""}${gi
 				throw new Error(BRANCH_KEPT_MOVING);
 			}
 			const failure =
-				result.exitCode === PUSH_EXIT.commit
-					? "Workspace Git could not prepare the commit to push."
-					: WORKFLOW_PUSH_REFUSED_PATTERN.test(stderr)
-						? WORKFLOW_PUSH_REFUSED
-						: TRANSFER_FAILED;
+				result.exitCode === PUSH_EXIT.identity
+					? "Push refused: an unpublished commit does not have the managed Git identity."
+					: result.exitCode === PUSH_EXIT.commit
+						? "Workspace Git could not prepare the commit to push."
+						: WORKFLOW_PUSH_REFUSED_PATTERN.test(stderr)
+							? WORKFLOW_PUSH_REFUSED
+							: TRANSFER_FAILED;
 			console.warn("Workspace Git command failed", {
 				failure,
 				exitCode: result.exitCode,
@@ -588,6 +597,7 @@ const PUSH_EXIT = {
 	commit: 66,
 	push: 67,
 	diverged: 68,
+	identity: 69,
 } as const;
 
 /**
@@ -610,7 +620,7 @@ remote=$(${git} --git-dir=${publish} rev-parse --verify ${remoteRef}) || exit ${
 if ${git} --git-dir=${publish} merge-base --is-ancestor "$commit" "$remote"; then exit 0; fi
 if ! ${git} --git-dir=${publish} merge-base --is-ancestor "$remote" "$commit"; then
   tree=$(${git} --git-dir=${publish} merge-tree --write-tree --no-messages "$commit" "$remote") || exit ${PUSH_EXIT.diverged}
-  merged=$(GIT_AUTHOR_NAME=ytimesy GIT_AUTHOR_EMAIL=noreply@ytimesy.com GIT_COMMITTER_NAME=ytimesy GIT_COMMITTER_EMAIL=noreply@ytimesy.com ${git} --git-dir=${publish} commit-tree "$tree" -p "$commit" -p "$remote" -m "Merge remote changes into the chat's branch") || exit ${PUSH_EXIT.diverged}
+  merged=$(${MANAGED_GIT_ENV} ${git} --git-dir=${publish} commit-tree "$tree" -p "$commit" -p "$remote" -m "Merge remote changes into the chat's branch" -m ${quote(MANAGED_GIT_TRAILER)}) || exit ${PUSH_EXIT.diverged}
   ${git} --git-dir=${publish} update-ref refs/heads/publish "$merged" || exit ${PUSH_EXIT.commit}
 fi
 `;

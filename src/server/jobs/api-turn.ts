@@ -128,6 +128,7 @@ import {
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { startedByPeerMessage } from "#/domain/thread-peer";
 import { withStoppedNotice } from "#/domain/turn-end";
 import {
 	savingChangesItem,
@@ -139,7 +140,10 @@ import { ASK_USER_TOOL } from "#/domain/user-question";
 import { ySquaredInstructions } from "#/domain/y-squared";
 import { ySquaredModelMessages } from "#/domain/y-squared-images";
 import { apiReasoningEffort } from "#/server/adapters/api-reasoning-effort";
-import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
+import {
+	isCutConnection,
+	isPlatformRestart,
+} from "#/server/adapters/freestyle/provider-retry";
 import { lastUserMessageIndex } from "#/server/adapters/turn-items-storage";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import type { ApiTurn } from "../adapters/api-turns";
@@ -292,6 +296,7 @@ import {
 	type ThinkingPauseScheduler,
 	thinkingPauseScheduler,
 } from "../services/thinking-pause";
+import { threadPeerTools } from "../services/thread-peer-tools";
 import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import type { CommittedTurn, PublishedTurn } from "../services/turn-commit";
@@ -365,6 +370,25 @@ async function acquireConversationTurn(
 		});
 		if (signal.aborted) return false;
 	}
+}
+
+/**
+ * The edge answered a box's workspace request 5xx: the machine provider or
+ * the edge was briefly unavailable (2026-11-22/23: 4 box turns failed this
+ * way, reported as "the model request failed"). The box retries the step.
+ */
+function isEdgeOutage(error: unknown) {
+	const refused = error as { name?: unknown; status?: unknown } | null;
+	return (
+		refused?.name === "TurnBoxVmRefused" &&
+		typeof refused.status === "number" &&
+		refused.status >= 500
+	);
+}
+
+/** The person pressed Stop: that ends the turn even if a connection was cut too. */
+function userStopped(reason: unknown) {
+	return reason instanceof ApiTurnCancelled;
 }
 
 type ApiTurnStepOutcome = "continue" | "completed" | "failed" | "cancelled";
@@ -2180,7 +2204,7 @@ async function runApiTurnAttempt(
 					})
 				: {};
 		// The thin lead only inspects, so a round needs no write guard.
-		const baseTools: ToolSet = ySquared
+		const leadTools: ToolSet = ySquared
 			? {
 					// Y² asks the person; it has no secret or delegation tools.
 					...(ownTools[ASK_USER_TOOL]
@@ -2214,6 +2238,36 @@ async function runApiTurnAttempt(
 							...planning,
 							...goalMode,
 						};
+		// A root thread may read its project's other threads (read-only; appended
+		// so earlier requests' tool lists stay a cached prefix).
+		const peerProject = owner.projectId;
+		const baseTools: ToolSet =
+			ySquared || owner.parentSessionId || !peerProject
+				? leadTools
+				: {
+						...leadTools,
+						...threadPeerTools({
+							read: (id) =>
+								ports.peerThreadRead({
+									userId: owner.userId,
+									projectId: peerProject,
+									selfId: owner.id,
+									id,
+								}),
+							send: ({ id, text, mode }) =>
+								ports.peerThreadSend({
+									userId: owner.userId,
+									projectId: peerProject,
+									selfId: owner.id,
+									id,
+									text,
+									mode,
+									turnId: turn.id,
+									machines: unscopedMachines,
+								}),
+							startedByPeer: () => startedByPeerMessage(items),
+						}),
+					};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
 		// call tools (run_code only). agent, agent_send and
 		// request_project_secret are ordinary tools. Additions append, so
@@ -3565,11 +3619,32 @@ async function runApiTurnAttempt(
 		// A deploy replaced this Worker mid-step: the step is resumed on the new
 		// version from its checkpoint (executor.ts alarm), never failed. The
 		// provider stream may report only "Model run cancelled" after the abort.
-		const platformRestart = [error, abort.signal.reason].find((cause) =>
-			isPlatformRestart(cause),
+		// A cut connection resumes only where an executor retries the step
+		// (a chat object or a box), and never over the person's own Stop.
+		const platformRestart = [error, abort.signal.reason].find(
+			(cause) =>
+				isPlatformRestart(cause) ||
+				(!!step &&
+					!userStopped(abort.signal.reason) &&
+					(isCutConnection(cause) || isEdgeOutage(cause))),
 		);
 		if (platformRestart) {
-			console.warn("Turn step interrupted by a platform reset; it resumes.");
+			// One line per interruption, so they are counted without anyone
+			// reporting them (turn.interrupted in the edge or box logs).
+			console.warn(
+				JSON.stringify({
+					event: "turn.interrupted",
+					turnId: turn.id,
+					step: step?.index ?? null,
+					stage: failureStage,
+					cause: isPlatformRestart(platformRestart)
+						? "reset"
+						: isEdgeOutage(platformRestart)
+							? "edge-outage"
+							: "connection",
+					executor: step ? "step" : "local",
+				}),
+			);
 			throw platformRestart;
 		}
 		// The step's soft deadline passed while its model call was still running and

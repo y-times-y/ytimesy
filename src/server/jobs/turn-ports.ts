@@ -83,6 +83,7 @@ import type { startQueuedUserTurn } from "../services/queued-user-messages";
 import type { SubagentToolDeps } from "../services/subagent-tools";
 import type { commitSessionTurn } from "../services/turn-commit";
 import type { subagentMemory, turnMemory } from "../services/turn-memory";
+import type { WorkspaceMachines } from "../services/workspace-machines";
 import type { YSquaredToolDeps } from "../services/y-squared-tools";
 import type { enqueueAgentTaskEvent } from "./queue";
 
@@ -214,6 +215,27 @@ export interface TurnPorts {
 	 * (turn-box-y-squared-port.ts). Unset in the Durable Object.
 	 */
 	readonly ySquaredToolDeps?: Partial<YSquaredToolDeps>;
+	/**
+	 * read_thread's read of another thread of the project (thread-peer-read.ts):
+	 * here in the Durable Object, through the edge on a box.
+	 */
+	/** message_thread's send to another thread (sendPeerMessage); `machines` only where the turn has them (the edge uses its own). */
+	readonly peerThreadSend: (input: {
+		readonly userId: string;
+		readonly projectId: string;
+		readonly selfId: string;
+		readonly id: string;
+		readonly text: string;
+		readonly mode: "queue" | "steer";
+		readonly turnId: string;
+		readonly machines?: WorkspaceMachines;
+	}) => Promise<string>;
+	readonly peerThreadRead: (input: {
+		readonly userId: string;
+		readonly projectId: string;
+		readonly selfId: string;
+		readonly id: string;
+	}) => Promise<string>;
 	/**
 	 * Set on a box: the failover plan, made by the edge from the turn's own
 	 * row (model-failover.ts reads the user's connections and preferences).

@@ -1,7 +1,5 @@
-import {
-	type PublicationAuthor,
-	publicationCommitAuthor,
-} from "#/domain/publication";
+import type { PublicationAuthor } from "#/domain/publication";
+import { MANAGED_GIT_BOT } from "./managed-git-identity";
 import { commitAllArgv } from "./repository-setup";
 
 const lockedTurnCommitScript = `import fcntl, os, pathlib, subprocess, sys, tempfile
@@ -40,14 +38,21 @@ export function automaticTurnCommitArgv(
 	turn: string,
 	message: string,
 	expectedTree = "",
-	author: PublicationAuthor = publicationCommitAuthor({}),
-	coAuthor: PublicationAuthor | null = null,
+	author: PublicationAuthor = MANAGED_GIT_BOT,
+	coAuthor: PublicationAuthor | null = MANAGED_GIT_BOT,
+	humanCoAuthor: PublicationAuthor | null = null,
 ) {
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn commit identity.");
 	if (expectedTree && !/^[a-f0-9]{40,64}$/.test(expectedTree))
 		throw new Error("Invalid verified tree identity.");
-	const command = commitAllArgv(directory, message, author, coAuthor)[2];
+	const command = commitAllArgv(
+		directory,
+		message,
+		author,
+		coAuthor,
+		humanCoAuthor,
+	)[2];
 	return [
 		"python3",
 		"-c",

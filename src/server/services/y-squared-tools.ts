@@ -27,18 +27,24 @@ import { wakeMessageId } from "#/domain/pull-request-wake";
 import type { SessionItem } from "#/domain/session-item";
 import { threadOutcomeLines } from "#/domain/thread-outcome";
 import {
+	archiveThreadInput,
 	messageThreadInput,
 	readCanvasInput,
+	retryThreadInput,
 	showCanvasInput,
 	startThreadInput,
 	stopThreadInput,
 	threadsOverview,
 	threadTimesText,
+	Y_SQUARED_ARCHIVE_THREAD_DESCRIPTION,
+	Y_SQUARED_ARCHIVE_THREAD_TOOL,
 	Y_SQUARED_MAX_STARTS_PER_TURN,
 	Y_SQUARED_MESSAGE_THREAD_DESCRIPTION,
 	Y_SQUARED_MESSAGE_THREAD_TOOL,
 	Y_SQUARED_READ_CANVAS_DESCRIPTION,
 	Y_SQUARED_READ_CANVAS_TOOL,
+	Y_SQUARED_RETRY_THREAD_DESCRIPTION,
+	Y_SQUARED_RETRY_THREAD_TOOL,
 	Y_SQUARED_SHOW_CANVAS_DESCRIPTION,
 	Y_SQUARED_START_THREAD_DESCRIPTION,
 	Y_SQUARED_START_THREAD_TOOL,
@@ -120,6 +126,14 @@ type Deps = {
 		/** The chat the message went to (a new thread's id); absent from an older edge. */
 		readonly sessionId?: string | null;
 	}>;
+	/** Whether a pull request is still open: true open, false merged or closed, null unknown. */
+	readonly prOpen: (
+		userId: string,
+		projectId: string,
+		url: string,
+	) => Promise<boolean | null>;
+	/** Archives a root chat (stops its turn, keeps everything; Settings > Archived restores it). */
+	readonly archive: (userId: string, sessionId: string) => Promise<void>;
 	/** The Stop button's path. */
 	readonly stop: (
 		machines: WorkspaceMachines,
@@ -152,6 +166,15 @@ const defaultDeps: Deps = {
 				? { failed: view.connection.message }
 				: {}),
 		};
+	},
+	prOpen: async (userId, projectId, url) => {
+		const { pullRequestIsOpen } = await import("./y-squared-pr-state");
+		return pullRequestIsOpen({ userId, projectId, url });
+	},
+	archive: async (userId, sessionId) => {
+		// Lazy: the archive service pulls in the machine and project services.
+		const { archiveOwned } = await import("./archive");
+		await archiveOwned(userId, "chat", sessionId);
 	},
 	stop: async (machines, scope) => {
 		const view = await Effect.runPromise(stopTurnKeepingQueue(machines, scope));
@@ -315,23 +338,33 @@ export function ySquaredTools(input: {
 		found.latestRevision > found.revision
 			? `(The thread's newest revision ${found.latestRevision} no longer has its document stored; this is revision ${found.revision}, the latest that does.)`
 			: "";
+	/** The project's root, unarchived chats: one metadata read. */
+	const sidebar = () => deps.list(input.userId, input.projectId);
 	/** Metadata of the project's threads: the cold start and where no crew exists. */
-	const fromSidebar = async () =>
-		(await deps.list(input.userId, input.projectId))
+	const fromSidebar = (chats: Sidebar[]) =>
+		chats
 			.filter((chat) => chat.id !== input.selfId && !chat.unused)
 			.slice(0, Y_SQUARED_THREAD_LIMIT)
 			.map(rowFromSidebar);
 	/** The crew's rows; an empty, never-filled crew is filled once from the sidebar. */
 	const crewRows = async (): Promise<CrewRow[]> => {
 		const crew = deps.crew(input.projectId);
-		if (!crew) return fromSidebar();
-		const listed = await crew.list();
-		const rows = listed.rows.filter((row) => row.sessionId !== input.selfId);
+		if (!crew) return fromSidebar(await sidebar());
+		// Both at once: on a box each is a hop through the edge.
+		const [chats, listed] = await Promise.all([sidebar(), crew.list()]);
+		// Only the project's own threads: the crew also holds rows of helper
+		// chats (builders) and of threads since archived, which the list of
+		// root, unarchived chats leaves out.
+		const roots = new Set(chats.map((chat) => chat.id));
+		const rows = listed.rows.filter(
+			(row) => row.sessionId !== input.selfId && roots.has(row.sessionId),
+		);
 		if (rows.length || listed.reconciled) return rows;
-		const seeded = await fromSidebar();
+		const seeded = fromSidebar(chats);
 		await crew.reconcile(seeded).catch(() => undefined);
 		return seeded;
 	};
+
 	return {
 		[Y_SQUARED_THREADS_TOOL]: tool({
 			description:
@@ -354,7 +387,9 @@ export function ySquaredTools(input: {
 				const crew = deps.crew(input.projectId);
 				const noted = crew
 					? await crew.thread(id)
-					: (await fromSidebar()).find((entry) => entry.sessionId === id);
+					: fromSidebar(await sidebar()).find(
+							(entry) => entry.sessionId === id,
+						);
 				// Not noted yet (just started, queued): the thread's own row.
 				const unnoted = noted ? null : await ownThread(id).catch(() => null);
 				const row = noted ?? (unnoted ? rowFromMetadata(unnoted) : null);
@@ -654,6 +689,71 @@ export function ySquaredTools(input: {
 				]
 					.filter(Boolean)
 					.join("\n");
+			},
+		}),
+		[Y_SQUARED_RETRY_THREAD_TOOL]: tool({
+			description: Y_SQUARED_RETRY_THREAD_DESCRIPTION,
+			inputSchema: retryThreadInput,
+			execute: async ({ id }) => {
+				if (!input.machines || !input.modelId) return noMachines;
+				const chat = await ownThread(id);
+				if (!chat) return noThread;
+				if (chat.turnStatus !== "failed")
+					return `"${chat.title}" did not fail on its last turn (it is ${chat.turnStatus}); nothing to retry.`;
+				await markSent(chat.id);
+				const text =
+					"Your last turn failed. Retry it: continue where you stopped and finish the work.";
+				const sent = await deps.send(
+					input.machines,
+					{
+						userId: input.userId,
+						projectId: input.projectId,
+						sessionId: chat.id,
+						harnessId: chat.harness,
+						createNew: false,
+					},
+					{
+						text,
+						modelId: chat.listedModelId ?? input.modelId,
+						idempotencyKey: sendKey("retry", chat.id, text),
+					},
+				);
+				if (sent.failed) return `Not retried: ${sent.failed}`;
+				return sent.turnStatus === "running"
+					? `Retrying "${chat.title}": a new turn started.`
+					: `Retry queued for "${chat.title}" behind the budget/concurrency limit; it starts by itself.`;
+			},
+		}),
+		[Y_SQUARED_ARCHIVE_THREAD_TOOL]: tool({
+			description: Y_SQUARED_ARCHIVE_THREAD_DESCRIPTION,
+			inputSchema: archiveThreadInput,
+			execute: async ({ id }) => {
+				if (id === input.selfId) return noThread;
+				const found = await deps.metadata(input.userId, id);
+				if (!found || found.projectId !== input.projectId) return noThread;
+				if (found.parentSessionId || found.agentRole)
+					return `"${found.title}" is a helper chat (a ${found.agentRole ?? "child"} of another thread), not a thread of its own: it is not in the threads list and is archived with its parent thread.`;
+				const chat = found;
+				if (chat.turnStatus === "running")
+					return `"${chat.title}" is working; stop it first if it should go.`;
+				const row = await deps
+					.crew(input.projectId)
+					?.thread(id)
+					.catch(() => null);
+				if (row?.waitingOn && row.waitingOn !== "failed")
+					return `"${chat.title}" is waiting on the person (${row.waitingOn}); not archived.`;
+				if (row?.prUrl) {
+					// A merged or closed pull request is no reason to keep it.
+					const open = await deps
+						.prOpen(input.userId, input.projectId, row.prUrl)
+						.catch(() => null);
+					if (open !== false)
+						return open
+							? `"${chat.title}" has an open pull request (${row.prUrl}); not archived.`
+							: `"${chat.title}" has a pull request (${row.prUrl}) whose state could not be checked; not archived.`;
+				}
+				await deps.archive(input.userId, chat.id);
+				return `Archived "${chat.title}". Settings > Archived restores it.`;
 			},
 		}),
 		[Y_SQUARED_STOP_THREAD_TOOL]: tool({

@@ -1,12 +1,9 @@
 import { posixShellQuoted } from "#/domain/posix-command";
 import { projectCheckoutPath } from "#/domain/project-checkout";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
-import { resolveGithubAppBot } from "#/server/adapters/github/bot-identity";
 import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
+import { managedGitSetupCommand } from "#/server/adapters/managed-git-identity";
 import {
-	activateGithubBotCommitHookArgv,
-	githubBotCommitHookPath,
-	githubBotCommitMsgHook,
 	installArgv,
 	listLockfilesArgv,
 } from "#/server/adapters/repository-setup";
@@ -45,12 +42,6 @@ export async function prepareProjectCheckout(input: {
 	const directory = projectCheckoutPath(input.home, input.name);
 	if (input.commit && !/^[a-f0-9]{40}$/i.test(input.commit))
 		throw new Error("Invalid repository revision.");
-	// The App's bot identity is a GitHub read independent of the clone.
-	const botLookup = resolveGithubAppBot({
-		installationId: input.installationId,
-		repositoryName: input.name,
-	});
-	botLookup.catch(() => undefined);
 	const exists = await input.host.exec(
 		`test -d ${posixShellQuoted(`${directory}/.git`)} && echo present`,
 		15_000,
@@ -61,31 +52,16 @@ export async function prepareProjectCheckout(input: {
 			destination: directory,
 			mode: "clone",
 		});
-	// Every commit made in this checkout (the agent's own included) credits the App.
-	const [, bot] = await Promise.all([
-		input.host.writeTextFile(PROJECT_CWD_PATH, `${directory}\n`),
-		botLookup.then(async (found) => {
-			if (found)
-				await input.host.writeTextFile(
-					githubBotCommitHookPath(directory),
-					githubBotCommitMsgHook(found),
-				);
-			return found;
-		}),
-	]);
-	const activate = bot ? activateGithubBotCommitHookArgv(directory)[2] : null;
+	await input.host.writeTextFile(PROJECT_CWD_PATH, `${directory}\n`);
+	const setup = managedGitSetupCommand(directory);
 	const revision = `git -C ${posixShellQuoted(directory)} rev-parse HEAD`;
-	// Without a callback in between, activating the hook and reading the
-	// commit are one guest command.
-	const together = !input.onCloned && activate && input.commit;
-	if (activate)
-		await runCheckoutCommand(
-			input.host,
-			together ? `{ ${activate}; } && ${revision}` : activate,
-			15_000,
-		).then((result) => {
-			if (together) assertCommit(result.stdout, input.commit);
-		});
+	const together = !input.onCloned && input.commit;
+	const configured = await runCheckoutCommand(
+		input.host,
+		together ? `{ ${setup}; } && ${revision}` : setup,
+		15_000,
+	);
+	if (together) assertCommit(configured.stdout, input.commit);
 	await input.onCloned?.(directory);
 	if (input.commit && !together)
 		await runCheckoutCommand(input.host, revision, 15_000).then((result) =>

@@ -27,6 +27,8 @@ export const CREW_REPLY_LIMIT = 300;
 export const CREW_REQUEST_LIMIT = 200;
 /** Longest canvas line a note carries. */
 export const CREW_CANVAS_LIMIT = 200;
+/** Longest question/secret line a waiting note carries. */
+export const CREW_ASK_LIMIT = 360;
 /** Most canvases one wake line names. */
 const CREW_CANVAS_NAMED = 3;
 /** Rows untouched this long are dropped. */
@@ -72,6 +74,11 @@ export type CrewNote = {
 	 * revision only, never html). Told once in the wake; not kept in the rows.
 	 */
 	readonly canvas?: string | null;
+	/**
+	 * What a waiting thread asks, as one line: the question and its options, or
+	 * the NAMES of the secrets it needs (never a value). Told once in the wake.
+	 */
+	readonly ask?: string | null;
 	/** Who to wake, and Y²'s own chat (never woken by its own notes). */
 	readonly userId: string;
 	readonly projectId: string;
@@ -127,6 +134,7 @@ export function parseCrewNote(value: unknown): CrewNote | null {
 		lastReply: text(note.lastReply ?? note.reply, CREW_REPLY_LIMIT) || null,
 		lastRequest: text(note.lastRequest, CREW_REQUEST_LIMIT) || null,
 		canvas: text(note.canvas, CREW_CANVAS_LIMIT) || null,
+		ask: text(note.ask, CREW_ASK_LIMIT) || null,
 		ySquaredId: text(note.ySquaredId, 64) || null,
 	};
 }
@@ -258,7 +266,12 @@ export function crewWakeBody(input: {
 					"A thread showed a canvas: if it is a new revision of one you displayed here, call `show_canvas` again with the same title so the person sees it in this chat, and say what changed in one or two lines.",
 				]
 			: []),
-		"Call `threads`, then call `thread` for each one that finished or needs the person and give the person a short delta with the substance: what it found or built, the decision they need to make, who is still working and for how long. Never just say it finished; do not list everything again.",
+		...(input.events.some((event) => event.detail?.includes("asks "))
+			? [
+					"A waiting thread's question and options are in its line above: put that question to the person yourself (one decision per message, with your recommendation); you need not read the thread to do it. Never ask for a secret's value in this chat: say which secret the thread needs and that the person enters it from the Needs you list beside this chat (or in the thread).",
+				]
+			: []),
+		"Call `threads`, then call `thread` for each one that finished or needs the person and give the person a short delta in at most 60 words: lead with what needs them (one decision, with your recommendation), then one line per thread that changed with its substance. Skip anything you already reported, do not re-list open decisions or still-working threads that did not change, and use no tables.",
 		`If nothing here needs the person and nothing needs an action from you, reply with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else: it shows no message.`,
 	].join("\n");
 }
@@ -280,6 +293,7 @@ export function crewFromSettledItems(
 	| "lastRequest"
 	| "title"
 	| "canvas"
+	| "ask"
 > {
 	const waiting = chatWaitingOn(items, turnStatus);
 	const facts = threadHistoryFacts(items);
@@ -299,7 +313,43 @@ export function crewFromSettledItems(
 			: null,
 		title: crewTitleFromItems(items),
 		canvas: crewCanvasLine(items),
+		ask: waiting ? crewAskLine(items) : null,
 	};
+}
+
+/**
+ * What the thread's open question or secret request says, in one line, from
+ * the items the chat object already holds (no database read): the first
+ * question with its option labels, or the secret NAMES. Never a secret value
+ * (a request holds none) and never more than CREW_ASK_LIMIT characters.
+ */
+export function crewAskLine(items: readonly SessionItem[]): string | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (!item || item.kind === "userMessage") break;
+		if (item.kind === "userQuestion") {
+			const questions = item.questions ?? [];
+			const first = questions[0];
+			if (!first) return null;
+			const more = questions.length - 1;
+			return text(
+				`asks "${text(first.question, 160)}" options: ${(first.options ?? [])
+					.map((option) => text(option.label, 40))
+					.join(
+						" / ",
+					)}${more > 0 ? ` (+${more} more question${more > 1 ? "s" : ""})` : ""}`,
+				CREW_ASK_LIMIT,
+			);
+		}
+		if (item.kind === "secretRequest") {
+			const names =
+				"secrets" in item
+					? item.secrets.map((secret) => secret.name)
+					: [item.name];
+			return text(`asks for secrets ${names.join(", ")}`, CREW_ASK_LIMIT);
+		}
+	}
+	return null;
 }
 
 /**
