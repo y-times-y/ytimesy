@@ -21,21 +21,36 @@ export type ThreadModelChange = {
 	readonly changeId: string;
 };
 
+/** A selection is pending until a new turn records its own settings. */
+export async function threadModelSettings(
+	userId: string,
+	sessionId: string,
+	modelId: string,
+): Promise<{
+	variant?: string;
+	speed?: "fast" | "ultrafast";
+	fast?: boolean;
+} | null> {
+	const result = await database().query<{
+		settings: {
+			variant?: string;
+			speed?: "fast" | "ultrafast";
+			fast?: boolean;
+		};
+	}>(
+		`select s.model_selection->'settings' as settings from agent_session s
+		 where s.id=$1 and s.user_id=$2 and s.listed_model_id=$3
+		   and s.model_selection->>'modelId'=$3
+		   and (s.model_selection->>'turnCount')::bigint =
+		     (select count(*) from api_turn t where t.session_id=s.id)`,
+		[sessionId, userId, modelId],
+	);
+	return result.rows[0]?.settings ?? null;
+}
+
 /**
- * Points one of the person's threads at another model from its next turn.
- *
- * The thread's model is `listed_model_id` (every turn start rewrites it, and
- * runtime sends such as a pull request wake or an answered question read it);
- * its harness stays as it is, because the next send is what switches a chat
- * between runtimes and carries the conversation over (the send path takes the
- * harness from the model's id, harnessForModelId). Messages already waiting in
- * the thread move to the new model too, so "the next turn" is the new one
- * whoever starts it.
- *
- * The quiet line goes into an idle thread's transcript in the same statement;
- * a running turn owns its timeline, so there the model changes and the line is
- * left out (`lineWritten` false). Only a root thread of the project that is not
- * Y² itself and not a helper chat changes.
+ * Points a root thread at a model without changing the running turn's harness.
+ * Waiting sends move too; only an idle transcript gets the quiet notice.
  */
 export async function setThreadModel(
 	change: ThreadModelChange,
@@ -66,6 +81,8 @@ export async function setThreadModel(
 		   for update),
 		 changed as (
 		   update agent_session s set listed_model_id=$4, updated_at=now(),
+		     model_selection=jsonb_build_object('modelId',$4::text,'settings',$6::jsonb - 'harnessId' - 'modelId',
+		       'turnCount',(select count(*) from api_turn where session_id=s.id)),
 		     items=case when t.turn_status <> 'running'
 		       and not coalesce(s.items,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('id',$7::text))
 		       then coalesce(s.items,'[]'::jsonb)||$5::jsonb else s.items end

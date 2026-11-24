@@ -66,6 +66,7 @@ import {
 	loadModelConnection,
 } from "../adapters/model-connections";
 import { loadModelFailoverPreferences } from "../adapters/model-failover-preferences";
+import { threadModelSettings } from "../adapters/thread-model";
 import { openAgentSession } from "./agent-session-machine";
 import { cancelServerTurn } from "./cancel-server-turn";
 import {
@@ -282,7 +283,7 @@ export async function sendApiWorkspaceTask(
 	const catalog = apiModelCatalog(scope.userId);
 	catalog.catch(() => {});
 	const held = heldTranscript(read, sessionId);
-	const [session, connection, inherited] = await Promise.all([
+	const [session, connection, inherited, selection] = await Promise.all([
 		held && read ? read : agentSessionMetadataForOwner(scope.userId, sessionId),
 		selected ? loadModelConnection(scope.userId, selected.connectionId) : null,
 		selected && inheritsSettings
@@ -292,6 +293,9 @@ export async function sendApiWorkspaceTask(
 					selected.modelId,
 					selected.connectionId,
 				)
+			: null,
+		inheritsSettings && !input.continueOn
+			? threadModelSettings(scope.userId, sessionId, input.modelId)
 			: null,
 	]);
 	if (!session || session.projectId !== scope.projectId)
@@ -307,7 +311,12 @@ export async function sendApiWorkspaceTask(
 			"The selected model is no longer available on this connection.",
 		);
 	const settings = inheritsSettings
-		? (inherited ?? {})
+		? selection
+			? {
+					...(selection.variant ? { reasoning: selection.variant } : {}),
+					...(selection.speed ? { speed: selection.speed } : {}),
+				}
+			: (inherited ?? {})
 		: {
 				...(input.variant ? { reasoning: input.variant } : {}),
 				...(input.speed && input.speed !== "standard"
@@ -441,9 +450,15 @@ async function sendClaudeCodeTask(
 	const catalog = apiModelCatalog(scope.userId);
 	catalog.catch(() => {});
 	const held = heldTranscript(read, sessionId);
-	const [session, connected] = await Promise.all([
+	const [session, connected, selection, inherited] = await Promise.all([
 		held && read ? read : agentSessionMetadataForOwner(scope.userId, sessionId),
 		claudeCodeSendable(scope.userId),
+		input.variant === undefined && !input.continueOn
+			? threadModelSettings(scope.userId, sessionId, input.modelId)
+			: null,
+		input.variant === undefined
+			? inheritedApiTurnSettings(scope.userId, sessionId, modelId, null)
+			: null,
 	]);
 	if (!session || session.projectId !== scope.projectId)
 		throw new Error("Session is not available.");
@@ -457,7 +472,9 @@ async function sendClaudeCodeTask(
 	if (await alreadySent(scope, session.id, held, input.idempotencyKey))
 		return readApiWorkspaceSession(scope);
 	const revision = claudeCodeTurnRevision();
-	const effort = apiReasoningEffort(input.variant);
+	const effort = apiReasoningEffort(
+		input.variant ?? (selection ? selection.variant : inherited?.reasoning),
+	);
 	const route = {
 		connectionId: null,
 		connectionRevision: revision,

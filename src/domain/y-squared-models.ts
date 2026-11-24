@@ -153,7 +153,14 @@ export function resolveThreadModel(
 	models: readonly ThreadModel[],
 ): ThreadModelPick {
 	const wanted = key(request);
-	const found = wanted ? models.filter((model) => matches(model, wanted)) : [];
+	const exactRoute = wanted
+		? models.filter((model) => key(model.id) === wanted)
+		: [];
+	const found = exactRoute.length
+		? exactRoute
+		: wanted
+			? models.filter((model) => matches(model, wanted))
+			: [];
 	if (!found.length)
 		return {
 			ok: false,
