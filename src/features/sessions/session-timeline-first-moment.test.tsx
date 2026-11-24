@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
+import { childTaskEventQueueText } from "#/domain/child-task-activity";
 import { SessionItemId } from "#/domain/ids";
 import { SessionTimeline } from "./session-timeline";
 
@@ -16,7 +17,7 @@ it("shows the sent message and Starting in the reply's place before any reply", 
 	expect(html).toContain("Fix the build");
 	// The reply's row comes next, sized as the reply's first line.
 	expect(html).toMatch(
-		/<li [^>]*data-kind="working" data-follows="userMessage"[^>]*><p class="session-working session-shimmer" role="status">Starting…<\/p><\/li>/,
+		/<li [^>]*data-kind="working" data-follows="userMessage"[^>]*><p id="[^"]+" class="session-working session-shimmer" role="status">Starting…<\/p>/,
 	);
 });
 
@@ -61,6 +62,23 @@ it("keeps Thinking after a completed step instead of restarting the first-activi
 	);
 	expect(html).toContain("Thinking");
 	expect(html).not.toContain("Starting…");
+});
+
+it("waits for a public response even when an internal message was filtered out", () => {
+	const html = renderToStaticMarkup(
+		<SessionTimeline
+			items={[
+				sent,
+				{
+					kind: "agentMessage",
+					id: SessionItemId("internal-42"),
+					text: childTaskEventQueueText("42"),
+				},
+			]}
+			turnStatus="running"
+		/>,
+	);
+	expect(html).toMatch(/role="status">Starting…/);
 });
 
 it("does not show progress when the turn is idle", () => {

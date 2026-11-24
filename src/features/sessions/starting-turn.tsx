@@ -1,19 +1,60 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
-export function StartingTurn() {
-	const [waiting, setWaiting] = useState(false);
+const WAIT_MS = 20_000;
+const WAITING = "Still waiting for the first response or step…";
+const STARTING = "Starting…";
+
+export function remainingStartWait(startedAt: number | undefined, now: number) {
+	return startedAt === undefined || !Number.isFinite(startedAt)
+		? undefined
+		: Math.max(0, startedAt + WAIT_MS - now);
+}
+
+// Runs during parsing, before paint. Keep its threshold and text in sync above.
+function prepareStartingTurn(id: string, startedAt: number | null) {
+	const element = document.getElementById(id);
+	if (element && startedAt !== null && Date.now() - startedAt >= 20_000) {
+		element.textContent = "Still waiting for the first response or step…";
+		element.className = "session-working";
+	}
+}
+
+export function StartingTurn({ startedAt }: { startedAt?: number }) {
+	const id = useId();
+	const [waiting, setWaiting] = useState(() => {
+		if (typeof document === "undefined") return false;
+		const existing = document.getElementById(id);
+		return existing
+			? existing.textContent === WAITING
+			: remainingStartWait(startedAt, Date.now()) === 0;
+	});
 	useEffect(() => {
-		const timer = setTimeout(() => setWaiting(true), 20_000);
+		const remaining = remainingStartWait(startedAt, Date.now());
+		if (remaining === undefined) return;
+		if (remaining === 0) {
+			setWaiting(true);
+			return;
+		}
+		const timer = setTimeout(() => setWaiting(true), remaining);
 		return () => clearTimeout(timer);
-	}, []);
+	}, [startedAt]);
 	return (
-		<p
-			className={
-				waiting ? "session-working" : "session-working session-shimmer"
-			}
-			role="status"
-		>
-			{waiting ? "Still waiting for the first response or step…" : "Starting…"}
-		</p>
+		<>
+			<p
+				id={id}
+				className={
+					waiting ? "session-working" : "session-working session-shimmer"
+				}
+				role="status"
+			>
+				{waiting ? WAITING : STARTING}
+			</p>
+			<script
+				// biome-ignore lint/security/noDangerouslySetInnerHtml: the script contains only a React-generated id and a numeric timestamp.
+				dangerouslySetInnerHTML={{
+					__html: `(${prepareStartingTurn.toString()})(${JSON.stringify(id)},${JSON.stringify(Number.isFinite(startedAt) ? startedAt : null)})`,
+				}}
+			/>
+		</>
 	);
 }

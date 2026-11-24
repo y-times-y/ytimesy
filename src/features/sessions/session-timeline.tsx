@@ -35,6 +35,7 @@ import {
 	childTaskAnchorId,
 	childTaskPublicItems,
 	startsTurn,
+	turnStartTiming,
 	withoutWakeTurnStarts,
 } from "#/domain/child-task-activity";
 import {
@@ -494,13 +495,18 @@ export function SessionTimeline({
 		addHelperFinish(task);
 	const lastItem = presented.at(-1);
 	const awaitingFirstActivity = !lastItem || startsTurn(lastItem);
-	if (showTurnWorking(items, turnStatus))
+	if (showTurnWorking(presented, turnStatus))
 		add({
 			key: "working",
 			kind: "working",
 			estimate: 30,
 			content: awaitingFirstActivity ? (
-				<StartingTurn key={lastItem?.id ?? "empty"} />
+				<StartingTurn
+					key={lastItem?.id ?? "empty"}
+					startedAt={
+						lastItem ? turnStartTiming(lastItem)?.startedAt : undefined
+					}
+				/>
 			) : (
 				<p className="session-working session-shimmer">
 					{compactingContext(items) ? "Compacting context" : "Thinking"}
