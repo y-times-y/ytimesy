@@ -584,9 +584,8 @@ describe("Y projects: the Y² and Threads sections", () => {
 			expect(y2).toContain('data-chat-id="y2"');
 			expect(threads).toContain('data-chat-id="busy"');
 			expect(threads).toContain('data-chat-id="beta-thread"');
-			expect(
-				threads.match(/<ul class="sidebar-chats sidebar-threads"/g),
-			).toHaveLength(1);
+			// One list for both projects, split by state, not by project.
+			expect(threads.match(/sidebar-thread-group-title/g)).toHaveLength(3);
 		});
 		it('labels the section "Super agent" once (the mark is already there), never a second label in the row', () => {
 			const html = view();
@@ -727,6 +726,38 @@ describe("Y projects: the Y² and Threads sections", () => {
 			});
 			expect(pending).toContain('data-pending="true"');
 			expect(pending).not.toContain("lucide-message-circle-question");
+		});
+
+		it("groups the one Threads list by state: Needs you, Working, Recently finished, then Settled", () => {
+			const { threads } = sections(view());
+			const title = (text: string) =>
+				threads.indexOf(`<h4 class="sidebar-thread-group-title">${text}`);
+			expect(title("Needs you")).toBeGreaterThan(-1);
+			expect(title("Needs you")).toBeLessThan(title("Working"));
+			expect(title("Working")).toBeLessThan(title("Recently finished"));
+			expect(title("Recently finished")).toBeLessThan(
+				threads.indexOf("sidebar-settled-toggle"),
+			);
+			expect(threads.indexOf(">Asks<")).toBeGreaterThan(title("Needs you"));
+			expect(threads.indexOf(">Asks<")).toBeLessThan(title("Working"));
+			expect(threads.indexOf(">Busy<")).toBeGreaterThan(title("Working"));
+			expect(threads.indexOf(">Busy<")).toBeLessThan(
+				title("Recently finished"),
+			);
+			expect(threads.indexOf(">Shipped<")).toBeGreaterThan(
+				title("Recently finished"),
+			);
+			// A state nothing is in gets no heading.
+			const calm = sections(
+				view(true, {
+					projects: [alpha],
+					chats: finished,
+					projectChats: [{ project: alpha, chats: finished }],
+				}),
+			).threads;
+			expect(calm).not.toContain(">Needs you");
+			expect(calm).not.toContain(">Working");
+			expect(calm).toContain(">Recently finished");
 		});
 
 		it("has one + on the Threads header, for the open project, and none on the Super agent section", () => {
