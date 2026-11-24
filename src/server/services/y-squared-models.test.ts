@@ -153,6 +153,22 @@ describe("the models Y² can choose from", () => {
 		expect(first).toMatchObject({ usable: true, nearlySpent: true });
 	});
 
+	it("keeps Codex models usable when only a feature-specific bucket is exhausted", async () => {
+		mocks.codexUsage.mockResolvedValue({
+			limits: {
+				rateLimitsByLimitId: {
+					codex: { primary: { usedPercent: 20, resetsAt: NOW + 1e6 } },
+					code_review: { primary: { usedPercent: 100, resetsAt: NOW + 1e6 } },
+				},
+			},
+		});
+		const codex = (await ySquaredThreadModels("u", "p")).models.slice(0, 2);
+		for (const model of codex) {
+			expect(model.usable).toBe(true);
+			expect(model.nearlySpent).toBeUndefined();
+		}
+	});
+
 	it("a refused Claude sign-in or a plan waiting for sign-in is not usable", async () => {
 		mocks.claude.mockResolvedValue({ status: "refused" });
 		mocks.connections.mockResolvedValue([
@@ -194,10 +210,45 @@ describe("the models Y² can choose from", () => {
 });
 
 describe("codexPlanState", () => {
+	it("only uses the global codex bucket for spent and nearly spent state", () => {
+		const usage = (codex: unknown, featurePercent: number) => ({
+			limits: {
+				rateLimitsByLimitId: {
+					...(codex ? { codex } : {}),
+					review: {
+						primary: { usedPercent: featurePercent, resetsAt: NOW + 2e6 },
+					},
+				},
+			},
+		});
+		expect(
+			codexPlanState(usage({ primary: { usedPercent: 15 } }, 100), NOW),
+		).toEqual({ spentUntil: null, nearly: false });
+		expect(
+			codexPlanState(usage({ primary: { usedPercent: 15 } }, 95), NOW),
+		).toEqual({ spentUntil: null, nearly: false });
+		expect(codexPlanState(usage(undefined, 100), NOW)).toEqual({
+			spentUntil: null,
+			nearly: false,
+		});
+		expect(
+			codexPlanState(
+				usage(
+					{
+						primary: { usedPercent: 20 },
+						secondary: { usedPercent: 100, resetsAt: NOW + 1e6 },
+					},
+					100,
+				),
+				NOW,
+			),
+		).toEqual({ spentUntil: NOW + 1e6, nearly: false });
+	});
+
 	it("reads reset times in seconds or milliseconds and ignores a window that already reset", () => {
 		const bucket = (usedPercent: number, resetsAt: number) => ({
 			limits: {
-				rateLimitsByLimitId: { c: { primary: { usedPercent, resetsAt } } },
+				rateLimitsByLimitId: { codex: { primary: { usedPercent, resetsAt } } },
 			},
 		});
 		const seconds = Math.floor(NOW / 1000) + 600;

@@ -158,9 +158,11 @@ type Deps = {
 		projectId: string,
 	) => Promise<ThreadModelChoices>;
 	/** Points a thread at another model from its next turn (one statement). */
-	readonly setModel: (
-		change: ThreadModelChange,
-	) => Promise<{ readonly found: boolean; readonly lineWritten: boolean }>;
+	readonly setModel: (change: ThreadModelChange) => Promise<{
+		readonly found: boolean;
+		readonly lineWritten: boolean;
+		readonly running?: boolean;
+	}>;
 	/** The Stop button's path. */
 	readonly stop: (
 		machines: WorkspaceMachines,
@@ -783,8 +785,8 @@ export function ySquaredTools(input: {
 				const chosen = await pickModel(requested, { reasoning, speed });
 				if ("error" in chosen) return `Not changed: ${chosen.error}`;
 				const { model } = chosen;
-				if (chat.turnStatus === "running" && !interrupt)
-					return `Not changed: "${chat.title}" is working, and its running turn finishes on its current model. Wait for it to finish (you wake when it does) and call ${Y_SQUARED_SET_THREAD_MODEL_TOOL} again, or pass interrupt true to stop the running turn first (what it did stays in the thread).`;
+				const working = `Not changed: "${chat.title}" is working, and its running turn finishes on its current model. Wait for it to finish (you wake when it does) and call ${Y_SQUARED_SET_THREAD_MODEL_TOOL} again, or pass interrupt true to stop the running turn first (what it did stays in the thread).`;
+				if (chat.turnStatus === "running" && !interrupt) return working;
 				const interrupted = chat.turnStatus === "running";
 				if (interrupted)
 					await deps.stop(input.machines, {
@@ -801,6 +803,7 @@ export function ySquaredTools(input: {
 					sessionId: chat.id,
 					modelId: model.id,
 					harness: model.harness,
+					requireIdle: !interrupt,
 					...(settings.variant ? { variant: settings.variant } : {}),
 					...("speed" in settings && settings.speed
 						? { speed: settings.speed }
@@ -817,6 +820,7 @@ export function ySquaredTools(input: {
 					),
 				});
 				if (!changed.found) return noThread;
+				if (changed.running) return working;
 				const on = `${model.label} (${model.route})${reasoning ? `, reasoning ${reasoning}` : ""}${speed ? `, ${speed} speed` : ""}`;
 				return [
 					`"${chat.title}" will use ${on} from its next turn; its conversation and checkpoint stay.`,

@@ -46,24 +46,25 @@ export function codexPlanState(
 	usage: unknown,
 	now: number,
 ): { spentUntil: number | null; nearly: boolean } {
-	const buckets = Object.values(
-		(
-			usage as {
-				limits?: { rateLimitsByLimitId?: Record<string, unknown> };
-			} | null
-		)?.limits?.rateLimitsByLimitId ?? {},
-	) as { primary?: Window; secondary?: Window }[];
+	const bucket = (
+		usage as {
+			limits?: {
+				rateLimitsByLimitId?: {
+					codex?: { primary?: Window; secondary?: Window };
+				};
+			};
+		} | null
+	)?.limits?.rateLimitsByLimitId?.codex;
 	let spentUntil: number | null = null;
 	let nearly = false;
-	for (const bucket of buckets)
-		for (const window of [bucket.primary, bucket.secondary]) {
-			if (typeof window?.usedPercent !== "number") continue;
-			const reset =
-				typeof window.resetsAt === "number" ? resetMs(window.resetsAt) : null;
-			if (window.usedPercent >= 100 && reset !== null && reset > now)
-				spentUntil = Math.max(spentUntil ?? 0, reset);
-			else if (window.usedPercent >= NEARLY_SPENT_PERCENT) nearly = true;
-		}
+	for (const window of [bucket?.primary, bucket?.secondary]) {
+		if (typeof window?.usedPercent !== "number") continue;
+		const reset =
+			typeof window.resetsAt === "number" ? resetMs(window.resetsAt) : null;
+		if (window.usedPercent >= 100 && reset !== null && reset > now)
+			spentUntil = Math.max(spentUntil ?? 0, reset);
+		else if (window.usedPercent >= NEARLY_SPENT_PERCENT) nearly = true;
+	}
 	return { spentUntil, nearly };
 }
 
