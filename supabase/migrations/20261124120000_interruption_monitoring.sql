@@ -34,7 +34,3 @@ alter table interruption_event enable row level security;
 alter table canary_run enable row level security;
 revoke all on interruption_event from anon, authenticated;
 revoke all on canary_run from anon, authenticated;
-
-alter table owner_alert drop constraint owner_alert_kind_check;
-alter table owner_alert add constraint owner_alert_kind_check
-  check (kind in ('fleet-budget','abandoned-turns','cron-failure','email-failed','codex-egress','chat-wake-failed','interruption','interruption-digest','canary-failed'));

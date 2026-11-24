@@ -15,6 +15,7 @@ import {
 	expireApiTurnLeases,
 	finalizeApiTurn,
 	MAX_BOX_TURN_TAKEOVERS,
+	reassignStrandedBoxTurns,
 	renewApiTurn,
 	requeueInterruptedBoxTurns,
 } from "./api-turns";
@@ -575,4 +576,37 @@ it("(7) idempotency: the same send, delivery, finalize or abandon twice changes 
 	expect(await inboxRows()).toEqual([]);
 	await finish(await claimed(), "ok");
 	await expectNothingLost(["once", "later"]);
+});
+
+it("(9) production 2026-11-24: turns queued for a box that no box takes (all draining) move to the chat's object and are not left waiting", async () => {
+	const stuck = randomUUID();
+	const fresh = randomUUID();
+	const other = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,harness) values($1,$2,'api')",
+		[other, USER],
+	);
+	const insert = (id: string, session: string, age: string) =>
+		db.query(
+			`insert into api_turn(id,session_id,user_id,connection_id,model_id,connection_revision,state,executor,updated_at)
+			 values($1,$2,$3,$4,$5,$6,'queued','node',now()-$7::interval)`,
+			[id, session, USER, connection, MODEL, REVISION, age],
+		);
+	await insert(stuck, chat, "16 minutes");
+	await insert(fresh, other, "5 seconds");
+	expect(await reassignStrandedBoxTurns()).toBe(1);
+	const rows = (
+		await db.query<{ id: string; executor: string; state: string }>(
+			"select id,executor,state from api_turn order by id",
+		)
+	).rows;
+	expect(rows.find((row) => row.id === stuck)).toMatchObject({
+		executor: "durable-object",
+		state: "queued",
+	});
+	expect(rows.find((row) => row.id === fresh)?.executor).toBe("node");
+	// Idempotent, and the object's admission claims it like any object turn.
+	expect(await reassignStrandedBoxTurns()).toBe(0);
+	const claimed = await claimApiTurn(2, 10, "durable-object", chat);
+	expect(claimed?.id).toBe(stuck);
 });

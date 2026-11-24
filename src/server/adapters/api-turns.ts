@@ -1491,7 +1491,40 @@ export const MAX_BOX_TURN_TAKEOVERS = 10;
  * lease's writes are then refused). After MAX_BOX_TURN_TAKEOVERS it is left
  * to expireApiTurnLeases, which fails it. A turn asked to stop is not resumed.
  */
+/**
+ * A turn queued for a box that no box takes within this many seconds goes to
+ * its chat's Durable Object instead. A claim is a long poll answered in
+ * seconds, so a longer wait means no box can take it: every live box is
+ * draining for a new program with a long turn still running, restarting,
+ * full, or gone. Production, 2026-11-24 19:18 UTC: three turns waited 16
+ * minutes ("thinking", no tokens) behind one box's 32-minute turn.
+ */
+export const STRANDED_BOX_TURN_SECONDS = 45;
+
+export async function reassignStrandedBoxTurns() {
+	const result = await database().query<{ id: string; session_id: string }>(
+		`update api_turn set executor='durable-object',updated_at=now()
+		 where state='queued' and executor='node' and not cancel_requested
+		 and updated_at < now()-make_interval(secs => $1) returning id,session_id`,
+		[STRANDED_BOX_TURN_SECONDS],
+	);
+	await Promise.all(
+		result.rows.map((row) =>
+			reportInterruption({
+				kind: "delayed-start",
+				turnId: row.id,
+				sessionId: row.session_id,
+				cause: "no-box-took-turn",
+				recovered: true,
+				userVisible: false,
+			}),
+		),
+	);
+	return result.rowCount ?? 0;
+}
+
 export async function requeueInterruptedBoxTurns() {
+	await reassignStrandedBoxTurns().catch(() => 0);
 	const result = await database().query(
 		`update api_turn set state='queued',run_attempts=run_attempts+1,updated_at=now()
 		 where state='running' and executor='node' and not cancel_requested
