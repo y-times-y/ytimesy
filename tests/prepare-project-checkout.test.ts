@@ -36,9 +36,17 @@ it("shares authenticated checkout logic without putting tokens in host commands"
 		"/tmp/ytimesy-gh-token",
 		expect.anything(),
 	);
-	expect(host.writeTextFile).toHaveBeenCalledWith(
-		expect.stringContaining("/.git/hooks/commit-msg"),
-		expect.any(String),
+	const setup = host.exec.mock.calls.find(([command]) =>
+		command.includes("config --local core.hooksPath"),
+	)?.[0];
+	expect(setup).toContain("rev-parse --path-format=absolute --git-common-dir");
+	expect(setup).toContain('> "$common/ytimesy-hooks/prepare-commit-msg"');
+	expect(setup).toContain('> "$common/ytimesy-hooks/pre-push"');
+	expect(setup).toContain(
+		'chmod +x "$common/ytimesy-hooks/prepare-commit-msg" "$common/ytimesy-hooks/pre-push"',
+	);
+	expect(setup).toContain(
+		'config --local core.hooksPath "$common/ytimesy-hooks"',
 	);
 	expect(JSON.stringify(host.exec.mock.calls)).not.toContain(
 		"installation-fixture",

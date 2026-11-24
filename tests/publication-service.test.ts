@@ -13,6 +13,7 @@ const adapter = vi.hoisted(() => ({
 	workspace: vi.fn(),
 	push: vi.fn(),
 	peek: vi.fn(),
+	commitIdentity: vi.fn(),
 }));
 vi.mock("../src/server/adapters/github/git-broker", () => ({
 	pushBrokeredRepository: adapter.push,
@@ -29,6 +30,9 @@ vi.mock("../src/server/adapters/projects", () => ({
 vi.mock("../src/server/adapters/github", () => ({
 	authorizedRepository: adapter.authorize,
 	compareBranchAhead: adapter.ahead,
+}));
+vi.mock("../src/server/adapters/github/commit-identity", () => ({
+	githubCommitIdentityForToken: adapter.commitIdentity,
 }));
 vi.mock("../src/server/adapters/github/app-pull-request", () => ({
 	ensureAppDraftPullRequest: adapter.create,
@@ -59,6 +63,7 @@ beforeEach(() => {
 	vi.unstubAllEnvs();
 	vi.resetAllMocks();
 	adapter.token.mockResolvedValue("user-token");
+	adapter.commitIdentity.mockResolvedValue(null);
 	adapter.installationToken.mockResolvedValue("ghs_install");
 	adapter.push.mockResolvedValue(undefined);
 	adapter.peek.mockResolvedValue({
@@ -165,9 +170,11 @@ it("does not create a pull request when the branch is not ahead", async () => {
 	expect(adapter.push).toHaveBeenCalled();
 });
 
-it("commits and pushes from the checkout before opening a draft pull request", async () => {
-	vi.stubEnv("GITHUB_APP_BOT_USER_ID", "328807657");
-	vi.stubEnv("GITHUB_APP_SLUG", "ytimesy-cloud");
+it("commits as the managed bot, credits the verified human, and pushes before opening a draft pull request", async () => {
+	adapter.commitIdentity.mockResolvedValue({
+		name: "Verified Alice",
+		email: "verified-alice@example.test",
+	});
 	const runtime = await readyRuntime();
 	adapter.ahead.mockResolvedValue(2);
 	adapter.create.mockResolvedValue({
@@ -182,32 +189,30 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 				projectId,
 				title: "Ship feature",
 				body: "Ready for review.",
-				authorName: "Alice",
-				authorEmail: "alice@example.test",
+				authorName: "Unverified Name",
+				authorEmail: "unverified@example.test",
 			},
 			runtime,
 		),
 	);
-	expect(
-		runtime.commands.some((command) =>
-			command.argv.join(" ").includes("git add -A"),
-		),
-	).toBe(true);
-	expect(
-		runtime.commands.some((command) =>
-			command.argv.join(" ").includes("user.name='Alice'"),
-		),
-	).toBe(true);
-	expect(
-		runtime.commands.some((command) =>
-			command.argv
-				.join(" ")
-				.includes(
-					"Co-authored-by: ytimesy-cloud[bot] <328807657+ytimesy-cloud[bot]@users.noreply.github.com>",
-				),
-		),
-	).toBe(true);
-	vi.unstubAllEnvs();
+	const commit = runtime.commands.find(({ argv }) =>
+		argv[2]?.includes("git add -A"),
+	)?.argv[2];
+	const botName = "ytimesy-agent[bot]";
+	const botEmail = "328807657+ytimesy-agent[bot]@users.noreply.github.com";
+	for (const role of ["AUTHOR", "COMMITTER"]) {
+		expect(commit).toContain(`GIT_${role}_NAME='${botName}'`);
+		expect(commit).toContain(`GIT_${role}_EMAIL='${botEmail}'`);
+	}
+	expect(commit).toContain(
+		`--trailer 'Co-authored-by: ${botName} <${botEmail}>'`,
+	);
+	expect(adapter.commitIdentity).toHaveBeenCalledWith("user-token");
+	expect(commit).toContain(
+		"--trailer 'Co-authored-by: Verified Alice <verified-alice@example.test>'",
+	);
+	expect(commit).not.toContain("Unverified Name");
+	expect(commit).not.toContain("unverified@example.test");
 	expect(adapter.push).toHaveBeenCalledWith(
 		expect.anything(),
 		expect.objectContaining({
