@@ -8,6 +8,10 @@ import {
 	codexRelaySettingNames,
 	codexRelaySettingsProblem,
 } from "../src/domain/codex-egress";
+import {
+	deriveTestSessionToken,
+	hashTestSessionToken,
+} from "../src/domain/test-account";
 import { acquireDeployLock } from "./deploy-lock";
 import {
 	IN_FLIGHT_WORK_NOTE,
@@ -259,6 +263,15 @@ secrets.PR_REPAIR_INGRESS_SECRET = derived(
 	"ytimesy:pr-repair-ingress:production:v1",
 );
 secrets.YTIMESY_REALTIME_SECRET = derived("ytimesy:realtime:production:v1");
+// The synthetic test account's capability (docs/testing-live.md): the Worker
+// keeps only the hash. Set YTIMESY_TEST_SESSION_TOKEN_VERSION to a new value
+// to revoke every copy of the token.
+secrets.YTIMESY_TEST_SESSION_TOKEN_SHA256 = hashTestSessionToken(
+	deriveTestSessionToken(
+		root,
+		process.env.YTIMESY_TEST_SESSION_TOKEN_VERSION || "1",
+	),
+);
 secrets.YTIMESY_GIT_PROXY_SECRET = secrets.GIT_PROXY_SECRET;
 // Background delivery and recovery address the same chat objects as inference.
 secrets.YTIMESY_REALTIME_URL = secrets.YTIMESY_GIT_PROXY_URL;

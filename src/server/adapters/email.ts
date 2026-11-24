@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isTestAddress } from "#/domain/test-account";
 import {
 	AUTH_EMAIL_MAX_ATTEMPTS,
 	type AuthEmailPurpose,
@@ -187,6 +188,8 @@ export async function persistAuthEmail(input: {
 	 */
 	skipIfQueuedWithinMs?: number;
 }) {
+	// The reserved `.test` domain (the synthetic test account) is never mailed.
+	if (isTestAddress(input.to)) return;
 	const queued = await database().query<{ id: string }>(
 		`insert into auth_email_outbox(to_address, subject, purpose, encrypted_action_url)
 		 select $1,$2,$3,$4
