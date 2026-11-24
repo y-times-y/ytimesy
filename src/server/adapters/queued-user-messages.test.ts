@@ -41,7 +41,7 @@ it("queues only under the running session's row lock and republishes the chat", 
 	expect(sql).toContain(
 		"update agent_session set items=items where id=$1 and user_id=$2 and turn_status='running'",
 	);
-	expect(sql).toContain("on conflict(id) do nothing");
+	expect(sql).toContain("on conflict(id) do update");
 	expect(parameters.slice(0, 4)).toEqual([
 		"chat",
 		"owner",

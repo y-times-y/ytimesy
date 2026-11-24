@@ -41,7 +41,31 @@ export const heldForSetupSql = `coalesce(q.queued_send->'item'->>'heldForSetup',
 /** A waiting message as the timeline sees it. `released` is set only after Send. */
 export const queuedTimelineItemSql = `case when q.queued_send->>'released' = 'true' then jsonb_set(q.queued_send->'item', '{released}', 'true'::jsonb) else q.queued_send->'item' end`;
 
-const inboxId = (messageId: string) => `queued-user:${messageId}`;
+export const inboxId = (messageId: string) => `queued-user:${messageId}`;
+
+/**
+ * A message taken to start a turn is claimed, not deleted: its row stays (the
+ * chat keeps showing it as waiting) until the turn that includes it exists,
+ * when enqueueApiTurn deletes it in the same transaction that creates the
+ * turn. A delivery that dies in between (a deploy or a memory reset of the
+ * chat's object, a lost connection) leaves the claim, which lapses after
+ * this long and is taken again. Before this the take deleted the row first:
+ * a delivery that died after it lost the person's message for good
+ * (2026-11-24, the Y² chat).
+ */
+export const QUEUED_CLAIM_TTL_MS = 60_000;
+
+const nowMsSql = "(extract(epoch from now())*1000)::bigint";
+/** Set on a row a delivery is starting a turn for. */
+const claimSql = `jsonb_set(q.queued_send,'{claimedAt}',to_jsonb(${nowMsSql}))`;
+
+/** A queued send as the delivery uses it, without the claim marker. */
+function unclaimed<T extends { claimedAt?: unknown }>(
+	send: T,
+): Omit<T, "claimedAt"> {
+	const { claimedAt: _claimedAt, ...rest } = send;
+	return rest;
+}
 
 /**
  * Queues the send only while the chat's turn is running. The session row lock
@@ -64,7 +88,10 @@ export async function queueUserMessageWhileRunning(
 		`with s as (update agent_session set items=items where id=$1 and user_id=$2 and turn_status='running' returning id),
 		 waiting as (select count(*)::int as n, coalesce(bool_or(id=$3),false) as has from agent_peer_inbox where recipient_id=$1 and not accepted and queued_send is not null),
 		 queued as (insert into agent_peer_inbox(id,recipient_id,message,queued_send)
-		  select $3,s.id,$4,$5::jsonb from s, waiting where waiting.n < $6 on conflict(id) do nothing returning id)
+		  select $3,s.id,$4,$5::jsonb from s, waiting where waiting.n < $6
+		  on conflict(id) do update set queued_send=excluded.queued_send
+		   where agent_peer_inbox.queued_send ? 'claimedAt' and not agent_peer_inbox.accepted
+		  returning id)
 		 select (select count(*) from s)::int as running,
 		  (select n >= $6 and not has from waiting) as full`,
 		[
@@ -167,7 +194,9 @@ export async function releaseQueuedUserMessage(
 	const result = await database().query<{
 		turn_status: string;
 		message: string | null;
-		queued_send: Omit<QueuedUserSend, "message"> | null;
+		queued_send:
+			| (Omit<QueuedUserSend, "message"> & { claimedAt?: number })
+			| null;
 	}>(
 		`with locked as (
 		  select q.id, q.message, q.queued_send, s.turn_status
@@ -187,8 +216,9 @@ export async function releaseQueuedUserMessage(
 		  where id in (select recipient_id from marked)
 		  returning id),
 		 taken as (
-		  delete from agent_peer_inbox q
-		  using locked
+		  update agent_peer_inbox q
+		  set queued_send=${claimSql}
+		  from locked
 		  where q.id=locked.id and locked.turn_status<>'running'
 		  returning q.message, q.queued_send)
 		 select locked.turn_status, taken.message, taken.queued_send,
@@ -205,7 +235,11 @@ export async function releaseQueuedUserMessage(
 	}
 	return {
 		status: "taken",
-		send: { ...row.queued_send, message: row.message, released: true },
+		send: {
+			...unclaimed(row.queued_send),
+			message: row.message,
+			released: true,
+		},
 	};
 }
 
@@ -238,15 +272,22 @@ export async function takeNextQueuedUserMessages(
 	const result = await database().query<{
 		rn: string | number;
 		message: string;
-		queued_send: Omit<QueuedUserSend, "message">;
+		reclaimed: boolean;
+		queued_send: Omit<QueuedUserSend, "message"> & { claimedAt?: number };
 	}>(
-		`with eligible as (
-		  select q.id, q.created_at, q.message, q.queued_send, ${mergeKeySql} as k,
+		`with live as (
+		  select 1 from agent_peer_inbox c
+		  where c.recipient_id=$1 and not c.accepted and c.queued_send is not null
+		   and coalesce((c.queued_send->>'claimedAt')::bigint,0) >= ${nowMsSql} - $6
+		  limit 1),
+		 eligible as (
+		  select q.id, q.created_at, q.message, q.queued_send, (q.queued_send ? 'claimedAt') as reclaimed, ${mergeKeySql} as k,
 		   coalesce(jsonb_array_length(q.queued_send->'item'->'attachments'),0) as files,
 		   coalesce((select sum((a->>'size')::bigint) from jsonb_array_elements(coalesce(q.queued_send->'item'->'attachments','[]'::jsonb)) a),0) as bytes
 		  from agent_peer_inbox q join agent_session s on s.id=q.recipient_id
 		  where q.recipient_id=$1 and s.user_id=$2 and s.turn_status<>'running'
 		   and not q.accepted and q.queued_send is not null and not ${heldForSetupSql}
+		   and not exists(select 1 from live)
 		  order by q.created_at,q.id for update of q skip locked),
 		 numbered as (
 		  select e.*, row_number() over w as rn, sum(files) over w as cum_files,
@@ -256,21 +297,34 @@ export async function takeNextQueuedUserMessages(
 		  select min(rn) as at from numbered
 		  where k<>head_k or rn>$3 or (rn>1 and (cum_files>$4 or cum_bytes>$5))),
 		 taken as (
-		  delete from agent_peer_inbox q using numbered n, stop
+		  update agent_peer_inbox q set queued_send=${claimSql}
+		  from numbered n, stop
 		  where q.id=n.id and n.rn < coalesce(stop.at, 2147483647)
-		  returning n.rn, q.message, q.queued_send)
-		 select rn, message, queued_send from taken order by rn`,
+		  returning n.rn, q.message, q.queued_send, n.reclaimed)
+		 select rn, message, queued_send, reclaimed from taken order by rn`,
 		[
 			sessionId,
 			userId,
 			Math.max(1, limit),
 			MESSAGE_ATTACHMENT_LIMITS.files,
 			MESSAGE_ATTACHMENT_LIMITS.totalBytes,
+			QUEUED_CLAIM_TTL_MS,
 		],
 	);
-	return [...result.rows]
-		.sort((a, b) => Number(a.rn) - Number(b.rn))
-		.map((row) => ({ ...row.queued_send, message: row.message }));
+	const rows = [...result.rows].sort((a, b) => Number(a.rn) - Number(b.rn));
+	if (rows.length)
+		console.info(
+			JSON.stringify({
+				event: "queued_message.claimed",
+				sessionId,
+				count: rows.length,
+				reclaimed: rows.filter((row) => row.reclaimed).length,
+			}),
+		);
+	return rows.map((row) => ({
+		...unclaimed(row.queued_send),
+		message: row.message,
+	}));
 }
 
 /** The oldest waiting message alone (a held send's own delivery). */
@@ -286,47 +340,51 @@ export async function restoreQueuedUserMessage(
 	sessionId: string,
 	send: QueuedUserSend,
 ) {
-	const { message, ...stored } = send;
-	await database().query(
-		`with restored as (insert into agent_peer_inbox(id,recipient_id,message,queued_send,created_at)
-		  values($1,$2,$3,$4::jsonb,'-infinity') on conflict(id) do nothing returning recipient_id)
-		 update agent_session set items=items where id in (select recipient_id from restored)`,
-		[inboxId(send.item.id), sessionId, message, jsonbText(stored)],
-	);
-	forgetPeerInboxObservation(sessionId);
-	await wakeConversationProgress();
+	await restoreQueuedUserMessages(sessionId, [send]);
 }
 
 /**
  * Taken messages whose turn could not start go back, still in their order and
- * ahead of everything waiting (the first as restoreQueuedUserMessage; the
- * rest just after it, in the order they were taken).
+ * ahead of everything waiting: their rows are still there (taking only claimed
+ * them), so the claim is lifted; a row that is gone (an older take deleted it)
+ * is inserted again, the first at the head of the queue and the rest just
+ * after it in the order they were taken.
  */
 export async function restoreQueuedUserMessages(
 	sessionId: string,
 	sends: readonly QueuedUserSend[],
 ) {
-	if (sends.length < 2) {
-		for (const send of sends) await restoreQueuedUserMessage(sessionId, send);
-		return;
-	}
+	if (!sends.length) return;
+	const ids = sends.map((send) => inboxId(send.item.id));
 	await database().query(
 		`with restored as (
 		  insert into agent_peer_inbox(id,recipient_id,message,queued_send,created_at)
 		  select x.id,$1,x.message,x.stored::jsonb,
 		   case when x.n=1 then '-infinity'::timestamptz else timestamptz 'epoch' + (x.n * interval '1 millisecond') end
 		  from unnest($2::text[],$3::text[],$4::text[]) with ordinality as x(id,message,stored,n)
-		  on conflict(id) do nothing returning recipient_id)
-		 update agent_session set items=items where id in (select recipient_id from restored)`,
+		  on conflict(id) do nothing returning recipient_id),
+		 lifted as (
+		  update agent_peer_inbox set queued_send=queued_send - 'claimedAt'
+		  where recipient_id=$1 and id=any($2::text[]) and not accepted and queued_send ? 'claimedAt'
+		  returning recipient_id)
+		 update agent_session set items=items
+		 where id in (select recipient_id from restored union all select recipient_id from lifted)`,
 		[
 			sessionId,
-			sends.map((send) => inboxId(send.item.id)),
+			ids,
 			sends.map((send) => send.message),
 			sends.map((send) => {
 				const { message: _message, ...stored } = send;
 				return jsonbText(stored);
 			}),
 		],
+	);
+	console.warn(
+		JSON.stringify({
+			event: "queued_message.restored",
+			sessionId,
+			count: sends.length,
+		}),
 	);
 	forgetPeerInboxObservation(sessionId);
 	await wakeConversationProgress();
@@ -407,8 +465,9 @@ export async function chatHoldingMessage(
 }
 
 /**
- * Chats holding a send whose project's environment is ready: one workspace's
- * (its build just finished), or any (the periodic sweep).
+ * Chats holding a send to start: one whose project's environment is now
+ * ready, or a waiting message nothing took while its chat sat idle (one
+ * workspace's after its build, or any: the periodic sweep).
  */
 export async function chatsWithReleasableHeldSends(
 	workspaceId?: string,
@@ -428,11 +487,19 @@ export async function chatsWithReleasableHeldSends(
 		`select distinct s.user_id, s.id, w.id::text as workspace_id from agent_peer_inbox q
 		 join agent_session s on s.id=q.recipient_id
 		 join workspace w on w.user_id=s.user_id and w.project_id=s.project_id
-		 where not q.accepted and q.queued_send is not null and ${heldForSetupSql}
-		   and w.status='ready' and (w.provider_ref is not null or w.template_snapshot_id is not null)
+		 where not q.accepted and q.queued_send is not null
+		   and (
+		    (${heldForSetupSql}
+		     and w.status='ready' and (w.provider_ref is not null or w.template_snapshot_id is not null))
+		    -- A waiting message nothing took: its turn's end never drained it, or
+		    -- its delivery died holding the claim (it lapsed).
+		    or (not ${heldForSetupSql} and s.turn_status<>'running'
+		     and q.created_at < now() - interval '45 seconds'
+		     and coalesce((q.queued_send->>'claimedAt')::bigint,0) < ${nowMsSql} - $3)
+		   )
 		   and ($1::text is null or w.id::text=$1::text)
 		 limit $2`,
-		[workspaceId ?? null, limit],
+		[workspaceId ?? null, limit, QUEUED_CLAIM_TTL_MS],
 	);
 	return result.rows.map((row) => ({
 		userId: row.user_id,

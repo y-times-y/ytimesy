@@ -547,7 +547,9 @@ async function deliverHeldSendsInChat(
 ) {
 	// Released first: if the start below fails, the message stays in the
 	// chat as an ordinary waiting one (Send, Edit, Remove), never dropped.
-	if (!(await releaseHeldUserMessages(sessionId))) return false;
+	// Also the sweep's other catch: a waiting message nothing took (its
+	// claim lapsed, or its turn's end never drained it).
+	await releaseHeldUserMessages(sessionId);
 	const next = await takeNextQueuedUserMessage(userId, sessionId);
 	if (!next) return false;
 	return deliverQueuedSend(machines, userId, sessionId, [next]);
@@ -644,7 +646,12 @@ async function deliverQueuedSend(
 			throw new Error(view.connection.message);
 		return true;
 	} catch (cause) {
-		await restore().catch(() => {});
+		await restore().catch(() =>
+			// The claim stays on the rows and lapses; they are taken again.
+			console.warn(
+				JSON.stringify({ event: "queued_message.restore_failed", sessionId }),
+			),
+		);
 		console.warn(
 			"A queued message could not start its turn; it waits in the chat.",
 			cause instanceof Error ? cause.name : "unknown",

@@ -65,6 +65,7 @@ import { infrastructureAdmissionEnabled } from "./freestyle/usage-admission";
 import { evaluationRunForTask } from "./harness-evaluation";
 import { assertUsageWindowsOpen } from "./infrastructure-usage";
 import { observePeerInbox } from "./peer-inbox-observation";
+import { inboxId } from "./queued-user-messages";
 import { trainingEligibleAtTurnStart } from "./training-consent";
 import { mirrorTurnHistory } from "./turn-history-mirror";
 import {
@@ -180,6 +181,40 @@ export async function otherRunningTurnOnMachine(
 		[userId, turnId, vm],
 	);
 	return result.rows[0]?.shared ?? true;
+}
+
+/**
+ * The waiting rows of the messages this turn starts with, deleted in the
+ * transaction that creates the turn: a queued message leaves the chat's
+ * queue exactly when a turn that holds it exists, never before (taking one
+ * only claims it, queued-user-messages.ts). Rows that do not exist (a send
+ * that never waited) delete nothing.
+ */
+async function deleteDeliveredQueuedMessages(
+	client: { query: (sql: string, values: unknown[]) => Promise<unknown> },
+	input: {
+		readonly sessionId: string;
+		readonly items: readonly SessionItem[];
+		readonly appendItems?: readonly SessionItem[];
+	},
+) {
+	const sent = (input.appendItems ?? input.items)
+		.filter((item) => item.kind === "userMessage")
+		.slice(-100)
+		.map((item) => inboxId(item.id));
+	if (!sent.length) return;
+	const result = (await client.query(
+		"delete from agent_peer_inbox where recipient_id=$1 and id=any($2::text[]) and not accepted and queued_send is not null",
+		[input.sessionId, sent],
+	)) as { rowCount?: number | null };
+	if (result.rowCount)
+		console.info(
+			JSON.stringify({
+				event: "queued_message.delivered",
+				sessionId: input.sessionId,
+				count: result.rowCount,
+			}),
+		);
 }
 
 /** A send found its chat's turn already running (a Y² wake, say, started it a moment before). */
@@ -366,6 +401,7 @@ export async function enqueueApiTurn(input: {
 					"The model connection changed or is no longer available.",
 				);
 			if (checked.existing) {
+				await deleteDeliveredQueuedMessages(client, input);
 				await client.query("commit");
 				client.release();
 				return;
@@ -471,6 +507,7 @@ export async function enqueueApiTurn(input: {
 					input.base?.count ?? null,
 				],
 			);
+			await deleteDeliveredQueuedMessages(client, input);
 			await client.query("commit");
 			client.release();
 			break;

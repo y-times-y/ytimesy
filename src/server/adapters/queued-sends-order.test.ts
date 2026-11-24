@@ -9,16 +9,27 @@ import {
 	QUEUED_MESSAGES_PER_CHAT_LIMIT,
 } from "#/domain/peer-inbox-injection";
 import {
+	takeNextQueuedUserMessage as claimNextQueuedUserMessage,
 	type QueuedUserSend,
 	queueUserMessageWhileRunning,
 	restoreQueuedUserMessage,
-	takeNextQueuedUserMessage,
 } from "./queued-user-messages";
 import {
 	acceptPeerInbox,
 	readPeerInbox,
 	stageServerPeerMessage,
 } from "./server-peer-inbox";
+
+/** Taking claims a message; creating its turn deletes it (enqueueApiTurn). The tests that read what is taken in turn finish each delivery. */
+const settleDelivered = (batch: readonly { item: { id: string } }[]) =>
+	db.query("delete from agent_peer_inbox where id=any($1::text[])", [
+		batch.map((send) => `queued-user:${send.item.id}`),
+	]);
+const takeNextQueuedUserMessage = async (userId: string, sessionId: string) => {
+	const next = await claimNextQueuedUserMessage(userId, sessionId);
+	if (next) await settleDelivered([next]);
+	return next;
+};
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("./database", () => ({ database: () => holder }));

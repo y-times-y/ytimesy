@@ -7,12 +7,23 @@ import { listSidebarAgentSessions, reusableEmptyChat } from "./agent-sessions";
 import {
 	chatHoldingMessage,
 	chatsWithReleasableHeldSends,
+	takeNextQueuedUserMessage as claimNextQueuedUserMessage,
 	holdUserMessageForSetup,
 	queuedUserMessageItems,
 	releaseHeldUserMessages,
 	releaseQueuedUserMessage,
-	takeNextQueuedUserMessage,
 } from "./queued-user-messages";
+
+/** Taking claims a message; creating its turn deletes it (enqueueApiTurn). The tests that read what is taken in turn finish each delivery. */
+const settleDelivered = (batch: readonly { item: { id: string } }[]) =>
+	db.query("delete from agent_peer_inbox where id=any($1::text[])", [
+		batch.map((send) => `queued-user:${send.item.id}`),
+	]);
+const takeNextQueuedUserMessage = async (userId: string, sessionId: string) => {
+	const next = await claimNextQueuedUserMessage(userId, sessionId);
+	if (next) await settleDelivered([next]);
+	return next;
+};
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("./database", () => ({ database: () => holder }));
@@ -189,4 +200,42 @@ it("a message typed during setup waits behind the setup's request, and each goes
 		item: { id: messageId, text: "Add a login page" },
 	});
 	expect(await takeNextQueuedUserMessage("alice", setupChat)).toBeNull();
+});
+
+// The sweep's second job: a waiting message nothing took while its chat sat
+// idle (its turn's end never drained it, or its delivery died holding the
+// claim) is started by the next sweep, so it is never left waiting for good.
+it("lists a chat whose waiting message nothing took, once the claim lapsed", async () => {
+	const waiting = await chat("Super agent");
+	await db.query(
+		"insert into agent_peer_inbox(id,recipient_id,message,queued_send,created_at) values('queued-user:m1',$1,'hello',$2::jsonb, now() - interval '5 minutes')",
+		[
+			waiting,
+			JSON.stringify({
+				item: { kind: "userMessage", id: "m1", text: "hello" },
+				released: false,
+			}),
+		],
+	);
+	// A running turn will drain it at its own end: not listed.
+	await db.query("update agent_session set turn_status='running' where id=$1", [
+		waiting,
+	]);
+	expect(await chatsWithReleasableHeldSends()).toEqual([]);
+	await db.query("update agent_session set turn_status='idle' where id=$1", [
+		waiting,
+	]);
+	expect(await chatsWithReleasableHeldSends()).toEqual([
+		expect.objectContaining({ sessionId: waiting }),
+	]);
+	// A delivery in flight holds a live claim: not listed.
+	await db.query(
+		"update agent_peer_inbox set queued_send=jsonb_set(queued_send,'{claimedAt}',to_jsonb((extract(epoch from now())*1000)::bigint))",
+	);
+	expect(await chatsWithReleasableHeldSends()).toEqual([]);
+	// A message that only just arrived is left to the turn's own drain.
+	await db.query(
+		"update agent_peer_inbox set queued_send=queued_send - 'claimedAt', created_at=now()",
+	);
+	expect(await chatsWithReleasableHeldSends()).toEqual([]);
 });

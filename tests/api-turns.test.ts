@@ -205,6 +205,73 @@ beforeEach(async () => {
 	);
 });
 afterAll(() => db.close());
+
+// 2026-11-24, the Y² chat: a queued message was taken (its row deleted) before
+// its turn existed, and a delivery that died in between lost it. Taking now
+// only claims the row; the turn's own transaction deletes it.
+it("deletes a claimed queued message in the transaction that creates its turn, and never before", async () => {
+	const queued = {
+		kind: "userMessage",
+		id: "queued-1",
+		text: "which threads can be removed",
+	};
+	await db.query(
+		"insert into agent_peer_inbox(id,recipient_id,message,queued_send) values('queued-user:queued-1',$1,'which threads can be removed',$2::jsonb)",
+		[
+			sessionId,
+			JSON.stringify({ item: queued, released: true, claimedAt: Date.now() }),
+		],
+	);
+	// A send that fails (the chat still runs a turn) rolls back and leaves it.
+	await db.query("update agent_session set turn_status='running' where id=$1", [
+		sessionId,
+	]);
+	await expect(
+		enqueueApiTurn({
+			sessionId,
+			userId: "alice",
+			connectionId,
+			revision,
+			modelId: "test-model",
+			routeId: `api/${connectionId}/test-model`,
+			messages: [{ role: "user", content: "which threads can be removed" }],
+			items: [],
+			appendItems: [queued as never],
+			idempotencyKey: "queued-1",
+		}),
+	).rejects.toThrow("Finish or stop the current turn");
+	expect(
+		(
+			await db.query(
+				"select 1 from agent_peer_inbox where id='queued-user:queued-1'",
+			)
+		).rows,
+	).toHaveLength(1);
+	await db.query("update agent_session set turn_status='idle' where id=$1", [
+		sessionId,
+	]);
+	await enqueueApiTurn({
+		sessionId,
+		userId: "alice",
+		connectionId,
+		revision,
+		modelId: "test-model",
+		routeId: `api/${connectionId}/test-model`,
+		messages: [{ role: "user", content: "which threads can be removed" }],
+		items: [],
+		appendItems: [queued as never],
+		idempotencyKey: "queued-1",
+	});
+	expect(await turnCount()).toEqual({ n: 1 });
+	expect(
+		(
+			await db.query(
+				"select 1 from agent_peer_inbox where id='queued-user:queued-1'",
+			)
+		).rows,
+	).toHaveLength(0);
+});
+
 function submit(userId = "alice", targetSessionId = sessionId) {
 	return enqueueApiTurn({
 		sessionId: targetSessionId,

@@ -366,7 +366,14 @@ export function latestUserRequestText(items: readonly SessionItem[]) {
 export function childTaskPublicItems(
 	items: readonly SessionItem[],
 ): SessionItem[] {
+	// Whether the turn being read is a wake: its quiet reply shows nothing. A
+	// person's message in the turn (one that started it, or reached it
+	// mid-turn) makes its reply an answer, never hidden. A page that starts
+	// mid-turn reads as a wake, as before.
+	let wakeTurn = true;
 	return items.flatMap((item): SessionItem[] => {
+		if (item.kind === "userMessage")
+			wakeTurn = isInternalChildTaskMessage(item.text);
 		if (item.kind === "userMessage" && isInternalChildTaskMessage(item.text))
 			return [
 				{
@@ -380,7 +387,11 @@ export function childTaskPublicItems(
 		if (item.kind === "agentMessage" && isInternalChildTaskMessage(item.text))
 			return [];
 		// Y²'s "nothing to report" marker ends a proactive wake: no bubble.
-		if (item.kind === "agentMessage" && isYSquaredQuietReply(item.text))
+		if (
+			item.kind === "agentMessage" &&
+			wakeTurn &&
+			isYSquaredQuietReply(item.text)
+		)
 			return [];
 		return [item];
 	});

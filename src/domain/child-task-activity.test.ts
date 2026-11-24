@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	childTaskAnchorId,
 	childTaskEventQueueText,
@@ -159,4 +159,41 @@ it("anchors every batched child to its launch card rather than another prompt", 
 		expect(childTaskPromptId(task, items)).toBe("prompt");
 		expect(childTaskAnchorId(task, items)).toBe("batch");
 	}
+});
+
+describe("a quiet wake reply never hides the answer to a person's message", () => {
+	const wake = {
+		kind: "userMessage",
+		id: "w1",
+		text: `${childTaskEventQueueText("y2:1")}\nSomething changed.`,
+	} as never;
+	const person = {
+		kind: "userMessage",
+		id: "p1",
+		text: "which threads?",
+	} as never;
+	const quiet = {
+		kind: "agentMessage",
+		id: "a1",
+		text: "NOTHING_TO_REPORT",
+	} as never;
+	it("hides it in a wake turn", () => {
+		expect(
+			childTaskPublicItems([wake, quiet]).some(
+				(item) => item.kind === "agentMessage",
+			),
+		).toBe(false);
+	});
+	it("shows it when a person's message is in the turn", () => {
+		expect(
+			childTaskPublicItems([wake, person, quiet]).some(
+				(item) => item.kind === "agentMessage",
+			),
+		).toBe(true);
+		expect(
+			childTaskPublicItems([person, quiet]).some(
+				(item) => item.kind === "agentMessage",
+			),
+		).toBe(true);
+	});
 });

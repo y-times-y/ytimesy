@@ -17,7 +17,10 @@ describe("a person's send that loses the race to a Y² wake (2026-11-24: the mes
 			const queue = vi.fn(async () => "queued view");
 			expect(
 				await Effect.runPromise(
-					sendQueuingBehindRace(send as Effect.Effect<string>, queue),
+					sendQueuingBehindRace(
+						send as unknown as Effect.Effect<string>,
+						queue,
+					),
 				),
 			).toBe("queued view");
 			expect(queue).toHaveBeenCalledOnce();
@@ -28,7 +31,7 @@ describe("a person's send that loses the race to a Y² wake (2026-11-24: the mes
 		await expect(
 			Effect.runPromise(
 				sendQueuingBehindRace(
-					Effect.fail(refusal()) as Effect.Effect<string>,
+					Effect.fail(refusal()) as unknown as Effect.Effect<string>,
 					null,
 				),
 			),
@@ -42,7 +45,7 @@ describe("a person's send that loses the race to a Y² wake (2026-11-24: the mes
 				sendQueuingBehindRace(
 					Effect.fail(
 						new Error("The model connection changed."),
-					) as Effect.Effect<string>,
+					) as unknown as Effect.Effect<string>,
 					queue,
 				),
 			),
@@ -51,7 +54,7 @@ describe("a person's send that loses the race to a Y² wake (2026-11-24: the mes
 		await expect(
 			Effect.runPromise(
 				sendQueuingBehindRace(
-					Effect.fail(refusal()) as Effect.Effect<string>,
+					Effect.fail(refusal()) as unknown as Effect.Effect<string>,
 					async () => null,
 				),
 			),
