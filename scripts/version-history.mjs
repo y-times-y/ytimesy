@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Prints the proposed v0.x.y tag plan. Read-only: never creates, pushes or publishes a tag.
-// Rules (docs/versioning.md): the first milestone is v0.0.1 and each later one is a minor bump; after a minor, each
-// later Monday that has at least PATCH_MIN_COMMITS new commits since the last tag gets a patch.
-import { execFileSync } from "node:child_process";
+// Rules (docs/versioning.md): each milestone below is the next patch version, v0.0.1, v0.0.2, ...
+// A minor bump is an explicit owner decision, so none are planned here.
 
-const PATCH_MIN_COMMITS = 40;
+import { execFileSync } from "node:child_process";
 
 // Commit prefixes are the current main hashes (history was rewritten on 2026-11-24).
 const milestones = [
@@ -22,39 +21,9 @@ const milestones = [
 ];
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
-const dateOf = (rev) => git("show", "-s", "--format=%cs", rev);
-const monday = (iso) => {
-	const d = new Date(`${iso}T00:00:00Z`);
-	d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-	return d.toISOString().slice(0, 10);
-};
 
-const all = git("log", "--reverse", "--format=%H %cs").split("\n").map((l) => l.split(" "));
-const indexOf = (rev) => {
-	const full = git("rev-parse", rev);
-	return all.findIndex(([h]) => h === full);
-};
-const rows = [];
 milestones.forEach(([rev, title], i) => {
-	const start = indexOf(rev);
-	const end = i + 1 < milestones.length ? indexOf(milestones[i + 1][0]) : all.length;
-	const firstPatch = i === 0 ? 1 : 0; // the very first tag is v0.0.1
-	rows.push({ tag: `v0.${i}.${firstPatch}`, rev, date: dateOf(rev), title });
-	let patch = firstPatch;
-	let last = start;
-	let lastMonday = monday(all[start][1]);
-	for (let n = start + 1; n < end; n++) {
-		const m = monday(all[n][1]);
-		if (m !== lastMonday) {
-			if (n - last >= PATCH_MIN_COMMITS) {
-				patch += 1;
-				rows.push({ tag: `v0.${i}.${patch}`, rev: all[n - 1][0].slice(0, 8), date: all[n - 1][1], title: "weekly patch" });
-				last = n;
-			}
-			lastMonday = m;
-		}
-	}
+	const date = git("show", "-s", "--format=%cs", rev);
+	console.log(`v0.0.${i + 1}\t${date}\t${rev}\t${title}`);
 });
-for (const r of rows) console.log(`${r.tag}\t${r.date}\t${r.rev}\t${r.title}`);
-const tip = all.length;
-console.log(`\ncommits on main: ${tip}; tags: ${rows.length}; current estimate: ${rows.at(-1).tag}+ (tip ${all.at(-1)[1]})`);
+console.log(`\ncommits on main: ${git("rev-list", "--count", "HEAD")}; current estimate: v0.0.${milestones.length}+`);
