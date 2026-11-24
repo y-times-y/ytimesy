@@ -258,7 +258,7 @@ export function crewWakeBody(input: {
 					"A thread showed a canvas: if it is a new revision of one you displayed here, call `show_canvas` again with the same title so the person sees it in this chat, and say what changed in one or two lines.",
 				]
 			: []),
-		"Call `threads`, then call `thread` for each one that finished or needs the person and give the person a short delta with the substance: what it found or built, the decision they need to make, who is still working and for how long. Never just say it finished; do not list everything again.",
+		"Call `threads`, then call `thread` for each one that finished or needs the person and give the person a short delta in at most 60 words: lead with what needs them (one decision, with your recommendation), then one line per thread that changed with its substance. Skip anything you already reported, do not re-list open decisions or still-working threads that did not change, and use no tables.",
 		`If nothing here needs the person and nothing needs an action from you, reply with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else: it shows no message.`,
 	].join("\n");
 }

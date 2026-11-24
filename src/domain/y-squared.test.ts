@@ -16,6 +16,7 @@ import {
 	Y_SQUARED_TOOLS,
 	ySquaredInstructions,
 } from "./y-squared";
+import { crewWakeBody } from "./y-squared-crew";
 
 const id = (value: string) => SessionItemId(value);
 const NOW = Date.parse("2026-11-12T12:00:00Z");
@@ -220,7 +221,7 @@ describe("Y² write tools", () => {
 		expect(text).toContain("self-contained brief");
 		expect(text).toContain("how many were started and how many are queued");
 		expect(text).toContain("Never poll");
-		expect(text).toContain("at most 100 words");
+		expect(text).toContain("at most 60 words in all");
 	});
 
 	it("keeps the write tools out of the workspace-changing set (Y² has no checkout)", () => {
@@ -303,6 +304,64 @@ describe("Y² on a Claude runner", () => {
 	});
 });
 
+describe("Y² reports briefly and quietly (instructions)", () => {
+	const text = ySquaredInstructions();
+
+	it("uses one length rule: 60 words in all, never the old per-thread 100", () => {
+		expect(text).toContain(
+			"at most 60 words in all, however many threads changed",
+		);
+		expect(text).not.toContain("about 100 for each thread");
+		expect(text).not.toContain("100 words");
+	});
+
+	it("forbids tables and long bullet lists unless asked", () => {
+		expect(text).toContain("no tables, no headings and at most 3 bullets");
+		expect(text).toContain(
+			"unless the person asks for a table or a full report",
+		);
+	});
+
+	it("puts one decision per message and counts the rest", () => {
+		expect(text).toContain("at most ONE decision to the person per message");
+		expect(text).toContain("with your recommendation");
+		expect(text).toContain("2 more need you");
+	});
+
+	it("never repeats reported threads, asked decisions or old open items", () => {
+		expect(text).toContain("Never repeat yourself");
+		expect(text).toContain("restate a decision you already put to the person");
+		expect(text).toContain(
+			"unless something about it changed since your last message",
+		);
+		expect(text).toContain("Resolved items are never mentioned again");
+		expect(text).toContain(
+			"status card above this chat already shows what is open",
+		);
+	});
+
+	it("groups finished threads on one line and keeps digests to 10 lines on request", () => {
+		expect(text).toContain("3 threads finished: A, B, C");
+		expect(text).toContain(
+			"at most 10 lines in three groups, Needs you, Done, Working",
+		);
+		expect(text).toContain("say nothing");
+	});
+
+	it("the wake text asks for the same short, non-repeating delta", () => {
+		const wake = crewWakeBody({
+			events: [],
+			working: [],
+			now: 0,
+			proactive: ["x"],
+		});
+		expect(wake).toContain("at most 60 words");
+		expect(wake).toContain("Skip anything you already reported");
+		expect(wake).toContain("use no tables");
+		expect(wake).not.toContain("Never just say it finished");
+	});
+});
+
 describe("Y² stays in the loop (instructions)", () => {
 	const text = ySquaredInstructions();
 
@@ -338,7 +397,7 @@ describe("Y² stays in the loop (instructions)", () => {
 		expect(text).toContain("The Overview beside this chat lists every thread");
 		expect(text).toContain("Prefer steer over interrupt");
 		expect(text).toContain("never repeat its content");
-		expect(text).toContain("Report in at most 100 words");
+		expect(text).toContain("Report in at most 60 words in all");
 		expect(text).toContain("Never poll.");
 	});
 
