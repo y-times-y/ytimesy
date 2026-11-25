@@ -46,8 +46,10 @@ export function parseCli(argv: string[]) {
 		},
 	});
 	const command = positionals[0];
-	if (command !== "mint" && command !== "shot" && command !== "reset")
-		throw new Error("Usage: test-session.ts <mint|shot|reset> [options]");
+	if (!["mint", "shot", "reset", "seed-usage"].includes(command ?? ""))
+		throw new Error(
+			"Usage: test-session.ts <mint|shot|reset|seed-usage> [options]",
+		);
 	if (command === "shot" && !values.out)
 		throw new Error("Pass --out <file.png>.");
 	return { command, ...values };
@@ -57,7 +59,7 @@ export async function requestTestSession(input: {
 	base: string;
 	token: string | undefined;
 	caller: string;
-	action: "mint" | "reset";
+	action: "mint" | "reset" | "seed-usage";
 	fetcher?: typeof fetch;
 }) {
 	if (!input.token) throw new Error("YTIMESY_TEST_SESSION_TOKEN is not set.");
@@ -151,7 +153,10 @@ if (process.argv[1]?.endsWith("test-session.ts")) {
 		base: options.base,
 		token: process.env.YTIMESY_TEST_SESSION_TOKEN,
 		caller: options.caller ?? callerFromEnvironment(process.env),
-		action: options.command === "reset" ? "reset" : "mint",
+		action:
+			options.command === "reset" || options.command === "seed-usage"
+				? options.command
+				: "mint",
 	});
 	if (options.command === "shot") await shot(result, options);
 	else console.log(JSON.stringify(result));

@@ -11,6 +11,7 @@ node --import tsx scripts/test-session.ts mint                      # session co
 node --import tsx scripts/test-session.ts shot --path / --out /tmp/a.png \
   --step "fill:Message=say hi" --step "press:Enter" --step "wait:30000"   # headless Chrome, signed in
 node --import tsx scripts/test-session.ts reset                     # delete the test project's data
+node --import tsx scripts/test-session.ts seed-usage                # made-up daily token usage for the Usage page's heatmap (cleared by reset)
 ```
 
 `shot` prints JSON with the page URL, title and visible text; view the PNG with
@@ -29,7 +30,7 @@ Pass `--base http://127.0.0.1:PORT` to use a local server.
   mailed), public stats and billing (it has no subscription and its id is
   recognised by `isTestAccountId`).
 - Mint is `POST /api/internal/test-session` with `Authorization: Bearer <token>`.
-  The body has only `action` (`mint` or `reset`) and `caller`. There is no
+  The body has only `action` (`mint`, `reset` or `seed-usage`) and `caller`. There is no
   user id or email parameter anywhere. The server refuses unless the target row
   is flagged, limits mints to 30 an hour, and records each use in
   `test_session_event` and as a `test_session.minted` log line with the caller.

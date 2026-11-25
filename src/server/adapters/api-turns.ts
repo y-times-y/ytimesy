@@ -34,6 +34,7 @@ import {
 	localTurnsEnabled,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
+import { turnUsageFact } from "#/domain/usage-report";
 import { Y_SQUARED_CLAUDE_CODE_REFUSAL } from "#/domain/y-squared";
 import { withoutViewedImages } from "#/domain/y-squared-images";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
@@ -80,6 +81,7 @@ import {
 import { boxRoutingFacts, turnRunnerBoxAlive } from "./turn-runner-boxes";
 import { noteTurnsSettledElsewhere } from "./turn-settle-notes";
 import { startQueuedTurnsDirectly } from "./turn-start";
+import { recordTurnUsage } from "./usage-rollup";
 import { claudeCodeYSquaredAvailable, isActiveYSquaredChat } from "./y-mode";
 
 export type ApiTurn = {
@@ -1121,6 +1123,8 @@ export async function finalizeApiTurn(
 			settledRow.items_rev,
 			true,
 		);
+		// Bookkeeping: never fails the settled turn (recordTurnUsage catches).
+		await recordTurnUsage(turn.id, turn.model_id, turnUsageFact(items));
 		await wakeConversationProgress();
 	}
 	return settledRow?.state ?? null;
