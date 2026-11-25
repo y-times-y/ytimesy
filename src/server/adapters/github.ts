@@ -285,7 +285,17 @@ export async function authorizedRepository(
 				defaultBranch: repo.default_branch,
 				private: repo.private,
 			};
-		throw new Response("Repository access is unavailable.", { status: 403 });
+		// Only the synthetic account holds an installation token: say what the installation listed (ids are not secret).
+		throw new Response(
+			`Repository access is unavailable. The installation lists ${repos.length} repositories (ids ${repos
+				.slice(0, 5)
+				.map(
+					(item) =>
+						`${item.id}${item.archived ? " archived" : ""}${item.disabled ? " disabled" : ""}`,
+				)
+				.join(", ")}); wanted ${repositoryId}.`,
+			{ status: 403 },
+		);
 	}
 	const github = githubClient(token);
 	const [installations, repository] = await Promise.allSettled([
