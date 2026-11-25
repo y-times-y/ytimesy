@@ -1464,6 +1464,8 @@ a.session-title-meta:focus-visible {
 }
 .welcome-panel:not([data-layout="chat"]) {
 	justify-content: center;
+	/* Taller than the space left (a phone, the cookie banner): scroll, never clip. */
+	overflow-y: auto;
 }
 .welcome-panel:not([data-layout="chat"]) .welcome-content {
 	flex: 1;
@@ -2287,7 +2289,7 @@ a.session-title-meta:focus-visible {
 }
 @media (max-width: 1000px) {
 	.welcome-panel {
-		min-height: calc(100dvh - 76px);
+		min-height: calc(100dvh - 76px - var(--consent-banner-height, 0px));
 	}
 	.inspector-empty {
 		padding: 30px;
