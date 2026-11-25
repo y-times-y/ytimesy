@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import {
 	ArrowLeft,
 	ChevronDown,
-	CircleAlert,
 	GitPullRequest,
 	GitPullRequestDraft,
+	MessageCircleQuestion,
 	TriangleAlert,
 } from "lucide-react";
 import {
@@ -270,12 +270,23 @@ function NeedsYouItem({
 	nowMs: number;
 	onOpen: (threadId: string) => void;
 }) {
-	const Icon = row.waitingOn === "failed" ? TriangleAlert : CircleAlert;
+	// A question for the person is a calm "?", not an alert; only a failure is red.
+	const Icon =
+		row.waitingOn === "failed" ? TriangleAlert : MessageCircleQuestion;
 	return (
 		<YOverviewRow
 			threadId={row.threadId}
 			status="needs-you"
-			icon={<Icon size={15} strokeWidth={2} aria-hidden="true" />}
+			icon={
+				<Icon
+					size={15}
+					strokeWidth={2}
+					className={
+						row.waitingOn === "failed" ? "y-overview-failed" : undefined
+					}
+					aria-hidden="true"
+				/>
+			}
 			title={row.title}
 			detail={<ThreadId label={row.label}>{row.detail}</ThreadId>}
 			age={compactRelativeAge(row.updatedAt, nowMs)}

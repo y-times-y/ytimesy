@@ -36,7 +36,7 @@ it.skipIf(Boolean(process.env.UPDATE_PREVIEWS))(
 			"Needs you",
 			"Working",
 			"Recently finished",
-			"web-3",
+			"ytimesy-3",
 			"thread-mark",
 			"canvas-card",
 			"y-overview",

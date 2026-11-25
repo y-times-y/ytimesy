@@ -30,17 +30,17 @@ const at = (minutesAgo: number) =>
 	new Date(NOW - minutesAgo * 60_000).toISOString();
 
 const PROJECT = {
-	id: "web",
-	name: "web",
+	id: "ytimesy",
+	name: "ytimesy",
 	repositoryId: 1,
 	installationId: 1,
-	fullName: "acme/web",
+	fullName: "y-times-y/ytimesy",
 	branch: "main",
 };
 
 const pr = (number: number, state: "open" | "merged") => ({
 	number,
-	url: `https://github.com/acme/web/pull/${number}`,
+	url: `https://github.com/y-times-y/ytimesy/pull/${number}`,
 	state,
 	checks: "passed" as const,
 	failedChecks: 0,
@@ -101,7 +101,7 @@ const CHATS: SidebarChat[] = [
 ];
 
 const THREADS = threadDirectory(
-	"web",
+	"ytimesy",
 	CHATS.filter((chat) => chat.threadNumber).map((chat) => ({
 		id: chat.id,
 		title: chat.title,
@@ -139,18 +139,18 @@ const SESSION = {
 			kind: "agentMessage",
 			id: item("a0"),
 			phase: "final_answer",
-			text: "Started web-3 (dark mode toggle) and web-5 (billing page), each on its own cloud machine. I'll stay quiet until one needs you or finishes.",
+			text: "Started ytimesy-3 (dark mode toggle) and ytimesy-5 (billing page), each on its own cloud machine. I'll stay quiet until one needs you or finishes.",
 		},
 		{
 			kind: "userMessage",
 			id: item("u1"),
-			text: "What's going on? @web-3 should have the toggle by now.",
+			text: "What's going on? @ytimesy-3 should have the toggle by now.",
 		},
 		{
 			kind: "agentMessage",
 			id: item("a1"),
 			phase: "final_answer",
-			text: "Two threads are working and one needs you: web-4 asks which locale the emails use. web-3 has the toggle running in its own machine, and its canvas is above.",
+			text: "Two threads are working and one needs you: ytimesy-4 asks which locale the emails use. ytimesy-3 has the toggle running in its own machine, and its canvas is above.",
 		},
 		{
 			kind: "canvas",
@@ -167,7 +167,7 @@ const noop = () => undefined;
 const REPOSITORY = {
 	installationId: 1,
 	repositoryId: 1,
-	name: "acme/web",
+	name: "y-times-y/ytimesy",
 	projectId: PROJECT.id,
 };
 
@@ -175,18 +175,18 @@ const person = (login: string) => ({ login, avatarUrl: null, bot: false });
 
 const label = (name: string, color: string) => ({ name, color });
 
-/** The demo repository's pull requests: some are a thread's own (head `web-<n>`). */
+/** The demo repository's pull requests: some are a thread's own (head `ytimesy-<n>`). */
 const PULLS: RepositoryPullRequest[] = [
 	{
 		number: 106,
 		title: "Dark mode toggle in settings",
-		url: "https://github.com/acme/web/pull/106",
+		url: "https://github.com/y-times-y/ytimesy/pull/106",
 		author: "demo-user",
 		authorName: null,
 		authorAvatarUrl: null,
 		draft: false,
 		state: "open",
-		head: "web-3",
+		head: "ytimesy-3",
 		base: "main",
 		updatedAt: at(2),
 		labels: [label("design", "7057ff")],
@@ -200,13 +200,13 @@ const PULLS: RepositoryPullRequest[] = [
 	{
 		number: 105,
 		title: "Fix flaky settings test",
-		url: "https://github.com/acme/web/pull/105",
+		url: "https://github.com/y-times-y/ytimesy/pull/105",
 		author: "demo-user",
 		authorName: null,
 		authorAvatarUrl: null,
 		draft: false,
 		state: "open",
-		head: "web-2",
+		head: "ytimesy-2",
 		base: "main",
 		updatedAt: at(40),
 		labels: [label("tests", "0e8a16")],
@@ -219,13 +219,13 @@ const PULLS: RepositoryPullRequest[] = [
 	{
 		number: 107,
 		title: "Billing page",
-		url: "https://github.com/acme/web/pull/107",
+		url: "https://github.com/y-times-y/ytimesy/pull/107",
 		author: "demo-user",
 		authorName: null,
 		authorAvatarUrl: null,
 		draft: true,
 		state: "draft",
-		head: "web-5",
+		head: "ytimesy-5",
 		base: "main",
 		updatedAt: at(9),
 		labels: [label("billing", "fbca04")],
@@ -239,7 +239,7 @@ const ISSUES: IssueSummary[] = [
 	{
 		number: 41,
 		title: "Add a dark mode toggle to settings",
-		url: "https://github.com/acme/web/issues/41",
+		url: "https://github.com/y-times-y/ytimesy/issues/41",
 		state: "open",
 		stateReason: null,
 		author: person("reviewer"),
@@ -249,12 +249,12 @@ const ISSUES: IssueSummary[] = [
 		createdAt: at(5000),
 		updatedAt: at(6),
 		waiting: true,
-		pullRequests: [{ number: 106, state: "open", head: "web-3" }],
+		pullRequests: [{ number: 106, state: "open", head: "ytimesy-3" }],
 	},
 	{
 		number: 43,
 		title: "Emails should use the account's locale",
-		url: "https://github.com/acme/web/issues/43",
+		url: "https://github.com/y-times-y/ytimesy/issues/43",
 		state: "open",
 		stateReason: null,
 		author: person("demo-user"),
@@ -267,7 +267,7 @@ const ISSUES: IssueSummary[] = [
 	{
 		number: 38,
 		title: "Billing page shows the wrong total",
-		url: "https://github.com/acme/web/issues/38",
+		url: "https://github.com/y-times-y/ytimesy/issues/38",
 		state: "open",
 		stateReason: null,
 		author: person("reviewer"),
@@ -282,7 +282,7 @@ const ISSUES: IssueSummary[] = [
 /** The chat working on each pull request, by its head branch: the row's thread chip. */
 const THREAD_BY_HEAD = new Map(
 	CHATS.filter((chat) => chat.threadNumber).map((chat) => [
-		`web-${chat.threadNumber}`,
+		`ytimesy-${chat.threadNumber}`,
 		{
 			id: chat.id,
 			title: chat.title,
@@ -324,7 +324,7 @@ function App({ scene }: { scene: PreviewScene }) {
 			...pull,
 			installationId: 1,
 			repositoryId: 1,
-			repositoryFullName: "acme/web",
+			repositoryFullName: "y-times-y/ytimesy",
 		})),
 	});
 	client.setQueryData(issuesKey(REPOSITORY.repositoryId, "open"), {
@@ -338,7 +338,7 @@ function App({ scene }: { scene: PreviewScene }) {
 					<ProjectSidebar
 						projects={[PROJECT]}
 						projectsLoading={false}
-						selectedProjectId="web"
+						selectedProjectId="ytimesy"
 						selectedChatId={work ? undefined : "y2"}
 						onSelectProject={noop}
 						expanded
@@ -393,7 +393,7 @@ function App({ scene }: { scene: PreviewScene }) {
 							<div className="inspector-frame">
 								<YOverview
 									projectId={PROJECT.id}
-									projectName="web"
+									projectName="ytimesy"
 									pullRequests={[]}
 									live={false}
 									renderedAtMs={NOW}

@@ -103,7 +103,7 @@ it("shows the app as the product's own components render it today", () => {
 		"Super agent",
 		"Needs you",
 		"Recently finished",
-		"web-3",
+		"ytimesy-3",
 		"canvas-card",
 		"Pull requests",
 		"Issues",
