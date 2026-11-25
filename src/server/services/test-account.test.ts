@@ -10,6 +10,7 @@ import {
 import {
 	mintTestSession,
 	resetTestAccount,
+	seedTestUsage,
 	type TestAccountDb,
 	TestSessionRefused,
 } from "./test-account";
@@ -27,6 +28,7 @@ function fakeDb(opts: { testUserFlagged: boolean; minted?: number }) {
 	const sessions: unknown[][] = [];
 	const events: unknown[][] = [];
 	const deletes: unknown[][] = [];
+	const usage: { sql: string; params: unknown[] }[] = [];
 	const db = {
 		async query(sql: string, params: unknown[] = []) {
 			if (sql.startsWith("insert into auth_user")) return { rows: [] };
@@ -36,6 +38,10 @@ function fakeDb(opts: { testUserFlagged: boolean; minted?: number }) {
 				return { rows: [{ n: String(opts.minted ?? 0) }] };
 			if (sql.startsWith("insert into auth_session")) sessions.push(params);
 			if (sql.startsWith("insert into test_session_event")) events.push(params);
+			if (/usage_daily|usage_turn_counted/.test(sql))
+				usage.push({ sql, params });
+			if (sql.startsWith("insert into project"))
+				return { rows: [{ id: crypto.randomUUID() }] };
 			if (sql.startsWith("delete from project")) {
 				deletes.push(params);
 				return { rows: [{ id: "p1" }] };
@@ -43,7 +49,13 @@ function fakeDb(opts: { testUserFlagged: boolean; minted?: number }) {
 			return { rows: [] };
 		},
 	};
-	return { db: db as unknown as TestAccountDb, sessions, events, deletes };
+	return {
+		db: db as unknown as TestAccountDb,
+		sessions,
+		events,
+		deletes,
+		usage,
+	};
 }
 
 const refusal = async (p: Promise<unknown>) =>
@@ -128,5 +140,35 @@ describe("test account sessions", () => {
 			projectsRemoved: 1,
 		});
 		expect(deletes).toEqual([[TEST_ACCOUNT_ID]]);
+	});
+
+	it("reset also clears the test user's usage rows, and only theirs", async () => {
+		const { db, usage } = fakeDb({ testUserFlagged: true });
+		await resetTestAccount(db, settings, token, "t");
+		expect(usage.map((u) => u.params)).toEqual([
+			[TEST_ACCOUNT_ID],
+			[TEST_ACCOUNT_ID],
+		]);
+	});
+
+	it("seeds usage only for the flagged test user, behind the token", async () => {
+		const { db, usage, events } = fakeDb({ testUserFlagged: true });
+		const result = await seedTestUsage(db, settings, token, "t");
+		expect(result.usageRows).toBeGreaterThan(200);
+		const inserts = usage.filter((u) =>
+			u.sql.startsWith("insert into usage_daily"),
+		);
+		expect(inserts.length).toBeGreaterThan(0);
+		expect(inserts.every((u) => u.params[0] === TEST_ACCOUNT_ID)).toBe(true);
+		expect(events.at(-1)).toEqual(["seeded-usage", "t", null]);
+
+		const unflagged = fakeDb({ testUserFlagged: false });
+		expect(
+			await refusal(seedTestUsage(unflagged.db, settings, token, "t")),
+		).toBe("user-is-not-test-account");
+		expect(unflagged.usage).toHaveLength(0);
+		expect(await refusal(seedTestUsage(db, settings, "nope", "t"))).toBe(
+			"bad-token",
+		);
 	});
 });

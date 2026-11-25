@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { CURRENT_LEGAL_VERSIONS } from "#/domain/legal-acceptance";
+import { syntheticUsage } from "#/domain/synthetic-usage";
 import {
 	mintRefusal,
 	normalizeCaller,
@@ -35,7 +36,7 @@ type Settings = {
 
 async function record(
 	db: TestAccountDb,
-	action: "minted" | "refused" | "reset",
+	action: "minted" | "refused" | "reset" | "seeded-usage",
 	caller: string,
 	reason?: string,
 ) {
@@ -146,6 +147,9 @@ export async function resetTestAccount(
 ) {
 	const caller = await authorize(db, settings, presentedToken, rawCaller);
 	const userId = await flaggedTestUser(db);
+	// Seeded usage keeps its rows when its project goes (set null), so it is deleted first.
+	await db.query("delete from usage_daily where user_id=$1", [userId]);
+	await db.query("delete from usage_turn_counted where user_id=$1", [userId]);
 	const removed = await db.query(
 		"delete from project where user_id=$1 returning id",
 		[userId],
@@ -177,4 +181,79 @@ export async function runTestAccountAction(
 	const result = await seedTestAccount(db, userId, { apiKey: input.apiKey });
 	console.log(JSON.stringify({ event: "test_session.seed", caller }));
 	return result;
+}
+
+/** Two made-up repositories for the seeded usage; the ids cannot match a real GitHub repository. */
+const SEED_PROJECTS = [
+	{ repositoryId: 9_000_000_001, name: "synthetic/web-app" },
+	{ repositoryId: 9_000_000_002, name: "synthetic/api-service" },
+] as const;
+
+/**
+ * Replaces the test user's daily usage with made-up rows so the Usage page's
+ * heatmap has something to show. Only the test user's rows, the same fixed
+ * target as mint and reset; `reset` clears them again.
+ */
+export async function seedTestUsage(
+	db: TestAccountDb,
+	settings: Settings,
+	presentedToken: string | undefined,
+	rawCaller: unknown,
+) {
+	const caller = await authorize(db, settings, presentedToken, rawCaller);
+	const userId = await flaggedTestUser(db);
+	const today = (settings.now ?? (() => new Date()))()
+		.toISOString()
+		.slice(0, 10);
+	const projectIds: string[] = [];
+	for (const project of SEED_PROJECTS) {
+		const row = await db.query<{ id: string }>(
+			`insert into project(id,user_id,repository_id,installation_id,full_name,branch)
+			 values($1,$2,$3,$3,$4,'main')
+			 on conflict (user_id,repository_id) do update set full_name=excluded.full_name
+			 returning id`,
+			[randomUUID(), userId, project.repositoryId, project.name],
+		);
+		projectIds.push(row.rows[0]?.id as string);
+	}
+	await db.query("delete from usage_daily where user_id=$1", [userId]);
+	const rows = syntheticUsage(today);
+	for (let at = 0; at < rows.length; at += 200) {
+		const batch = rows.slice(at, at + 200);
+		await db.query(
+			`insert into usage_daily(user_id,day,provider,model_id,project_id,source,turns,unknown_turns,input_tokens,output_tokens,cache_read_tokens)
+			 select $1,r.day::date,r.provider,r.model_id,
+			        case r.project when 0 then $3::uuid when 1 then $4::uuid end,
+			        r.source,r.turns,r.unknown_turns,r.input_tokens,r.output_tokens,r.cache_read_tokens
+			 from jsonb_to_recordset($2::jsonb) as r(day text,provider text,model_id text,project int,source text,turns int,unknown_turns int,input_tokens bigint,output_tokens bigint,cache_read_tokens bigint)`,
+			[
+				userId,
+				JSON.stringify(
+					batch.map((r) => ({
+						day: r.day,
+						provider: r.provider,
+						model_id: r.modelId,
+						project: r.project,
+						source: r.source,
+						turns: r.turns,
+						unknown_turns: r.unknownTurns,
+						input_tokens: r.inputTokens,
+						output_tokens: r.outputTokens,
+						cache_read_tokens: r.cacheReadTokens,
+					})),
+				),
+				projectIds[0],
+				projectIds[1],
+			],
+		);
+	}
+	await record(db, "seeded-usage", caller);
+	console.log(
+		JSON.stringify({
+			event: "test_session.seeded_usage",
+			caller,
+			rows: rows.length,
+		}),
+	);
+	return { usageRows: rows.length };
 }

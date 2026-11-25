@@ -93,6 +93,7 @@ import {
 	ProjectTrainingSettings,
 	TrainingConsentSettings,
 } from "./training-consent-settings";
+import { UsageReport } from "./usage-report";
 import {
 	anyChatTurn,
 	pollUnlessPushed,
@@ -1120,6 +1121,7 @@ function UsageSection({
 					</div>
 				)}
 			</section>
+			<UsageReport />
 			<InfrastructureUsage />
 		</>
 	);

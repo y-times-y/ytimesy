@@ -1,0 +1,199 @@
+.usage-report,
+.usage-heatmap {
+	--usage-cell-empty: #1c1c1c;
+	--usage-hue-anthropic: #d55e00;
+	--usage-hue-openai: #009e73;
+	--usage-hue-xai: #cc79a7;
+	--usage-hue-google: #0072b2;
+	--usage-hue-other: #8a8a8a;
+	--usage-hue-neutral: #ededed;
+}
+:root[data-theme="light"] .usage-report,
+:root[data-theme="light"] .usage-heatmap {
+	--usage-cell-empty: #ebebeb;
+	--usage-hue-neutral: #111111;
+}
+.usage-heatmap {
+	position: relative;
+}
+.usage-heatmap-scroll {
+	overflow-x: auto;
+	padding-bottom: 6px;
+	overscroll-behavior-x: contain;
+}
+.usage-heatmap-scroll svg {
+	display: block;
+	flex: none;
+}
+.usage-heatmap-label {
+	fill: #8a8a8a;
+	font-size: 10px;
+}
+.usage-heatmap-cell {
+	outline: none;
+	shape-rendering: geometricPrecision;
+}
+.usage-heatmap-cell:focus-visible {
+	stroke: currentColor;
+	stroke-width: 2px;
+}
+.usage-heatmap-tip {
+	position: absolute;
+	z-index: 5;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 150px;
+	padding: 8px 10px;
+	border: 1px solid #ffffff22;
+	border-radius: 8px;
+	background: #111;
+	color: #ededed;
+	font-size: 12px;
+	pointer-events: none;
+	transform: translate(-50%, calc(-100% - 6px));
+	white-space: nowrap;
+}
+:root[data-theme="light"] .usage-heatmap-tip {
+	background: #fff;
+	color: #111;
+	border-color: #00000022;
+}
+.usage-heatmap-split {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.usage-heatmap-split i,
+.usage-report-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+	background: var(--usage-hue-other);
+}
+.usage-heatmap-legend {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	margin-top: 6px;
+	color: #8a8a8a;
+	font-size: 11px;
+}
+.usage-heatmap-swatch {
+	width: 11px;
+	height: 11px;
+	border-radius: 2px;
+}
+.usage-heatmap-steps {
+	margin-left: 6px;
+}
+.usage-report [data-provider="anthropic"],
+.usage-heatmap [data-provider="anthropic"] {
+	--dot: var(--usage-hue-anthropic);
+}
+.usage-report [data-provider="openai"],
+.usage-heatmap [data-provider="openai"] {
+	--dot: var(--usage-hue-openai);
+}
+.usage-report [data-provider="xai"],
+.usage-heatmap [data-provider="xai"] {
+	--dot: var(--usage-hue-xai);
+}
+.usage-report [data-provider="google"],
+.usage-heatmap [data-provider="google"] {
+	--dot: var(--usage-hue-google);
+}
+.usage-report [data-provider="other"],
+.usage-heatmap [data-provider="other"] {
+	--dot: var(--usage-hue-other);
+}
+.usage-heatmap-split i[data-provider],
+.usage-report-dot[data-provider] {
+	background: var(--dot);
+}
+.usage-report-head,
+.usage-report-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+}
+.usage-report-controls {
+	margin: 10px 0;
+}
+.usage-report-chip {
+	padding: 4px 10px;
+	border: 1px solid #ffffff22;
+	border-radius: 99px;
+	background: transparent;
+	color: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.usage-report-chip[aria-pressed="true"] {
+	background: #ededed;
+	color: #080808;
+	border-color: #ededed;
+}
+:root[data-theme="light"] .usage-report-chip {
+	border-color: #00000033;
+}
+:root[data-theme="light"] .usage-report-chip[aria-pressed="true"] {
+	background: #111;
+	color: #fff;
+	border-color: #111;
+}
+.usage-report-chip:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+}
+.usage-report-figures {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+	gap: 12px;
+	margin: 12px 0;
+}
+.usage-report-figures strong {
+	display: block;
+	font-size: 20px;
+	font-weight: 550;
+	font-variant-numeric: tabular-nums;
+}
+.usage-report-figures span {
+	color: #8a8a8a;
+	font-size: 12px;
+}
+.usage-report-lists {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: 16px;
+	margin-top: 14px;
+}
+.usage-report-lists h4 {
+	margin: 0 0 6px;
+	font-size: 12px;
+	color: #8a8a8a;
+	font-weight: 500;
+}
+.usage-report-lists ol {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: grid;
+	gap: 4px;
+}
+.usage-report-lists li {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.usage-report-lists li > span:first-of-type {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

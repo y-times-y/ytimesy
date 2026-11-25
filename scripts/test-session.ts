@@ -20,7 +20,14 @@ export type TestSessionResult = {
 	user: { id: string; email: string };
 };
 
-const COMMANDS = ["mint", "shot", "reset", "seed", "y-counts"] as const;
+const COMMANDS = [
+	"mint",
+	"shot",
+	"reset",
+	"seed",
+	"seed-usage",
+	"y-counts",
+] as const;
 
 export function callerFromEnvironment(env: NodeJS.ProcessEnv) {
 	return (
@@ -50,7 +57,7 @@ export function parseCli(argv: string[]) {
 	const command = positionals[0];
 	if (!COMMANDS.includes(command as (typeof COMMANDS)[number]))
 		throw new Error(
-			"Usage: test-session.ts <mint|shot|reset|seed|y-counts> [options]",
+			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|y-counts> [options]",
 		);
 	if (command === "shot" && !values.out)
 		throw new Error("Pass --out <file.png>.");
@@ -61,7 +68,7 @@ export async function requestTestSession(input: {
 	base: string;
 	token: string | undefined;
 	caller: string;
-	action: "mint" | "reset" | "seed" | "y-counts";
+	action: "mint" | "reset" | "seed" | "seed-usage" | "y-counts";
 	/** Only `seed`: the model key to connect, sealed server-side; never printed. */
 	apiKey?: string;
 	fetcher?: typeof fetch;
@@ -140,8 +147,7 @@ async function shot(
 			} else if (kind === "press") await page.keyboard.press(rest);
 			else if (kind === "eval")
 				console.error(JSON.stringify(await page.evaluate(rest)));
-			else if (kind === "scroll")
-				await page.mouse.wheel(0, Number(rest));
+			else if (kind === "scroll") await page.mouse.wheel(0, Number(rest));
 			else if (kind === "wait") await page.waitForTimeout(Number(rest));
 			else throw new Error(`Unknown step ${kind}`);
 		}

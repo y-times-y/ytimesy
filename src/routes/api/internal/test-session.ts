@@ -5,6 +5,7 @@ import {
 	mintTestSession,
 	resetTestAccount,
 	runTestAccountAction,
+	seedTestUsage,
 	TestSessionRefused,
 } from "../../../server/services/test-account";
 
@@ -33,7 +34,11 @@ export const Route = createFileRoute("/api/internal/test-session")({
 				};
 				try {
 					const run =
-						body.action === "reset" ? resetTestAccount : mintTestSession;
+						body.action === "reset"
+							? resetTestAccount
+							: body.action === "seed-usage"
+								? seedTestUsage
+								: mintTestSession;
 					if (body.action === "seed" || body.action === "y-counts")
 						return Response.json(
 							await runTestAccountAction(database(), settings, token, {
