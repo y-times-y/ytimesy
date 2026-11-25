@@ -72,6 +72,65 @@ describe("canvasMessageFromFrame", () => {
 	});
 });
 
+describe("viewer messages", () => {
+	const wheel = {
+		type: "ytimesy-canvas:wheel",
+		x: 10,
+		y: 20,
+		dx: 0,
+		dy: -4,
+		mode: 0,
+		zoom: true,
+	};
+	it("accepts the document's size, with or without artboards", () => {
+		expect(
+			canvasFrameMessage({
+				type: "ytimesy-canvas:size",
+				bounds: rect,
+				width: 3000,
+				height: 900,
+			}),
+		).toEqual({ type: "size", bounds: rect, width: 3000, height: 900 });
+		expect(
+			canvasFrameMessage({
+				type: "ytimesy-canvas:size",
+				bounds: null,
+				width: 1280,
+				height: 800,
+			}),
+		).toEqual({ type: "size", bounds: null, width: 1280, height: 800 });
+	});
+	it("accepts wheel, zoom key, space and pan", () => {
+		expect(canvasFrameMessage(wheel)).toMatchObject({
+			type: "wheel",
+			zoom: true,
+		});
+		expect(
+			canvasFrameMessage({ type: "ytimesy-canvas:zoomkey", key: "reset" }),
+		).toEqual({ type: "zoomkey", key: "reset" });
+		expect(
+			canvasFrameMessage({ type: "ytimesy-canvas:space", down: true }),
+		).toEqual({ type: "space", down: true });
+		expect(
+			canvasFrameMessage({ type: "ytimesy-canvas:pan", dx: -3, dy: 4 }),
+		).toEqual({ type: "pan", dx: -3, dy: 4 });
+	});
+	it("rejects malformed viewer messages", () => {
+		const malformed: unknown[] = [
+			{ type: "ytimesy-canvas:size", bounds: rect, width: -1, height: 5 },
+			{ type: "ytimesy-canvas:size", bounds: { x: 1 }, width: 5, height: 5 },
+			{ type: "ytimesy-canvas:size", width: 5, height: 5 },
+			{ ...wheel, mode: 7 },
+			{ ...wheel, zoom: "yes" },
+			{ ...wheel, dy: Number.NaN },
+			{ type: "ytimesy-canvas:zoomkey", key: "sideways" },
+			{ type: "ytimesy-canvas:space", down: 1 },
+			{ type: "ytimesy-canvas:pan", dx: 1 },
+		];
+		for (const data of malformed) expect(canvasFrameMessage(data)).toBeNull();
+	});
+});
+
 describe("canvasFrameMessage", () => {
 	it("rejects malformed messages", () => {
 		const malformed: unknown[] = [
@@ -209,11 +268,18 @@ function bridgeWindow(attributes: Record<string, string>) {
 		setAttribute: () => undefined,
 		textContent: "",
 	});
-	const html = { ...element(), nodeType: 1 };
+	const html = {
+		...element(),
+		nodeType: 1,
+		scrollWidth: 1280,
+		scrollHeight: 800,
+	};
 	const body = {
 		...element(),
 		nodeType: 1,
 		localName: "body",
+		scrollWidth: 1280,
+		scrollHeight: 640,
 		parentElement: html,
 	};
 	const button = {
@@ -252,8 +318,15 @@ function bridgeWindow(attributes: Record<string, string>) {
 	};
 	runInNewContext(
 		CANVAS_BRIDGE_SCRIPT.replace(/^<script>/, "").replace(/<\/script>$/, ""),
-		{ window, document, requestAnimationFrame: (run: () => void) => run() },
+		{
+			window,
+			document,
+			requestAnimationFrame: (run: () => void) => run(),
+			setTimeout: () => 0,
+		},
 	);
+	// The startup size report is the viewer's, not these tests'.
+	posted.length = 0;
 	const fire = (type: string, event: object) => {
 		for (const listener of listeners.get(type) ?? []) listener(event);
 	};
@@ -332,6 +405,64 @@ describe("CANVAS_BRIDGE_SCRIPT", () => {
 		expect(canvasFrameMessage(canvas.posted.at(-1))).toEqual({
 			type: "rects",
 			rects: [{ x: 10, y: 20, width: 120, height: 36 }],
+		});
+	});
+});
+
+describe("CANVAS_BRIDGE_SCRIPT viewer reports", () => {
+	it("forwards a pinch as a wheel message and keeps the page from zooming", () => {
+		const canvas = bridgeWindow({});
+		let prevented = false;
+		canvas.fire("wheel", {
+			clientX: 30,
+			clientY: 40,
+			deltaX: 0,
+			deltaY: -5,
+			deltaMode: 0,
+			ctrlKey: true,
+			metaKey: false,
+			preventDefault: () => {
+				prevented = true;
+			},
+		});
+		expect(prevented).toBe(true);
+		expect(canvasFrameMessage(canvas.posted.at(-1))).toEqual({
+			type: "wheel",
+			x: 30,
+			y: 40,
+			dx: 0,
+			dy: -5,
+			mode: 0,
+			zoom: true,
+		});
+	});
+
+	it("forwards Cmd/Ctrl zoom keys", () => {
+		const canvas = bridgeWindow({});
+		canvas.fire("keydown", {
+			key: "=",
+			ctrlKey: false,
+			metaKey: true,
+			target: null,
+			preventDefault: () => undefined,
+		});
+		expect(canvasFrameMessage(canvas.posted.at(-1))).toEqual({
+			type: "zoomkey",
+			key: "in",
+		});
+	});
+
+	it("reports the document's size on load", () => {
+		const canvas = bridgeWindow({});
+		canvas.fire("load", {});
+		const size = canvas.posted
+			.map(canvasFrameMessage)
+			.find((message) => message?.type === "size");
+		expect(size).toEqual({
+			type: "size",
+			bounds: null,
+			width: 1280,
+			height: 800,
 		});
 	});
 });

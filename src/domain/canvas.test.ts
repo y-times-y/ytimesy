@@ -251,6 +251,9 @@ describe("canvasInstructions", () => {
 		expect(text).toContain("compiled CSS");
 		expect(text).toContain("assets");
 		expect(text).toContain("artboard");
+		expect(text).toContain("data-artboard");
+		expect(text).toContain("never assume the panel is wide");
+		expect(text).toContain("fixed size");
 		expect(text).toContain("compare it with the real app");
 		expect(text).toContain("cannot reproduce");
 	});

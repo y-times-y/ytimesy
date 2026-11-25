@@ -236,27 +236,82 @@ button.canvas-picker:hover {
 	   whole frame, so this shows only where a page has none of its own. */
 	background: #0d0d0d;
 }
-.canvas-stage[data-device="true"] {
-	display: flex;
-	justify-content: center;
-	padding-top: 16px;
+.canvas-world {
+	position: absolute;
+	top: 0;
+	left: 0;
+	transform-origin: 0 0;
+	/* Placed before it is shown: no jump from the unplaced frame. */
+	visibility: hidden;
+}
+.canvas-world[data-revealed="true"] {
+	visibility: visible;
+}
+.canvas-stage {
 	background:
 		radial-gradient(circle at 1px 1px, #ffffff0f 1px, transparent 0) 0 0 / 16px
 		16px,
 		#0e0e0e;
+	touch-action: none;
+	outline: none;
 }
-.canvas-device {
-	width: 100%;
-	height: 100%;
+.canvas-stage[data-pan] .canvas-frame {
+	pointer-events: none;
 }
-.canvas-stage[data-device="true"] .canvas-device {
-	flex: none;
-	overflow: hidden;
-	border: 1px solid #ffffff24;
-	border-radius: 14px;
-	background: #0d0d0d;
-	box-shadow: 0 12px 40px #00000080;
-	transform-origin: top center;
+.canvas-stage[data-pan="ready"] {
+	cursor: grab;
+}
+.canvas-stage[data-pan="dragging"] {
+	cursor: grabbing;
+}
+.canvas-stage[data-expanded="true"] {
+	position: fixed;
+	inset: 0;
+	z-index: 80;
+}
+.canvas-zoom-bar {
+	position: absolute;
+	bottom: 12px;
+	left: 50%;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: 1px;
+	padding: 3px;
+	border: 1px solid #ffffff1f;
+	border-radius: 10px;
+	background: #1a1a1aee;
+	box-shadow: 0 8px 24px #00000066;
+	transform: translateX(-50%);
+}
+.canvas-zoom-level {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 58px;
+	justify-content: center;
+	height: 24px;
+	padding: 0 6px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--list-text-strong);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+}
+.canvas-zoom-level:hover {
+	background: var(--list-hover-bg);
+}
+.canvas-zoom-level:focus-visible {
+	outline: 2px solid var(--accent-blue);
+	outline-offset: 1px;
+}
+.canvas-zoom-divider {
+	width: 1px;
+	height: 16px;
+	margin: 0 3px;
+	background: #ffffff1f;
 }
 .canvas-frame {
 	display: block;
@@ -307,7 +362,9 @@ button.canvas-picker:hover {
 		display: none;
 	}
 }
-.canvas-inspector {
+/* Only the bar is a container: a size-contained panel would also trap the
+   expanded stage (position: fixed) inside it. */
+.canvas-inspector-bar {
 	container-type: inline-size;
 }
 .canvas-annotate-hint {

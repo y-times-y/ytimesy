@@ -8,7 +8,7 @@ import {
 	type LucideIcon,
 	MessageSquarePlus,
 	Monitor,
-	Scan,
+	PanelTop,
 	Smartphone,
 	Tablet,
 } from "lucide-react";
@@ -28,10 +28,13 @@ import type { CanvasFocus } from "./canvas-open-context";
 import { CanvasStage, type StageMark } from "./canvas-stage";
 import "./canvas.css";
 
-/** The preview widths: the panel's own, or a device's, scaled down to fit. */
+/**
+ * The widths a page is laid out at before the viewer fits it to the panel:
+ * the wide default, or a device's. Artboards keep their own sizes.
+ */
 const WIDTHS = [
-	{ id: "fit", label: "Fit to panel", icon: Scan, width: null },
-	{ id: "desktop", label: "Desktop (1280 px)", icon: Monitor, width: 1280 },
+	{ id: "auto", label: "Wide page (1280 px)", icon: PanelTop, width: null },
+	{ id: "desktop", label: "Desktop (1440 px)", icon: Monitor, width: 1440 },
 	{ id: "tablet", label: "Tablet (768 px)", icon: Tablet, width: 768 },
 	{ id: "mobile", label: "Mobile (390 px)", icon: Smartphone, width: 390 },
 ] as const satisfies readonly {
@@ -89,7 +92,7 @@ export function CanvasInspector({
 	/** The chat's message box; absent where there is none to write in. */
 	onCompose?: Compose;
 }) {
-	const [width, setWidth] = useState<PreviewWidth>("fit");
+	const [width, setWidth] = useState<PreviewWidth>("auto");
 	const [annotating, setAnnotating] = useState(false);
 	const [compare, setCompare] = useState<CanvasFocus | null>(null);
 	const thread =
@@ -238,7 +241,7 @@ export function CanvasInspector({
 				<NotKept />
 			) : (
 				<AnnotatedCanvas
-					key={shown.id}
+					key={thread.title}
 					canvas={shown}
 					html={html}
 					isLatest={shown === latest}
@@ -305,6 +308,9 @@ function AnnotatedCanvas({
 	const [composing, setComposing] = useState<Composing | null>(null);
 	const [highlighted, setHighlighted] = useState<string | null>(null);
 	const full = notes.length >= CANVAS_NOTES_LIMIT;
+	// A new revision keeps the camera (the stage stays mounted), not the open note box.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on a new revision.
+	useEffect(() => setComposing(null), [canvas.id]);
 	// Escape in the app (not in a note box) stops annotating.
 	useEffect(() => {
 		if (!annotating) return;
@@ -392,6 +398,7 @@ function AnnotatedCanvas({
 			<CanvasStage
 				html={html}
 				title={canvas.title}
+				canvasKey={canvas.title}
 				deviceWidth={deviceWidth}
 				annotating={annotating && !full}
 				marks={marks}
@@ -488,9 +495,9 @@ function ComparePane({
 				<NotKept />
 			) : (
 				<CanvasStage
-					key={shown.id}
 					html={whole.html}
 					title={`${thread.title}, revision ${shown.revision}`}
+					canvasKey={`compare:${thread.title}`}
 					deviceWidth={deviceWidth}
 					annotating={false}
 					marks={[]}
