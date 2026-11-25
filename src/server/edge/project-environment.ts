@@ -37,6 +37,7 @@ import {
 } from "../services/environment-build";
 import { startBackgroundJob } from "./background-jobs";
 import type { EdgeExecutorEnvironment } from "./environment";
+import { failureReason } from "./failure-reason";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { registerUserHubNotes } from "./user-hub-notes-binding";
 
@@ -244,10 +245,7 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 					);
 				} catch (error) {
 					// Which check refused (token, installation, branch): redacted, bounded.
-					const reason = redactSecrets(
-						error instanceof Error ? error.message : String(error),
-						300,
-					);
+					const reason = redactSecrets(await failureReason(error), 300);
 					console.warn("Environment source authorization failed.", {
 						requestId: request.requestId,
 						reason,
