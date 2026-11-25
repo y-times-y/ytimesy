@@ -172,8 +172,14 @@ export async function runTestAccountAction(
 	presentedToken: string | undefined,
 	input: {
 		caller: unknown;
-		action: "seed" | "seed-github-unlinked" | "y-counts" | "repo-ids";
+		action:
+			| "seed"
+			| "seed-github-unlinked"
+			| "y-counts"
+			| "repo-ids"
+			| "vm-map";
 		apiKey?: string;
+		slugs?: string[];
 	},
 ) {
 	const caller = await authorize(db, settings, presentedToken, input.caller);
@@ -181,6 +187,11 @@ export async function runTestAccountAction(
 		"./test-account-seed"
 	);
 	if (input.action === "repo-ids") return seedRepositoryIds(db);
+	if (input.action === "vm-map")
+		return (await import("./test-account-vm-map")).mapVmSlugs(
+			db,
+			input.slugs ?? [],
+		);
 	if (input.action === "y-counts") return yDefaultCounts(db);
 	const userId = await flaggedTestUser(db);
 	const result = await seedTestAccount(db, userId, {

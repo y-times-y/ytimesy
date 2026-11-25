@@ -10,6 +10,7 @@
  * It takes no user id or email: the server fixes the target to the one
  * account flagged is_test_account, and refuses anything else.
  */
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
 export const DEFAULT_BASE = "https://ytimesy.com";
@@ -28,6 +29,7 @@ const COMMANDS = [
 	"seed-usage",
 	"y-counts",
 	"repo-ids",
+	"vm-map",
 	"seed-github-unlinked",
 ] as const;
 
@@ -59,7 +61,7 @@ export function parseCli(argv: string[]) {
 	const command = positionals[0];
 	if (!COMMANDS.includes(command as (typeof COMMANDS)[number]))
 		throw new Error(
-			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|y-counts|repo-ids|seed-github-unlinked> [options]",
+			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|y-counts|repo-ids|vm-map|seed-github-unlinked> [options]",
 		);
 	if (command === "shot" && !values.out)
 		throw new Error("Pass --out <file.png>.");
@@ -77,9 +79,12 @@ export async function requestTestSession(input: {
 		| "seed-usage"
 		| "y-counts"
 		| "repo-ids"
+		| "vm-map"
 		| "seed-github-unlinked";
 	/** Only `seed`: the model key to connect, sealed server-side; never printed. */
 	apiKey?: string;
+	/** Only `vm-map`: machine slugs to classify. */
+	slugs?: string[];
 	fetcher?: typeof fetch;
 }) {
 	if (!input.token) throw new Error("YTIMESY_TEST_SESSION_TOKEN is not set.");
@@ -95,6 +100,7 @@ export async function requestTestSession(input: {
 				action: input.action,
 				caller: input.caller,
 				apiKey: input.apiKey,
+				slugs: input.slugs,
 			}),
 		},
 	);
@@ -181,6 +187,10 @@ if (process.argv[1]?.endsWith("test-session.ts")) {
 		token: process.env.YTIMESY_TEST_SESSION_TOKEN,
 		caller: options.caller ?? callerFromEnvironment(process.env),
 		action: options.command === "shot" ? "mint" : options.command,
+		slugs:
+			options.command === "vm-map" && process.env.YTIMESY_VM_SLUGS_FILE
+				? JSON.parse(readFileSync(process.env.YTIMESY_VM_SLUGS_FILE, "utf8"))
+				: undefined,
 		apiKey:
 			options.command === "seed" || options.command === "seed-github-unlinked"
 				? process.env.ANTHROPIC_API_KEY

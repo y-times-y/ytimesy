@@ -21,6 +21,7 @@ export const Route = createFileRoute("/api/internal/test-session")({
 				const body = (await request.json().catch(() => ({}))) as {
 					action?: string;
 					apiKey?: unknown;
+					slugs?: unknown;
 					caller?: unknown;
 				};
 				const token = request.headers
@@ -41,6 +42,7 @@ export const Route = createFileRoute("/api/internal/test-session")({
 								: mintTestSession;
 					if (
 						body.action === "seed" ||
+						body.action === "vm-map" ||
 						body.action === "seed-github-unlinked" ||
 						body.action === "y-counts" ||
 						body.action === "repo-ids"
@@ -51,6 +53,9 @@ export const Route = createFileRoute("/api/internal/test-session")({
 								action: body.action,
 								apiKey:
 									typeof body.apiKey === "string" ? body.apiKey : undefined,
+								slugs: Array.isArray(body.slugs)
+									? body.slugs.filter((s): s is string => typeof s === "string")
+									: undefined,
 							}),
 							{ headers: { "Cache-Control": "no-store" } },
 						);
