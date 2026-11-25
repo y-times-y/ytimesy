@@ -16,4 +16,9 @@ describe("the first screen under the cookie banner", () => {
 			/min-height:\s*calc\(100dvh - 76px - var\(--consent-banner-height, 0px\)\)/,
 		);
 	});
+	it("lets the content grow with what it holds, so centring never pushes its top out of reach", () => {
+		expect(
+			rule('.welcome-panel:not([data-layout="chat"]) .welcome-content {'),
+		).toMatch(/flex:\s*1 0 auto/);
+	});
 });
