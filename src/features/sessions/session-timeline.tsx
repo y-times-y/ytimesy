@@ -1747,6 +1747,23 @@ function SessionItemView({
 						{item.message}
 					</p>
 				);
+			if (item.startingMachine)
+				return (
+					<div
+						className="session-activity session-system-notice"
+						data-kind="starting-machine"
+						role="status"
+					>
+						<p>
+							<LoaderCircle
+								size={14}
+								className="workspace-status-spin"
+								aria-hidden="true"
+							/>
+							<span className="session-activity-title">{item.message}</span>
+						</p>
+					</div>
+				);
 			if (item.savingChanges)
 				return (
 					<div

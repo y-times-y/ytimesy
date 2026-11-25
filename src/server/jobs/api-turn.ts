@@ -132,8 +132,13 @@ import { startedByPeerMessage } from "#/domain/thread-peer";
 import { withStoppedNotice } from "#/domain/turn-end";
 import {
 	isEdgeOutage,
+	isMachineRefusalThatPasses,
 	isTransientInfrastructureFailure,
 } from "#/domain/turn-interruption";
+import {
+	startingMachineItem,
+	withoutStartingMachine,
+} from "#/domain/turn-machine-status";
 import {
 	savingChangesItem,
 	turnMayHaveChangedWorkspace,
@@ -664,7 +669,7 @@ async function runApiTurnAttempt(
 		);
 	step?.signal.addEventListener("abort", stopForDeadline, { once: true });
 	if (step?.signal.aborted) stopForDeadline();
-	let items = turn.items;
+	let items = withoutStartingMachine(turn.items);
 	const previousUsage =
 		step || continued
 			? [...items].reverse().find((item) => item.kind === "userMessage")
@@ -3717,6 +3722,13 @@ async function runApiTurnAttempt(
 					recovered: true,
 					userVisible: false,
 				}).catch(() => {});
+			// A machine that cannot start yet shows a calm status while the
+			// step is retried, never the refusal. Best effort.
+			if (isMachineRefusalThatPasses(platformRestart))
+				await checkpointApiTurn(turn, messages, [
+					...withoutStartingMachine(items),
+					startingMachineItem(turn.id),
+				]).catch(() => {});
 			throw platformRestart;
 		}
 		// The step's soft deadline passed while its model call was still running and

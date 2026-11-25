@@ -271,6 +271,12 @@ export type NoticeSessionItem = {
 	 */
 	readonly savingChanges?: true;
 	/**
+	 * The machine could not start yet (the provider's limit) and the turn is
+	 * waiting and retrying: a calm "Starting machine…" line, not an error
+	 * (turn-machine-status.ts). Removed when the step runs again.
+	 */
+	readonly startingMachine?: true;
+	/**
 	 * The turn's goal (goal-notice.ts): the model started goal mode, so the
 	 * harness keeps it working until it marks the goal complete or blocked.
 	 */
@@ -803,7 +809,8 @@ export function showTurnWorking(
 		return false;
 	if (last.kind === "reasoning") return false;
 	// It shows its own "Saving changes…" line.
-	if (last.kind === "notice" && last.savingChanges) return false;
+	if (last.kind === "notice" && (last.savingChanges || last.startingMachine))
+		return false;
 	if (last.kind === "commandExecution" && last.status === "inProgress") {
 		return false;
 	}

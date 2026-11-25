@@ -7,7 +7,8 @@ export type OwnerAlertKind =
 	| "chat-wake-failed"
 	| "interruption"
 	| "interruption-digest"
-	| "canary-failed";
+	| "canary-failed"
+	| "provider-account-limit";
 
 export type OwnerAlert = {
 	readonly kind: OwnerAlertKind;

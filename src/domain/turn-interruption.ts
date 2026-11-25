@@ -47,15 +47,17 @@ export function isEdgeOutage(error: unknown) {
 const MACHINE_REFUSAL_THAT_PASSES =
 	/limiting requests|LIMIT_EXCEEDED|too many new machines|resource limit exceeded/i;
 
-function isMachineRefusalThatPasses(cause: Error): boolean {
+export function isMachineRefusalThatPasses(cause: unknown, depth = 0): boolean {
+	if (depth > 4 || !(cause instanceof Error)) return false;
 	const tag = (cause as { _tag?: unknown })._tag;
 	if (
-		cause.name !== "WorkspaceProvisionError" &&
-		tag !== "WorkspaceProvisionError"
-	)
-		return false;
-	const detail = String((cause as { detail?: unknown }).detail ?? "");
-	return MACHINE_REFUSAL_THAT_PASSES.test(`${cause.message} ${detail}`);
+		cause.name === "WorkspaceProvisionError" ||
+		tag === "WorkspaceProvisionError"
+	) {
+		const detail = String((cause as { detail?: unknown }).detail ?? "");
+		return MACHINE_REFUSAL_THAT_PASSES.test(`${cause.message} ${detail}`);
+	}
+	return isMachineRefusalThatPasses(cause.cause, depth + 1);
 }
 
 /** True when retrying the step from its checkpoint is the right answer, whatever the person did not do. */

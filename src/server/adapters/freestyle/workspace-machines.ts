@@ -29,7 +29,6 @@ import type {
 	ProofWorkspace,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
-import { recordInterruption } from "../interruption-events";
 import { abortableFreestyleFetch, callSignalFetch } from "./abortable-fetch";
 import { boundedFreestyleFetch, fastPollFreestyleFetch } from "./bounded-fetch";
 import {
@@ -46,12 +45,12 @@ import { forkRunningVm } from "./fork-vm";
 import {
 	logMachineFailure,
 	MACHINE_START_RETRY_DELAYS_MS,
-	type MachineRateLimitHit,
 	machineFailureDetail,
 	machineFailureKind,
 	requestIdRecordingFetch,
 	resumableMachineStart,
 } from "./machine-failure";
+import { reportMachineRateLimit } from "./machine-rate-limit-report";
 import {
 	BACKGROUND_IDLE_TIMEOUT_SECONDS,
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
@@ -103,17 +102,6 @@ class MachineSizeRejected extends Error {
 		);
 		this.name = "MachineSizeRejected";
 	}
-}
-
-/** One monitoring row per provider limit hit; recovered because the start keeps waiting. */
-function recordMachineRateLimit(hit: MachineRateLimitHit) {
-	void recordInterruption({
-		kind: "machine.rate_limited",
-		sessionId: hit.slug,
-		cause: `${hit.operation} attempt ${hit.attempt}`,
-		recovered: true,
-		userVisible: false,
-	});
 }
 
 /** Fixed wording for the failure kinds machineFailureReason (api-turn-failure.ts) names. */
@@ -371,7 +359,7 @@ export function createFreestyleWorkspaceMachines(
 						{ operation: "ensureRunning", vmId: workspaceId },
 						MACHINE_START_RETRY_DELAYS_MS,
 						undefined,
-						recordMachineRateLimit,
+						reportMachineRateLimit,
 					),
 				);
 				// Never throws; the turn need not wait for the bookkeeping.
@@ -679,7 +667,7 @@ export function createFreestyleWorkspaceMachines(
 					{ operation: "provisionSession", slug },
 					MACHINE_START_RETRY_DELAYS_MS,
 					undefined,
-					recordMachineRateLimit,
+					reportMachineRateLimit,
 				);
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
