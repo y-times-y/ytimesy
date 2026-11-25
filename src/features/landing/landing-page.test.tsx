@@ -112,3 +112,19 @@ it("shows the app as the product's own components render it today", () => {
 	expect(html).not.toContain("app-shot");
 	expect(html).not.toContain("as-sidebar");
 });
+
+it("draws the preview in the app's open desktop layout whatever the visitor's window or saved sidebar choice", async () => {
+	const { readFileSync } = await import("node:fs");
+	const css = readFileSync(
+		new URL("./landing-page.css", import.meta.url),
+		"utf8",
+	);
+	// The app hides its sidebar unless <html data-sidebar="open"> (set only
+	// when signed in): the front page has none, so the preview opens it itself.
+	expect(css).toMatch(
+		/\.landing-preview \.workspace-shell \{\s*grid-template-columns: 260px/,
+	);
+	expect(css).toMatch(
+		/\.landing-preview \.workspace-shell \.project-sidebar \{\s*opacity: 1;/,
+	);
+});
