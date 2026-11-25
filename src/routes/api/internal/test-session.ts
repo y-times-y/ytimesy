@@ -72,7 +72,16 @@ export const Route = createFileRoute("/api/internal/test-session")({
 						"test-session failed",
 						error instanceof Error ? error.message : error,
 					);
-					return Response.json({ error: "failed" }, { status: 500 });
+					// Past the capability check the caller holds the test token: say why usage seeding failed.
+					return Response.json(
+						{
+							error: "failed",
+							...(body.action === "seed-usage" && error instanceof Error
+								? { reason: error.message.slice(0, 300) }
+								: {}),
+						},
+						{ status: 500 },
+					);
 				}
 			},
 		},

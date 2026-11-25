@@ -40,7 +40,7 @@ function fakeDb(opts: { testUserFlagged: boolean; minted?: number }) {
 			if (sql.startsWith("insert into test_session_event")) events.push(params);
 			if (/usage_daily|usage_turn_counted/.test(sql))
 				usage.push({ sql, params });
-			if (sql.startsWith("insert into project"))
+			if (sql.startsWith("select id from project where"))
 				return { rows: [{ id: crypto.randomUUID() }] };
 			if (sql.startsWith("delete from project")) {
 				deletes.push(params);

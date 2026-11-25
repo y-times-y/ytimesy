@@ -207,12 +207,15 @@ export async function seedTestUsage(
 		.slice(0, 10);
 	const projectIds: string[] = [];
 	for (const project of SEED_PROJECTS) {
-		const row = await db.query<{ id: string }>(
+		// No conflict target: the project's unique key has changed before (now it includes repository_set_key).
+		await db.query(
 			`insert into project(id,user_id,repository_id,installation_id,full_name,branch)
-			 values($1,$2,$3,$3,$4,'main')
-			 on conflict (user_id,repository_id) do update set full_name=excluded.full_name
-			 returning id`,
+			 values($1,$2,$3,$3,$4,'main') on conflict do nothing`,
 			[randomUUID(), userId, project.repositoryId, project.name],
+		);
+		const row = await db.query<{ id: string }>(
+			"select id from project where user_id=$1 and repository_id=$2 and repository_set_key=''",
+			[userId, project.repositoryId],
 		);
 		projectIds.push(row.rows[0]?.id as string);
 	}
