@@ -49,9 +49,6 @@
     // ProcessEnv type and breaks the executor typecheck.
     "production": {
       "name": "ytimesy-edge-executor-production",
-      // Restated: compatibility_flags inherit from the top level, and the
-      // development-only eviction flag must not reach production by inheritance.
-      "compatibility_flags": ["nodejs_compat"],
       "vpc_networks": [{ "binding": "CODEX_EGRESS", "network_id": "cf1:network", "remote": true }],
       "durable_objects": {
         "bindings": [
