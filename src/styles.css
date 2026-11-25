@@ -5746,6 +5746,9 @@ details.environment-build[open] > summary .session-activity-chevron {
 	color: var(--list-icon-color);
 }
 .y-overview-row[data-status="needs-you"] .y-overview-icon {
+	color: var(--accent-blue);
+}
+.y-overview-row[data-status="needs-you"] .y-overview-icon .y-overview-failed {
 	color: #f87171;
 }
 .y-overview-row[data-status="pull-request"] .y-overview-icon {

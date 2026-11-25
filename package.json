@@ -9,6 +9,7 @@
 	"scripts": {
 		"dev": "node --env-file-if-exists=.env --import tsx scripts/development-server.ts",
 		"generate-routes": "tsr generate",
+		"previews": "node --import tsx scripts/update-previews.ts",
 		"build": "vite build",
 		"preview": "vite preview",
 		"typecheck": "pnpm generate-routes && pnpm build:edge-executor && tsc --noEmit && pnpm typecheck:workflows && tsc --noEmit --project tsconfig.edge-executor.json",

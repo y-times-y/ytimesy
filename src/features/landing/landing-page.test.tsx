@@ -90,3 +90,25 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	// No emoji anywhere on the page.
 	expect(/\p{Extended_Pictographic}/u.test(text)).toBe(false);
 });
+
+it("shows the app as the product's own components render it today", () => {
+	const html = renderToStaticMarkup(<LandingPage />);
+	const preview = html.slice(html.indexOf('class="landing-preview"'));
+	// Inert and described: a picture of the app, not controls.
+	expect(preview.slice(0, 500)).toContain('role="img"');
+	expect(preview.slice(0, 500)).toContain("inert");
+	for (const real of [
+		"workspace-shell",
+		"project-sidebar",
+		"Super agent",
+		"Needs you",
+		"Recently finished",
+		"ytimesy-3",
+		"Pull requests",
+		"Issues",
+	])
+		expect(preview, real).toContain(real);
+	// The hand-drawn mock is gone.
+	expect(html).not.toContain("app-shot");
+	expect(html).not.toContain("as-sidebar");
+});

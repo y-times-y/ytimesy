@@ -15,7 +15,7 @@
 
 [**Website**](https://ytimesy.com) · [**Discord**](https://discord.gg/8rhTdsrtGw) · [**Architecture**](docs/architecture.md) · [**Contributing**](CONTRIBUTING.md)
 
-<img src="docs/images/hero.png" alt="The ytimesy front page: AI Software Engineer in the Cloud, with the app below" width="900">
+<img src="docs/images/hero.png" alt="The ytimesy app: the Super agent above the Threads list grouped into Needs you, Working and Recently finished, the Super agent's chat, and an Overview of what needs you" width="900">
 
 </div>
 
@@ -32,9 +32,9 @@
 - **Bring your own subscription or API key.** Use your ChatGPT, Claude or Grok subscription, or your own API keys, on one harness. Nothing silently falls back to paid inference.
 
 <div align="center">
-<img src="docs/images/app.png" alt="A task split across three agents, with the diff and progress in the right sidebar" width="900">
+<img src="docs/images/app.png" alt="The Pull requests page beside the Super agent and the Threads list, with each pull request's thread, checks and review" width="900">
 <br>
-<sub>The workspace: chat, per-agent progress, the diff, todos and what has shipped. Screenshot from <a href="https://ytimesy.com">ytimesy.com</a> with demo data.</sub>
+<sub>The workspace: the Super agent, threads grouped by what needs you, and pull requests in the app (Issues sit above them). Rendered from the app's own components with demo data by <code>pnpm previews</code>.</sub>
 </div>
 
 ## What's inside
