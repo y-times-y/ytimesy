@@ -119,6 +119,21 @@ export async function seedRepositoryIds(db: TestAccountDb) {
 		archived: row.archived,
 		projects: Number(row.n),
 	}));
+	const groupRows = (
+		await db.query<{
+			repository_id: string;
+			installation_id: string;
+			n: string;
+		}>(
+			`select r.repository_id::text, r.installation_id::text, count(*)::text as n
+			 from project_repository r where r.full_name=$1 group by 1,2 order by 1,2`,
+			[SEED_REPOSITORY],
+		)
+	).rows.map((row) => ({
+		repositoryId: Number(row.repository_id),
+		installationId: Number(row.installation_id),
+		rows: Number(row.n),
+	}));
 	const listed: Record<string, number | null> = {};
 	for (const installationId of new Set(
 		stored.map((row) => row.installationId),
@@ -139,5 +154,5 @@ export async function seedRepositoryIds(db: TestAccountDb) {
 			listed[String(installationId)] = null;
 		}
 	}
-	return { stored, listed };
+	return { stored, groupRows, listed };
 }

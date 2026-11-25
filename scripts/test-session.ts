@@ -27,6 +27,7 @@ const COMMANDS = [
 	"seed",
 	"seed-usage",
 	"y-counts",
+	"repo-ids",
 ] as const;
 
 export function callerFromEnvironment(env: NodeJS.ProcessEnv) {
@@ -57,7 +58,7 @@ export function parseCli(argv: string[]) {
 	const command = positionals[0];
 	if (!COMMANDS.includes(command as (typeof COMMANDS)[number]))
 		throw new Error(
-			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|y-counts> [options]",
+			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|y-counts|repo-ids> [options]",
 		);
 	if (command === "shot" && !values.out)
 		throw new Error("Pass --out <file.png>.");
@@ -68,7 +69,7 @@ export async function requestTestSession(input: {
 	base: string;
 	token: string | undefined;
 	caller: string;
-	action: "mint" | "reset" | "seed" | "seed-usage" | "y-counts";
+	action: "mint" | "reset" | "seed" | "seed-usage" | "y-counts" | "repo-ids";
 	/** Only `seed`: the model key to connect, sealed server-side; never printed. */
 	apiKey?: string;
 	fetcher?: typeof fetch;

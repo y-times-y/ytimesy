@@ -54,6 +54,7 @@ it("reports repository and installation ids only", async () => {
 				],
 			}) as never,
 	});
+	expect(result.groupRows[0]?.repositoryId).toBe(5);
 	expect(result.stored).toEqual([
 		{ repositoryId: 5, installationId: 9, archived: false, projects: 1 },
 	]);
