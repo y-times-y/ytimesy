@@ -47,15 +47,37 @@
 .menu-select-value[data-placeholder] {
 	color: var(--list-text-muted);
 }
-/* Over the Settings dialog (.settings-overlay is z-index 200). */
+/* Compact: small rows, a trigger-wide list that scrolls after seven rows. */
 .project-picker.menu-select-menu {
 	z-index: 210;
 	width: auto;
-	min-width: max(var(--radix-popover-trigger-width, 0px), 180px);
-	max-width: min(380px, calc(100vw - 24px));
+	min-width: max(var(--radix-popover-trigger-width, 0px), 140px);
+	max-width: min(260px, calc(100vw - 24px));
+	max-height: min(216px, var(--radix-popover-content-available-height, 80dvh));
+	border-radius: 8px;
+	box-shadow: 0 6px 16px #00000066;
+}
+.menu-select-menu .project-picker-list {
+	gap: 0;
+	padding: 3px;
 }
 .menu-select-choice {
-	font-size: var(--list-font-size);
+	min-height: 28px;
+	padding: 0 8px;
+	gap: 6px;
+	border-radius: 5px;
+	font-size: 12px;
+}
+.menu-select-choice .menu-row-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.menu-select-choice > svg {
+	width: 12px;
+	height: 12px;
 }
 .menu-select-choice:focus-visible {
 	outline: 1px solid #ffffff4d;

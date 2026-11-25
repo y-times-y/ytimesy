@@ -698,8 +698,16 @@ button:enabled:active {
 }
 .sidebar-section-actions {
 	display: flex;
+	flex: 0 0 auto;
 	align-items: center;
 	gap: 2px;
+	/* The last button's icon lines up with the right edge of the rows below. */
+	margin-left: auto;
+	margin-right: -4px;
+}
+.sidebar-section-header .sidebar-section-title {
+	flex: 1 1 auto;
+	min-width: 0;
 }
 .sidebar-section-add {
 	display: grid;

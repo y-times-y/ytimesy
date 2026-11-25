@@ -101,3 +101,12 @@ describe("MenuSelect", () => {
 		expect(source).toContain('role="listbox"');
 	});
 });
+
+describe("MenuSelect compact list", () => {
+	it("keeps rows near 28px and scrolls after about seven rows", async () => {
+		const { readFileSync } = await import("node:fs");
+		const css = readFileSync(`${__dirname}/menu-select.css`, "utf8");
+		expect(css).toMatch(/\.menu-select-choice \{[^}]*min-height: 28px/);
+		expect(css).toMatch(/max-height: min\(216px/);
+	});
+});
