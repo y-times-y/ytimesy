@@ -181,14 +181,14 @@
 }
 .landing-preview {
 	--preview-scale: tan(atan2(100cqw, 1440px));
-	height: calc(820px * var(--preview-scale));
+	height: calc(900px * var(--preview-scale));
 	overflow: hidden;
 	border-radius: 13px;
 	text-align: left;
 }
 .landing-preview > .workspace-shell {
 	width: 1440px;
-	height: 820px;
+	height: 900px;
 	min-height: 0;
 	transform-origin: 0 0;
 	transform: scale(var(--preview-scale));

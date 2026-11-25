@@ -131,7 +131,7 @@ function capture(
 		"--no-sandbox",
 		"--hide-scrollbars",
 		"--force-device-scale-factor=2",
-		"--window-size=1440,820",
+		"--window-size=1440,900",
 		`--screenshot=${join(IMAGES, out)}`,
 		pathToFileURL(page).href,
 	]);
