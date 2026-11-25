@@ -225,6 +225,87 @@
 	grid-template-columns: minmax(0, 1fr) 1fr;
 }
 
+/* Responsive preview. The frame is the container: from 1100px up the
+   1440x900 desktop picture is scaled to it (above); below that the same markup
+   reflows at its own size, so text stays readable and nothing scrolls sideways.
+   900-1099: sidebar, chat and Overview. 560-899: chat and Overview. Under
+   560: the chat, then the Overview. The panels' sizes are inline styles
+   (react-resizable-panels), so overriding them needs !important. */
+@container (max-width: 1099px) {
+	.landing-preview {
+		height: auto;
+		background: #161616;
+	}
+	.landing-preview > .workspace-shell {
+		width: 100%;
+		height: 760px;
+		transform: none;
+	}
+	/* The newest part of the conversation: the thread chips and the answer. */
+	.landing-preview .session-timeline > li:nth-child(-n + 2),
+	.landing-preview .session-timeline > li:nth-last-child(-n + 2) {
+		display: none;
+	}
+	/* The app sizes the chat from the visitor's window (min-height in vh). */
+	.landing-preview .welcome-panel {
+		height: 100%;
+		min-height: 0;
+	}
+}
+@container (min-width: 900px) and (max-width: 1099px) {
+	.landing-preview > .workspace-shell {
+		grid-template-columns: 240px minmax(0, 1fr);
+	}
+}
+@container (max-width: 899px) {
+	.landing-preview > .workspace-shell {
+		grid-template-columns: minmax(0, 1fr);
+		height: 700px;
+	}
+	.landing-preview .welcome-panel {
+		height: 100%;
+	}
+	.landing-preview .workspace-shell .project-sidebar-frame {
+		display: none;
+	}
+}
+@container (max-width: 559px) {
+	.landing-preview > .workspace-shell {
+		display: block;
+		height: auto;
+		background: #161616;
+	}
+	.landing-preview .welcome-panel {
+		height: auto;
+	}
+	.landing-preview .workspace-main {
+		display: block;
+		height: auto;
+	}
+	.landing-preview .workspace-body {
+		/* biome-ignore lint/complexity/noImportantStyles: overrides the panel library's inline layout */
+		flex-direction: column !important;
+		/* biome-ignore lint/complexity/noImportantStyles: overrides the panel library's inline layout */
+		height: auto !important;
+		overflow: visible;
+	}
+	.landing-preview .workspace-body > [data-panel] {
+		/* biome-ignore lint/complexity/noImportantStyles: overrides the panel library's inline flex-grow */
+		flex: none !important;
+		width: 100%;
+	}
+	.landing-preview .workspace-separator {
+		display: none;
+	}
+	.landing-preview .inspector-frame {
+		border-top: 1px solid #ffffff14;
+		background: #0a0a0a;
+	}
+	.landing-preview .y-overview {
+		height: auto;
+	}
+}
+
 /* Sections */
 .landing-bench,
 .landing-features,
@@ -852,19 +933,6 @@
 		margin-top: 24px;
 		padding: 5px;
 		border-radius: 16px;
-	}
-	/* A phone shows the Threads list at its own size, not a scaled-down app. */
-	.landing-preview {
-		height: 560px;
-	}
-	.landing-preview > .workspace-shell {
-		width: 100%;
-		height: 560px;
-		transform: none;
-		grid-template-columns: minmax(0, 1fr);
-	}
-	.landing-preview .workspace-main {
-		display: none;
 	}
 	.landing-bench,
 	.landing-models,

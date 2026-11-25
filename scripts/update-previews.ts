@@ -19,14 +19,13 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
-	readdirSync,
-	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { buildPreviewCss } from "./previews/build-css.ts";
 import { stylesheetsImportedBy } from "./previews/css-imports.ts";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -84,31 +83,6 @@ function findChrome(): string {
 	throw new Error("Chrome not found. Set CHROME_PATH or pass --no-images.");
 }
 
-/** One stylesheet: the app's own CSS plus what the preview's components import. */
-function buildStylesheet(work: string, sheets: string[]) {
-	const entry = join(ROOT, "scripts/previews/entry.gen.ts");
-	const imports = [resolve(ROOT, "src/styles.css"), ...sheets].map(
-		(sheet) =>
-			`import "${slashes(relative(join(ROOT, "scripts/previews"), sheet))}";`,
-	);
-	writeFileSync(entry, `${imports.join("\n")}\n`);
-	try {
-		run(
-			"pnpm",
-			["exec", "vite", "build", "-c", "scripts/previews/vite.config.ts"],
-			{ PREVIEW_CSS_DIR: join(work, "css") },
-		);
-	} finally {
-		rmSync(entry, { force: true });
-	}
-	const assets = join(work, "css/assets");
-	const css = readdirSync(assets)
-		.filter((file) => file.endsWith(".css"))
-		.map((file) => readFileSync(join(assets, file), "utf8"))
-		.join("\n");
-	return css.replaceAll("url(./", `url(${pathToFileURL(assets).href}/`);
-}
-
 /** The app's own images (/brand/...) from the checkout's public folder. */
 const publicUrl = (html: string) =>
 	html.replace(
@@ -159,7 +133,7 @@ try {
 		"src/features/landing/preview/preview-styles.gen.ts",
 	]);
 	if (withImages) {
-		const css = buildStylesheet(work, sheets);
+		const css = buildPreviewCss(join(work, "css"), sheets);
 		const chrome = findChrome();
 		const { PREVIEW } = (await import(
 			pathToFileURL(join(PREVIEW_DIR, "preview.gen.ts")).href
