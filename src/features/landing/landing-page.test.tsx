@@ -104,7 +104,6 @@ it("shows the app as the product's own components render it today", () => {
 		"Needs you",
 		"Recently finished",
 		"ytimesy-3",
-		"canvas-card",
 		"Pull requests",
 		"Issues",
 	])

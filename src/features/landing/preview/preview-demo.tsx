@@ -79,9 +79,9 @@ const CHATS: SidebarChat[] = [
 		workspaceId: "w5",
 	},
 	{
-		id: "t6",
+		id: "t1",
 		title: "Rate-limit the public API",
-		threadNumber: 6,
+		threadNumber: 1,
 		updatedAt: at(4),
 		turnStatus: "running",
 		workingSince: at(9),
@@ -89,9 +89,9 @@ const CHATS: SidebarChat[] = [
 		workspaceId: "w6",
 	},
 	{
-		id: "t7",
+		id: "t2",
 		title: "Onboarding emails",
-		threadNumber: 7,
+		threadNumber: 2,
 		updatedAt: at(4),
 		turnStatus: "running",
 		workingSince: at(4),
@@ -99,9 +99,9 @@ const CHATS: SidebarChat[] = [
 		workspaceId: "w7",
 	},
 	{
-		id: "t9",
+		id: "t6",
 		title: "Approve the pricing copy",
-		threadNumber: 9,
+		threadNumber: 6,
 		updatedAt: at(7),
 		turnStatus: "completed",
 		waitingOn: "plan",
@@ -109,9 +109,9 @@ const CHATS: SidebarChat[] = [
 		workspaceId: "w9",
 	},
 	{
-		id: "t2",
+		id: "t7",
 		title: "Fix flaky settings test",
-		threadNumber: 2,
+		threadNumber: 7,
 		updatedAt: at(40),
 		turnStatus: "completed",
 		pr: pr(105, "open"),
@@ -119,9 +119,9 @@ const CHATS: SidebarChat[] = [
 		workspaceId: "w2",
 	},
 	{
-		id: "t1",
+		id: "t8",
 		title: "Upgrade the date library",
-		threadNumber: 1,
+		threadNumber: 8,
 		updatedAt: at(200),
 		turnStatus: "completed",
 		pr: pr(104, "merged"),
@@ -140,8 +140,6 @@ const THREADS = threadDirectory(
 );
 
 const item = (id: string) => SessionItemId(id);
-
-const CANVAS_HTML = `<body style="margin:0;background:#161616;color:#ededed;font:13px system-ui,sans-serif;padding:14px"><b>Settings, Appearance</b><p style="color:#9a9a9a;margin:6px 0 10px">Dark mode toggle, option A</p><div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #2c2c2c;border-radius:8px"><span>Dark mode</span><span style="width:34px;height:20px;border-radius:10px;background:#83c1ff;display:inline-block"></span></div></body>`;
 
 const SESSION = {
 	snapshotAvailable: false,
@@ -169,18 +167,24 @@ const SESSION = {
 			kind: "agentMessage",
 			id: item("a0"),
 			phase: "final_answer",
-			text: "Started ytimesy-3 (dark mode toggle), ytimesy-5 (billing page) and ytimesy-6 (rate limiting), each on its own cloud machine. I'll stay quiet until one needs you or finishes.",
+			text: "Started ytimesy-3 (dark mode toggle), ytimesy-5 (billing page) and ytimesy-1 (rate limiting), each on its own cloud machine. I'll stay quiet until one needs you or finishes.",
 		},
 		{
 			kind: "userMessage",
 			id: item("u1"),
-			text: "Also look at the onboarding emails in @ytimesy-7. It should reuse the locale from @ytimesy-4 once I have answered, and @ytimesy-6 should not start before @ytimesy-3 has merged.",
+			text: "Also look at the onboarding emails in @ytimesy-2. It should reuse the locale from @ytimesy-4 once I have answered, and @ytimesy-1 should not start before @ytimesy-3 has merged.",
 		},
 		{
 			kind: "agentMessage",
 			id: item("a1"),
 			phase: "final_answer",
-			text: "Done. I told ytimesy-7 to wait for the locale and ytimesy-6 to wait for ytimesy-3. Four threads are running in parallel.",
+			text: "Done. I told ytimesy-2 to wait for the locale and ytimesy-1 to wait for ytimesy-3. Four threads are running in parallel.",
+		},
+		{
+			kind: "agentMessage",
+			id: item("a1b"),
+			phase: "final_answer",
+			text: "ytimesy-3 has the toggle and a test for it, ytimesy-5 is wiring the invoice totals, and ytimesy-7 finished its fix: the settings test no longer depends on the clock.",
 		},
 		{
 			kind: "userMessage",
@@ -188,17 +192,21 @@ const SESSION = {
 			text: "What's going on? @ytimesy-3 should have the toggle by now.",
 		},
 		{
-			kind: "canvas",
-			id: item("c1"),
-			title: "Settings, dark mode",
-			revision: 1,
-			html: CANVAS_HTML,
-		},
-		{
 			kind: "agentMessage",
 			id: item("a2"),
 			phase: "final_answer",
-			text: "Two threads need you: ytimesy-4 asks which locale the emails use, and ytimesy-9 wants your approval of the pricing copy. ytimesy-3 has the toggle running in its own machine, and its canvas is above. ytimesy-2 finished: pull request #105 is ready to merge.",
+			text: "Two threads need you: ytimesy-4 asks which locale the emails use, and ytimesy-6 wants your approval of the pricing copy. ytimesy-3 has the toggle running in its own machine. It already has a draft you can review. ytimesy-7 finished: pull request #105 is ready to merge.",
+		},
+		{
+			kind: "userMessage",
+			id: item("u3"),
+			text: "Merge #105 when its checks pass, and ask @ytimesy-2 to send me the draft before it goes out.",
+		},
+		{
+			kind: "agentMessage",
+			id: item("a3"),
+			phase: "final_answer",
+			text: "Queued: #105 merges as soon as its last check passes. ytimesy-2 will send you the draft of the onboarding emails first, and I'll stay quiet until then.",
 		},
 	],
 } as never;
@@ -247,7 +255,7 @@ const PULLS: RepositoryPullRequest[] = [
 		authorAvatarUrl: null,
 		draft: false,
 		state: "open",
-		head: "ytimesy-2",
+		head: "ytimesy-7",
 		base: "main",
 		updatedAt: at(40),
 		labels: [label("tests", "0e8a16")],
@@ -391,7 +399,6 @@ function App({ scene }: { scene: PreviewScene }) {
 						onOpenMemory={noop}
 						onOpenWorkItems={noop}
 						workItemsActive={work}
-						waitingOnYou={{ pullRequests: 2, issues: 1 }}
 						renderedAtMs={NOW}
 						account={{ name: "Demo user" }}
 					/>
@@ -429,7 +436,9 @@ function App({ scene }: { scene: PreviewScene }) {
 										/>
 									</div>
 								</div>
-								<Chat />
+								<div className="welcome-content" data-layout="chat">
+									<Chat />
+								</div>
 							</section>
 							<div className="inspector-frame">
 								<YOverview
