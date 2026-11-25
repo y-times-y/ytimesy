@@ -16,6 +16,8 @@ import {
 	crewNoteMatters,
 	crewTitle,
 	crewWakeBody,
+	CREW_BUSY_HOLD_MAX_MS,
+	CREW_BUSY_RECHECK_MS,
 	crewWakeDelayMs,
 	crewWakeDueAt,
 	decideWake,
@@ -449,6 +451,12 @@ export class SqliteYSquaredCrew {
 							note.ask,
 							// One line from titles and revisions the thread already held.
 							note.canvas,
+							// What the thread said (its result) or why it failed: Y² answers
+							// from the line, so it needs fewer `thread` calls.
+							note.state === "failed" && note.failure
+								? `failure: ${note.failure}`
+								: null,
+							note.result ? `said: "${note.result}"` : null,
 						]
 							.filter(Boolean)
 							.join("; ") || null,
@@ -1031,7 +1039,17 @@ export class SqliteYSquaredCrew {
 		}
 		let next: WakeState = { ...state, alarmAt: null, lastWakeAt: now };
 		if (baseDue) {
-			const decided = decideWake({ ...state, pending: true }, now);
+			const decided = decideWake(
+				{ ...state, pending: true },
+				now,
+				this.sql
+					.exec<{ n: number }>(
+						"select count(*) n from wake_events where kind in ('waiting','failed')",
+					)
+					.toArray()[0]?.n
+					? true
+					: false,
+			);
 			if (decided.action === "capped") {
 				// A heartbeat held by the cap is not a pending wake. Due
 				// schedules and signals wait for the window too.
@@ -1137,6 +1155,35 @@ export class SqliteYSquaredCrew {
 		this.sql.exec("delete from wake_events where id<=?", eventsUpTo);
 		this.sql.exec("update wake_state set wake_failures=0 where id=1");
 		this.consumeProactive(delivered, now);
+	}
+
+	/**
+	 * Y² is mid-turn on a route that cannot take a steer: keep the wake (and
+	 * every event that arrives meanwhile) and look again shortly, so they go
+	 * out as ONE wake once the turn ends. No failure is counted and the hour's
+	 * slot is given back. Held at most CREW_BUSY_HOLD_MAX_MS after the oldest
+	 * event (the caller queues behind the turn then). Null: not held (too long).
+	 */
+	holdWake(now: number): { retryAt: number | null } {
+		const oldest = this.sql
+			.exec<{ at: number | null }>("select min(at) at from wake_events")
+			.toArray()[0]?.at;
+		if (
+			oldest !== null &&
+			oldest !== undefined &&
+			now - oldest >= CREW_BUSY_HOLD_MAX_MS
+		)
+			return { retryAt: null };
+		const state = this.wakeState();
+		const retryAt = now + CREW_BUSY_RECHECK_MS;
+		this.saveWake({
+			...state,
+			pending: true,
+			wakesThisHour: Math.max(0, state.wakesThisHour - 1),
+			alarmAt: null,
+		});
+		this.sql.exec("update wake_state set pending_due_at=? where id=1", retryAt);
+		return { retryAt: this.rearm(now) ?? retryAt };
 	}
 
 	/**

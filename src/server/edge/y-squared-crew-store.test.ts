@@ -6,7 +6,9 @@ import {
 	CREW_HOUR_MS,
 	CREW_RETENTION_MS,
 	CREW_STARTED_WAKE_EVERY_MS,
+	CREW_BURST_GAP_MS,
 	CREW_URGENT_WAKE_DELAY_MS,
+	CREW_URGENT_WAKES_PER_HOUR,
 	CREW_WAKE_DELAY_MS,
 	CREW_WAKES_PER_HOUR,
 	CREW_WORKING_MAX_MS,
@@ -151,12 +153,13 @@ describe("wakes", () => {
 			T0 + 15,
 		);
 		expect(more.alarmAt).toBeNull();
-		// ...except one that needs the person sooner pulls it earlier
+		// ...and a needs-you note is just as immediate (no later than the alarm)
 		const second = crew.noteThread(
 			note({ sessionId: "t2", state: "waiting", waitingOn: "question" }),
 			T0 + 20,
 		);
-		expect(second.alarmAt).toBe(T0 + 20 + CREW_URGENT_WAKE_DELAY_MS);
+		expect(second.alarmAt).toBeNull();
+		expect(CREW_URGENT_WAKE_DELAY_MS).toBe(0);
 	});
 
 	it("an alarm sends exactly one wake and records it; the next waits 15 s after it", () => {
@@ -175,9 +178,8 @@ describe("wakes", () => {
 			note({ sessionId: "t2", state: "failed", waitingOn: "failed" }),
 			(alarmAt as number) + 1_000,
 		);
-		expect(next.alarmAt).toBe(
-			(alarmAt as number) + 1_000 + CREW_URGENT_WAKE_DELAY_MS,
-		);
+		// a note 1 s after a wake is due right away (the burst gap is 1 s)
+		expect(next.alarmAt).toBe((alarmAt as number) + CREW_BURST_GAP_MS);
 	});
 
 	it("caps wakes per hour and holds the extra one until the hour rolls over", () => {
@@ -193,7 +195,9 @@ describe("wakes", () => {
 				now,
 			);
 			now = alarmAt as number;
-			expect(crew.takeWake(now).action).toBe("send");
+			const taken = crew.takeWake(now);
+			expect(taken.action).toBe("send");
+			if (taken.action === "send") crew.wakeSent(taken.eventsUpTo);
 		}
 		const { alarmAt } = crew.noteThread(
 			note({ sessionId: "t9", state: "finished" }),
@@ -202,8 +206,8 @@ describe("wakes", () => {
 		now = alarmAt as number;
 		const capped = crew.takeWake(now);
 		expect(capped.action).toBe("capped");
-		// the hour window opened at the first wake (T0 + 15 s)
-		expect(capped.retryAt).toBe(T0 + CREW_URGENT_WAKE_DELAY_MS + CREW_HOUR_MS);
+		// the hour window opened at the first wake (T0)
+		expect(capped.retryAt).toBe(T0 + CREW_HOUR_MS);
 		expect(crew.wakeState().pending).toBe(true);
 		expect(crew.takeWake(capped.retryAt as number).action).toBe("send");
 	});
@@ -882,5 +886,114 @@ describe("a canvas the turn showed", () => {
 		};
 		expect(parseCrewNote(raw)?.canvas).toHaveLength(200);
 		expect(parseCrewNote({ ...raw, canvas: undefined })?.canvas).toBeNull();
+	});
+});
+
+describe("instant wakes (2026-11-25)", () => {
+	it("the first event after a quiet period wakes at once, finished or needs-you", () => {
+		for (const over of [
+			{ state: "finished" as const },
+			{ state: "waiting" as const, waitingOn: "question" },
+			{ state: "failed" as const, waitingOn: "failed" },
+		]) {
+			const crew = new SqliteYSquaredCrew(sql() as never);
+			expect(crew.noteThread(note(over), T0 + 7).alarmAt).toBe(T0 + 7);
+			expect(crew.takeWake(T0 + 7).action).toBe("send");
+		}
+	});
+
+	it("an identical burst within 1 s of a wake coalesces into one later wake with every event", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(note({ state: "finished" }), T0);
+		expect(crew.takeWake(T0).action).toBe("send");
+		const a = crew.noteThread(
+			note({ sessionId: "a", title: "a", state: "finished", lastReply: "A" }),
+			T0 + 100,
+		);
+		const b = crew.noteThread(
+			note({ sessionId: "b", title: "b", state: "finished", lastReply: "B" }),
+			T0 + 400,
+		);
+		expect(a.alarmAt).toBe(T0 + CREW_BURST_GAP_MS);
+		expect(b.alarmAt).toBeNull();
+		const sent = crew.takeWake(T0 + CREW_BURST_GAP_MS);
+		expect(sent.action).toBe("send");
+		if (sent.action !== "send") return;
+		expect(sent.body).toContain('"a" finished');
+		expect(sent.body).toContain('"b" finished');
+	});
+
+	it("the wake carries the thread's result, question, pull request, canvas and failure reason", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(
+			note({
+				sessionId: "ok",
+				title: "Ship it",
+				state: "finished",
+				prUrl: "https://github.com/o/r/pull/9",
+				result: "Added the retry button and its test.",
+				canvas: 'showed canvas "Retry flow" (revision 2)',
+			}),
+			T0,
+		);
+		crew.noteThread(
+			note({
+				sessionId: "q",
+				title: "Pick DB",
+				state: "waiting",
+				waitingOn: "question",
+				ask: 'asks "Which database?" options: Postgres / SQLite',
+			}),
+			T0 + 1,
+		);
+		crew.noteThread(
+			note({
+				sessionId: "bad",
+				title: "Build",
+				state: "failed",
+				waitingOn: "failed",
+				failure: "The build box ran out of disk",
+			}),
+			T0 + 2,
+		);
+		const sent = crew.takeWake(T0 + 2);
+		if (sent.action !== "send") throw new Error("expected a wake");
+		expect(sent.body).toContain('said: "Added the retry button and its test."');
+		expect(sent.body).toContain("pull/9");
+		expect(sent.body).toContain("Which database?");
+		expect(sent.body).toContain("Retry flow");
+		expect(sent.body).toContain("failure: The build box ran out of disk");
+		expect(sent.body).toContain("call `thread` only for a thread whose line");
+	});
+
+	it("caps: finished wakes stop at the soft cap, needs-you and failed go on to the hard ceiling", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		let now = T0;
+		let replies = 0;
+		const wake = (over: Partial<CrewNote>) => {
+			const { alarmAt } = crew.noteThread(
+				note({ ...over, lastReply: `r${replies++}` }),
+				now,
+			);
+			now = Math.max(now, alarmAt ?? now);
+			const taken = crew.takeWake(now);
+			if (taken.action === "send") crew.wakeSent(taken.eventsUpTo);
+			return taken.action;
+		};
+		for (let i = 0; i < CREW_WAKES_PER_HOUR; i++)
+			expect(wake({ state: "finished" })).toBe("send");
+		expect(wake({ state: "finished", sessionId: "x" })).toBe("capped");
+		// a person waiting is still woken past the soft cap (the pending finished one rides along)
+		expect(
+			wake({ state: "waiting", waitingOn: "question", sessionId: "w" }),
+		).toBe("send");
+		for (let i = CREW_WAKES_PER_HOUR + 1; i < CREW_URGENT_WAKES_PER_HOUR; i++)
+			expect(
+				wake({ state: "failed", waitingOn: "failed", sessionId: `f${i}` }),
+			).toBe("send");
+		// the hard ceiling still stops a loop
+		expect(
+			wake({ state: "failed", waitingOn: "failed", sessionId: "loop" }),
+		).toBe("capped");
 	});
 });

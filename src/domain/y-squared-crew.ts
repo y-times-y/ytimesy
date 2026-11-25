@@ -35,13 +35,31 @@ const CREW_CANVAS_NAMED = 3;
 /** Rows untouched this long are dropped. */
 export const CREW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /**
- * A wake for a finished turn (or a thread the person started) never comes
- * sooner than this after the note that asked for it, or the previous wake.
+ * The first event after a quiet period wakes Y² at once: no debounce after
+ * the note (it was 10 s for a finished turn, 5 s for needs-you / failed
+ * until 2026-11-25). Only what arrives while Y² is already working is
+ * batched (steered into its running turn, or one wake right after).
  */
-export const CREW_WAKE_DELAY_MS = 10_000;
-/** The same for a thread that needs the person or failed: they want it sooner. */
-export const CREW_URGENT_WAKE_DELAY_MS = 5_000;
-export const CREW_WAKES_PER_HOUR = 24;
+export const CREW_WAKE_DELAY_MS = 0;
+export const CREW_URGENT_WAKE_DELAY_MS = 0;
+/** Notes closer than this to the previous wake coalesce into one wake (an identical burst). */
+export const CREW_BURST_GAP_MS = 1_000;
+/** Wakes per hour per project, for events that can wait (a finished turn, a started thread). */
+export const CREW_WAKES_PER_HOUR = 60;
+/**
+ * Hard ceiling per hour per project, counting needs-you / failed wakes, which
+ * are exempt from CREW_WAKES_PER_HOUR (a person waits on them) but still
+ * bounded, so a thread that fails again and again cannot loop Y².
+ */
+export const CREW_URGENT_WAKES_PER_HOUR = 120;
+/** A wake into a Y² that is mid-turn and cannot be steered is held and re-checked this often. */
+export const CREW_BUSY_RECHECK_MS = 5_000;
+/** ...for at most this long after its first event, then it queues behind the turn as before. */
+export const CREW_BUSY_HOLD_MAX_MS = 5 * 60_000;
+/** The part of a thread's final reply a wake carries (the row keeps CREW_REPLY_LIMIT). */
+export const CREW_RESULT_LIMIT = 700;
+/** The part of a failure reason a wake carries. */
+export const CREW_FAILURE_LIMIT = 300;
 /** A wake that could not be enqueued is tried again this many times in all. */
 export const CREW_WAKE_RETRIES = 8;
 /** The wait before retry `failures`: 30 s, 1 min, 2 min, then 5 min at most. */
@@ -80,6 +98,10 @@ export type CrewNote = {
 	 * the NAMES of the secrets it needs (never a value). Told once in the wake.
 	 */
 	readonly ask?: string | null;
+	/** The final reply's first CREW_RESULT_LIMIT characters, told once in the wake (the row keeps 300). */
+	readonly result?: string | null;
+	/** Why a failed turn failed (the error's message, never its raw cause). */
+	readonly failure?: string | null;
 	/** Who to wake, and Y²'s own chat (never woken by its own notes). */
 	readonly userId: string;
 	readonly projectId: string;
@@ -136,6 +158,8 @@ export function parseCrewNote(value: unknown): CrewNote | null {
 		lastRequest: text(note.lastRequest, CREW_REQUEST_LIMIT) || null,
 		canvas: text(note.canvas, CREW_CANVAS_LIMIT) || null,
 		ask: text(note.ask, CREW_ASK_LIMIT) || null,
+		result: text(note.result, CREW_RESULT_LIMIT) || null,
+		failure: text(note.failure, CREW_FAILURE_LIMIT) || null,
 		ySquaredId: text(note.ySquaredId, 64) || null,
 	};
 }
@@ -174,20 +198,24 @@ export function crewNoteMatters(state: CrewState) {
 	return state !== "working";
 }
 
-/** How long a wake for this kind of change waits for more notes to coalesce. */
+/** How long a wake for this kind of change waits after its note: none. */
 export function crewWakeDelayMs(state: CrewState | "started") {
 	return state === "waiting" || state === "failed"
 		? CREW_URGENT_WAKE_DELAY_MS
 		: CREW_WAKE_DELAY_MS;
 }
 
-/** When a wake asked for at `now` is due: after its delay, and its delay after the previous wake. */
+/** A change a person is waiting on: always wakes at once, outside the soft hourly cap. */
+export const crewEventIsUrgent = (kind: string) =>
+	kind === "waiting" || kind === "failed";
+
+/** When a wake asked for at `now` is due: at once, unless the previous wake was under CREW_BURST_GAP_MS ago (then one wake covers the burst). */
 export function crewWakeDueAt(
 	lastWakeAt: number,
 	now: number,
 	delayMs: number,
 ) {
-	return Math.max(now + delayMs, lastWakeAt + delayMs);
+	return Math.max(now + delayMs, lastWakeAt + CREW_BURST_GAP_MS);
 }
 
 /**
@@ -276,7 +304,7 @@ export function crewWakeBody(input: {
 					"A waiting thread's question and options are in its line above: put that question to the person yourself (one decision per message, with your recommendation); you need not read the thread to do it. Never ask for a secret's value in this chat: say which secret the thread needs and that the person enters it from the Needs you list beside this chat (or in the thread).",
 				]
 			: []),
-		"Call `threads`, then call `thread` for each one that finished or needs the person and give the person a short delta in at most 60 words: lead with what needs them (one decision, with your recommendation), then one line per thread that changed with its substance. Skip anything you already reported, do not re-list open decisions or still-working threads that did not change, and use no tables.",
+		"Each line above carries what the thread said (its result, question and options, pull request, canvases, failure reason). Answer from those lines; call `thread` only for a thread whose line is cut off or not enough to act on, and `threads` only when you need the whole list. Give the person a short delta in at most 60 words: lead with what needs them (one decision, with your recommendation), then one line per thread that changed with its substance. Skip anything you already reported, do not re-list open decisions or still-working threads that did not change, and use no tables.",
 		`If nothing here needs the person and nothing needs an action from you, reply with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else: it shows no message.`,
 	].join("\n");
 }
@@ -299,6 +327,8 @@ export function crewFromSettledItems(
 	| "title"
 	| "canvas"
 	| "ask"
+	| "result"
+	| "failure"
 > {
 	const waiting = chatWaitingOn(items, turnStatus);
 	const facts = threadHistoryFacts(items);
@@ -319,7 +349,33 @@ export function crewFromSettledItems(
 		title: crewTitleFromItems(items),
 		canvas: crewCanvasLine(items),
 		ask: waiting ? crewAskLine(items) : null,
+		result: crewFinalReply(items),
+		failure: turnStatus === "failed" ? crewFailureReason(items) : null,
 	};
+}
+
+/** The last agent message's first CREW_RESULT_LIMIT characters (the thread's result). */
+export function crewFinalReply(items: readonly SessionItem[]): string | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "userMessage") break;
+		if (item?.kind === "agentMessage" && item.text.trim())
+			return text(item.text, CREW_RESULT_LIMIT) || null;
+	}
+	return null;
+}
+
+/** The message of the turn's last error item (not its raw cause). */
+export function crewFailureReason(
+	items: readonly SessionItem[],
+): string | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "userMessage") break;
+		if (item?.kind === "error")
+			return text(item.message, CREW_FAILURE_LIMIT) || null;
+	}
+	return null;
 }
 
 /**
@@ -409,6 +465,8 @@ export function crewNoteFromItems(
 					// person sent it to the thread directly.
 					lastRequest: crewRequestFromStartItems(items),
 					canvas: null,
+					result: null,
+					failure: null,
 					title: crewTitleFromItems(items),
 				}
 			: crewFromSettledItems(items, turnStatus);
@@ -535,6 +593,8 @@ export type WakeState = {
 export function decideWake(
 	state: WakeState,
 	now: number,
+	/** A needs-you / failed change is in the wake: exempt from the soft cap, bounded by the hard one. */
+	urgent = false,
 ): { action: "none" | "send" | "capped"; next: WakeState; retryAt?: number } {
 	const rolled =
 		now - state.hourStart >= CREW_HOUR_MS
@@ -542,7 +602,10 @@ export function decideWake(
 			: state;
 	const cleared = { ...rolled, alarmAt: null };
 	if (!cleared.pending) return { action: "none", next: cleared };
-	if (cleared.wakesThisHour >= CREW_WAKES_PER_HOUR)
+	if (
+		cleared.wakesThisHour >=
+		(urgent ? CREW_URGENT_WAKES_PER_HOUR : CREW_WAKES_PER_HOUR)
+	)
 		return {
 			action: "capped",
 			next: cleared,

@@ -11,8 +11,8 @@ import type { ClaudePlanUsage } from "./claude-plan-usage";
 export const Y_SQUARED_WELCOME =
 	"I'm this project's Super agent. I keep track of its threads: what's working, what needs you and what finished with its pull request. Start a thread and I'll follow it. You can turn me off in Project settings > Y.";
 
-/** Wakes per user per day across all their projects (each project also has its own 24/hour and 48/day proactive caps). */
-export const Y_WAKES_PER_USER_PER_DAY = 200;
+/** Wakes per user per day across all their projects (each project also has its own 60/hour (120 with needs-you / failed) wake cap and 48/day proactive cap). */
+export const Y_WAKES_PER_USER_PER_DAY = 600;
 
 /** A plan this full gets no Y² wake: the person's own work comes first. */
 export const PLAN_WAKE_STOP_PERCENT = 90;
