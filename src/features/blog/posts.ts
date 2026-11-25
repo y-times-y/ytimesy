@@ -91,9 +91,9 @@ export const SITE_JSON_LD = JSON.stringify([
 export const SITE_PREVIEW_META = sitePreviewMeta({
 	title: SITE_TITLE,
 	description:
-		"A Super agent keeps up with every thread while they build in parallel on their own cloud machines and open pull requests. Use your ChatGPT, Claude or Grok plan, or your API keys.",
+		"Give it a task and it builds in its own cloud machine, then opens a pull request. Use your ChatGPT, Claude or Grok plan, or your API keys.",
 	url: `${SITE_ORIGIN}/`,
-	image: "/og/home-card.png",
+	image: "/og/home-card.jpg",
 	imageAlt:
-		"ytimesy: your Super agent runs the whole project. Runs on your ChatGPT, Claude or Grok plan, or your API keys.",
+		"ytimesy: AI Software Engineer in the Cloud. Runs on your ChatGPT, Claude or Grok plan, or your API keys.",
 });

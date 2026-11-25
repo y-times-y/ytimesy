@@ -7,7 +7,7 @@
 
 # ytimesy
 
-### Your Super agent runs the whole project
+### AI Software Engineer in the Cloud
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/8rhTdsrtGw)
@@ -15,7 +15,7 @@
 
 [**Website**](https://ytimesy.com) · [**Discord**](https://discord.gg/8rhTdsrtGw) · [**Architecture**](docs/architecture.md) · [**Contributing**](CONTRIBUTING.md)
 
-<img src="docs/images/hero.png" alt="The ytimesy app: the Super agent open, a Threads list grouped into Needs you, Working and Recently finished, and an Overview of what needs you" width="900">
+<img src="docs/images/hero.png" alt="The ytimesy app: the Super agent above the Threads list grouped into Needs you, Working and Recently finished, the Super agent's chat, and an Overview of what needs you" width="900">
 
 </div>
 
@@ -23,29 +23,30 @@
 
 ## Why ytimesy
 
-- **A Super agent for every project.** One place to live. It keeps up with every thread, stays quiet by default, and answers with a short digest. A question a thread asked is answered inline, and a stuck thread is retried or archived from the same chat.
-- **Threads in parallel, on their own machines.** Each thread builds on its own cloud machine with its own working tree and terminal, so threads never collide, and they can read and message each other. Threads are named `<project>-<number>`, take their own colour, and can be mentioned with `@`.
-- **Canvases.** A thread shows its work as a rendered page next to the chat; pin a note on any element and send it back as feedback.
-- **Pull requests and issues in the app.** Review a pull request or pick up an issue without leaving the workspace.
-- **Fixes its own failing checks, and remembers how you work.** When a test fails the chat picks it up; "use pnpm, not npm" is learned once and kept.
-- **Bring your own subscription or API key.** Use your ChatGPT, Claude or Grok subscription, or your own keys (OpenAI, Anthropic, Google including Gemini 4 Neon, xAI, or one OpenRouter key). When a plan runs out, the thread continues on the next model you allowed. Nothing silently falls back to paid inference.
+- **Parallel agents, separate machines.** A lead agent plans and splits the work. Builders write code in parallel, each on its own cloud machine with its own working tree, terminal and preview, so they never collide.
+- **Tested in a real browser.** Verifier agents open the running app, click through it and capture screenshots and a screen recording.
+- **Proof, not promises.** Screenshots, a screen recording and test results come with the work, and every completed turn is saved to its own branch so you can review, steer or roll back.
+- **Fixes its own failing checks.** When a test fails, the chat picks it up and keeps going.
+- **Remembers how you work.** "Use pnpm, not npm" is learned once and kept.
+- **Keeps working when you leave.** Close the tab; the work continues and you reconnect later.
+- **Bring your own subscription or API key.** Use your ChatGPT, Claude or Grok subscription, or your own API keys, on one harness. Nothing silently falls back to paid inference.
 
 <div align="center">
-<img src="docs/images/setup.png" alt="The setup card a new account sees above the composer: connect GitHub, choose a model, bring your agent sessions" width="560">
+<img src="docs/images/app.png" alt="The Pull requests page beside the Super agent and the Threads list, with each pull request's thread, checks and review" width="900">
 <br>
-<sub>A new account's first screen. The pictures of the app on this page are rendered from the product's own components with demo data (no real person, repository or key) by <code>pnpm previews</code>.</sub>
+<sub>The workspace: the Super agent, threads grouped by what needs you, and pull requests in the app (Issues sit above them). Rendered from the app's own components with demo data by <code>pnpm previews</code>.</sub>
 </div>
 
 ## What's inside
 
 <div align="center">
-<img src="docs/images/features.png" alt="A Super agent for every project, threads in parallel on their own cloud machines, canvases, pull requests and issues in the app, failing checks fixed on their own, and memory" width="900">
+<img src="docs/images/features.png" alt="Parallel agents, tests in a real browser, fixing failing checks, memory, and screenshots and video as proof" width="900">
 </div>
 
 ## Bring your own model
 
 <div align="center">
-<img src="docs/images/models.png" alt="Use your ChatGPT, Claude or Grok subscription, or your own API keys including Gemini 4 Neon, with automatic failover when a plan runs out" width="900">
+<img src="docs/images/models.png" alt="Use your ChatGPT, Claude or Grok subscription, or your own API keys" width="900">
 </div>
 
 ## How it works
@@ -55,12 +56,12 @@ flowchart LR
   You([You]) --> UI[Web app]
   UI --> Edge["Cloudflare<br/>one Durable Object per chat"]
   Edge --> Models["Your model<br/>subscription or API key"]
-  Edge --> VMs["Cloud machines<br/>one per thread"]
+  Edge --> VMs["Cloud machines<br/>one per agent"]
   VMs --> Out["Working software<br/>with screenshots and video"]
   Edge --> DB[("Postgres")]
 ```
 
-A chat is owned by a Durable Object that runs each turn one model step at a time and resumes after a deploy instead of failing. Every thread gets its own machine copied from your project's prepared snapshot. The full picture, with sequence diagrams and a code map, is in **[docs/architecture.md](docs/architecture.md)**.
+A chat is owned by a Durable Object that runs each turn one model step at a time and resumes after a deploy instead of failing. Every agent gets its own machine copied from your project's prepared snapshot. The full picture, with sequence diagrams and a code map, is in **[docs/architecture.md](docs/architecture.md)**.
 
 ## Repository layout
 
@@ -77,7 +78,7 @@ A chat is owned by a Durable Object that runs each turn one model step at a time
 
 ## Getting started
 
-**Use it:** the hosted product is free in beta at **[ytimesy.com](https://ytimesy.com)**. The Super agent is on for every project.
+**Use it:** the hosted product is free in beta at **[ytimesy.com](https://ytimesy.com)**.
 
 **Move a local session to it:**
 
@@ -99,8 +100,6 @@ pnpm typecheck
 ```
 
 > **Self-hosting is not supported yet.** The full app needs a Postgres database, Cloudflare Workers and Durable Objects, a Freestyle account and a GitHub App; `.env.example` lists the settings. The development server is currently wired to the maintainers' development environment. Making it runnable from a fresh clone is on the roadmap, and help is welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-
-**Update the pictures:** after you change the sidebar, chat, composer, Overview or setup card, run `pnpm previews` and commit the result (`src/features/landing/preview/*.gen.ts`, `docs/images/`, `public/og/`). A test fails until you do.
 
 ## Community
 

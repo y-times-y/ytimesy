@@ -1,25 +1,28 @@
 import { Link } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
+	BookmarkPlus,
+	Camera,
 	Check,
 	CornerDownRight,
 	Terminal,
 	X,
 } from "lucide-react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Wordmark } from "#/components/brand/wordmark";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
-import { threadColor } from "#/domain/thread-color";
+import { HELPER_COLORS } from "#/domain/helper-names";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { ScoreCostChart } from "#/features/blog/score-cost-chart";
+import { AgentIcon } from "#/features/sessions/agent-icon";
 import { ClaudeMark } from "#/features/sessions/claude-mark";
 import { CodexMark } from "#/features/sessions/codex-mark";
 import { GrokMark } from "#/features/sessions/grok-mark";
 import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
 import { GithubMark } from "#/features/workspace/github-mark";
-import { ThreadMark } from "#/features/workspace/thread-mark";
 import { DISCORD_URL } from "./community-links";
 import { DiscordMark } from "./discord-mark";
+import { DEMO_AGENTS as SHOT_HELPERS } from "./landing-demo";
 import {
 	BENCH_COLUMNS,
 	BENCH_ROWS,
@@ -135,12 +138,7 @@ export function LandingPage() {
 			<LandingHeader />
 			<main>
 				<section className="landing-hero" aria-labelledby="landing-title">
-					<h1 id="landing-title">Your Super agent runs the whole project</h1>
-					<p className="landing-lede">
-						Threads work in parallel on their own cloud machines. The Super
-						agent keeps up with every one, stays quiet until you are needed, and
-						tells you what changed in a short digest.
-					</p>
+					<h1 id="landing-title">AI Software Engineer in the Cloud</h1>
 					<SignUp
 						className="landing-button landing-button-large"
 						label="Start building"
@@ -149,14 +147,11 @@ export function LandingPage() {
 						<AppPreview />
 					</div>
 				</section>
-				<Features />
-				<Models />
 				<Benchmark />
+				<Models />
+				<Features />
 				<section className="landing-close" aria-labelledby="landing-close">
 					<h2 id="landing-close">Build Ambitious Software</h2>
-					<p className="landing-dim landing-close-note">
-						Open source under the MIT licence.
-					</p>
 					<SignUp
 						className="landing-button landing-button-large"
 						label="Start building"
@@ -169,19 +164,19 @@ export function LandingPage() {
 }
 
 /**
- * The app as it is today: the product's own components, rendered with demo
- * data by `pnpm previews` (preview/preview-demo.tsx). Plain markup, no app
- * script on this page; inert so none of it takes focus or clicks.
+ * The app as it is today: the product's own components rendered with demo
+ * data by `pnpm previews` (preview/preview-demo.tsx). Plain markup with no
+ * app script on this page; inert, so none of it takes focus or clicks.
  */
 function AppPreview() {
 	return (
 		<div
 			className="landing-preview"
 			role="img"
-			aria-label="The ytimesy app: a Threads list grouped into Needs you, Working and Recently finished, the Super agent's chat with a canvas, and an Overview of what needs you."
+			aria-label="The ytimesy app: the Super agent in the left sidebar above the Threads list grouped into Needs you, Working and Recently finished, the Super agent's chat, and an Overview of what needs you."
 			inert
 			// biome-ignore lint/security/noDangerouslySetInnerHtml: markup generated from our own components by pnpm previews, never user input
-			dangerouslySetInnerHTML={{ __html: PREVIEW.app }}
+			dangerouslySetInnerHTML={{ __html: PREVIEW["super-agent"] }}
 		/>
 	);
 }
@@ -299,7 +294,7 @@ const API_PROVIDERS = [
 	"openrouter",
 ];
 
-export function Models() {
+function Models() {
 	return (
 		<section className="landing-models" aria-labelledby="landing-models">
 			<h2 id="landing-models">
@@ -344,20 +339,8 @@ export function Models() {
 					<div>
 						<h3>Your API keys</h3>
 						<p>
-							Your OpenAI, Anthropic, Google (including Gemini 4 Neon) or xAI
-							key, or one OpenRouter key for all of them.
-						</p>
-					</div>
-				</li>
-				<li className="model-card">
-					<span className="model-logos">
-						<CornerDownRight size={26} strokeWidth={1.5} aria-hidden="true" />
-					</span>
-					<div>
-						<h3>Automatic failover</h3>
-						<p>
-							When a plan runs out, the thread continues on the next model you
-							allowed. It goes back when the plan resets.
+							Your OpenAI, Anthropic, Google or xAI key, or one OpenRouter key
+							for all of them.
 						</p>
 					</div>
 				</li>
@@ -385,30 +368,27 @@ function Tile({
 	);
 }
 
-/** Demo threads for the fleet tile: the sidebar's own naming (<project>-<number>). */
 const FLEET = [
+	{ ...SHOT_HELPERS[0], command: "pnpm test tokens", done: true },
+	{ ...SHOT_HELPERS[1], command: "pnpm test settings", done: false },
 	{
-		number: 1,
-		name: "web-1",
-		task: "Upgrade the date library",
-		command: "pnpm test dates",
-		done: true,
-	},
-	{
-		number: 3,
-		name: "web-3",
-		task: "Dark mode toggle",
-		command: "pnpm test settings",
-		done: false,
-	},
-	{
-		number: 5,
-		name: "web-5",
-		task: "Billing page",
+		name: "build-3",
+		icon: SHOT_HELPERS[0].icon,
+		color: HELPER_COLORS[1],
+		task: "Dark mode emails",
 		command: "pnpm build",
 		done: false,
 	},
 ] as const;
+
+/** A real run: our own front page, tested and recorded in Chrome (public/landing). */
+const RUN_STEPS = [
+	"Open the front page",
+	"Scroll to the benchmark",
+	"Open Sign in",
+	"Screenshot each step",
+];
+const EVIDENCE_SHOTS = ["1-front", "2-benchmark", "3-signin"];
 
 const MEMORIES = [
 	"Use pnpm, not npm",
@@ -416,87 +396,81 @@ const MEMORIES = [
 	"Keep commits small, one change each",
 ];
 
-export function Features() {
+function Features() {
 	return (
 		<section className="landing-features" aria-labelledby="landing-features">
 			<h2 id="landing-features">What's inside.</h2>
 			<ul className="tiles">
 				<Tile
-					title="A Super agent for every project: one place to live"
-					className="tile-full"
-				>
-					<div className="tv-super">
-						<p className="tv-super-copy">
-							It keeps up with every thread, stays quiet by default, and answers
-							with a short digest. A question a thread asked is answered right
-							there, and a stuck thread is retried or archived from the same
-							chat.
-						</p>
-						<div
-							className="tv-super-overview"
-							// biome-ignore lint/security/noDangerouslySetInnerHtml: markup generated from our own components by pnpm previews, never user input
-							dangerouslySetInnerHTML={{ __html: PREVIEW.overview }}
-						/>
-					</div>
-				</Tile>
-				<Tile
-					title="Threads run in parallel, each on its own cloud machine, and can message each other"
+					title="Agents work in parallel, each in its own machine"
 					className="tile-full"
 				>
 					<div className="tv-fleet">
 						<div className="tv-vm tv-vm-main">
 							<p className="tv-vm-head">
 								<span className="tv-main-dot" />
-								<strong>Super agent</strong>
+								<strong>Main</strong>
 								<span>web</span>
 							</p>
-							<p className="tv-vm-line">Reads every thread</p>
-							<p className="tv-vm-line">Digest only when it matters</p>
+							<p className="tv-vm-line">Splits the work</p>
+							<p className="tv-vm-line">Reviews each patch</p>
 						</div>
 						<div className="tv-links" />
 						<div className="tv-vms">
-							{FLEET.map((thread) => (
-								<div key={thread.name} className="tv-vm">
+							{FLEET.map((vm) => (
+								<div key={vm.name} className="tv-vm">
 									<p className="tv-vm-head">
-										<span
-											className="tv-thread"
-											style={
-												{
-													"--thread-color": threadColor({
-														id: thread.name,
-														threadNumber: thread.number,
-													}),
-												} as CSSProperties
-											}
-										>
-											<ThreadMark size={16} />
-										</span>
-										<strong>{thread.name}</strong>
+										<AgentIcon icon={vm.icon} color={vm.color} />
+										<strong>{vm.name}</strong>
 										<span
 											className="tv-vm-status"
-											data-done={thread.done || undefined}
+											data-done={vm.done || undefined}
 										>
-											{thread.done ? <Check size={13} /> : <MatrixDotLoader />}
+											{vm.done ? <Check size={13} /> : <MatrixDotLoader />}
 										</span>
 									</p>
-									<p className="tv-vm-task">{thread.task}</p>
+									<p className="tv-vm-task">{vm.task}</p>
 									<p className="tv-vm-term">
 										<Terminal size={12} />
-										{thread.command}
+										{vm.command}
 									</p>
 								</div>
 							))}
 						</div>
 					</div>
 				</Tile>
-				<Tile
-					title="Canvases: live pages you can annotate"
-					className="tile-wide"
-				>
-					<p className="tv-copy">
-						A thread shows its work as a rendered page next to the chat. Pin a
-						note on any element and send it back as feedback.
-					</p>
+				<Tile title="Tests in a real browser" className="tile-wide">
+					<div className="tv-run">
+						<div className="tv-run-video">
+							<p className="tv-browser-bar">
+								<span />
+								<span />
+								<span />
+								<span className="tv-url">localhost:8793</span>
+								<span className="tv-rec">
+									<span />
+									REC
+								</span>
+							</p>
+							<video
+								src="/landing/run.mp4"
+								poster="/landing/poster.jpg"
+								autoPlay
+								muted
+								loop
+								playsInline
+								preload="metadata"
+							/>
+						</div>
+						<ol className="tv-run-steps">
+							{RUN_STEPS.map((step) => (
+								<li key={step}>
+									<Check size={13} strokeWidth={2.6} />
+									{step}
+								</li>
+							))}
+						</ol>
+					</div>
 				</Tile>
 				<Tile title="Fixes failing checks on its own">
 					<div className="tv-checks">
@@ -516,23 +490,45 @@ export function Features() {
 						</p>
 					</div>
 				</Tile>
-				<Tile
-					title="GitHub pull requests and issues, in the app"
-					className="tile-wide"
-				>
-					<p className="tv-copy">
-						Review a pull request or pick up an issue without leaving the
-						workspace. Each thread's pull request shows beside it in the list.
-					</p>
-				</Tile>
 				<Tile title="Remembers how you work">
 					<div className="tv-memory">
+						<p className="tv-memory-head">
+							<BookmarkPlus size={14} strokeWidth={1.5} />
+							Saved 3 memories
+						</p>
 						{MEMORIES.map((line) => (
 							<p key={line} className="tv-memory-line">
 								<span>{line}</span>
+								<span className="tv-memory-meta">
+									MEMORY.md
+									<span>Undo</span>
+								</span>
 							</p>
 						))}
 					</div>
+				</Tile>
+				<Tile title="Screenshots and video in your PR" className="tile-wide">
+					<section className="evidence-card" data-status="captured">
+						<header className="evidence-header">
+							<Camera size={14} />
+							<strong>Evidence for web#131</strong>
+							<span className="evidence-status" data-status="captured">
+								Captured
+							</span>
+						</header>
+						<div className="evidence-body">
+							<p className="evidence-note">
+								3 screenshots, 9 s screen recording
+							</p>
+							<ul className="evidence-thumbnails">
+								{EVIDENCE_SHOTS.map((shot) => (
+									<li key={shot}>
+										<img src={`/landing/${shot}.webp`} alt="" loading="lazy" />
+									</li>
+								))}
+							</ul>
+						</div>
+					</section>
 				</Tile>
 			</ul>
 		</section>

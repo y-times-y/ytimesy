@@ -8,10 +8,11 @@
  * 1. preview-styles.gen.ts: the stylesheets those components import.
  * 2. preview.gen.ts: their markup (a vitest run with UPDATE_PREVIEWS set;
  *    preview-drift.test.tsx fails when this file is stale).
- * 3. docs/images/*.png: headless Chrome screenshots of the same markup with
- *    the app's compiled CSS. Set CHROME_PATH if Chrome is not found.
+ * 3. docs/images/{hero,app}.png: headless Chrome screenshots of the
+ *    same markup with the app's compiled CSS. Set CHROME_PATH if Chrome is
+ *    not found.
  *
- * Pass --no-images to stop after step 2 (CI, machines without Chrome).
+ * Pass --no-images to stop after step 2 (machines without Chrome).
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -32,6 +33,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const PREVIEW_DIR = join(ROOT, "src/features/landing/preview");
 const IMAGES = join(ROOT, "docs/images");
 const withImages = !process.argv.includes("--no-images");
+const slashes = (path: string) => path.split("\\").join("/");
 
 function run(command: string, args: string[], env: NodeJS.ProcessEnv = {}) {
 	const result = spawnSync(command, args, {
@@ -47,7 +49,7 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv = {}) {
 function writeStyleImports() {
 	const sheets = stylesheetsImportedBy(join(PREVIEW_DIR, "preview-demo.tsx"));
 	const lines = sheets.map((sheet) => {
-		const path = relative(PREVIEW_DIR, sheet).split("\\").join("/");
+		const path = slashes(relative(PREVIEW_DIR, sheet));
 		return `import "${path.startsWith(".") ? path : `./${path}`}";`;
 	});
 	writeFileSync(
@@ -82,24 +84,19 @@ function findChrome(): string {
 	throw new Error("Chrome not found. Set CHROME_PATH or pass --no-images.");
 }
 
+/** One stylesheet: the app's own CSS plus what the preview's components import. */
 function buildStylesheet(work: string, sheets: string[]) {
 	const entry = join(ROOT, "scripts/previews/entry.gen.ts");
-	const imports = [
-		resolve(ROOT, "src/styles.css"),
-		resolve(ROOT, "src/features/landing/landing-page.css"),
-		...sheets,
-	].map(
+	const imports = [resolve(ROOT, "src/styles.css"), ...sheets].map(
 		(sheet) =>
-			`import "${relative(join(ROOT, "scripts/previews"), sheet).split("\\").join("/")}";`,
+			`import "${slashes(relative(join(ROOT, "scripts/previews"), sheet))}";`,
 	);
 	writeFileSync(entry, `${imports.join("\n")}\n`);
 	try {
 		run(
 			"pnpm",
 			["exec", "vite", "build", "-c", "scripts/previews/vite.config.ts"],
-			{
-				PREVIEW_CSS_DIR: join(work, "css"),
-			},
+			{ PREVIEW_CSS_DIR: join(work, "css") },
 		);
 	} finally {
 		rmSync(entry, { force: true });
@@ -109,13 +106,13 @@ function buildStylesheet(work: string, sheets: string[]) {
 		.filter((file) => file.endsWith(".css"))
 		.map((file) => readFileSync(join(assets, file), "utf8"))
 		.join("\n");
-	const base = `${pathToFileURL(assets).href}/`;
-	return css.replaceAll("url(./", `url(${base}`);
+	return css.replaceAll("url(./", `url(${pathToFileURL(assets).href}/`);
 }
 
+/** The app's own images (/brand/...) from the checkout's public folder. */
 const publicUrl = (html: string) =>
 	html.replace(
-		/(src|href)="\/(brand|landing|thread-art)\//g,
+		/(src|href)="\/(brand|thread-art)\//g,
 		(_, attribute, folder) =>
 			`${attribute}="${pathToFileURL(join(ROOT, "public", folder)).href}/`,
 	);
@@ -125,7 +122,6 @@ function capture(
 	work: string,
 	name: string,
 	html: string,
-	size: [number, number],
 	out: string,
 ) {
 	const page = join(work, `${name}.html`);
@@ -135,7 +131,7 @@ function capture(
 		"--no-sandbox",
 		"--hide-scrollbars",
 		"--force-device-scale-factor=2",
-		`--window-size=${size[0]},${size[1]}`,
+		"--window-size=1440,820",
 		`--screenshot=${join(IMAGES, out)}`,
 		pathToFileURL(page).href,
 	]);
@@ -144,7 +140,6 @@ function capture(
 const work = mkdtempSync(join(tmpdir(), "ytimesy-previews-"));
 try {
 	const sheets = writeStyleImports();
-	const sectionsFile = join(work, "sections.json");
 	run(
 		"pnpm",
 		[
@@ -153,71 +148,23 @@ try {
 			"run",
 			"src/features/landing/preview/preview-drift.test.tsx",
 		],
-		{
-			UPDATE_PREVIEWS: "1",
-			PREVIEW_SECTIONS_OUT: sectionsFile,
-		},
+		{ UPDATE_PREVIEWS: "1" },
 	);
-	if (!withImages) process.exit(0);
-
-	const css = buildStylesheet(work, sheets);
-	const chrome = findChrome();
-	const { PREVIEW } = await import(
-		pathToFileURL(join(PREVIEW_DIR, "preview.gen.ts")).href
-	);
-	const sections = JSON.parse(readFileSync(sectionsFile, "utf8")) as {
-		models: string;
-		features: string;
-		wordmark: string;
-	};
-	const section =
-		"<style>.landing-features,.landing-models{padding-top:40px!important}</style>";
-	const page = (body: string, background = "#0a0a0a") =>
-		publicUrl(
-			`<!doctype html><html lang="en" class="dark" data-sidebar="open"><head><meta charset="utf-8"><style>${css}</style></head><body style="margin:0;background:${background}">${body}</body></html>`,
-		);
-	mkdirSync(IMAGES, { recursive: true });
-	mkdirSync(join(ROOT, "public/og"), { recursive: true });
-	capture(chrome, work, "hero", page(PREVIEW.app), [1440, 820], "hero.png");
-	capture(
-		chrome,
-		work,
-		"setup",
-		page(
-			`<div style="padding:32px 40px;box-sizing:border-box">${PREVIEW.setup}</div>`,
-			"#161616",
-		),
-		[760, 440],
-		"setup.png",
-	);
-	capture(
-		chrome,
-		work,
-		"features",
-		page(`<div class="landing">${section}${sections.features}</div>`),
-		[1200, 1380],
-		"features.png",
-	);
-	capture(
-		chrome,
-		work,
-		"models",
-		page(`<div class="landing">${section}${sections.models}</div>`),
-		[1200, 900],
-		"models.png",
-	);
-	const card = `<div style="box-sizing:border-box;width:1200px;height:630px;padding:64px 68px;background:#fff;color:#161616;font-family:Inter,system-ui,sans-serif;display:flex;flex-direction:column;justify-content:space-between"><div style="filter:invert(1)">${sections.wordmark}</div><div style="font-size:76px;line-height:1.02;font-weight:650;letter-spacing:-0.035em;max-width:1040px">Your Super agent runs the whole project</div><div style="font-size:30px;line-height:1.3;color:#4a4a47;max-width:1040px">Threads work in parallel on their own cloud machines. Runs on your <b style="color:#161616">ChatGPT</b>, <b style="color:#161616">Claude</b> or <b style="color:#161616">Grok</b> plan, or your API keys.</div></div>`;
-	capture(
-		chrome,
-		work,
-		"card",
-		page(card, "#fff"),
-		[1200, 630],
-		"../../public/og/home-card.png",
-	);
-	console.log(
-		"Updated src/features/landing/preview/*.gen.ts and docs/images/*.png",
-	);
+	if (withImages) {
+		const css = buildStylesheet(work, sheets);
+		const chrome = findChrome();
+		const { PREVIEW } = (await import(
+			pathToFileURL(join(PREVIEW_DIR, "preview.gen.ts")).href
+		)) as { PREVIEW: Record<string, string> };
+		const page = (body: string) =>
+			publicUrl(
+				`<!doctype html><html lang="en" class="dark" data-sidebar="open"><head><meta charset="utf-8"><style>${css}</style></head><body style="margin:0;background:#0a0a0a">${body}</body></html>`,
+			);
+		mkdirSync(IMAGES, { recursive: true });
+		capture(chrome, work, "hero", page(PREVIEW["super-agent"]), "hero.png");
+		capture(chrome, work, "app", page(PREVIEW["pull-requests"]), "app.png");
+	}
+	console.log("Updated the preview markup and images.");
 } finally {
 	rmSync(work, { recursive: true, force: true });
 }

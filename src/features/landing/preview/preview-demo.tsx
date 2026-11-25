@@ -1,15 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { IssueSummary } from "#/domain/github-issues";
 import { SessionItemId } from "#/domain/ids";
-import { setupProgress } from "#/domain/setup-steps";
+import type { RepositoryPullRequest } from "#/domain/pull-request-review";
 import type { SidebarChat } from "#/domain/sidebar-chats";
 import { threadDirectory } from "#/domain/thread-label";
 import { RenderAsHydrated } from "#/features/app/first-paint";
-import { SetupChecklistView } from "#/features/onboarding/setup-checklist";
 import { ReferenceContext } from "#/features/sessions/agent-reference-chips";
 import { SessionLauncher } from "#/features/sessions/session-launcher";
 import { ChatHeaderTitle } from "#/features/workspace/chat-header-title";
 import { ProjectSidebar } from "#/features/workspace/project-sidebar";
+import { WorkItemsPage } from "#/features/workspace/work-items-page";
+import {
+	issuesKey,
+	pullRequestsKey,
+} from "#/features/workspace/work-items-queries";
 import { WorkspacePanes } from "#/features/workspace/workspace-panes";
 import { YOverview } from "#/features/workspace/y-overview";
 
@@ -157,8 +162,134 @@ const SESSION = {
 	],
 } as never;
 
-const SETUP_STATE = { githubConnected: false, modelReady: false };
 const noop = () => undefined;
+
+const REPOSITORY = {
+	installationId: 1,
+	repositoryId: 1,
+	name: "acme/web",
+	projectId: PROJECT.id,
+};
+
+const person = (login: string) => ({ login, avatarUrl: null, bot: false });
+
+const label = (name: string, color: string) => ({ name, color });
+
+/** The demo repository's pull requests: some are a thread's own (head `web-<n>`). */
+const PULLS: RepositoryPullRequest[] = [
+	{
+		number: 106,
+		title: "Dark mode toggle in settings",
+		url: "https://github.com/acme/web/pull/106",
+		author: "demo-user",
+		authorName: null,
+		authorAvatarUrl: null,
+		draft: false,
+		state: "open",
+		head: "web-3",
+		base: "main",
+		updatedAt: at(2),
+		labels: [label("design", "7057ff")],
+		review: { kind: "requested", from: person("reviewer"), you: true },
+		checks: { passed: 5, failed: 0, pending: 1 },
+		additions: 84,
+		deletions: 12,
+		waiting: true,
+		closes: [41],
+	},
+	{
+		number: 105,
+		title: "Fix flaky settings test",
+		url: "https://github.com/acme/web/pull/105",
+		author: "demo-user",
+		authorName: null,
+		authorAvatarUrl: null,
+		draft: false,
+		state: "open",
+		head: "web-2",
+		base: "main",
+		updatedAt: at(40),
+		labels: [label("tests", "0e8a16")],
+		review: { kind: "approved", by: person("reviewer") },
+		checks: { passed: 6, failed: 0, pending: 0 },
+		additions: 18,
+		deletions: 7,
+		waiting: true,
+	},
+	{
+		number: 107,
+		title: "Billing page",
+		url: "https://github.com/acme/web/pull/107",
+		author: "demo-user",
+		authorName: null,
+		authorAvatarUrl: null,
+		draft: true,
+		state: "draft",
+		head: "web-5",
+		base: "main",
+		updatedAt: at(9),
+		labels: [label("billing", "fbca04")],
+		checks: { passed: 2, failed: 1, pending: 0 },
+		additions: 212,
+		deletions: 30,
+	},
+];
+
+const ISSUES: IssueSummary[] = [
+	{
+		number: 41,
+		title: "Add a dark mode toggle to settings",
+		url: "https://github.com/acme/web/issues/41",
+		state: "open",
+		stateReason: null,
+		author: person("reviewer"),
+		labels: [label("design", "7057ff")],
+		assignees: [person("demo-user")],
+		comments: 3,
+		createdAt: at(5000),
+		updatedAt: at(6),
+		waiting: true,
+		pullRequests: [{ number: 106, state: "open", head: "web-3" }],
+	},
+	{
+		number: 43,
+		title: "Emails should use the account's locale",
+		url: "https://github.com/acme/web/issues/43",
+		state: "open",
+		stateReason: null,
+		author: person("demo-user"),
+		labels: [label("bug", "d73a4a")],
+		assignees: [],
+		comments: 1,
+		createdAt: at(3000),
+		updatedAt: at(180),
+	},
+	{
+		number: 38,
+		title: "Billing page shows the wrong total",
+		url: "https://github.com/acme/web/issues/38",
+		state: "open",
+		stateReason: null,
+		author: person("reviewer"),
+		labels: [label("billing", "fbca04")],
+		assignees: [],
+		comments: 0,
+		createdAt: at(9000),
+		updatedAt: at(1500),
+	},
+];
+
+/** The chat working on each pull request, by its head branch: the row's thread chip. */
+const THREAD_BY_HEAD = new Map(
+	CHATS.filter((chat) => chat.threadNumber).map((chat) => [
+		`web-${chat.threadNumber}`,
+		{
+			id: chat.id,
+			title: chat.title,
+			working: chat.turnStatus === "running",
+		},
+	]),
+);
 
 function Chat() {
 	return (
@@ -182,17 +313,33 @@ function Chat() {
 	);
 }
 
-/** The signed-in app as a person with a Super agent chat open sees it. */
-function App({ client }: { client: QueryClient }) {
+export type PreviewScene = "super-agent" | "pull-requests" | "issues";
+
+/** The signed-in app, as the real components draw it, with one scene open. */
+function App({ scene }: { scene: PreviewScene }) {
+	const client = new QueryClient();
+	client.setQueryData(["agent-sessions", PROJECT.id], CHATS);
+	client.setQueryData(pullRequestsKey(REPOSITORY.repositoryId, "open"), {
+		pullRequests: PULLS.map((pull) => ({
+			...pull,
+			installationId: 1,
+			repositoryId: 1,
+			repositoryFullName: "acme/web",
+		})),
+	});
+	client.setQueryData(issuesKey(REPOSITORY.repositoryId, "open"), {
+		issues: ISSUES,
+	});
+	const work = scene === "super-agent" ? null : scene;
 	return (
 		<QueryClientProvider client={client}>
-			<div className="workspace-shell" data-preview="app">
+			<div className="workspace-shell" data-preview={scene}>
 				<RenderAsHydrated value>
 					<ProjectSidebar
 						projects={[PROJECT]}
 						projectsLoading={false}
 						selectedProjectId="web"
-						selectedChatId="y2"
+						selectedChatId={work ? undefined : "y2"}
 						onSelectProject={noop}
 						expanded
 						onToggle={noop}
@@ -201,67 +348,63 @@ function App({ client }: { client: QueryClient }) {
 						onNewChat={noop}
 						projectChats={[{ project: PROJECT, chats: CHATS }]}
 						onOpenMemory={noop}
+						onOpenWorkItems={noop}
+						workItemsActive={work}
+						waitingOnYou={{ pullRequests: 2, issues: 1 }}
 						renderedAtMs={NOW}
 						account={{ name: "Demo user" }}
 					/>
 				</RenderAsHydrated>
-				<main className="workspace-main">
-					<WorkspacePanes
-						open
-						compact={false}
-						ratio={0.6}
-						view="overview"
-						layout="chat"
-						onResize={noop}
-						onReset={noop}
-					>
-						<section className="welcome-panel" data-layout="chat">
-							<div className="session-title-row">
-								<div className="session-title-copy">
-									<ChatHeaderTitle
-										superAgent
-										listedTitle="Y²"
-										sessionTitle="Y²"
-									/>
+				<main
+					className="workspace-main"
+					data-work-page={work ? "true" : undefined}
+				>
+					{work ? (
+						<WorkItemsPage
+							kind={work}
+							repositories={[REPOSITORY]}
+							chatsOf={() => THREAD_BY_HEAD}
+							issueChatsOf={() => new Map()}
+							onOpenChat={noop}
+							onChatStarted={noop}
+						/>
+					) : (
+						<WorkspacePanes
+							open
+							compact={false}
+							ratio={0.6}
+							view="overview"
+							layout="chat"
+							onResize={noop}
+							onReset={noop}
+						>
+							<section className="welcome-panel" data-layout="chat">
+								<div className="session-title-row">
+									<div className="session-title-copy">
+										<ChatHeaderTitle
+											superAgent
+											listedTitle="Y²"
+											sessionTitle="Y²"
+										/>
+									</div>
 								</div>
+								<Chat />
+							</section>
+							<div className="inspector-frame">
+								<YOverview
+									projectId={PROJECT.id}
+									projectName="web"
+									pullRequests={[]}
+									live={false}
+									renderedAtMs={NOW}
+									onOpenThread={noop}
+								/>
 							</div>
-							<Chat />
-						</section>
-						<div className="inspector-frame">
-							<YOverview
-								projectId={PROJECT.id}
-								projectName="web"
-								pullRequests={[]}
-								live={false}
-								renderedAtMs={NOW}
-								onOpenThread={noop}
-							/>
-						</div>
-					</WorkspacePanes>
+						</WorkspacePanes>
+					)}
 				</main>
 			</div>
 		</QueryClientProvider>
-	);
-}
-
-/** A new account's first screen: the setup card above the composer. */
-function FirstRun() {
-	return (
-		<SetupChecklistView
-			progress={setupProgress({
-				state: SETUP_STATE,
-				repositoryCount: null,
-				sessionsSkipped: false,
-			})}
-			state={SETUP_STATE}
-			installationUrl={undefined}
-			repositoriesLoading={false}
-			open={null}
-			onToggle={noop}
-			onHide={noop}
-			onModelDone={noop}
-			onSessionsDone={noop}
-		/>
 	);
 }
 
@@ -269,35 +412,15 @@ function FirstRun() {
 const withoutScripts = (html: string) =>
 	html.replace(/<script[\s\S]*?<\/script>/g, "");
 
-export type PreviewMarkup = {
-	/** The whole app with the Super agent open. */
-	readonly app: string;
-	/** The Overview panel alone: what needs the person, what is running. */
-	readonly overview: string;
-	/** A new account's setup card. */
-	readonly setup: string;
-};
+export type PreviewMarkup = Readonly<Record<PreviewScene, string>>;
 
-/** The real components' markup: the whole app, and the new-user setup card. */
+/** The real components' markup, one entry per scene. */
 export function renderPreview(): PreviewMarkup {
-	const client = new QueryClient();
-	client.setQueryData(["agent-sessions", PROJECT.id], CHATS);
+	const scene = (name: PreviewScene) =>
+		withoutScripts(renderToStaticMarkup(<App scene={name} />));
 	return {
-		app: withoutScripts(renderToStaticMarkup(<App client={client} />)),
-		overview: withoutScripts(
-			renderToStaticMarkup(
-				<QueryClientProvider client={client}>
-					<YOverview
-						projectId={PROJECT.id}
-						projectName="web"
-						pullRequests={[]}
-						live={false}
-						renderedAtMs={NOW}
-						onOpenThread={noop}
-					/>
-				</QueryClientProvider>,
-			),
-		),
-		setup: withoutScripts(renderToStaticMarkup(<FirstRun />)),
+		"super-agent": scene("super-agent"),
+		"pull-requests": scene("pull-requests"),
+		issues: scene("issues"),
 	};
 }

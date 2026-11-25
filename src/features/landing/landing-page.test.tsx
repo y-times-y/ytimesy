@@ -28,7 +28,7 @@ import { LandingPage } from "./landing-page";
 it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and support", () => {
 	const html = renderToStaticMarkup(<LandingPage />);
 	const text = html.replace(/<[^>]+>/g, " ");
-	expect(text).toContain("Your Super agent runs the whole project");
+	expect(text).toContain("AI Software Engineer in the Cloud");
 	expect(text).toContain("Terminal-Bench 4.0");
 	const flat = text.replace(/\s+/g, " ");
 	// The post's three columns and nine rows.
@@ -91,57 +91,25 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	expect(/\p{Extended_Pictographic}/u.test(text)).toBe(false);
 });
 
-it("headlines the Super agent and shows the app as the real components render it", () => {
+it("shows the app as the product's own components render it today", () => {
 	const html = renderToStaticMarkup(<LandingPage />);
-	const text = html
-		.replace(/<[^>]+>/g, " ")
-		.replace(/&#x27;/g, "'")
-		.replace(/\s+/g, " ");
-	// The Super agent leads: the hero and the first tile.
-	expect(text.indexOf("Your Super agent runs the whole project")).toBeLessThan(
-		text.indexOf("What's inside"),
-	);
-	expect(text).toContain("A Super agent for every project: one place to live");
-	// The preview is the product's own markup (preview.gen.ts), inert and described.
 	const preview = html.slice(html.indexOf('class="landing-preview"'));
-	expect(preview.slice(0, 600)).toContain('role="img"');
-	expect(preview.slice(0, 600)).toContain("inert");
+	// Inert and described: a picture of the app, not controls.
+	expect(preview.slice(0, 500)).toContain('role="img"');
+	expect(preview.slice(0, 500)).toContain("inert");
 	for (const real of [
 		"workspace-shell",
 		"project-sidebar",
+		"Super agent",
 		"Needs you",
 		"Recently finished",
-		"Super agent",
 		"web-3",
 		"canvas-card",
-		"GPT-6 Astra",
+		"Pull requests",
+		"Issues",
 	])
-		expect(preview).toContain(real);
-	// The hand-drawn imitation is gone.
+		expect(preview, real).toContain(real);
+	// The hand-drawn mock is gone.
 	expect(html).not.toContain("app-shot");
 	expect(html).not.toContain("as-sidebar");
-	// Parallel threads, canvases, pull requests and issues, memory.
-	for (const claim of [
-		"Threads run in parallel, each on its own cloud machine, and can message each other",
-		"Canvases: live pages you can annotate",
-		"GitHub pull requests and issues, in the app",
-		"Remembers how you work",
-	])
-		expect(text).toContain(claim);
-	// Bring your own model, with Gemini 4 Neon and automatic failover.
-	expect(text).toContain("Your ChatGPT subscription");
-	expect(text).toContain("Your Claude subscription");
-	expect(text).toContain("Your Grok subscription");
-	expect(text).toContain("Gemini 4 Neon");
-	expect(text).toContain("Automatic failover");
-	expect(text).toContain("Open source under the MIT licence.");
-	// Nothing the product does not do yet: no version, desktop app, or
-	// per-thread model choice; no media recorded from the old front page.
-	expect(text).not.toMatch(/\bv\d+\.\d+/);
-	expect(text).not.toMatch(/desktop app/i);
-	expect(text).not.toMatch(
-		/choose a model per thread|picks? a model for each thread/i,
-	);
-	expect(html).not.toContain("/landing/run.mp4");
-	expect(html).not.toContain("/landing/1-front.webp");
 });

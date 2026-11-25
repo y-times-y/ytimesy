@@ -972,53 +972,9 @@
 	min-height: 36px;
 }
 
-/* Super agent headline, copy tiles and the Overview inside a tile. */
-.landing-lede {
-	max-width: 640px;
-	color: var(--landing-dim);
-	font-size: clamp(16px, 2vw, 19px);
-	line-height: 1.5;
-	margin: 0;
-}
-.landing-close-note {
-	margin: 0;
-}
-.tv-super {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-	gap: 24px;
-	align-items: start;
-	text-align: left;
-}
-.tv-super-copy,
-.tv-copy {
-	color: #bdbdbd;
-	font-size: 14px;
-	line-height: 1.55;
-	margin: 0;
-	text-align: left;
-}
-.tv-super-overview {
-	pointer-events: none;
-	border-radius: 10px;
-	background: #0a0a0a;
-	border: 1px solid #ffffff14;
-	padding: 6px;
-	font-size: 13px;
-	text-align: left;
-}
-.tv-thread {
-	display: inline-flex;
-}
-@media (max-width: 720px) {
-	.tv-super {
-		grid-template-columns: minmax(0, 1fr);
-	}
-}
+/* The app's own text spacing, not the page's. */
 .landing-preview,
-.landing-preview *,
-.tv-super-overview,
-.tv-super-overview * {
+.landing-preview * {
 	letter-spacing: normal;
 	word-spacing: normal;
 }
