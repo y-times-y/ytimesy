@@ -160,3 +160,21 @@ export async function resetTestAccount(
 	);
 	return { projectsRemoved: removed.rows.length };
 }
+
+/** Capability-guarded extras: `seed` (model + project) and `y-counts` (aggregates only). */
+export async function runTestAccountAction(
+	db: TestAccountDb,
+	settings: Settings,
+	presentedToken: string | undefined,
+	input: { caller: unknown; action: "seed" | "y-counts"; apiKey?: string },
+) {
+	const caller = await authorize(db, settings, presentedToken, input.caller);
+	const { seedTestAccount, yDefaultCounts } = await import(
+		"./test-account-seed"
+	);
+	if (input.action === "y-counts") return yDefaultCounts(db);
+	const userId = await flaggedTestUser(db);
+	const result = await seedTestAccount(db, userId, { apiKey: input.apiKey });
+	console.log(JSON.stringify({ event: "test_session.seed", caller }));
+	return result;
+}

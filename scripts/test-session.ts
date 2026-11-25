@@ -20,6 +20,8 @@ export type TestSessionResult = {
 	user: { id: string; email: string };
 };
 
+const COMMANDS = ["mint", "shot", "reset", "seed", "y-counts"] as const;
+
 export function callerFromEnvironment(env: NodeJS.ProcessEnv) {
 	return (
 		env.YTIMESY_THREAD_ID ||
@@ -46,18 +48,22 @@ export function parseCli(argv: string[]) {
 		},
 	});
 	const command = positionals[0];
-	if (command !== "mint" && command !== "shot" && command !== "reset")
-		throw new Error("Usage: test-session.ts <mint|shot|reset> [options]");
+	if (!COMMANDS.includes(command as (typeof COMMANDS)[number]))
+		throw new Error(
+			"Usage: test-session.ts <mint|shot|reset|seed|y-counts> [options]",
+		);
 	if (command === "shot" && !values.out)
 		throw new Error("Pass --out <file.png>.");
-	return { command, ...values };
+	return { command: command as (typeof COMMANDS)[number], ...values };
 }
 
 export async function requestTestSession(input: {
 	base: string;
 	token: string | undefined;
 	caller: string;
-	action: "mint" | "reset";
+	action: "mint" | "reset" | "seed" | "y-counts";
+	/** Only `seed`: the model key to connect, sealed server-side; never printed. */
+	apiKey?: string;
 	fetcher?: typeof fetch;
 }) {
 	if (!input.token) throw new Error("YTIMESY_TEST_SESSION_TOKEN is not set.");
@@ -69,7 +75,11 @@ export async function requestTestSession(input: {
 				authorization: `Bearer ${input.token}`,
 				"content-type": "application/json",
 			},
-			body: JSON.stringify({ action: input.action, caller: input.caller }),
+			body: JSON.stringify({
+				action: input.action,
+				caller: input.caller,
+				apiKey: input.apiKey,
+			}),
 		},
 	);
 	if (!response.ok)
@@ -151,7 +161,9 @@ if (process.argv[1]?.endsWith("test-session.ts")) {
 		base: options.base,
 		token: process.env.YTIMESY_TEST_SESSION_TOKEN,
 		caller: options.caller ?? callerFromEnvironment(process.env),
-		action: options.command === "reset" ? "reset" : "mint",
+		action: options.command === "shot" ? "mint" : options.command,
+		apiKey:
+			options.command === "seed" ? process.env.ANTHROPIC_API_KEY : undefined,
 	});
 	if (options.command === "shot") await shot(result, options);
 	else console.log(JSON.stringify(result));
