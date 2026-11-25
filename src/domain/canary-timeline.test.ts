@@ -38,7 +38,7 @@ it("fails at once on an error item, but not on one from before the run", () => {
 
 it("waits while answers are missing, then fails with the first missing piece", () => {
 	expect(canaryVerdict([old, a, ra, b], input).status).toBe("pending");
-	const late = { ...input, elapsedMs: 9 * 60_000 };
+	const late = { ...input, elapsedMs: 14 * 60_000 };
 	expect(canaryVerdict([old, a, ra, b], late)).toMatchObject({
 		status: "fail",
 		reason: expect.stringContaining("second message was not answered"),
@@ -59,4 +59,31 @@ it("fails when the answers arrive out of order", () => {
 		status: "fail",
 		reason: "the timeline is out of order",
 	});
+});
+
+it("finds its messages by nonce even when the baseline overshoots the chat", () => {
+	// Items before the run were compacted or trimmed, or manual messages shifted
+	// the count: the nonce is unique, so the position must not matter.
+	expect(
+		canaryVerdict([a, ra, b, rb], { ...input, baselineItems: 9 }).status,
+	).toBe("pass");
+});
+
+it("ignores other canary-looking messages typed into the chat by hand", () => {
+	const manual = user("m", "Canary check. Reply with exactly: PONG-A-other");
+	const manualReply = agent("mr", "PONG-A-other");
+	expect(
+		canaryVerdict([manual, manualReply, a, ra, b, rb], {
+			...input,
+			baselineItems: 0,
+		}).status,
+	).toBe("pass");
+});
+
+it("rechecks once after the latency bound before failing on a missing piece", () => {
+	const justPast = { ...input, elapsedMs: 9 * 60_000 };
+	expect(canaryVerdict([old], justPast).status).toBe("pending");
+	expect(
+		canaryVerdict([old, a, error("The worker disconnected.")], justPast).status,
+	).toBe("fail");
 });
