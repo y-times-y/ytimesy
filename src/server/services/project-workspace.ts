@@ -13,6 +13,7 @@ import {
 	projectFolderName,
 	repositoriesForProject,
 } from "#/domain/projects";
+import type { PublicationAuthor } from "#/domain/publication";
 import { sessionCloneBranch } from "#/domain/session-branch";
 import {
 	agentSessionMetadataForOwner,
@@ -33,6 +34,7 @@ import { githubInstallationAccessToken } from "#/server/adapters/github/installa
 import { managedGitSetupCommand } from "#/server/adapters/managed-git-identity";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
+import { managedGitAuthorForUser } from "./managed-git-author";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Effect wraps what a promise throws, so the message may sit a few causes down. */
@@ -75,10 +77,13 @@ function ensureSingleProjectCheckout(
 		if (!checkout) {
 			return null;
 		}
+		const author = yield* Effect.promise(() =>
+			managedGitAuthorForUser(checkout.userId),
+		);
 		const reused = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				reusePreparedCheckoutCommand(checkout.name),
+				reusePreparedCheckoutCommand(checkout.name, author),
 				15_000,
 			),
 		);
@@ -171,7 +176,7 @@ function ensureSingleProjectCheckout(
 				{ ...checkout, destination, mode: "clone" },
 			),
 		);
-		yield* configureManagedCheckout(machines, workspaceId, destination);
+		yield* configureManagedCheckout(machines, workspaceId, destination, author);
 		// As a reused checkout does: a machine booted without the project's
 		// template (no build wrote it) finds its repository here. The primary
 		// repository is cloned last, so its path is the one left.
@@ -186,11 +191,12 @@ function configureManagedCheckout(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	directory: string,
+	author: PublicationAuthor | null,
 ) {
 	return Effect.tryPromise(async () => {
 		const result = await machines.exec(
 			workspaceId,
-			managedGitSetupCommand(directory),
+			managedGitSetupCommand(directory, author),
 			15_000,
 		);
 		if (result.exitCode !== 0)

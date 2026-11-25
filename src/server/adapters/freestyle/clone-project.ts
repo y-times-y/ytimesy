@@ -1,4 +1,5 @@
 import { posixShellQuoted } from "#/domain/posix-command";
+import type { PublicationAuthor } from "#/domain/publication";
 import { setupManagedGitForQuotedDirectory } from "../managed-git-identity";
 
 export const PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd";
@@ -8,11 +9,14 @@ export const PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd";
  * branch and the path note's contents, so reusing a checkout costs one
  * guest command instead of three.
  */
-export function reusePreparedCheckoutCommand(repoName: string) {
+export function reusePreparedCheckoutCommand(
+	repoName: string,
+	author?: PublicationAuthor | null,
+) {
 	return `HOME="\${HOME:-/home/ubuntu}"
 DEST="$HOME/"${posixShellQuoted(repoName)}
 if [ -e "$DEST/.git" ]; then
-  ${setupManagedGitForQuotedDirectory('"$DEST"')} || exit 1
+  ${setupManagedGitForQuotedDirectory('"$DEST"', author)} || exit 1
   echo present
   echo "$DEST"
   printf 'branch:%s\\n' "$(git -C "$DEST" branch --show-current 2>/dev/null)"

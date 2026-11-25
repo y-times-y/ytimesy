@@ -41,6 +41,7 @@ export function automaticTurnCommitArgv(
 	author: PublicationAuthor = MANAGED_GIT_BOT,
 	coAuthor: PublicationAuthor | null = MANAGED_GIT_BOT,
 	humanCoAuthor: PublicationAuthor | null = null,
+	committer: PublicationAuthor = author,
 ) {
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn commit identity.");
@@ -52,6 +53,7 @@ export function automaticTurnCommitArgv(
 		author,
 		coAuthor,
 		humanCoAuthor,
+		committer,
 	)[2];
 	return [
 		"python3",

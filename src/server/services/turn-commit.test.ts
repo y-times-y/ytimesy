@@ -124,8 +124,9 @@ it("commits a root chat's turn without the verification gate and returns where i
 	expect(runtime.commands[0].argv[5]).toContain(
 		"Agent: Fix parser\n\nRequest: Fix parser",
 	);
+	// The user is the author, so GitHub counts the commit as theirs.
 	expect(runtime.commands[0].argv[5]).toContain(
-		"GIT_AUTHOR_EMAIL='328807657+ytimesy-agent[bot]@users.noreply.github.com'",
+		"GIT_AUTHOR_EMAIL='7+het@users.noreply.github.com'",
 	);
 	expect(runtime.commands[0].argv[5]).toContain(
 		"GIT_COMMITTER_EMAIL='328807657+ytimesy-agent[bot]@users.noreply.github.com'",
@@ -182,19 +183,20 @@ it("neither commits nor pushes a root chat of an eval user or evaluation run", a
 	expect(publication.publish).not.toHaveBeenCalled();
 });
 
-it("credits the bot and the authenticated GitHub user without using the human as author or committer", async () => {
+it("authors the commit as the authenticated GitHub user and credits the bot as co-author", async () => {
 	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
 	const runtime = new MemoryWorkspaceRuntime();
 	await commitCompletedSessionTurn(chat, items, runtime);
 	expect(runtime.commands[0].argv[5]).toContain(
 		"Co-authored-by: ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>",
 	);
-	expect(runtime.commands[0].argv[5]).toContain(
+	expect(runtime.commands[0].argv[5]).toContain("GIT_AUTHOR_NAME='Het'");
+	expect(runtime.commands[0].argv[5]).not.toContain(
 		"Co-authored-by: Het <7+het@users.noreply.github.com>",
 	);
 });
 
-it("uses the bot alone when GitHub cannot verify a human co-author", async () => {
+it("keeps the bot as author, without inventing a human, when GitHub cannot verify one", async () => {
 	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
 	identity.forToken.mockResolvedValue(null);
 	const runtime = new MemoryWorkspaceRuntime();
@@ -204,6 +206,9 @@ it("uses the bot alone when GitHub cannot verify a human co-author", async () =>
 	);
 	expect(runtime.commands[0].argv[5]).not.toContain(
 		"7+het@users.noreply.github.com",
+	);
+	expect(runtime.commands[0].argv[5]).toContain(
+		"GIT_AUTHOR_EMAIL='328807657+ytimesy-agent[bot]@users.noreply.github.com'",
 	);
 });
 

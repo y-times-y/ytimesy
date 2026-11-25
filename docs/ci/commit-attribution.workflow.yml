@@ -1,0 +1,18 @@
+# The GitHub App cannot push workflow files. To enable the CI check, copy this file to .github/workflows/commit-attribution.yml (needs a push by the user or a token with the workflows permission).
+name: Commit attribution
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Commits are authored by the user and credit the ytimesy bot
+        run: node scripts/check-commit-attribution.mjs "origin/${{ github.base_ref }}" "${{ github.event.pull_request.head.sha }}"

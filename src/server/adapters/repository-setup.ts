@@ -55,6 +55,7 @@ export function commitAllArgv(
 	author: PublicationAuthor,
 	coAuthor?: PublicationAuthor | null,
 	additionalCoAuthor?: PublicationAuthor | null,
+	committer: PublicationAuthor = author,
 ) {
 	const trailer = [coAuthor, additionalCoAuthor]
 		.map((credit) =>
@@ -65,7 +66,9 @@ export function commitAllArgv(
 		.join("");
 	const name = shellSingleQuote(author.name);
 	const email = shellSingleQuote(author.email);
-	const identity = `GIT_AUTHOR_NAME=${name} GIT_AUTHOR_EMAIL=${email} GIT_COMMITTER_NAME=${name} GIT_COMMITTER_EMAIL=${email}`;
+	const committerName = shellSingleQuote(committer.name);
+	const committerEmail = shellSingleQuote(committer.email);
+	const identity = `GIT_AUTHOR_NAME=${name} GIT_AUTHOR_EMAIL=${email} GIT_COMMITTER_NAME=${committerName} GIT_COMMITTER_EMAIL=${committerEmail}`;
 	return [
 		"bash",
 		"-lc",

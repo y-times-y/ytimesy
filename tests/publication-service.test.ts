@@ -170,7 +170,7 @@ it("does not create a pull request when the branch is not ahead", async () => {
 	expect(adapter.push).toHaveBeenCalled();
 });
 
-it("commits as the managed bot, credits the verified human, and pushes before opening a draft pull request", async () => {
+it("authors the commit as the verified human, credits the bot, and pushes before opening a draft pull request", async () => {
 	adapter.commitIdentity.mockResolvedValue({
 		name: "Verified Alice",
 		email: "verified-alice@example.test",
@@ -200,17 +200,15 @@ it("commits as the managed bot, credits the verified human, and pushes before op
 	)?.argv[2];
 	const botName = "ytimesy-agent[bot]";
 	const botEmail = "328807657+ytimesy-agent[bot]@users.noreply.github.com";
-	for (const role of ["AUTHOR", "COMMITTER"]) {
-		expect(commit).toContain(`GIT_${role}_NAME='${botName}'`);
-		expect(commit).toContain(`GIT_${role}_EMAIL='${botEmail}'`);
-	}
+	expect(commit).toContain("GIT_AUTHOR_NAME='Verified Alice'");
+	expect(commit).toContain("GIT_AUTHOR_EMAIL='verified-alice@example.test'");
+	expect(commit).toContain(`GIT_COMMITTER_NAME='${botName}'`);
+	expect(commit).toContain(`GIT_COMMITTER_EMAIL='${botEmail}'`);
 	expect(commit).toContain(
 		`--trailer 'Co-authored-by: ${botName} <${botEmail}>'`,
 	);
 	expect(adapter.commitIdentity).toHaveBeenCalledWith("user-token");
-	expect(commit).toContain(
-		"--trailer 'Co-authored-by: Verified Alice <verified-alice@example.test>'",
-	);
+	expect(commit).not.toContain("Co-authored-by: Verified Alice");
 	expect(commit).not.toContain("Unverified Name");
 	expect(commit).not.toContain("unverified@example.test");
 	expect(adapter.push).toHaveBeenCalledWith(
@@ -220,6 +218,10 @@ it("commits as the managed bot, credits the verified human, and pushes before op
 			name: "app",
 			branch: "feature",
 			installationId: 1,
+			author: {
+				name: "Verified Alice",
+				email: "verified-alice@example.test",
+			},
 		}),
 	);
 	expect(

@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { managedGitSetupCommand } from "./managed-git-identity";
+import {
+	hasManagedPushMetadata,
+	managedGitSetupCommand,
+} from "./managed-git-identity";
 
 function withDisposableGit(test: (git: GitFixture) => void) {
 	const root = mkdtempSync(join(tmpdir(), "ytimesy git identity-"));
@@ -248,4 +251,120 @@ it("recovers a resumed branch without rewriting it or replacing a remote ref", (
 		expect(source("diff", "--cached")).toBe(originalStaged);
 		expect(source("diff")).toBe(originalUnstaged);
 	});
+});
+const human = {
+	name: "Het Patel",
+	email: "163411274+hetpatel-11@users.noreply.github.com",
+};
+const humanIdentity = `${human.name} <${human.email}>`;
+
+it("a checkout set up for a user makes them the author, the bot a co-author, and refuses anything else", () => {
+	withDisposableGit(({ root, run }) => {
+		const commit = ["commit", "--allow-empty", "-m", "Agent commit"];
+		const upstream = join(root, "upstream.git");
+		run("git", ["init", "-q"]);
+		run("git", ["init", "--bare", "-q", upstream]);
+		run("git", [
+			"-c",
+			"user.name=Historical Author",
+			"-c",
+			"user.email=historic@example.test",
+			...commit,
+		]);
+		run("git", ["push", upstream, "HEAD:refs/heads/main"]);
+		run("sh", ["-ec", managedGitSetupCommand(root, human)]);
+
+		// Plain git commit: the user is author and committer, the bot a trailer.
+		run("git", commit);
+		const log = [
+			"log",
+			"-1",
+			"--format=%an <%ae>|%cn <%ce>|%(trailers:key=Co-authored-by,valueonly,unfold)",
+		];
+		expect(run("git", log).trim()).toBe(
+			`${humanIdentity}|${humanIdentity}|${identity}`,
+		);
+		run("git", ["push", upstream, "HEAD:refs/heads/by-user"]);
+
+		// The bot may be the committer; the user stays the author.
+		run("git", commit, {
+			GIT_COMMITTER_NAME: "ytimesy-agent[bot]",
+			GIT_COMMITTER_EMAIL:
+				"328807657+ytimesy-agent[bot]@users.noreply.github.com",
+		});
+		expect(run("git", log).trim()).toBe(
+			`${humanIdentity}|${identity}|${identity}`,
+		);
+		run("git", ["push", upstream, "HEAD:refs/heads/bot-committer"]);
+
+		// The bot as author (the old behaviour), another person, or no identity are refused.
+		for (const env of <Record<string, string>[]>[
+			{
+				GIT_AUTHOR_NAME: "ytimesy-agent[bot]",
+				GIT_AUTHOR_EMAIL:
+					"328807657+ytimesy-agent[bot]@users.noreply.github.com",
+			},
+			{ GIT_AUTHOR_NAME: "Other", GIT_AUTHOR_EMAIL: "other@example.test" },
+			{ GIT_COMMITTER_EMAIL: "other@example.test" },
+		])
+			expect(() => run("git", commit, env)).toThrow(/managed Git identity/i);
+
+		// Commits that skipped the hooks never reach the remote.
+		for (const env of <Record<string, string>[]>[
+			{
+				GIT_AUTHOR_NAME: "ytimesy-agent[bot]",
+				GIT_AUTHOR_EMAIL:
+					"328807657+ytimesy-agent[bot]@users.noreply.github.com",
+				GIT_COMMITTER_NAME: "ytimesy-agent[bot]",
+				GIT_COMMITTER_EMAIL:
+					"328807657+ytimesy-agent[bot]@users.noreply.github.com",
+			},
+			{ GIT_AUTHOR_NAME: "Other", GIT_AUTHOR_EMAIL: "other@example.test" },
+		]) {
+			run(
+				"git",
+				[
+					"-c",
+					"core.hooksPath=missing-hooks",
+					"commit",
+					"--allow-empty",
+					"-m",
+					"Skipped hooks",
+				],
+				env,
+			);
+			expect(() =>
+				run("git", ["push", upstream, "HEAD:refs/heads/rejected"]),
+			).toThrow(/unpublished commit/i);
+			run("git", ["reset", "-q", "--hard", "HEAD^"]);
+		}
+		run("git", [
+			"-c",
+			"core.hooksPath=missing-hooks",
+			"commit",
+			"--allow-empty",
+			"-m",
+			"No trailer",
+		]);
+		expect(() =>
+			run("git", ["push", upstream, "HEAD:refs/heads/rejected"]),
+		).toThrow(/unpublished commit/i);
+		expect(run("git", ["ls-remote", upstream, "refs/heads/rejected"])).toBe("");
+	});
+});
+
+it("judges pushed commit metadata by the user's identity, and by the bot's only when no user is known", () => {
+	const botIdentity = identity;
+	const trailers = `\n${botIdentity}`;
+	const bothHuman = `${humanIdentity}\t${humanIdentity}${trailers}`;
+	const botCommitted = `${humanIdentity}\t${botIdentity}${trailers}`;
+	const bothBot = `${botIdentity}\t${botIdentity}${trailers}`;
+	expect(hasManagedPushMetadata(bothHuman, human)).toBe(true);
+	expect(hasManagedPushMetadata(botCommitted, human)).toBe(true);
+	expect(hasManagedPushMetadata(bothBot, human)).toBe(false);
+	expect(
+		hasManagedPushMetadata(`${humanIdentity}\t${humanIdentity}`, human),
+	).toBe(false);
+	expect(hasManagedPushMetadata(bothBot)).toBe(true);
+	expect(hasManagedPushMetadata(bothHuman)).toBe(false);
 });

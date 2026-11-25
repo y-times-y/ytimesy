@@ -2,6 +2,7 @@ import { turnPublicationRole } from "#/domain/agent-task";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { withAgentCapturesSection } from "#/domain/pr-evidence";
 import { repositoriesForProject } from "#/domain/projects";
+import type { PublicationAuthor } from "#/domain/publication";
 import {
 	changedPathsFromDiff,
 	type PullRequestHandoffFacts,
@@ -17,6 +18,7 @@ import {
 	isNothingAheadToOpen,
 } from "../adapters/github";
 import { ensureAppDraftPullRequest } from "../adapters/github/app-pull-request";
+import { githubCommitIdentityForToken } from "../adapters/github/commit-identity";
 import { pushBrokeredRepository } from "../adapters/github/git-broker";
 import { evaluationRunForTask } from "../adapters/harness-evaluation";
 import { projectForOwner } from "../adapters/projects";
@@ -135,6 +137,13 @@ export async function publishCompletedSessionTurn(
 		);
 		return tokenRead;
 	};
+	let authorRead: Promise<PublicationAuthor | null> | undefined;
+	const authorFor = () => {
+		authorRead ??= userTokenFor()
+			.then(githubCommitIdentityForToken)
+			.catch(() => null);
+		return authorRead;
+	};
 	let published: TurnPublication | undefined;
 	const repositories = repositoriesForProject(project).filter(
 		(repo) => !pending || pending.has(repo.fullName),
@@ -238,6 +247,7 @@ export async function publishCompletedSessionTurn(
 					}).catch(() => null),
 				)
 			: Promise.resolve(null);
+		const author = await authorFor();
 		await timed("handoff:push", () =>
 			pushBrokeredRepository(
 				{
@@ -264,6 +274,7 @@ export async function publishCompletedSessionTurn(
 					installationId: repo.installationId,
 					directory,
 					revision,
+					author,
 				},
 			),
 		);

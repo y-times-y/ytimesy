@@ -7,6 +7,7 @@ import {
 	installArgv,
 	listLockfilesArgv,
 } from "#/server/adapters/repository-setup";
+import { managedGitAuthorForUser } from "./managed-git-author";
 
 type ProjectCheckoutHost = {
 	readonly exec: (
@@ -53,7 +54,10 @@ export async function prepareProjectCheckout(input: {
 			mode: "clone",
 		});
 	await input.host.writeTextFile(PROJECT_CWD_PATH, `${directory}\n`);
-	const setup = managedGitSetupCommand(directory);
+	const setup = managedGitSetupCommand(
+		directory,
+		await managedGitAuthorForUser(input.userId),
+	);
 	const revision = `git -C ${posixShellQuoted(directory)} rev-parse HEAD`;
 	const together = !input.onCloned && input.commit;
 	const configured = await runCheckoutCommand(

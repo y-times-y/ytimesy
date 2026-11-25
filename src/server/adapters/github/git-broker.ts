@@ -9,6 +9,7 @@ import {
 	fetchedBranchCommand,
 } from "#/domain/git-branch-switch";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+import type { PublicationAuthor } from "#/domain/publication";
 
 export { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
 
@@ -48,6 +49,8 @@ export interface GitTransferHost {
 
 type Repository = {
 	userId?: string;
+	/** The user's GitHub identity the pushed commits must be authored by (the bot when absent). */
+	author?: PublicationAuthor | null;
 	projectId?: string;
 	owner: string;
 	name: string;
@@ -332,7 +335,7 @@ base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
 				`--format=${MANAGED_PUSH_METADATA_FORMAT}`,
 				commit,
 			]);
-			if (!hasManagedPushMetadata(metadata))
+			if (!hasManagedPushMetadata(metadata, input.author))
 				throw new Error(MANAGED_PUSH_REFUSED);
 		}
 		await git(

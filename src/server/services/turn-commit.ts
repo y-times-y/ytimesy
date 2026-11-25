@@ -166,9 +166,10 @@ async function commitChatTurn(
 						.filter(Boolean)
 						.join("\n\n"),
 					"",
+					humanCredit ?? MANAGED_GIT_BOT,
 					MANAGED_GIT_BOT,
+					null,
 					MANAGED_GIT_BOT,
-					humanCredit,
 				),
 				{},
 				60_000,

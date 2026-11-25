@@ -145,9 +145,10 @@ export function publishProject(
 			commitAllArgv(
 				directory,
 				input.title,
+				humanCredit ?? MANAGED_GIT_BOT,
 				MANAGED_GIT_BOT,
+				null,
 				MANAGED_GIT_BOT,
-				humanCredit,
 			),
 			{},
 			"Commit failed in the workspace.",
@@ -193,6 +194,7 @@ export function publishProject(
 					baseBranch: base,
 					installationId: project.installationId,
 					directory,
+					author: humanCredit,
 				},
 			),
 		);

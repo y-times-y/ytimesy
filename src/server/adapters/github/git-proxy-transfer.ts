@@ -5,11 +5,12 @@ import {
 } from "#/domain/git-branch-switch";
 import { issueGitProxyGrant } from "#/domain/github-git-proxy";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+import type { PublicationAuthor } from "#/domain/publication";
 import { redactSecrets } from "#/domain/redact-secrets";
 import {
-	MANAGED_GIT_ENV,
 	MANAGED_GIT_TRAILER,
 	MANAGED_PUSH_REFUSED,
+	managedMergeEnv,
 	managedPushIdentityCheck,
 } from "../managed-git-identity";
 import type { GitTransferHost } from "./git-broker";
@@ -21,6 +22,8 @@ type Repository = {
 	installationId: string | number;
 	userId?: string;
 	projectId?: string;
+	/** The user's GitHub identity the pushed commits must be authored by (the bot when absent). */
+	author?: PublicationAuthor | null;
 };
 
 export function gitProxyConfiguration() {
@@ -527,8 +530,8 @@ commit=$(git -C ${directory} rev-parse --verify ${quote(`${input.commit || input
 ${git} init -q --bare ${publish}
 printf '%s\n' "$objects" > ${quote(`${temporary}/push.git/objects/info/alternates`)}
 ${git} --git-dir=${publish} update-ref refs/heads/publish "$commit") || exit ${PUSH_EXIT.commit}
-${reconcile ? mergeRemoteBranchScript(git, publish, url, input.branch) : ""}${git} --git-dir=${publish} fetch -q --no-tags ${quote(url)} 'refs/heads/*:refs/ytimesy/upstream/*' || exit ${PUSH_EXIT.prepare}
-${managedPushIdentityCheck(`${git} --git-dir=${publish}`, "refs/heads/publish", "--glob=refs/ytimesy/upstream/*", PUSH_EXIT.identity)}
+${reconcile ? mergeRemoteBranchScript(git, publish, url, input.branch, input.author) : ""}${git} --git-dir=${publish} fetch -q --no-tags ${quote(url)} 'refs/heads/*:refs/ytimesy/upstream/*' || exit ${PUSH_EXIT.prepare}
+${managedPushIdentityCheck(`${git} --git-dir=${publish}`, "refs/heads/publish", "--glob=refs/ytimesy/upstream/*", PUSH_EXIT.identity, input.author)}
 ${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/heads/${input.branch}`)} || exit ${PUSH_EXIT.push}`,
 			NETWORK_GIT_TIMEOUT_MS,
 		);
@@ -613,6 +616,7 @@ export function mergeRemoteBranchScript(
 	publish: string,
 	url: string,
 	branch: string,
+	author?: PublicationAuthor | null,
 ) {
 	const remoteRef = "refs/remotes/origin/chat";
 	return `${git} --git-dir=${publish} fetch -q --no-tags ${quote(url)} ${quote(`refs/heads/${branch}:${remoteRef}`)} || exit ${PUSH_EXIT.push}
@@ -621,7 +625,7 @@ remote=$(${git} --git-dir=${publish} rev-parse --verify ${remoteRef}) || exit ${
 if ${git} --git-dir=${publish} merge-base --is-ancestor "$commit" "$remote"; then exit 0; fi
 if ! ${git} --git-dir=${publish} merge-base --is-ancestor "$remote" "$commit"; then
   tree=$(${git} --git-dir=${publish} merge-tree --write-tree --no-messages "$commit" "$remote") || exit ${PUSH_EXIT.diverged}
-  merged=$(${MANAGED_GIT_ENV} ${git} --git-dir=${publish} commit-tree "$tree" -p "$commit" -p "$remote" -m "Merge remote changes into the chat's branch" -m ${quote(MANAGED_GIT_TRAILER)}) || exit ${PUSH_EXIT.diverged}
+  merged=$(${managedMergeEnv(author)} ${git} --git-dir=${publish} commit-tree "$tree" -p "$commit" -p "$remote" -m "Merge remote changes into the chat's branch" -m ${quote(MANAGED_GIT_TRAILER)}) || exit ${PUSH_EXIT.diverged}
   ${git} --git-dir=${publish} update-ref refs/heads/publish "$merged" || exit ${PUSH_EXIT.commit}
 fi
 `;
