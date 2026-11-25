@@ -138,6 +138,10 @@ async function shot(
 					.first()
 					.fill(rest.slice(at + 1));
 			} else if (kind === "press") await page.keyboard.press(rest);
+			else if (kind === "eval")
+				console.error(JSON.stringify(await page.evaluate(rest)));
+			else if (kind === "scroll")
+				await page.mouse.wheel(0, Number(rest));
 			else if (kind === "wait") await page.waitForTimeout(Number(rest));
 			else throw new Error(`Unknown step ${kind}`);
 		}

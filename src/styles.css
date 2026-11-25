@@ -1468,7 +1468,7 @@ a.session-title-meta:focus-visible {
 	overflow-y: auto;
 }
 .welcome-panel:not([data-layout="chat"]) .welcome-content {
-	flex: 1;
+	flex: 1 0 auto;
 	justify-content: center;
 	max-width: 640px;
 	padding: 32px 24px 48px;
