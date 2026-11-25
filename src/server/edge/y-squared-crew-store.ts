@@ -1,5 +1,7 @@
 import { Y_SQUARED_THREAD_LIMIT } from "../../domain/y-squared";
 import {
+	CREW_BUSY_HOLD_MAX_MS,
+	CREW_BUSY_RECHECK_MS,
 	CREW_EVENT_LIMIT,
 	CREW_REPLY_LIMIT,
 	CREW_REQUEST_LIMIT,
@@ -16,8 +18,6 @@ import {
 	crewNoteMatters,
 	crewTitle,
 	crewWakeBody,
-	CREW_BUSY_HOLD_MAX_MS,
-	CREW_BUSY_RECHECK_MS,
 	crewWakeDelayMs,
 	crewWakeDueAt,
 	decideWake,
@@ -1039,17 +1039,13 @@ export class SqliteYSquaredCrew {
 		}
 		let next: WakeState = { ...state, alarmAt: null, lastWakeAt: now };
 		if (baseDue) {
-			const decided = decideWake(
-				{ ...state, pending: true },
-				now,
-				this.sql
+			const urgent =
+				(this.sql
 					.exec<{ n: number }>(
 						"select count(*) n from wake_events where kind in ('waiting','failed')",
 					)
-					.toArray()[0]?.n
-					? true
-					: false,
-			);
+					.toArray()[0]?.n ?? 0) > 0;
+			const decided = decideWake({ ...state, pending: true }, now, urgent);
 			if (decided.action === "capped") {
 				// A heartbeat held by the cap is not a pending wake. Due
 				// schedules and signals wait for the window too.

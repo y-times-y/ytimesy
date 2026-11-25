@@ -1,12 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
+	CREW_BURST_GAP_MS,
 	CREW_HEARTBEAT_AFTER_MS,
 	CREW_HEARTBEAT_EVERY_MS,
 	CREW_HOUR_MS,
 	CREW_RETENTION_MS,
 	CREW_STARTED_WAKE_EVERY_MS,
-	CREW_BURST_GAP_MS,
 	CREW_URGENT_WAKE_DELAY_MS,
 	CREW_URGENT_WAKES_PER_HOUR,
 	CREW_WAKE_DELAY_MS,
