@@ -171,3 +171,15 @@ export async function canaryCountsSince(days: number) {
 		failures: Number(result.rows[0]?.failures ?? 0),
 	};
 }
+
+/** The canary's target row, or null while none is set (the canary is then inert). */
+export async function canaryConfigRow() {
+	const result = await database().query<{
+		userId: string;
+		projectId: string;
+		modelId: string;
+	}>(
+		`select user_id as "userId", project_id as "projectId", model_id as "modelId" from canary_config where singleton`,
+	);
+	return result.rows[0] ?? null;
+}

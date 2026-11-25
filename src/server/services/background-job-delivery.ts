@@ -44,6 +44,8 @@ import {
 import { sweepClaudeBoxToolIdentities } from "./claude-box-tool-grant";
 import { prepareForkWorkspace } from "./conversation-recovery";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
+import { productionCanary } from "./interruption-canary";
+import { runInterruptionMonitoring } from "./interruption-monitoring";
 import { sweepUnusedChatMachines } from "./machine-prewarm";
 import { runMaintenanceSteps } from "./maintenance-steps";
 import {
@@ -51,8 +53,6 @@ import {
 	runMemoryDream,
 	runMemorySave,
 } from "./memory-jobs";
-import { productionCanary } from "./interruption-canary";
-import { runInterruptionMonitoring } from "./interruption-monitoring";
 import {
 	alertAbandonedTurns,
 	alertFailedEmails,
@@ -180,8 +180,11 @@ export async function deliverBackgroundJob(
 						// (docs/interruption-monitoring.md); never fails the job.
 						{
 							name: "interruption-monitoring",
-							run: () =>
-								runInterruptionMonitoring(new Date(), productionCanary(machines)),
+							run: async () =>
+								runInterruptionMonitoring(
+									new Date(),
+									await productionCanary(machines),
+								),
 						},
 					]);
 					break;
