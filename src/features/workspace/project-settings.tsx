@@ -8,6 +8,7 @@ import {
 	Folder,
 	Gauge,
 	Import,
+	LifeBuoy,
 	Mail,
 	Plug,
 	Shield,
@@ -46,6 +47,8 @@ import {
 	xaiSubscriptionNeedsSignIn,
 } from "#/domain/xai-subscription";
 import { ReplayChoiceSection } from "#/features/analytics/replay-choice-setting";
+import { DISCORD_URL, GITHUB_URL } from "#/features/landing/community-links";
+import { DiscordMark } from "#/features/landing/discord-mark";
 import { authClient } from "../auth/client";
 import { ContinueSessionCard } from "../local-import/continue-session-card";
 import { PastImports } from "../local-import/past-imports";
@@ -125,6 +128,7 @@ const sectionIcon = {
 	mcp: Plug,
 	usage: Gauge,
 	archived: Archive,
+	support: LifeBuoy,
 } as const;
 
 export function ProjectSettings({
@@ -284,6 +288,7 @@ export function ProjectSettings({
 								) : null}
 								{section === "memory" ? <MemorySettings /> : null}
 								{section === "archived" ? <ArchivedSettings /> : null}
+								{section === "support" ? <SupportSection /> : null}
 								{section === "usage" ? (
 									<UsageSection
 										planConnected={
@@ -460,6 +465,57 @@ function SettingsHeader({
 			</div>
 			{action}
 		</header>
+	);
+}
+
+/** Where to get help and follow the project: the community and the source. */
+function SupportSection() {
+	const links = [
+		{
+			href: DISCORD_URL,
+			title: "Join our Discord",
+			meta: "Ask questions, share feedback and meet other users.",
+			label: "Open Discord",
+			mark: <DiscordMark size={16} />,
+		},
+		{
+			href: GITHUB_URL,
+			title: "GitHub",
+			meta: "Report issues and read the source.",
+			label: "Open GitHub",
+			mark: <GithubMark size={16} />,
+		},
+	];
+	return (
+		<section className="settings-section" aria-label="Support">
+			<SettingsHeader
+				title="Support"
+				description="Get help and follow the project."
+			/>
+			<div className="settings-group">
+				{links.map((link) => (
+					<div key={link.href} className="settings-row">
+						<div className="settings-row-main settings-identity">
+							{link.mark}
+							<div className="settings-row-text">
+								<span className="settings-row-title">{link.title}</span>
+								<span className="settings-row-meta">{link.meta}</span>
+							</div>
+						</div>
+						<div className="settings-row-actions">
+							<a
+								className="settings-secondary"
+								href={link.href}
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								{link.label}
+							</a>
+						</div>
+					</div>
+				))}
+			</div>
+		</section>
 	);
 }
 
