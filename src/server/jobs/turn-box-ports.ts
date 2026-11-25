@@ -2,6 +2,7 @@ import { jsonSchema, type ModelMessage, type ToolSet, tool } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
 import {
 	CoordinationFailure,
+	TURN_COORDINATION_RENEW_EVERY_MS,
 	type TurnControlAction,
 } from "#/domain/conversation-turn-control";
 import { attachedMemory, withMemoryParts } from "#/domain/memory-repo";
@@ -17,7 +18,10 @@ import type {
 	SubagentPortDep,
 	YSquaredPortDep,
 } from "#/domain/turn-box-protocol";
-import { TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
+import {
+	TURN_BOX_RENEW_EVERY_MS,
+	TurnBoxPortForbidden,
+} from "#/domain/turn-box-protocol";
 import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
 import type { CodexSelection } from "../adapters/codex-subscription-runtime";
 import type { YSquaredCrewClient } from "../adapters/y-squared-crew-client";
@@ -68,12 +72,17 @@ export type BoxTurnPorts = TurnPorts & {
 };
 
 const ANALYTICS_BATCH = 20;
-/** One attempt at a call on the chat's lock; the attempts together stay inside its 30 s lease. */
+/** One attempt at a call on the chat's lock; the attempts together stay inside its lease. */
 export const COORDINATION_PORT_TIMEOUT_MS = 6_000;
 export const COORDINATION_PORT_ATTEMPTS = 3;
 const COORDINATION_PORT_BACKOFF_MS = [300, 1_000];
-/** The edge confirmed the lease this recently (a renewal, or a checkpoint's own): no renewal request. */
-const RENEW_SKIP_MS = 5_000;
+/**
+ * The edge confirmed the lease this recently (a renewal, or a checkpoint's
+ * own): no renewal request. Postgres' lease lasts 45 s, so this keeps two
+ * renewals inside it; a renewal is an HTTP request to the Worker, not a
+ * socket message, so it never wakes the chat's Durable Object.
+ */
+const RENEW_SKIP_MS = TURN_BOX_RENEW_EVERY_MS;
 /** An empty peer inbox is read again after this long. */
 const INBOX_RECHECK_MS = 10_000;
 
@@ -129,7 +138,7 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 	const coordinateTurn = async (action: TurnControlAction) => {
 		// One slow answer never ends the turn: each call is tried a few times
 		// (all of them repeat safely under one lease), the whole inside the
-		// room's 30 s lease. A call that hung held the next renewals back until
+		// room's lease. A call that hung held the next renewals back until
 		// the lease lapsed and the turn was stopped; one that timed out once
 		// and was never repeated killed two healthy turns (2026-11-24).
 		let failure: CoordinationFailure | undefined;
@@ -206,15 +215,21 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 		},
 		// Acquired once per turn; the box's socket and its lease renewals keep
 		// the turn tied to the room. A renewal is still sent (the room's lease
-		// is 30 s), a release once at the end.
+		// is TURN_COORDINATION_LEASE_MS), a release once at the end.
 		coordinateConversationTurn: async (action) => {
 			if (action === "acquire") {
 				// A later step of the same turn holds the lease already; it is
-				// refreshed here (the room's lease lasts 30 s, and a step's own
-				// renewal only starts after 10 s, so steps shorter than that
-				// once let it lapse mid-turn: a helper was stopped, 2026-11-22).
+				// refreshed here (a step's own renewal only starts after
+				// TURN_COORDINATION_RENEW_EVERY_MS, so steps shorter than that
+				// once let a 30 s lease lapse mid-turn: a helper was stopped,
+				// 2026-11-22). Refreshed at half that period, so the gap
+				// between two refreshes stays well inside the lease.
 				if (coordinated) {
-					if (Date.now() - coordinationRefreshedAt < 10_000) return true;
+					if (
+						Date.now() - coordinationRefreshedAt <
+						TURN_COORDINATION_RENEW_EVERY_MS / 2
+					)
+						return true;
 					const held = await coordinateTurn("renew");
 					coordinated = held !== false;
 					if (coordinated) coordinationRefreshedAt = Date.now();

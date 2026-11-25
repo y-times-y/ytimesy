@@ -54,8 +54,8 @@ From a box that is ~360 requests an hour for renewals alone and thousands for
 progress, against ~10,000 Durable Object requests per user per month. So the box
 must not talk to the room over HTTP per event. **Before the boxes are enabled for
 any user**, coordination and progress go over one hibernatable WebSocket per
-turn (a WebSocket message bills at 1/20 of a request), with renewals every 30 s
-or less often and progress coalesced. Until then `YTIMESY_BOX_TURN_USERS` stays
+turn (a WebSocket message bills at 1/20 of a request), with the Postgres lease renewed over HTTP
+(a Worker request; a socket message wakes the object) and the room lease every 90 s and progress coalesced. Until then `YTIMESY_BOX_TURN_USERS` stays
 empty and nothing is routed to a box.
 
 ## No secrets on a box (decided 2026-11-15)
@@ -743,8 +743,10 @@ measured concurrency.
   hand on 2026-11-22). The box also keeps the failover it checkpoints on its
   own turn identity, so the next step runs on the fallback route.
 - **The chat's coordination lease across short steps.** A box acquires the
-  chat room's 30 s coordination lease once per turn; a later step's acquire
-  now renews it when 10 s have passed. Before, only a step's own heartbeat
+  chat room's coordination lease once per turn (180 s, renewed every 90 s: a
+  renewal wakes the chat's Durable Object, which Cloudflare bills for every
+  second it stays awake, so a 30 s lease renewed every 10 s kept it awake for
+  a whole turn); a later step's acquire now renews it when 45 s have passed. Before, only a step's own heartbeat
   renewed it, and only after 10 s inside the step, so a helper whose steps
   were all shorter let it lapse and was stopped mid-turn (2026-11-22).
 
@@ -835,7 +837,7 @@ progress write, last renewal) before calling a thread stuck (docs/y.md,
   box's single 8 s attempt ("Timed out while waiting for an open slot in the
   pool", op coordinateTurn). Now the lock calls read the turn's identity
   only, the box repeats each of them (3 attempts of 6 s with 0.3 s and 1 s
-  between, 19 s in all, inside the 30 s lease), and a renewal that still
+  between, 19 s in all, inside the lease), and a renewal that still
   fails after the grace window first asks the database whether the turn
   owns its lease and takes the lock back (`resume`) before stopping it.
   Only a real outage stops a turn. No production Worker changed at that
@@ -857,8 +859,8 @@ progress write, last renewal) before calling a thread stuck (docs/y.md,
 
 - **Edge and web deploys** restart chat objects (each moves to the new code
   once idle or after a delay). A turn rides that out: a failed coordination
-  renewal is retried for up to 20 s of the 30 s lease
-  (`COORDINATION_HEARTBEAT_GRACE_MS`; the lease is in the object's storage),
+  renewal is retried for up to 120 s of the 180 s lease
+  (`TURN_COORDINATION_GRACE_MS`; the lease is in the object's storage),
   the box's socket falls back to HTTP and reconnects, and a relayed Claude
   call reconnects for the same call (the object keeps an answer meanwhile).
 - **A Claude turn's MCP calls through its chat object** (2026-11-23): an

@@ -1,4 +1,5 @@
 import { isDevelopmentEnvironment } from "./development-environment";
+import { TURN_BOX_HANDOFF_HISTORY_BYTES } from "./turn-box-protocol";
 
 export type TurnExecutor = "node" | "durable-object";
 
@@ -39,6 +40,16 @@ export function chooseTurnExecutor(input: {
 	return enabled && input.eligible && input.boxAlive
 		? "node"
 		: input.configured;
+}
+
+/**
+ * Whether a chat's history (its base turn's messages as JSON text, counted in
+ * the database) is small enough to send to a box. A longer one is queued for
+ * its chat's object: a box would claim it, find it too long and hand it back,
+ * and every claim and the object's own load read the row in full.
+ */
+export function historyFitsBox(bytes: number | undefined) {
+	return bytes === undefined || bytes <= TURN_BOX_HANDOFF_HISTORY_BYTES;
 }
 
 /**

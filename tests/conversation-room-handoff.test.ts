@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+	RETIRED_TURN_MS,
+	TURN_COORDINATION_GRACE_MS,
+	TURN_COORDINATION_LEASE_MS,
+	TURN_COORDINATION_RENEW_EVERY_MS,
+} from "../src/domain/conversation-turn-control";
 import { ConversationRoom } from "../src/realtime/worker";
 import { durableObjectState } from "./support/durable-object-state";
 
@@ -190,5 +196,49 @@ describe("a turn taking over the chat's lock", () => {
 		expect((await control(conversation, "takeover", objectLease)).status).toBe(
 			409,
 		);
+	});
+});
+
+describe("the room's lease is long and renewed rarely (each renewal wakes the chat's object)", () => {
+	it("holds a turn for the long lease from acquire and every renewal, and a crashed owner's lease never delays the next owner", async () => {
+		const { conversation, storage } = roomWithState();
+		const held = async () =>
+			(await storage.get<{ expiresAt: number }>("active-turn"))?.expiresAt ?? 0;
+		const before = Date.now();
+		await control(conversation, "acquire", boxLease);
+		expect((await held()) - before).toBeGreaterThanOrEqual(
+			TURN_COORDINATION_LEASE_MS,
+		);
+		// A renewal extends from now, not by the old remainder.
+		await storage.put("active-turn", {
+			...(await storage.get<object>("active-turn")),
+			expiresAt: Date.now() + 1_000,
+		});
+		await control(conversation, "renew", boxLease);
+		expect((await held()) - Date.now()).toBeGreaterThan(
+			TURN_COORDINATION_LEASE_MS - 5_000,
+		);
+		// The owner crashed: its lease is live for minutes, yet the next owner
+		// (the box that takes the requeued turn) takes the lock at once.
+		expect((await control(conversation, "acquire", objectLease)).status).toBe(
+			409,
+		);
+		expect((await control(conversation, "takeover", objectLease)).status).toBe(
+			204,
+		);
+		expect((await control(conversation, "renew", boxLease)).status).toBe(409);
+	});
+
+	it("keeps the constants consistent: two renewals per lease, a grace inside it, retirement beyond Postgres' lease", () => {
+		expect(TURN_COORDINATION_RENEW_EVERY_MS * 2).toBeLessThanOrEqual(
+			TURN_COORDINATION_LEASE_MS,
+		);
+		expect(TURN_COORDINATION_GRACE_MS).toBeGreaterThan(
+			TURN_COORDINATION_RENEW_EVERY_MS,
+		);
+		expect(TURN_COORDINATION_GRACE_MS).toBeLessThan(TURN_COORDINATION_LEASE_MS);
+		expect(45_000).toBeLessThan(RETIRED_TURN_MS);
+		// The room outlasts Postgres' 45 s lease, so it lapses last.
+		expect(TURN_COORDINATION_LEASE_MS).toBeGreaterThan(45_000);
 	});
 });

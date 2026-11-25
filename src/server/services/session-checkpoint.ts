@@ -14,6 +14,7 @@ import {
 	restoreGuestCheckpoint,
 } from "../adapters/checkpoints/guest";
 import {
+	type CheckpointRunClaim,
 	type CheckpointStage,
 	checkpointForSession,
 	clearCheckpointFailure,
@@ -56,8 +57,9 @@ export async function captureSessionCheckpoint(
 	machines: WorkspaceMachines,
 	userId: string,
 	sessionId: string,
+	/** The caller reads the stage a capture reached when it gives up waiting on it. */
+	progress: { stage: CheckpointStage } = { stage: "wake" },
 ) {
-	const progress: { stage: CheckpointStage } = { stage: "wake" };
 	try {
 		await captureSessionCheckpointStages(machines, userId, sessionId, progress);
 	} catch (error) {
@@ -199,4 +201,91 @@ export async function restoreSessionWorkspace(
 		if (result.exitCode !== 0)
 			throw new Error("Could not restore the repository remote.");
 	}
+}
+
+/** A capture that outlives this is given up on (its VM and upload are the wait). */
+export const CHECKPOINT_RUN_LIMIT_MS = 5 * 60_000;
+/** Captures running at once across the whole fleet (each holds a VM awake). */
+export const CHECKPOINT_MAX_ACTIVE_RUNS = 3;
+/** Captures one cron tick starts, so a backlog drains over ticks, not in one. */
+export const CHECKPOINT_STARTS_PER_TICK = 2;
+/** Sessions one tick looks at while finding that many free ones. */
+const CHECKPOINT_CANDIDATES_PER_TICK = 8;
+
+type CheckpointRunDeps = {
+	claim(sessionId: string, leaseId: string): Promise<CheckpointRunClaim>;
+	release(sessionId: string, leaseId: string): Promise<void>;
+	capture(
+		userId: string,
+		sessionId: string,
+		progress: { stage: CheckpointStage },
+	): Promise<void>;
+	recordFailure(sessionId: string, stage: CheckpointStage): Promise<void>;
+	limitMs?: number;
+};
+
+/**
+ * Captures the sessions the per-minute backstop found, inside the Worker that
+ * runs the cron: a Worker is billed for CPU, not for the minutes it waits on a
+ * VM and an upload, and a Durable Object per capture was billed for all of it.
+ * One run per session (an in-flight lease) and a fleet-wide cap keep
+ * overlapping ticks from piling up; a crashed run's lease expires and the
+ * session is found again. Returns the sessions it could not hand to a lease
+ * holder ("unavailable": lease table missing), so the caller can fall back.
+ */
+export async function runSessionCheckpoints(
+	sessions: readonly { user_id: string; id: string }[],
+	deps: CheckpointRunDeps,
+): Promise<{
+	started: number;
+	unavailable: { user_id: string; id: string }[];
+}> {
+	const limitMs = deps.limitMs ?? CHECKPOINT_RUN_LIMIT_MS;
+	const runs: Promise<void>[] = [];
+	const unavailable: { user_id: string; id: string }[] = [];
+	for (const session of sessions.slice(0, CHECKPOINT_CANDIDATES_PER_TICK)) {
+		if (runs.length >= CHECKPOINT_STARTS_PER_TICK) break;
+		const leaseId = randomUUID();
+		const claim = await deps.claim(session.id, leaseId);
+		if (claim.kind === "unavailable") {
+			unavailable.push(session);
+			continue;
+		}
+		if (claim.kind === "busy") continue;
+		runs.push(
+			(async () => {
+				const progress: { stage: CheckpointStage } = { stage: "wake" };
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					const outcome = await Promise.race([
+						deps
+							.capture(session.user_id, session.id, progress)
+							.then(() => "done" as const),
+						new Promise<"limit">((resolve) => {
+							timer = setTimeout(() => resolve("limit"), limitMs);
+						}),
+					]);
+					// The capture cannot be cancelled: stop waiting, back the
+					// session off like a failure, and let its lease run out.
+					if (outcome === "limit") {
+						console.warn("Session checkpoint ran past its limit.", {
+							sessionId: session.id,
+							stage: progress.stage,
+						});
+						await deps
+							.recordFailure(session.id, progress.stage)
+							.catch(() => undefined);
+						return;
+					}
+				} catch {
+					// captureSessionCheckpoint recorded the failure and logged its cause.
+				} finally {
+					clearTimeout(timer);
+				}
+				await deps.release(session.id, leaseId).catch(() => undefined);
+			})(),
+		);
+	}
+	await Promise.all(runs);
+	return { started: runs.length, unavailable };
 }

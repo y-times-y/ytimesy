@@ -40,6 +40,8 @@ import {
 import { type ClaudeRunnerBox, claudeRunnerFor } from "#/domain/claude-runner";
 import {
 	CoordinationFailure,
+	TURN_COORDINATION_GRACE_MS,
+	TURN_COORDINATION_RENEW_EVERY_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
 import { isDevelopmentEnvironment } from "#/domain/development-environment";
@@ -937,7 +939,7 @@ async function runApiTurnAttempt(
 				// by every chat at once, Nov 12 00:16 and 00:19) says nothing about
 				// the lease, which holds 45 s past the last success. The next tick
 				// tries again; only a failure that lasts stops the turn.
-				// The same for the chat's coordination lease (30 s, kept in the
+				// The same for the chat's coordination lease (3 min, kept in the
 				// chat's object's storage): a deploy moving that object to new
 				// code fails a renewal or two while it restarts, and a turn
 				// running on a box (or any other process) must ride that out.
@@ -994,7 +996,7 @@ async function runApiTurnAttempt(
 			(coordinated || leaseCarried) &&
 			!coordinationHeartbeatBusy &&
 			!abort.signal.aborted &&
-			Date.now() - lastCoordinationRenewal >= 10_000
+			Date.now() - lastCoordinationRenewal >= TURN_COORDINATION_RENEW_EVERY_MS
 		) {
 			coordinationHeartbeatBusy = true;
 			coordinationHeartbeatPending = guardHeartbeat(
@@ -4458,10 +4460,10 @@ const PREPARATION_SETTLE_MS = 60_000;
 const DATABASE_HEARTBEAT_GRACE_MS = 20_000;
 /**
  * A failing coordination renewal stops the turn once it has lasted this
- * long: inside the 30 s coordination lease (TURN_COORDINATION_LEASE_MS), so a
+ * long: inside the coordination lease (TURN_COORDINATION_LEASE_MS), so a
  * renewal that then succeeds still holds it.
  */
-const COORDINATION_HEARTBEAT_GRACE_MS = 20_000;
+const COORDINATION_HEARTBEAT_GRACE_MS = TURN_COORDINATION_GRACE_MS;
 
 /** Waits for `work` to settle, at most `ms` and never past the signal's abort. */
 function settledWithin(

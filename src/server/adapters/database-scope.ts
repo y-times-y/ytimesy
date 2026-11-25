@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Pool } from "pg";
 import { stepTimingEnabled, timed, timedCall } from "../services/step-timing";
+import { boundedWait } from "./bounded";
 import {
 	accountQueryBytes,
 	byteAccountingEnabled,
+	flushEgressSummaryIfDue,
 } from "./database-byte-accounting";
 import {
 	logConnectionFailure,
@@ -75,6 +77,9 @@ export function scopedResource<T>(
 	return ready;
 }
 
+/** The longest one teardown step of a database scope is waited for. */
+const SCOPE_TEARDOWN_MS = 10_000;
+
 /** Connections belong to one invocation; no Worker socket escapes into another request. */
 export async function withDatabaseScope<T>(
 	connectionString: string,
@@ -106,11 +111,23 @@ export async function withDatabaseScope<T>(
 	try {
 		return await scope.run(current, () => withInvocationTasks(run));
 	} finally {
+		// Each teardown is bounded: the invocation (a chat object's alarm) is
+		// billed until it returns, and a hung disposer or pool end held a
+		// finished turn's alarm open for 6-14 minutes.
 		for (const close of current.cleanup.reverse())
-			await scope
-				.run(current, close)
-				.catch(() => console.warn("Request resource cleanup failed."));
-		await pool.end();
+			await boundedWait(
+				scope
+					.run(current, close)
+					.catch(() => console.warn("Request resource cleanup failed.")),
+				SCOPE_TEARDOWN_MS,
+				() => console.warn("Request resource cleanup timed out."),
+			);
+		await boundedWait(pool.end(), SCOPE_TEARDOWN_MS, () =>
+			console.warn("Database pool did not close in time."),
+		);
+		// An isolate (or chat object) can be evicted right after this: write
+		// the egress window now if it is a minute old, not only at 10 minutes.
+		if (byteAccountingEnabled()) flushEgressSummaryIfDue();
 	}
 }
 

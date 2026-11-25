@@ -59,3 +59,11 @@ it("does not leave its timer behind", async () => {
 	await runWithJobTimeLimit(job, async () => "ok");
 	expect(vi.getTimerCount()).toBe(0);
 });
+
+it("gives a checkpoint a shorter limit than other jobs", async () => {
+	const { JOB_TIME_LIMIT_MS, jobTimeLimitMs } = await import(
+		"./background-job-time-limit"
+	);
+	expect(jobTimeLimitMs("checkpoint")).toBe(5 * 60_000);
+	expect(jobTimeLimitMs("memory")).toBe(JOB_TIME_LIMIT_MS);
+});

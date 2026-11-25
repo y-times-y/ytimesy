@@ -1,3 +1,4 @@
+import type { ModelMessage } from "ai";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellCommand } from "#/domain/posix-command";
 import type { SessionItem } from "#/domain/session-item";
@@ -61,6 +62,7 @@ export async function afterBoxTurnSettled(
 	input: {
 		readonly state: Settled;
 		readonly items: readonly SessionItem[];
+		readonly messages?: readonly ModelMessage[];
 		readonly publish: boolean;
 	},
 	deps: { readonly machines: () => WorkspaceMachines },

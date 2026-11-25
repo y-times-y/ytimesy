@@ -48,7 +48,7 @@ export const TURN_BOX_MAX_HISTORY_BYTES = 16 * 1024 * 1024;
 export const TURN_BOX_HANDOFF_HISTORY_BYTES = 8 * 1024 * 1024;
 /** Progress is sent at most this often (a WebSocket message bills 1/20 request). */
 export const TURN_BOX_PROGRESS_EVERY_MS = 500;
-/** The lease heartbeat rides the socket (or HTTP) this often; the lease lasts 45 s. */
+/** The lease heartbeat goes over HTTP (a socket message wakes the chat's object) this often; the lease lasts 45 s. */
 export const TURN_BOX_RENEW_EVERY_MS = 15_000;
 
 // Messages and items are validated by the server's own writers; here only
