@@ -22,7 +22,7 @@ import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
 import { GithubMark } from "#/features/workspace/github-mark";
 import { DISCORD_URL } from "./community-links";
 import { DiscordMark } from "./discord-mark";
-import { AppShot, SHOT_HELPERS } from "./landing-app-shot";
+import { DEMO_AGENTS as SHOT_HELPERS } from "./landing-demo";
 import {
 	BENCH_COLUMNS,
 	BENCH_ROWS,
@@ -30,6 +30,8 @@ import {
 	HARNESS_POST_PATH,
 } from "./landing-facts";
 import "./landing-page.css";
+import { PREVIEW } from "./preview/preview.gen";
+import "./preview/preview-styles.gen";
 
 /** The auth route's optional search parameters, all unset. */
 const NO_SEARCH = { error: undefined, redirectTo: undefined };
@@ -142,7 +144,7 @@ export function LandingPage() {
 						label="Start building"
 					/>
 					<div className="landing-shot-frame">
-						<AppShot />
+						<AppPreview />
 					</div>
 				</section>
 				<Benchmark />
@@ -158,6 +160,24 @@ export function LandingPage() {
 			</main>
 			<SiteFooter />
 		</div>
+	);
+}
+
+/**
+ * The app as it is today: the product's own components rendered with demo
+ * data by `pnpm previews` (preview/preview-demo.tsx). Plain markup with no
+ * app script on this page; inert, so none of it takes focus or clicks.
+ */
+function AppPreview() {
+	return (
+		<div
+			className="landing-preview"
+			role="img"
+			aria-label="The ytimesy app: the Super agent in the left sidebar above the Threads list grouped into Needs you, Working and Recently finished, the Super agent's chat, and an Overview of what needs you."
+			inert
+			// biome-ignore lint/security/noDangerouslySetInnerHtml: markup generated from our own components by pnpm previews, never user input
+			dangerouslySetInnerHTML={{ __html: PREVIEW["super-agent"] }}
+		/>
 	);
 }
 
