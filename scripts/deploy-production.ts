@@ -42,6 +42,7 @@ import {
 } from "./production-source";
 import { readRunningTurns, runningTurnsDecision } from "./running-turns-check";
 import { supabaseCertificate } from "./supabase-certificate";
+import { liveWorkerBindingProblems } from "./worker-bindings-guard";
 
 /**
  * Production deploy for the edge executor and the web Worker. It refuses to
@@ -620,6 +621,16 @@ const smokeProblems = await runSmokeChecks(
 		};
 	},
 	{ attempts: 7, delayMs: 10_000, log: (line) => console.log(line) },
+);
+// The Workers must still carry the bindings they cannot work without (the
+// Codex egress network); a deploy that dropped one is rolled back like a
+// failed smoke check (2026-11-25 incident review).
+const cloudflareToken =
+	process.env.CLOUDFLARE_API_TOKEN ?? process.env.CLOUDFLARE_DEPLOY_TOKEN;
+smokeProblems.push(
+	...(cloudflareToken
+		? await liveWorkerBindingProblems(cloudflareToken)
+		: ["No Cloudflare token to check the live Worker bindings."]),
 );
 if (smokeProblems.length) {
 	console.error(

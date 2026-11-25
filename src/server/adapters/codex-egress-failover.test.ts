@@ -311,3 +311,25 @@ it("lets the VPC egress keep its connections but closes them on a direct (Node) 
 		"close",
 	);
 });
+
+it("serves from the Workers VPC binding when the AWS tunnel path fails (production's two paths)", async () => {
+	// Node has no cloudflare:sockets, so the tunnel path fails as a transport error.
+	vi.unstubAllEnvs();
+	vi.stubEnv("YTIMESY_CODEX_TUNNEL_URL", "http://proxy.example:443");
+	vi.stubEnv("YTIMESY_CODEX_TUNNEL_SECRET", "t".repeat(64));
+	const vpc = vi
+		.fn<typeof fetch>()
+		.mockResolvedValue(new Response("data: ok\n\n"));
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	const response = await withCodexSubscriptionEgress(vpc, () => inference());
+	expect(await response.text()).toBe("data: ok\n\n");
+	expect(vpc).toHaveBeenCalledOnce();
+	expect(warn).toHaveBeenCalledWith(
+		"Codex egress path blocked.",
+		expect.objectContaining({
+			path: "tunnel",
+			reason: "transport",
+			fallbacks: ["vpc"],
+		}),
+	);
+});
