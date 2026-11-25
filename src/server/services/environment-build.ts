@@ -38,6 +38,7 @@ import {
 	repositoriesForProject,
 } from "#/domain/projects";
 import { sessionCloneBranch } from "#/domain/session-branch";
+import { TEST_ACCOUNT_ID } from "#/domain/test-account";
 import { hubTopic } from "#/domain/user-hub";
 import { toolsSnapshotIdFromEnv } from "#/domain/workspace-boot-snapshot";
 import { captureServerAnalytics } from "../adapters/analytics";
@@ -1248,16 +1249,28 @@ export async function recoverExpiredEnvironmentBuilds(
 }
 
 /** Authorization/source failures happen before a build claim but must not leave setup queued. */
-export async function failEnvironmentPreflight(workspaceId: string) {
+export async function failEnvironmentPreflight(
+	workspaceId: string,
+	reason?: string,
+) {
 	const generic =
 		"Could not start environment setup. Check repository access and the selected branches, then retry.";
 	// A user whose GitHub link is gone is told so (the UI offers Connect).
-	const unlinked = await database().query(
-		`select 1 from workspace w where w.id=$1
-		 and not exists(select 1 from github_connection g where g.user_id=w.user_id)`,
-		[workspaceId],
-	);
-	const message = unlinked.rows[0] ? GITHUB_SETUP_MESSAGE : generic;
+	const owner = (
+		await database().query<{ user_id: string; unlinked: boolean }>(
+			`select w.user_id, not exists(select 1 from github_connection g where g.user_id=w.user_id) as unlinked
+			 from workspace w where w.id=$1`,
+			[workspaceId],
+		)
+	).rows[0];
+	const synthetic = owner?.user_id === TEST_ACCOUNT_ID;
+	// The synthetic account has no GitHub link by design; it gets the real reason (redacted, bounded).
+	const message =
+		owner?.unlinked && !synthetic
+			? GITHUB_SETUP_MESSAGE
+			: synthetic && reason
+				? `${generic} (${reason})`
+				: generic;
 	const failed = await database().query(
 		`update workspace set status='failed',error_message=$2,updated_at=now()
 		 where id=$1 and template_snapshot_id is null

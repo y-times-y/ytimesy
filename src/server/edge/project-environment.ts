@@ -244,14 +244,15 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 					);
 				} catch (error) {
 					// Which check refused (token, installation, branch): redacted, bounded.
+					const reason = redactSecrets(
+						error instanceof Error ? error.message : String(error),
+						300,
+					);
 					console.warn("Environment source authorization failed.", {
 						requestId: request.requestId,
-						reason: redactSecrets(
-							error instanceof Error ? error.message : String(error),
-							300,
-						),
+						reason,
 					});
-					await failEnvironmentPreflight(request.workspaceId);
+					await failEnvironmentPreflight(request.workspaceId, reason);
 					throw new Error("Environment source authorization failed.");
 				}
 			},
