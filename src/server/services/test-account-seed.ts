@@ -1,7 +1,9 @@
 import { Effect } from "effect";
 import { TEST_ACCOUNT_ID } from "#/domain/test-account";
 import { githubClient } from "../adapters/github";
+import { readGitHubAppCredentials } from "../adapters/github/credentials";
 import { githubInstallationAccessToken } from "../adapters/github/installation-token";
+import { createOctokitGitHubListing } from "../adapters/github/octokit-app";
 import { listModelConnections } from "../adapters/model-connections";
 import { saveProject } from "../adapters/projects";
 import { connectApiModels } from "./model-connections";
@@ -154,5 +156,28 @@ export async function seedRepositoryIds(db: TestAccountDb) {
 			listed[String(installationId)] = null;
 		}
 	}
-	return { stored, groupRows, listed };
+	// Names and ids of what the seed installation lists (organisation repositories, no content).
+	const installations = [...new Set(stored.map((row) => row.installationId))];
+	const everything: { id: number; fullName: string }[] = [];
+	for (const installationId of installations.slice(0, 1)) {
+		try {
+			const token = await createOctokitGitHubListing().installationToken({
+				credentials: await Effect.runPromise(readGitHubAppCredentials()),
+				installationId: String(installationId),
+				contents: "read",
+			});
+			const github = githubClient(token);
+			for (const repo of await github.paginate(
+				github.apps.listReposAccessibleToInstallation,
+				{ per_page: 100 },
+			))
+				everything.push({ id: repo.id, fullName: repo.full_name });
+		} catch (error) {
+			everything.push({
+				id: 0,
+				fullName: `error: ${String(error).slice(0, 80)}`,
+			});
+		}
+	}
+	return { stored, groupRows, listed, installationRepositories: everything };
 }
