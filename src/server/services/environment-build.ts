@@ -23,6 +23,7 @@ import {
 	type EnvironmentModel,
 	environmentModel,
 } from "#/domain/environment-model";
+import { GITHUB_SETUP_MESSAGE } from "#/domain/github-sign-in";
 import { machineSize } from "#/domain/machine-size";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { projectCheckoutPath } from "#/domain/project-checkout";
@@ -1248,8 +1249,15 @@ export async function recoverExpiredEnvironmentBuilds(
 
 /** Authorization/source failures happen before a build claim but must not leave setup queued. */
 export async function failEnvironmentPreflight(workspaceId: string) {
-	const message =
+	const generic =
 		"Could not start environment setup. Check repository access and the selected branches, then retry.";
+	// A user whose GitHub link is gone is told so (the UI offers Connect).
+	const unlinked = await database().query(
+		`select 1 from workspace w where w.id=$1
+		 and not exists(select 1 from github_connection g where g.user_id=w.user_id)`,
+		[workspaceId],
+	);
+	const message = unlinked.rows[0] ? GITHUB_SETUP_MESSAGE : generic;
 	const failed = await database().query(
 		`update workspace set status='failed',error_message=$2,updated_at=now()
 		 where id=$1 and template_snapshot_id is null

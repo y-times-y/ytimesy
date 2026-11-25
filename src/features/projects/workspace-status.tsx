@@ -9,6 +9,7 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { EnvironmentBuildView } from "#/domain/environment-build-progress";
 import type { RepositorySetup } from "#/domain/environment-detection";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
+import { needsGithubSetup } from "#/domain/github-sign-in";
 import { firstBuildRunning } from "#/domain/project-setup-start";
 import {
 	workspacePrepareShowsStatus,
@@ -32,6 +33,7 @@ import {
 	useEnvironmentProgress,
 } from "./environment-build-progress";
 import { GithubSetupLink } from "./github-setup-link";
+import { GithubSetupStep } from "./github-setup-step";
 
 /** Projects with a message waiting for their environment (workspace-home.tsx). */
 export const HeldForSetupContext = createContext<ReadonlySet<string>>(
@@ -263,6 +265,19 @@ export function WorkspaceStatus({
 		);
 	if (!stalled && !workspacePrepareShowsStatus(current.status)) return null;
 	const failure = current.build?.status === "failed" ? current.build : null;
+	if (current.errorMessage && needsGithubSetup(current.errorMessage))
+		return (
+			<div className="workspace-status">
+				<GithubSetupStep message={current.errorMessage} />
+				<button
+					type="button"
+					disabled={retry.isPending}
+					onClick={() => retry.mutate({ workspaceId: current.id })}
+				>
+					{retry.isPending ? "Retrying…" : "Retry"}
+				</button>
+			</div>
+		);
 	return (
 		<div className="workspace-status" role="alert">
 			<div className="workspace-status-message">

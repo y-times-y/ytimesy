@@ -12,3 +12,6 @@ export function githubAppIdentityMatchesSignIn(
 export function needsGithubSetup(message: string) {
 	return /\b(?:re)?connect github\b/i.test(message);
 }
+
+/** The setup failure for a user whose GitHub link is gone (the UI offers Connect). */
+export const GITHUB_SETUP_MESSAGE = "Connect GitHub to set up this project.";
