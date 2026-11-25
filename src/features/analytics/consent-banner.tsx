@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Button } from "#/components/ui/button";
 import type { ConsentTier } from "./consent-tier";
 import type { ReplayBrowserBlock, ReplayChoice } from "./replay-choice";
@@ -31,16 +32,58 @@ export function consentBannerVisible(input: {
 	return !(input.tier === "notice" && input.signedIn);
 }
 
+const FLOATING_FROM_WIDTH = 1024;
+const BANNER_MARGIN = 16;
+
+/**
+ * Height the page gives up while the banner is shown. Below the width where
+ * it floats in a corner it is a bar across the bottom, so the app shell
+ * shrinks by its height and nothing (composer, onboarding card) sits under it.
+ */
+export function reservedBannerHeight(
+	viewportWidth: number,
+	bannerHeight: number,
+) {
+	return viewportWidth >= FLOATING_FROM_WIDTH
+		? 0
+		: Math.ceil(bannerHeight) + BANNER_MARGIN;
+}
+
+function useReservedBannerSpace(element: React.RefObject<HTMLElement | null>) {
+	useEffect(() => {
+		const node = element.current;
+		if (!node) return;
+		const root = document.documentElement;
+		const apply = () =>
+			root.style.setProperty(
+				"--consent-banner-height",
+				`${reservedBannerHeight(window.innerWidth, node.getBoundingClientRect().height)}px`,
+			);
+		apply();
+		const observer = new ResizeObserver(apply);
+		observer.observe(node);
+		window.addEventListener("resize", apply);
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", apply);
+			root.style.removeProperty("--consent-banner-height");
+		};
+	}, [element]);
+}
+
 export function ConsentBanner(props: {
 	readonly tier: ConsentTier;
 	readonly onChoose: (choice: ReplayChoice) => void;
 }) {
 	const copy = consentBannerCopy(props.tier);
+	const section = useRef<HTMLElement>(null);
+	useReservedBannerSpace(section);
 	return (
 		<section
+			ref={section}
 			aria-label="Cookie settings"
 			data-consent-banner={props.tier}
-			className="fixed inset-x-4 bottom-4 z-[260] mx-auto max-w-md rounded-lg border bg-background p-3 text-xs shadow-lg sm:p-4 sm:text-sm sm:inset-x-auto sm:right-4 sm:mx-0 sm:w-[340px]"
+			className="fixed inset-x-4 bottom-4 z-[260] mx-auto max-w-md rounded-lg border bg-background p-3 text-xs shadow-lg sm:p-4 sm:text-sm lg:inset-x-auto lg:right-4 lg:mx-0 lg:w-[340px]"
 		>
 			<p className="text-muted-foreground">
 				{copy.text}{" "}
