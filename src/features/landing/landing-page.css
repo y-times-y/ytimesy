@@ -190,9 +190,39 @@
 	width: 1440px;
 	height: 900px;
 	min-height: 0;
+	padding: 0;
 	transform-origin: 0 0;
 	transform: scale(var(--preview-scale));
 	pointer-events: none;
+}
+/* The app picks its layout from the viewer's window and the saved sidebar
+   choice. The picture is always the open desktop layout. */
+.landing-preview .workspace-shell {
+	grid-template-columns: 260px minmax(0, 1fr);
+}
+.landing-preview .workspace-shell .project-sidebar {
+	opacity: 1;
+	transform: none;
+}
+.landing-preview .workspace-shell .project-sidebar-frame {
+	width: auto;
+	overflow: hidden;
+}
+.landing-preview .workspace-shell .project-sidebar {
+	position: static;
+	width: auto;
+	height: auto;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	background: #0a0a0a;
+}
+.landing-preview .workspace-shell .welcome-content {
+	padding-right: 12px;
+	padding-left: 12px;
+}
+.landing-preview .workspace-shell .workspace-body {
+	grid-template-columns: minmax(0, 1fr) 1fr;
 }
 
 /* Sections */
@@ -823,9 +853,9 @@
 		padding: 5px;
 		border-radius: 16px;
 	}
-	/* A phone shows the real Threads list at its own width, not a scaled-down app. */
+	/* A phone shows the Threads list at its own size, not a scaled-down app. */
 	.landing-preview {
-		height: auto;
+		height: 560px;
 	}
 	.landing-preview > .workspace-shell {
 		width: 100%;
