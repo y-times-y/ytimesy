@@ -15,3 +15,11 @@ it("uses an Error's message and bounds the length", async () => {
 it("falls back to a string", async () => {
 	expect(await failureReason("odd")).toBe("odd");
 });
+it("recognises a Response-shaped object from another realm", async () => {
+	const foreign = {
+		status: 403,
+		clone: () => foreign,
+		text: async () => "no access",
+	};
+	expect(await failureReason(foreign)).toBe("403 no access");
+});
