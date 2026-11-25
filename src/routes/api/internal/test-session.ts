@@ -41,6 +41,7 @@ export const Route = createFileRoute("/api/internal/test-session")({
 								: mintTestSession;
 					if (
 						body.action === "seed" ||
+						body.action === "seed-github-unlinked" ||
 						body.action === "y-counts" ||
 						body.action === "repo-ids"
 					)

@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { GITHUB_SETUP_MESSAGE } from "#/domain/github-sign-in";
 import { TEST_ACCOUNT_ID } from "#/domain/test-account";
 import { githubClient } from "../adapters/github";
 import { readGitHubAppCredentials } from "../adapters/github/credentials";
@@ -6,6 +7,10 @@ import { githubInstallationAccessToken } from "../adapters/github/installation-t
 import { createOctokitGitHubListing } from "../adapters/github/octokit-app";
 import { listModelConnections } from "../adapters/model-connections";
 import { saveProject } from "../adapters/projects";
+import {
+	insertQueuedWorkspace,
+	saveWorkspaceStatus,
+} from "../adapters/workspaces";
 import { connectApiModels } from "./model-connections";
 import type { TestAccountDb } from "./test-account";
 import { enqueueProjectWorkspace } from "./workspaces";
@@ -48,7 +53,7 @@ export async function yDefaultCounts(db: TestAccountDb) {
 export async function seedTestAccount(
 	db: TestAccountDb,
 	userId: string,
-	input: { apiKey?: string },
+	input: { apiKey?: string; githubUnlinked?: boolean },
 ) {
 	if (userId !== TEST_ACCOUNT_ID) throw new Error("not the test account");
 	let modelConnected = (await listModelConnections(userId)).length > 0;
@@ -93,7 +98,11 @@ export async function seedTestAccount(
 		},
 		listed.default_branch,
 	);
-	await Effect.runPromise(enqueueProjectWorkspace(userId, project.id));
+	if (input.githubUnlinked) {
+		// The state a user whose GitHub link is gone is left in: setup failed with the connect prompt, no build running.
+		const workspace = await insertQueuedWorkspace(userId, project.id);
+		await saveWorkspaceStatus(workspace.id, "failed", GITHUB_SETUP_MESSAGE);
+	} else await Effect.runPromise(enqueueProjectWorkspace(userId, project.id));
 	const ySquaredId = await createProjectYSquared(userId, project.id);
 	return { modelConnected, projectId: project.id, ySquaredId };
 }

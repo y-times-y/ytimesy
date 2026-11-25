@@ -172,7 +172,7 @@ export async function runTestAccountAction(
 	presentedToken: string | undefined,
 	input: {
 		caller: unknown;
-		action: "seed" | "y-counts" | "repo-ids";
+		action: "seed" | "seed-github-unlinked" | "y-counts" | "repo-ids";
 		apiKey?: string;
 	},
 ) {
@@ -183,7 +183,10 @@ export async function runTestAccountAction(
 	if (input.action === "repo-ids") return seedRepositoryIds(db);
 	if (input.action === "y-counts") return yDefaultCounts(db);
 	const userId = await flaggedTestUser(db);
-	const result = await seedTestAccount(db, userId, { apiKey: input.apiKey });
+	const result = await seedTestAccount(db, userId, {
+		apiKey: input.apiKey,
+		githubUnlinked: input.action === "seed-github-unlinked",
+	});
 	console.log(JSON.stringify({ event: "test_session.seed", caller }));
 	return result;
 }
