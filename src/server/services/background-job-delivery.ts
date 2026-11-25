@@ -14,7 +14,12 @@ import {
 	backgroundJobId,
 	dispatchBackgroundJob,
 } from "../adapters/background-job-dispatch";
-import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
+import {
+	claimSessionCheckpointRun,
+	recordCheckpointFailure,
+	releaseSessionCheckpointRun,
+	sessionsAwaitingCheckpoint,
+} from "../adapters/checkpoints/records";
 import { checkpointStorageConfigured } from "../adapters/checkpoints/storage";
 import {
 	authEmailDeliveryConfigured,
@@ -26,6 +31,7 @@ import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { releaseReplacedTemplateSnapshots } from "../adapters/freestyle/template-snapshot-release";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { settleRetainedWorkspaces } from "../adapters/freestyle/workspace-retention";
+import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { memoryReposAvailable } from "../adapters/memory-repos";
 import { memoryDreamCandidates } from "../adapters/memory-settings";
 import { settleReferrals } from "../adapters/referral";
@@ -44,7 +50,10 @@ import {
 } from "./background-command-notices";
 import { sweepClaudeBoxToolIdentities } from "./claude-box-tool-grant";
 import { prepareForkWorkspace } from "./conversation-recovery";
-import { recoverExpiredEnvironmentBuilds } from "./environment-build";
+import {
+	recoverExpiredEnvironmentBuilds,
+	resolveEnvironmentBuildInput,
+} from "./environment-build";
 import { productionCanary } from "./interruption-canary";
 import { runInterruptionMonitoring } from "./interruption-monitoring";
 import { sweepUnusedChatMachines } from "./machine-prewarm";
@@ -70,7 +79,11 @@ import {
 	deliverHeldSends,
 	dispatchReleasableHeldSends,
 } from "./queued-user-messages";
-import { captureSessionCheckpoint } from "./session-checkpoint";
+import {
+	CHECKPOINT_MAX_ACTIVE_RUNS,
+	captureSessionCheckpoint,
+	runSessionCheckpoints,
+} from "./session-checkpoint";
 import { recoverStaleQueuedWorkspaces } from "./stale-workspace-queue";
 import { teardownSubagentForks } from "./subagent-runtime";
 import { recoverChildTurnEvents } from "./subagent-turn-recovery";
@@ -140,13 +153,58 @@ export async function deliverBackgroundJob(
 						await alertFailedEmails((await deliverAuthEmails()).failed);
 					break;
 				case "checkpoints":
-					if (checkpointStorageConfigured())
-						for (const session of await sessionsAwaitingCheckpoint())
+					if (checkpointStorageConfigured()) {
+						const awaiting = await sessionsAwaitingCheckpoint();
+						// In this Worker (billed for CPU), not in a Durable Object per
+						// capture (billed for every second it waits on the VM).
+						// YTIMESY_CHECKPOINT_IN_WORKER=false goes back to the objects.
+						const inWorker =
+							process.env.YTIMESY_CHECKPOINT_IN_WORKER !== "false";
+						const rest = inWorker
+							? (
+									await runSessionCheckpoints(awaiting, {
+										claim: (sessionId, leaseId) =>
+											claimSessionCheckpointRun(
+												sessionId,
+												CHECKPOINT_MAX_ACTIVE_RUNS,
+												leaseId,
+											),
+										release: releaseSessionCheckpointRun,
+										capture: (userId, sessionId, progress) =>
+											captureSessionCheckpoint(
+												machines,
+												userId,
+												sessionId,
+												progress,
+											),
+										recordFailure: recordCheckpointFailure,
+									})
+								).unavailable
+							: awaiting;
+						for (const session of rest)
 							await enqueueSessionCheckpoint(session.user_id, session.id);
+					}
 					break;
 				case "refresh":
 					if (process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH !== "false")
-						for (const workspaceId of await listReadyWorkspaceIds())
+						for (const workspaceId of await listReadyWorkspaceIds()) {
+							// Nothing to build unless a repository head, the tools snapshot or
+							// a saved setup changed: the same input check a prepare starts
+							// with (GitHub reads only, no VM), done here in the Worker so an
+							// unchanged workspace never wakes its environment object. A check
+							// that fails still dispatches, so a revoked token is reported by
+							// the build as before.
+							const unchanged = await resolveEnvironmentBuildInput(
+								workspaceId,
+								false,
+								workspaceRuntimeFromEnv(process.env, {
+									fetch: boundedFreestyleFetch(),
+								}),
+							).then(
+								(input) => input === null,
+								() => false,
+							);
+							if (unchanged) continue;
 							await dispatchBackgroundJob({
 								id: backgroundJobId(`${job.id}:${workspaceId}`),
 								kind: "prepare",
@@ -154,6 +212,7 @@ export async function deliverBackgroundJob(
 								force: false,
 								repairModel: null,
 							});
+						}
 					break;
 				case "infrastructure": {
 					const client = new Freestyle({

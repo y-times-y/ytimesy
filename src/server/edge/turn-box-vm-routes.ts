@@ -74,6 +74,8 @@ export type TurnBoxVmRouteDeps = {
 	readonly ops: {
 		boxActive(boxId: string): Promise<boolean>;
 		loadOwned(grant: TurnBoxGrant): Promise<ApiTurn | null>;
+		/** loadOwned without the messages and items: every vm route needs only who the turn is. */
+		loadOwnedIdentity?(grant: TurnBoxGrant): Promise<ApiTurn | null>;
 		cancelRequested(turn: ApiTurn): Promise<boolean>;
 		/** Queues the turn again for its chat's Durable Object (turn-box-routes.ts). */
 		handToObject?(turn: ApiTurn): Promise<void>;
@@ -153,7 +155,9 @@ export async function routeTurnBoxVm(
 	if (body === null) return refuse("bad-request", 400);
 	const log = deps.log ?? ((m, d) => console.warn(m, d));
 	try {
-		const turn = await deps.ops.loadOwned(grant);
+		const turn = await (deps.ops.loadOwnedIdentity
+			? deps.ops.loadOwnedIdentity(grant)
+			: deps.ops.loadOwned(grant));
 		if (!turn) return refuse("lease-lost", 409);
 		if (!(await deps.ops.boxActive(grant.boxId)))
 			return refuse("forbidden", 403);

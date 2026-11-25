@@ -22,13 +22,30 @@ export type ActiveConversationTurn = TurnControl & {
 	expiresAt: number;
 	cancelled: boolean;
 };
-export const TURN_COORDINATION_LEASE_MS = 30_000;
+/**
+ * How long the chat's room holds a turn after the last renewal. Long, and
+ * renewed rarely, because every renewal wakes the chat's Durable Object and
+ * Cloudflare bills it for every second it stays awake (a 10 s renewal against
+ * a 30 s lease kept it awake for the whole turn: Nov 2026, 3,825 renewals a
+ * day). A crash does not wait this out: Postgres requeues the turn after its
+ * own 45 s lease and the next owner takes the lock over (`takeover`).
+ */
+export const TURN_COORDINATION_LEASE_MS = 180_000;
+/** A running turn renews its room lease this often (two renewals per lease). */
+export const TURN_COORDINATION_RENEW_EVERY_MS = 90_000;
+/**
+ * A failing renewal stops its turn once it has failed this long since the
+ * last success: inside the lease, so a renewal that then succeeds still holds.
+ */
+export const TURN_COORDINATION_GRACE_MS = 120_000;
 /**
  * How long a turn the room let go (released, lapsed or replaced) may not
- * take it again: longer than its Postgres lease can outlive its room lease
- * (45 s against 30 s; a parked Claude Code turn's 150 s against 120 s,
- * claude-parked-turn.ts), so a lapsed turn cannot come back while
- * Postgres still takes its writes.
+ * take it again: longer than its Postgres lease can outlive its room lease,
+ * so a lapsed turn cannot come back while Postgres still takes its writes.
+ * Both leases run from the same process's renewals, and the room's (180 s)
+ * outlasts Postgres' (45 s; a parked Claude Code turn's 150 s), so the room
+ * lapses last; the one way Postgres outlives it is renewals that reach
+ * Postgres but not the room, by at most the Postgres lease.
  */
 export const RETIRED_TURN_MS = 70_000;
 

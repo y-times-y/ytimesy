@@ -349,10 +349,14 @@ export async function routeTurnBoxEdge(
 			}
 			// A chat whose history is near what a box may be sent runs in its
 			// object instead (which holds it already), never stranded on a box.
+			// A box claim counts the history in the database (history_bytes) and
+			// carries none of it; a claim that does carry it is measured here.
+			const historyBytes =
+				turn.history_bytes ??
+				JSON.stringify({ m: turn.messages ?? [], i: turn.items ?? [] }).length;
 			if (
 				deps.ops.handToObject &&
-				JSON.stringify({ m: turn.messages ?? [], i: turn.items ?? [] }).length >
-					TURN_BOX_HANDOFF_HISTORY_BYTES
+				historyBytes > TURN_BOX_HANDOFF_HISTORY_BYTES
 			) {
 				console.info("Turn too long for a box; handed to its chat's object.", {
 					turnId: turn.id,
@@ -452,14 +456,24 @@ export async function routeTurnBoxEdge(
 	try {
 		// The lease check every endpoint starts with: the turn must be running
 		// under exactly the grant's lease and belong to the grant's user and chat.
-		// The chat's lock calls (a renewal every few seconds) need only who the
-		// turn is, never its messages and items (megabytes on a long chat): read
-		// whole they held the edge's two database connections for seconds and a
-		// renewal waited past its timeout (2026-11-24: two turns died on it).
-		const light =
-			path === TURN_BOX_PATHS.port &&
-			opOf(body) === "coordinateTurn" &&
-			deps.ops.loadOwnedIdentity;
+		// Every endpoint but `history` needs only who the turn is, never its
+		// messages and items (megabytes on a long chat, up to 8 MB for the Y²
+		// chat): read whole they held the edge's two database connections for
+		// seconds and a renewal waited past its timeout (2026-11-24: two turns
+		// died on it), and a renewal every 15 s read the whole row from Postgres
+		// each time (4.2 GB on 2026-11-23, 3.4 GB on 2026-11-24). Columns each
+		// handler uses, all in the identity row:
+		//   renew, cancel          id, lease_id, user_id, session_id
+		//   reserve                (grant only)
+		//   checkpoint, progress   id, lease_id, user_id, session_id (the writers
+		//                          send what they write; planItemsWrite reads
+		//                          turn.items only for a row with items_from,
+		//                          which only the chat object's rows have)
+		//   finalize               the same plus model_id; a helper checker's
+		//                          report reads the final messages the box sends
+		//   port, vm routes        id, lease_id, user_id, session_id, settings
+		//   history                the whole row: its answer is the history
+		const light = path !== TURN_BOX_PATHS.history && deps.ops.loadOwnedIdentity;
 		const turn = await (light
 			? deps.ops.loadOwnedIdentity?.(grant)
 			: deps.ops.loadOwned(grant));

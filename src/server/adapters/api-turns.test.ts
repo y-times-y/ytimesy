@@ -113,6 +113,35 @@ it("claims in one round trip that bounds its own transaction before its lock", a
 	expect(mocks.release).toHaveBeenCalledWith(false);
 });
 
+it("a box's claim returns the turn's identity and its counted history size, never the history", async () => {
+	mocks.query.mockResolvedValue([
+		{ fields: [{ name: "id" }], rows: [{ id: "turn", history_bytes: 9 }] },
+	]);
+	expect(await claimApiTurn(2, 8, "node", undefined, [], "box")).toEqual({
+		id: "turn",
+		history_bytes: 9,
+	});
+	const [batch] = mocks.query.mock.calls[0];
+	const returning = batch.slice(batch.indexOf(" returning "));
+	expect(returning).toContain("'[]'::jsonb as messages");
+	expect(returning).toContain("'[]'::jsonb as items");
+	expect(returning).toContain(
+		"octet_length(messages::text)+octet_length(items::text)) as history_bytes",
+	);
+	expect(returning).not.toMatch(/returning \*/);
+});
+
+it("every other claim keeps the whole row, and an unknown shape is refused", async () => {
+	mocks.query.mockResolvedValue([
+		{ fields: [{ name: "id" }], rows: [{ id: "turn" }] },
+	]);
+	await claimApiTurn(2, 8);
+	expect(mocks.query.mock.calls[0][0]).toMatch(/returning \*;/);
+	await expect(
+		claimApiTurn(2, 8, "node", undefined, [], "x" as never),
+	).rejects.toThrow("Unknown claim shape.");
+});
+
 it("reports no claim when nothing was admitted", async () => {
 	mocks.query.mockResolvedValue([
 		{ fields: [], rows: [] },

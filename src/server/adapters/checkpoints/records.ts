@@ -21,6 +21,58 @@ export async function sessionsAwaitingCheckpoint() {
 	return rows;
 }
 
+/** How long a capture's in-flight lease lasts: longer than its 5-minute run limit. */
+export const CHECKPOINT_RUN_LEASE_SECONDS = 6 * 60;
+
+export type CheckpointRunClaim =
+	| { kind: "claimed"; leaseId: string }
+	/** Another run holds the session, or the fleet is at its capture limit. */
+	| { kind: "busy" }
+	/** The lease table is not there yet (code deployed before its migration). */
+	| { kind: "unavailable" };
+
+/**
+ * Takes the session's in-flight lease, atomically: one run per session, and at
+ * most `maxActive` runs at once across all sessions (a race between two ticks
+ * can overshoot by one). An expired lease (a crashed or deployed-over run) is
+ * taken over; the session's failure backoff still applies in
+ * sessionsAwaitingCheckpoint.
+ */
+export async function claimSessionCheckpointRun(
+	sessionId: string,
+	maxActive: number,
+	leaseId: string,
+): Promise<CheckpointRunClaim> {
+	try {
+		const { rows } = await database().query<{ lease_id: string }>(
+			`insert into session_checkpoint_run(session_id,lease_id,expires_at)
+			 select $1::uuid,$2::uuid,now()+($4::int * interval '1 second')
+			 where (select count(*) from session_checkpoint_run where expires_at>now() and session_id<>$1::uuid)<$3::int
+			 on conflict(session_id) do update set lease_id=excluded.lease_id,started_at=now(),expires_at=excluded.expires_at
+			   where session_checkpoint_run.expires_at<=now()
+			 returning lease_id`,
+			[sessionId, leaseId, maxActive, CHECKPOINT_RUN_LEASE_SECONDS],
+		);
+		return rows[0] ? { kind: "claimed", leaseId } : { kind: "busy" };
+	} catch (error) {
+		// Undefined table: the migration has not run; the caller falls back.
+		if ((error as { code?: string } | null)?.code === "42P01")
+			return { kind: "unavailable" };
+		throw error;
+	}
+}
+
+/** Lets the session be captured again; only the run that holds the lease can. */
+export async function releaseSessionCheckpointRun(
+	sessionId: string,
+	leaseId: string,
+) {
+	await database().query(
+		"delete from session_checkpoint_run where session_id=$1 and lease_id=$2",
+		[sessionId, leaseId],
+	);
+}
+
 /** Backs off 5 minutes, doubling to a day, so a failing capture cannot keep its VM awake. */
 export async function recordCheckpointFailure(
 	sessionId: string,

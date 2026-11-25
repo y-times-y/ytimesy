@@ -365,8 +365,11 @@ describe("turn box client against the edge", () => {
 			const http = requests.length - httpAtStart;
 			const socketMessages = sockets.flatMap((s) => s.sent).length;
 			// Per step: model request + 2 checkpoints (after the model, after the
-			// tools) = 3 Worker requests; progress and renewals are socket messages.
-			expect(http).toBe(40 * 3);
+			// tools) = 3 Worker requests; progress is socket messages. A lease
+			// renewal is an HTTP request too (a socket message would wake the
+			// chat's object for ~10 s each); this test renews every third step
+			// whatever the real skip window, 14 times.
+			expect(http).toBe(40 * 3 + 14);
 			// 1 socket upgrade = 1 DO request; messages bill 1/20.
 			const doRequests = 1 + Math.ceil(socketMessages / 20);
 			// MISSES the ~100 / ~10 targets (120 and ~19 for steps that stream
@@ -408,25 +411,21 @@ describe("turn box client against the edge", () => {
 		expect(await session.cancelRequested()).toBe(true);
 	});
 
-	it("keeps its grant alive through a step longer than the grant (renewing over HTTP near its end)", async () => {
+	it("keeps its grant alive through a step longer than the grant (renewing over HTTP throughout)", async () => {
 		const { client, requests, tick } = await setup();
 		const session = await client.claim();
 		if (!session) throw new Error("no turn");
 		await session.openSocket();
 		const httpRenewals = () =>
 			requests.filter((path) => path.endsWith("/renew")).length;
-		// Early on, renewals go over the socket.
-		for (let minute = 0; minute < 4; minute++) {
+		// Renewals go over HTTP (never the socket, which wakes the chat's
+		// object), and the grant's replacement comes with the first one in the
+		// grant's last five minutes.
+		for (let minute = 0; minute < 12; minute++) {
 			tick(60_000);
 			expect(await session.renew()).toBe("renewed");
 		}
-		expect(httpRenewals()).toBe(0);
-		// In the grant's last five minutes a renewal goes over HTTP and brings a new grant.
-		for (let minute = 4; minute < 12; minute++) {
-			tick(60_000);
-			expect(await session.renew()).toBe("renewed");
-		}
-		expect(httpRenewals()).toBeGreaterThan(0);
+		expect(httpRenewals()).toBe(12);
 		// Twelve minutes in, the box's requests are still accepted.
 		await expect(session.history()).resolves.toBeTruthy();
 	});

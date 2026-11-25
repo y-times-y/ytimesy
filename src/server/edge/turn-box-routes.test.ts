@@ -136,7 +136,9 @@ describe("turn box edge: lease and user checks", () => {
 			});
 			expect((await post(edge, path, otherChat, body)).status).toBe(409);
 			expect(
-				edge.calls.filter((call) => !["loadOwned"].includes(call)),
+				edge.calls.filter(
+					(call) => !["loadOwned", "loadOwnedIdentity"].includes(call),
+				),
 			).toEqual([]);
 			expect((await post(edge, path, "ytbg1.forged.sig", body)).status).toBe(
 				401,
@@ -154,6 +156,11 @@ describe("turn box edge: lease and user checks", () => {
 		// Another box took the turn over between the load and the write.
 		const loaded = { ...edge.row };
 		edge.ops.loadOwned = async () => loaded;
+		edge.ops.loadOwnedIdentity = async () => ({
+			...loaded,
+			messages: [],
+			items: [],
+		});
 		edge.row.lease_id = "66666666-6666-4666-8666-666666666666";
 		const response = await post(edge, TURN_BOX_PATHS.checkpoint, grant, {
 			messages: [{ role: "user", content: "x" }],
@@ -194,14 +201,16 @@ describe("turn box edge: lease and user checks", () => {
 		expect(lock.status).toBe(200);
 		expect(edge.calls).toContain("loadOwnedIdentity");
 		expect(edge.calls).not.toContain("loadOwned");
-		// Any other port still reads the turn whole.
+		// Any other port reads the identity too: no port handler uses the turn's
+		// messages or items (they take what they write from the call's arguments).
 		edge.state.ports.harnessVariant = () => ({}) as never;
 		edge.calls.length = 0;
 		await post(edge, TURN_BOX_PATHS.port, grant, {
 			op: "harnessVariant",
 			args: {},
 		});
-		expect(edge.calls).toContain("loadOwned");
+		expect(edge.calls).toContain("loadOwnedIdentity");
+		expect(edge.calls).not.toContain("loadOwned");
 		// A stale lease is refused as before.
 		edge.row.lease_id = "66666666-6666-4666-8666-666666666666";
 		expect(
@@ -212,6 +221,41 @@ describe("turn box edge: lease and user checks", () => {
 				})
 			).status,
 		).toBe(409);
+	});
+
+	it("reads the turn's identity alone on every endpoint but history (Postgres egress: a renewal every 15 s read the whole row, 2-8 MB, 4.2 GB on 2026-11-23)", async () => {
+		const endpoints: [string, string, unknown][] = [
+			["renew", TURN_BOX_PATHS.renew, {}],
+			["cancel", TURN_BOX_PATHS.cancel, {}],
+			["reserve", TURN_BOX_PATHS.reserve, { tokens: 10 }],
+			["progress", TURN_BOX_PATHS.progress, { items: [] }],
+			["checkpoint", TURN_BOX_PATHS.checkpoint, { messages: [], items: [] }],
+		];
+		for (const [name, path, body] of endpoints) {
+			const edge = await fakeEdge();
+			const grant = await grantFor(edge);
+			edge.calls.length = 0;
+			const response = await post(edge, path, grant, body);
+			expect(response.status, name).toBe(200);
+			expect(edge.calls, name).toContain("loadOwnedIdentity");
+			expect(edge.calls, name).not.toContain("loadOwned");
+		}
+		const finalizing = await fakeEdge();
+		const finalGrant = await grantFor(finalizing);
+		finalizing.calls.length = 0;
+		await post(finalizing, TURN_BOX_PATHS.finalize, finalGrant, {
+			state: "completed",
+			items: [],
+		});
+		expect(finalizing.calls).toContain("loadOwnedIdentity");
+		expect(finalizing.calls).not.toContain("loadOwned");
+		// History is the one answer that is the whole row.
+		const history = await fakeEdge();
+		const historyGrant = await grantFor(history);
+		history.calls.length = 0;
+		await post(history, TURN_BOX_PATHS.history, historyGrant);
+		expect(history.calls).toContain("loadOwned");
+		expect(history.calls).not.toContain("loadOwnedIdentity");
 	});
 
 	it("a successful write lands, and finalize reports the effective state", async () => {
@@ -475,6 +519,31 @@ describe("turn box edge: claim and identity", () => {
 		edge.queue.push({ ...edge.row });
 		expect((await claim(edge)).status).toBe(204);
 		expect(edge.calls).toContain("handToObject");
+	});
+
+	it("hands a turn over on the size the database counted, without any history in the claim", async () => {
+		const edge = await fakeEdge();
+		edge.queue.push({
+			...edge.row,
+			messages: [],
+			items: [],
+			history_bytes: TURN_BOX_HANDOFF_HISTORY_BYTES + 1,
+		});
+		expect((await claim(edge)).status).toBe(204);
+		expect(edge.calls).toContain("handToObject");
+		expect(edge.calls).not.toContain("noteStarted");
+	});
+
+	it("keeps a turn on the box when the counted history fits", async () => {
+		const edge = await fakeEdge();
+		edge.queue.push({
+			...edge.row,
+			messages: [],
+			items: [],
+			history_bytes: TURN_BOX_HANDOFF_HISTORY_BYTES,
+		});
+		expect((await claim(edge)).status).toBe(200);
+		expect(edge.calls).not.toContain("handToObject");
 	});
 
 	it("revoking a box stops its renewals and model requests", async () => {

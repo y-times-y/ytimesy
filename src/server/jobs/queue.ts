@@ -15,6 +15,8 @@ export const REFRESH_WORKSPACE_QUEUE = "refresh-workspace-snapshot";
 export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
 export const AGENT_PEER_MESSAGE_QUEUE = "agent-peer-message";
 export const SESSION_CHECKPOINT_QUEUE = "session-checkpoint";
+/** A session gets at most one checkpoint job per window. */
+export const CHECKPOINT_JOB_WINDOW_MS = 10 * 60_000;
 export const PR_REPAIR_QUEUE = "pr-repair";
 
 export interface WorkspaceJobQueue {
@@ -173,7 +175,12 @@ export async function enqueueSessionCheckpoint(
 	userId: string,
 	sessionId: string,
 ) {
-	const id = randomUUID();
+	// One job per session per window: the per-minute backstop used to start a
+	// fresh object each tick while the last capture was still running, and
+	// Cloudflare bills every one of them for as long as it waits on the VM.
+	const id = backgroundJobId(
+		`checkpoint:${sessionId}:${Math.floor(Date.now() / CHECKPOINT_JOB_WINDOW_MS)}`,
+	);
 	if (
 		await dispatchBackgroundJob({ id, kind: "checkpoint", userId, sessionId })
 	)

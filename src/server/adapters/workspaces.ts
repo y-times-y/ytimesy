@@ -138,7 +138,7 @@ export async function saveWorkspaceStatus(
 }
 
 /** Projects idle longer than this are not refreshed hourly; their next chat's build catches up. */
-export const ENVIRONMENT_REFRESH_ACTIVE_DAYS = 7;
+export const ENVIRONMENT_REFRESH_ACTIVE_DAYS = 3;
 
 /**
  * Ready workspaces worth refreshing: a chat in the project moved in the last

@@ -1,4 +1,5 @@
 /// <reference path="../../../.ytimesy/edge-executor-runtime.d.ts" />
+
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
 import { z } from "zod";
@@ -98,6 +99,7 @@ import {
 	backgroundJobId,
 	withBackgroundJobDispatcher,
 } from "../adapters/background-job-dispatch";
+import { boundedWait } from "../adapters/bounded";
 import {
 	ClaudeRunnerPlacement,
 	withClaudeRunnerPlacement,
@@ -156,6 +158,7 @@ import {
 	pauseVmWhileThinkingEnabled,
 	THINKING_PAUSE_GRACE_MS,
 } from "../services/thinking-pause";
+import { awakeReasonsEnabled, PendingTracker } from "./awake-reasons";
 import {
 	admitQueuedTurns,
 	runBackgroundJob,
@@ -261,6 +264,8 @@ const environmentSecrets = z.object({
 
 /** Well inside the 45 seconds after which a turn's lease counts as stale. */
 const WAITING_TURN_REFRESH_MS = 15_000;
+/** The longest a best-effort tail (a note, a store) holds the object after a turn. */
+const BEST_EFFORT_TAIL_MS = 30_000;
 
 type ActiveTurn = {
 	userId: string;
@@ -324,6 +329,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private readonly vmQuiet: SqliteClaudeVmQuiet;
 	/** A feed step waiting for lines (claude-feed.ts); called when lines or the exit arrive. */
 	private readonly feedWaiters = new Set<() => void>();
+	/** When the latest step stopped running; the rest of its alarm is the tail. */
+	private stepEndedAt: number | null = null;
 	/** Lines arrived since the turn's last step started: when the first did, and whether any is urgent. */
 	private feedPending: { since: number; urgent: boolean } | null = null;
 	private readonly history: TurnHistoryCache;
@@ -623,10 +630,17 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				cause: stepFailureCause(error),
 			});
 		try {
-			this.ctx.waitUntil(
-				this.env.USER_HUBS.getByName(scope.userId, durableObjectLocation())
-					.noteTurn({ sessionId: scope.sessionId, turnStatus, at: Date.now() })
-					.catch(warn),
+			this.background(
+				boundedWait(
+					this.env.USER_HUBS.getByName(scope.userId, durableObjectLocation())
+						.noteTurn({
+							sessionId: scope.sessionId,
+							turnStatus,
+							at: Date.now(),
+						})
+						.catch(warn),
+					BEST_EFFORT_TAIL_MS,
+				),
 			);
 		} catch (error) {
 			warn(error);
@@ -692,7 +706,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				).noteThread(note);
 			// A turn end is what Y² wakes for: one more try if the note's request
 			// to the crew failed, so a blip does not lose it.
-			this.ctx.waitUntil(
+			this.background(
 				send().catch(async (error: unknown) => {
 					console.warn("Crew was not told the thread's state; trying again.", {
 						cause: stepFailureCause(error),
@@ -838,7 +852,16 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			await this.usage.timeStep(() => this.advanceTurn(now - turnAt));
 		} finally {
 			this.stepping = false;
-			this.ctx.waitUntil(this.rollupUsage());
+			// What an alarm does after its step is billed too: a finished
+			// turn's alarm once stayed open 6-14 minutes in its tail.
+			if (this.stepEndedAt !== null) {
+				const tailMs = Date.now() - this.stepEndedAt;
+				this.stepEndedAt = null;
+				if (tailMs >= 30_000)
+					console.warn("Chat alarm tail ran long.", { tailMs });
+			}
+			this.background(this.rollupUsage());
+			this.awakeReasons("alarm");
 		}
 	}
 	/** The Claude Code turn parked here, if any (its next turn wake only renews). */
@@ -1041,7 +1064,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				if (outcome === "paused" && pausedAt !== null)
 					this.vmQuiet.markPaused(turnId, pausedAt);
 			});
-			this.ctx.waitUntil(
+			this.background(
 				attempt.catch((error) =>
 					console.warn("Parked turn's VM pause check failed.", {
 						cause: stepFailureCause(error),
@@ -1099,16 +1122,20 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		// Only a settled copy is the history Postgres keeps (and a send names).
 		if (!copy || copy.turnId !== ended.turnId || !copy.settled) return;
 		const { messages } = copy;
-		this.ctx.waitUntil(
-			storeTurnMessages({
-				userId: ended.userId,
-				sessionId: ended.sessionId,
-				turnId: ended.turnId,
-				messages,
-			}).catch((error) =>
-				console.warn("Turn history object was not stored.", {
-					cause: stepFailureCause(error),
-				}),
+		this.background(
+			boundedWait(
+				storeTurnMessages({
+					userId: ended.userId,
+					sessionId: ended.sessionId,
+					turnId: ended.turnId,
+					messages,
+				}).catch((error) =>
+					console.warn("Turn history object was not stored.", {
+						cause: stepFailureCause(error),
+					}),
+				),
+				BEST_EFFORT_TAIL_MS,
+				() => console.warn("Turn history object store timed out."),
 			),
 		);
 	}
@@ -1121,6 +1148,37 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			null,
 		).catch(() => console.warn("Waiting turn refresh failed."));
 	}
+	/** Best-effort promises still pending (what keeps this object from hibernating). */
+	private readonly pendingBackground = new PendingTracker();
+	/** Waiting-turn refresh intervals running (one per step, cleared when it ends). */
+	private refreshTimers = 0;
+	/**
+	 * ctx.waitUntil with a count: a pending promise keeps the object in memory
+	 * (and billed) until it settles, up to 15 minutes. Callers keep these short
+	 * and bounded; awakeReasons() shows what is left when a handler ends.
+	 */
+	private background(promise: Promise<unknown>) {
+		this.pendingBackground.track(promise, (tracked) =>
+			this.ctx.waitUntil(tracked),
+		);
+	}
+	/**
+	 * Off by default (YTIMESY_DO_AWAKE_REASONS=1): what a finished handler leaves
+	 * behind that stops this object hibernating, so the development edge can
+	 * confirm it is eligible between events. Counts only; no data.
+	 */
+	private awakeReasons(handler: string) {
+		if (!awakeReasonsEnabled(process.env.YTIMESY_DO_AWAKE_REASONS)) return;
+		console.info(
+			`awake-reasons ${JSON.stringify({
+				handler,
+				waitUntil: this.pendingBackground.count,
+				refreshTimers: this.refreshTimers,
+				feedWaiters: this.feedWaiters.size,
+				stepping: this.stepping,
+			})}`,
+		);
+	}
 	/** Refreshes waiting turns now and while the active turn's step runs. */
 	private keepWaitingTurnsFresh() {
 		void this.refreshWaiting();
@@ -1128,7 +1186,15 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			() => void this.refreshWaiting(),
 			WAITING_TURN_REFRESH_MS,
 		);
-		return () => clearInterval(timer);
+		this.refreshTimers += 1;
+		let cleared = false;
+		return () => {
+			clearInterval(timer);
+			if (!cleared) {
+				cleared = true;
+				this.refreshTimers -= 1;
+			}
+		};
 	}
 	/**
 	 * Stop on a turn still waiting here settles it now; the room never knew it,
@@ -1297,6 +1363,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			stopRefreshing();
 			unregister();
 			this.settleVmQuiet(step.turnId);
+			this.stepEndedAt = Date.now();
 		}
 		this.stepFailureTransient = null;
 		this.stepFailuresSince = null;
@@ -2148,13 +2215,17 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	// object's hibernatable sockets, told apart by tag.
 	async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
 		this.usage.record({ wsMsgs: 1 });
-		if (this.isTurnBoxSocket(socket))
-			return this.turnBoxSocketMessage(socket, message);
-		if (this.isClaudeRelayCall(socket))
-			return this.claudeRelayCallMessage(socket, message);
-		if (this.isClaudeFeed(socket))
-			return this.claudeFeedMessage(socket, message);
-		this.room.webSocketMessage(socket, message);
+		try {
+			if (this.isTurnBoxSocket(socket))
+				return await this.turnBoxSocketMessage(socket, message);
+			if (this.isClaudeRelayCall(socket))
+				return await this.claudeRelayCallMessage(socket, message);
+			if (this.isClaudeFeed(socket))
+				return await this.claudeFeedMessage(socket, message);
+			this.room.webSocketMessage(socket, message);
+		} finally {
+			this.awakeReasons("socket");
+		}
 	}
 	webSocketClose(
 		socket: WebSocket,
@@ -2253,7 +2324,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 const CRON_EVERY_MINUTES: Readonly<Record<string, number>> = {
 	infrastructure: 5,
 	"memory-dreams": 5,
-	refresh: 60,
+	refresh: 360,
 	"evidence-expiry": 360,
 	"archive-expiry": 360,
 };
@@ -2346,7 +2417,10 @@ const edgeExecutorWorker = {
 					action: "archive-expiry",
 				}),
 			);
-		if (minute % 60 === 0)
+		// Every 6 hours, not hourly: each refresh boots a VM per ready workspace
+		// and holds a Durable Object awake for it (about 9.5k GB-s a day by
+		// Nov 24, for 10 workspaces).
+		if (minute % 360 === 0)
 			jobs.push(
 				backgroundJob.parse({
 					id: backgroundJobId(`cron:${minute}:refresh`),

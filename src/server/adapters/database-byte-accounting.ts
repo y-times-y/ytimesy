@@ -87,16 +87,28 @@ export function estimateRowsBytes(rows: unknown) {
 
 /**
  * Running per-query-tag totals for this isolate, logged as one
- * `db.egress_summary` line per interval (no timer: checked as queries
- * complete, so an idle isolate logs nothing). Tags are cached by SQL text so
- * the hash is computed once per distinct statement.
+ * `db.egress_summary` line (no timer: Workers run none). A line is written
+ * when a query completes and the window is 10 minutes old, as soon as the
+ * window holds EGRESS_SUMMARY_BYTES (a leak reports itself in minutes, and log
+ * volume follows egress, not time), and when a database scope ends and the
+ * window is a minute old (flushEgressSummaryIfDue), so an isolate or chat
+ * object that is evicted soon after its queries still reports them. Tags are
+ * cached by SQL text so the hash is computed once per distinct statement.
+ *
+ * The line carries `message` as well as `event`: Workers observability indexes
+ * a JSON log by its `message`, and a search on `$metadata.message` found
+ * nothing while the lines were keyed only by `event`.
  */
 export const EGRESS_SUMMARY_INTERVAL_MS = 10 * 60 * 1000;
-const TOP_TAGS = 5;
+export const EGRESS_SUMMARY_BYTES = 16 * 1024 * 1024;
+/** A scope end writes a line only when the window is at least this old. */
+export const EGRESS_SUMMARY_MIN_AGE_MS = 60 * 1000;
+const TOP_TAGS = 8;
 type Totals = { bytes: number; rows: number; calls: number };
 const totals = new Map<string, Totals>();
 const tagCache = new Map<string, string>();
 let windowStartedAt = 0;
+let windowBytes = 0;
 
 /**
  * Chat page reads in this interval, and the ones a client's known revision
@@ -128,13 +140,31 @@ function cachedTag(sql: string) {
 function recordEgress(sql: string, rows: number, bytes: number, now: number) {
 	if (!windowStartedAt) windowStartedAt = now;
 	const tag = cachedTag(sql);
+	windowBytes += bytes;
 	const entry = totals.get(tag);
 	if (entry) {
 		entry.bytes += bytes;
 		entry.rows += rows;
 		entry.calls += 1;
 	} else if (totals.size < 500) totals.set(tag, { bytes, rows, calls: 1 });
-	if (now - windowStartedAt < EGRESS_SUMMARY_INTERVAL_MS) return;
+	if (
+		now - windowStartedAt < EGRESS_SUMMARY_INTERVAL_MS &&
+		windowBytes < EGRESS_SUMMARY_BYTES
+	)
+		return;
+	flushEgressSummary(now);
+}
+
+/**
+ * Called when a database scope (a Worker request or a durable step) ends:
+ * writes the running window when it is at least `minAgeMs` old, so an isolate
+ * that is about to go idle does not take its totals with it.
+ */
+export function flushEgressSummaryIfDue(
+	now = Date.now(),
+	minAgeMs = EGRESS_SUMMARY_MIN_AGE_MS,
+) {
+	if (!windowStartedAt || now - windowStartedAt < minAgeMs) return;
 	flushEgressSummary(now);
 }
 
@@ -155,6 +185,7 @@ export function flushEgressSummary(now = Date.now()) {
 			.map(([query, entry]) => ({ query, ...entry }));
 		console.info(
 			JSON.stringify({
+				message: "db.egress_summary",
 				event: "db.egress_summary",
 				windowSeconds: Math.round((now - windowStartedAt) / 1000),
 				totalApproxBytes: bytes,
@@ -172,6 +203,7 @@ export function flushEgressSummary(now = Date.now()) {
 	totals.clear();
 	pageReads.read = pageReads.unchanged = pageReads.delta = 0;
 	windowStartedAt = now;
+	windowBytes = 0;
 }
 
 /** Test hook: forget the running totals. */
@@ -180,6 +212,7 @@ export function resetEgressSummary() {
 	totals.clear();
 	tagCache.clear();
 	windowStartedAt = 0;
+	windowBytes = 0;
 }
 
 function reportLargeResult(sql: string, result: unknown) {
@@ -189,6 +222,7 @@ function reportLargeResult(sql: string, result: unknown) {
 	if (bytes < LARGE_RESULT_BYTES) return;
 	console.warn(
 		JSON.stringify({
+			message: "db.large_result",
 			event: "db.large_result",
 			query: queryTag(sql),
 			approxBytes: bytes,

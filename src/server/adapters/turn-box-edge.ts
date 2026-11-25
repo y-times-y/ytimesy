@@ -22,6 +22,7 @@ import {
 	publishApiTurnProgress,
 	readRunningApiTurn,
 	readRunningApiTurnIdentity,
+	readTurnNoteItems,
 	releaseClaimedApiTurn,
 	renewApiTurn,
 } from "./api-turns";
@@ -83,7 +84,15 @@ export function createTurnBoxEdgeOps(
 			: Promise.resolve();
 	return {
 		noteStarted: async (turn) => {
-			await noteChat(turn, "running", turn.items ?? []);
+			// A claim carries no history (claimApiTurn "box"): the note needs only
+			// the first and the last item, read in the database.
+			const items =
+				turn.items?.length || !turn.lease_id
+					? (turn.items ?? [])
+					: await scope(() =>
+							readTurnNoteItems(turn.id, turn.lease_id as string),
+						).catch(() => []);
+			await noteChat(turn, "running", items);
 		},
 		boxActive: (boxId) => scope(() => turnRunnerBoxActive(boxId)),
 		register: (boxId, input) =>
@@ -95,6 +104,9 @@ export function createTurnBoxEdgeOps(
 					perUserLimit ?? limits.perUser,
 					limits.fleet,
 					"node",
+					undefined,
+					[],
+					"box",
 				);
 			}),
 		handToObject: (turn) =>
@@ -179,6 +191,7 @@ export function createTurnBoxEdgeOps(
 						{
 							state: saved,
 							items: input.items,
+							messages: input.messages,
 							publish: input.publish === true,
 						},
 						{ machines },

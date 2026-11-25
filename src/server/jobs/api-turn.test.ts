@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
-import { CoordinationFailure } from "#/domain/conversation-turn-control";
+import {
+	CoordinationFailure,
+	TURN_COORDINATION_GRACE_MS,
+	TURN_COORDINATION_RENEW_EVERY_MS,
+} from "#/domain/conversation-turn-control";
 import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
@@ -912,10 +916,10 @@ it("keeps coordinator failure primary when renewal aborts the provider stream", 
 		});
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
 		// One failed renewal is ridden out (a deploy restarting the chat's
-		// object); only failures lasting most of the 30 s lease stop the turn.
-		await vi.advanceTimersByTimeAsync(10_001);
+		// object); only failures lasting most of the lease stop the turn.
+		await vi.advanceTimersByTimeAsync(TURN_COORDINATION_RENEW_EVERY_MS + 1);
 		expect(mocks.stop).not.toHaveBeenCalled();
-		await vi.advanceTimersByTimeAsync(20_000);
+		await vi.advanceTimersByTimeAsync(TURN_COORDINATION_GRACE_MS);
 		await run;
 		expect(mocks.commit).not.toHaveBeenCalled();
 		expect(mocks.stop).toHaveBeenCalled();
@@ -972,7 +976,7 @@ it("rides out a coordination renewal that fails while the chat's object restarts
 			return { messages: [], outcome: "completed" } as never;
 		});
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
-		await vi.advanceTimersByTimeAsync(15_000);
+		await vi.advanceTimersByTimeAsync(TURN_COORDINATION_RENEW_EVERY_MS + 5_000);
 		expect(renewals).toBeGreaterThanOrEqual(3);
 		finish();
 		await vi.advanceTimersByTimeAsync(1_000);
@@ -1009,7 +1013,7 @@ it("stops a writer on lease conflict without retrying inference or publication",
 			input.signal.throwIfAborted();
 		});
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
-		await vi.advanceTimersByTimeAsync(10_001);
+		await vi.advanceTimersByTimeAsync(TURN_COORDINATION_RENEW_EVERY_MS + 1);
 		expect(await run).toBe("cancelled");
 		expect(mocks.runtime).toHaveBeenCalledOnce();
 		expect(mocks.commit).not.toHaveBeenCalled();
@@ -1055,11 +1059,11 @@ it("keeps a healthy turn whose renewals time out for the whole grace window, whe
 				setTimeout(() => {
 					finished = true;
 					resolve();
-				}, 45_000);
+				}, TURN_COORDINATION_GRACE_MS + 25_000);
 			});
 		});
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
-		await vi.advanceTimersByTimeAsync(46_000);
+		await vi.advanceTimersByTimeAsync(TURN_COORDINATION_GRACE_MS + 26_000);
 		await run;
 		expect(actions).toContain("resume");
 		expect(stopped).toBe(false);
@@ -1097,11 +1101,13 @@ it("takes back a lapsed chat lease it still owns instead of stopping mid-work (2
 				setTimeout(() => {
 					finished = true;
 					resolve();
-				}, 25_000);
+				}, TURN_COORDINATION_RENEW_EVERY_MS + 15_000);
 			});
 		});
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
-		await vi.advanceTimersByTimeAsync(26_000);
+		await vi.advanceTimersByTimeAsync(
+			TURN_COORDINATION_RENEW_EVERY_MS + 16_000,
+		);
 		await run;
 		expect(actions).toContain("resume");
 		expect(aborted).toBe(false);
@@ -1235,7 +1241,7 @@ it("renews coordination while a database heartbeat is waiting", async () => {
 				}),
 		);
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
-		await vi.advanceTimersByTimeAsync(20_001);
+		await vi.advanceTimersByTimeAsync(TURN_COORDINATION_RENEW_EVERY_MS * 2 + 1);
 		expect(
 			vi
 				.mocked(coordinateConversationTurn)

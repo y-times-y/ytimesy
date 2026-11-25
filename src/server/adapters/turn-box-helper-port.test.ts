@@ -115,6 +115,41 @@ describe("a helper's report when its box turn settles", () => {
 		expect(queued).toEqual(["e1"]);
 	});
 
+	it("a checker's forced-final mark comes from the messages the box finalized with: the turn row is read without its messages", async () => {
+		const texts: string[] = [];
+		const checker = { ...(helper as object), agentRole: "checker" } as never;
+		const deps = {
+			machines: () => ({}) as never,
+			report: (async (input: { text: string }) => {
+				texts.push(input.text);
+				return "ok";
+			}) as never,
+			save: (async () => "e1") as never,
+			enqueue: async () => undefined,
+		};
+		const { CHECKER_FINAL_NOTICE } = await import("#/domain/checker-brief");
+		// The row as the identity read returns it: no messages.
+		const row = { ...turn, messages: [], items: [] } as unknown as ApiTurn;
+		await settleHelperReport(
+			row,
+			checker,
+			{
+				state: "completed",
+				items,
+				messages: [{ role: "user", content: CHECKER_FINAL_NOTICE }],
+			},
+			deps,
+		);
+		await settleHelperReport(
+			row,
+			checker,
+			{ state: "completed", items, messages: [] },
+			deps,
+		);
+		expect(texts[0]).toContain("forced final step");
+		expect(texts[1]).not.toContain("forced final step");
+	});
+
 	it("a failed helper reports the failure (budget exhaustion as such); a cancelled one and a root chat report nothing", async () => {
 		const outcomes: string[] = [];
 		const deps = {

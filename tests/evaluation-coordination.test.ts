@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { startEvaluationCoordinator } from "../benchmarks/evaluation/coordination";
 import { apiTurnFailureClassification } from "../src/domain/api-turn-failure";
+import { TURN_COORDINATION_LEASE_MS } from "../src/domain/conversation-turn-control";
 import { coordinateConversationTurn } from "../src/server/adapters/conversation-turn-control";
 
 it("isolates evaluation leases and preserves fencing across parent continuation and failures", async () => {
@@ -89,32 +90,38 @@ it("isolates evaluation leases and preserves fencing across parent continuation 
 	}
 }, 30_000);
 
-it("rejects an expired lease without replaying the retired writer", async () => {
-	const coordinator = await startEvaluationCoordinator();
-	try {
-		const turn = {
-			userId: "expiration-control",
-			sessionId: randomUUID(),
-			turnId: randomUUID(),
-			leaseId: randomUUID(),
-		};
-		expect(await coordinateConversationTurn("acquire", turn)).toBe(true);
-		await delay(31_000);
-		expect(await coordinateConversationTurn("renew", turn)).toBe(false);
-		expect(await coordinateConversationTurn("acquire", turn)).toBe(false);
-		const replacement = {
-			...turn,
-			turnId: randomUUID(),
-			leaseId: randomUUID(),
-		};
-		expect(await coordinateConversationTurn("acquire", replacement)).toBe(true);
-		expect(await coordinateConversationTurn("cancel", turn)).toBe(false);
-		expect(await coordinateConversationTurn("renew", replacement)).toBe(true);
-		await coordinateConversationTurn("release", replacement);
-	} finally {
-		await coordinator.close();
-	}
-}, 45_000);
+it(
+	"rejects an expired lease without replaying the retired writer",
+	async () => {
+		const coordinator = await startEvaluationCoordinator();
+		try {
+			const turn = {
+				userId: "expiration-control",
+				sessionId: randomUUID(),
+				turnId: randomUUID(),
+				leaseId: randomUUID(),
+			};
+			expect(await coordinateConversationTurn("acquire", turn)).toBe(true);
+			await delay(TURN_COORDINATION_LEASE_MS + 1_000);
+			expect(await coordinateConversationTurn("renew", turn)).toBe(false);
+			expect(await coordinateConversationTurn("acquire", turn)).toBe(false);
+			const replacement = {
+				...turn,
+				turnId: randomUUID(),
+				leaseId: randomUUID(),
+			};
+			expect(await coordinateConversationTurn("acquire", replacement)).toBe(
+				true,
+			);
+			expect(await coordinateConversationTurn("cancel", turn)).toBe(false);
+			expect(await coordinateConversationTurn("renew", replacement)).toBe(true);
+			await coordinateConversationTurn("release", replacement);
+		} finally {
+			await coordinator.close();
+		}
+	},
+	TURN_COORDINATION_LEASE_MS + 15_000,
+);
 
 it("fails coordinator preflight closed and restores inherited configuration", async () => {
 	const previousUrl = process.env.YTIMESY_REALTIME_URL;
