@@ -28,6 +28,7 @@ import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { cloudflareStage, type InfraStage } from "./src/stages.ts";
+import { EDGE_COMPATIBILITY } from "./src/edge-compatibility.ts";
 import { stackState } from "./src/state.ts";
 
 const repository = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -103,7 +104,7 @@ export default Alchemy.Stack(
 			name: settings.edge,
 			main: edgeEntry(),
 			bundle: false,
-			compatibility,
+			compatibility: EDGE_COMPATIBILITY,
 			observability: { enabled: true, traces: { enabled: true } },
 			crons: ["* * * * *"],
 			// A busy chat object moves to new code once idle, up to one step's

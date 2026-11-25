@@ -5,7 +5,7 @@
   "build": { "command": "node --import tsx scripts/build-edge-executor.ts" },
   "account_id": "00000000000000000000000000000000",
   "compatibility_date": "2026-10-08",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "durable_object_io_tasks_do_not_prevent_eviction"],
   "vpc_networks": [{ "binding": "CODEX_EGRESS", "network_id": "cf1:network", "remote": true }],
   "durable_objects": {
     "bindings": [
