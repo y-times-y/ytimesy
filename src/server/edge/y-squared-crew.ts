@@ -19,6 +19,13 @@ import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import type { YSquaredScheduleResult } from "../adapters/y-squared-crew-client";
 import { sendComposerMessage } from "../services/queued-user-messages";
+import { hasActiveApiTurn } from "../adapters/api-turns";
+import {
+	removePendingServerPeerMessage,
+	serverPeerMessageAccepted,
+	stageServerPeerMessage,
+} from "../adapters/server-peer-inbox";
+import { deliverY2Wake } from "../services/y-wake-delivery";
 import { yWakeGate } from "../services/y-wake-gate";
 import { runCrewAlarm } from "./crew-alarm";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -133,7 +140,8 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 		await runCrewAlarm({
 			store: this.store,
 			now: Date.now(),
-			enqueue: (target, at, body) => this.enqueueWake(target, at, body),
+			enqueue: (target, at, body, options) =>
+				this.enqueueWake(target, at, body, options),
 			setAlarm: (at) => this.ctx.storage.setAlarm(at),
 			log: (line) => console.log(line),
 			// Before "it may be stuck": what the threads' turns really did.
@@ -146,11 +154,12 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 		});
 	}
 
-	/** Exactly one Y² turn, through the same send path as a person's message. */
+	/** One wake into Y²: a turn when idle, a steer into the running turn, or held (see deliverY2Wake). */
 	private enqueueWake(
 		target: { userId: string; sessionId: string },
 		at: number,
 		body: string,
+		options?: { readonly queueBehind?: boolean },
 	) {
 		return withDatabaseScope(
 			this.env.HYPERDRIVE.connectionString,
@@ -160,34 +169,49 @@ export class YSquaredCrew extends DurableObject<EdgeExecutorEnvironment> {
 					target.sessionId,
 				);
 				if (!chat) return false;
-				// Dormant until the person has a connected model that can run
-				// Y² (their own plan or key): no turn, no error, no cost.
-				const gate = await yWakeGate({
-					userId: target.userId,
-					harnessId: chat.harness === "codex" ? "codex" : "api",
-					listedModelId: chat.listedModelId ?? null,
-				});
-				if (!gate.ok) return { skipped: gate.reason };
-				await Effect.runPromise(
-					sendComposerMessage(
-						createFreestyleWorkspaceMachines(
-							Effect.runSync(readFreestyleApiKey()),
-						),
-						{
-							userId: target.userId,
-							projectId: chat.projectId,
-							sessionId: chat.id,
-							harnessId: gate.harnessId,
-							createNew: false,
-						},
-						{
-							text: `${childTaskEventQueueText(`y2:${at}`)}\n${body}`,
-							modelId: gate.modelId,
-							idempotencyKey: wakeMessageId(`y2:${target.sessionId}:${at}`),
-						},
-					),
+				return deliverY2Wake(
+					{
+						// Dormant until the person has a connected model that can run
+						// Y² (their own plan or key): no turn, no error, no cost.
+						gate: (c) =>
+							yWakeGate({
+								userId: target.userId,
+								harnessId: c.harness === "codex" ? "codex" : "api",
+								listedModelId: c.listedModelId ?? null,
+							}),
+						busy: async (c) =>
+							c.turnStatus === "running" ||
+							hasActiveApiTurn(target.userId, target.sessionId),
+						stage: (id, message) =>
+							stageServerPeerMessage(target.sessionId, id, message),
+						accepted: (id) => serverPeerMessageAccepted(target.sessionId, id),
+						unstage: (id) =>
+							removePendingServerPeerMessage(target.sessionId, id),
+						send: (gate) =>
+							Effect.runPromise(
+								sendComposerMessage(
+									createFreestyleWorkspaceMachines(
+										Effect.runSync(readFreestyleApiKey()),
+									),
+									{
+										userId: target.userId,
+										projectId: chat.projectId,
+										sessionId: chat.id,
+										harnessId: gate.harnessId,
+										createNew: false,
+									},
+									{
+										text: `${childTaskEventQueueText(`y2:${at}`)}\n${body}`,
+										modelId: gate.modelId,
+										idempotencyKey: wakeMessageId(
+											`y2:${target.sessionId}:${at}`,
+										),
+									},
+								),
+							).then(() => undefined),
+					},
+					{ target, at, body, chat, queueBehind: options?.queueBehind },
 				);
-				return true;
 			},
 			null,
 		);

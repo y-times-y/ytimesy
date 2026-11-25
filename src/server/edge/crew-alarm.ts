@@ -23,7 +23,10 @@ export async function runCrewAlarm(input: {
 		target: { userId: string; sessionId: string },
 		at: number,
 		body: string,
-	) => Promise<boolean | { readonly skipped: string }>;
+		options?: { readonly queueBehind?: boolean },
+	) => Promise<
+		boolean | { readonly skipped: string } | { readonly held: "busy" }
+	>;
 	setAlarm: (at: number) => Promise<void>;
 	log: (line: string) => void;
 	/**
@@ -84,19 +87,36 @@ export async function runCrewAlarm(input: {
 	}
 	let failure: string | null = null;
 	try {
-		const sent = await input.enqueue(
+		let sent = await input.enqueue(
 			target,
 			decided.next.lastWakeAt,
 			decided.body,
 		);
-		if (typeof sent === "object") {
+		if (typeof sent === "object" && "held" in sent) {
+			// Y² is mid-turn and cannot take a steer: keep the changes and look
+			// again shortly (one batched wake once it is idle).
+			const held = store.holdWake(now);
+			if (held.retryAt !== null) {
+				log({ enqueued: false, held: "busy", retryAt: held.retryAt });
+				await input.setAlarm(held.retryAt);
+				return;
+			}
+			// Held long enough: queue behind the running turn.
+			sent = await input.enqueue(
+				target,
+				decided.next.lastWakeAt,
+				decided.body,
+				{ queueBehind: true },
+			);
+		}
+		if (typeof sent === "object" && "skipped" in sent) {
 			store.wakeSent(decided.eventsUpTo, decided.delivered, now);
 			log({ enqueued: false, skipped: sent.skipped });
 			const next = store.rearmAfterSend(now);
 			if (next !== null) await input.setAlarm(next);
 			return;
 		}
-		if (sent) {
+		if (sent === true) {
 			store.wakeSent(decided.eventsUpTo, decided.delivered, now);
 			log({
 				enqueued: true,

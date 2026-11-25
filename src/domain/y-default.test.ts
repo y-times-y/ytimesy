@@ -23,6 +23,6 @@ describe("a Y² wake and the person's plan", () => {
 	it("has a short welcome and a per-user daily cap", () => {
 		expect(Y_SQUARED_WELCOME.length).toBeLessThan(260);
 		expect(Y_SQUARED_WELCOME).toMatch(/keep track of its threads/);
-		expect(Y_WAKES_PER_USER_PER_DAY).toBe(200);
+		expect(Y_WAKES_PER_USER_PER_DAY).toBe(600);
 	});
 });

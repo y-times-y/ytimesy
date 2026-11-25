@@ -52,6 +52,8 @@ function world() {
 		busy: false,
 		turns: [] as string[],
 		queued: [] as string[],
+		steered: [] as string[],
+		noSteer: false,
 		failNext: 0,
 		unsendable: false,
 		dormant: null as string | null,
@@ -69,14 +71,18 @@ function world() {
 		await runCrewAlarm({
 			store,
 			now,
-			enqueue: async (_target, _at, body) => {
+			enqueue: async (_target, _at, body, options) => {
 				if (y2.failNext > 0) {
 					y2.failNext--;
 					throw new Error("connection timeout");
 				}
 				if (y2.dormant) return { skipped: y2.dormant };
 				if (y2.unsendable) return false;
-				if (y2.busy) y2.queued.push(body);
+				// A Claude-plan Y² mid-turn cannot be steered: held, then queued once held too long.
+				if (y2.busy && y2.noSteer && !options?.queueBehind)
+					return { held: "busy" };
+				if (y2.busy && !y2.noSteer) y2.steered.push(body);
+				else if (y2.busy) y2.queued.push(body);
 				else y2.turns.push(body);
 				return true;
 			},
@@ -127,17 +133,16 @@ describe("a thread's turn end reaches Y²", () => {
 		expect(w.alarm()).toBeNull();
 	});
 
-	it("queues the wake behind a busy Y², and delivers it when that turn ends", async () => {
+	it("steers the wake into a busy Y²'s running turn (no second turn)", async () => {
 		const w = world();
 		w.y2.busy = true;
 		w.note1(note(), T0);
 		w.note1(finish("t1", "Fix sign-up"), T0 + 5_000);
 		await w.fire();
 		expect(w.y2.turns).toHaveLength(0);
-		expect(w.y2.queued).toHaveLength(1);
-		w.y2TurnEnds();
-		expect(w.y2.turns).toHaveLength(1);
-		expect(w.y2.turns[0]).toContain('"Fix sign-up" finished its turn');
+		expect(w.y2.queued).toHaveLength(0);
+		expect(w.y2.steered).toHaveLength(1);
+		expect(w.y2.steered[0]).toContain('"Fix sign-up" finished its turn');
 	});
 
 	it("tells all of several threads that end close together in one wake", async () => {
@@ -241,5 +246,61 @@ describe("retry delays", () => {
 		expect([1, 2, 3, 4, 5, 6].map(wakeRetryDelayMs)).toEqual([
 			30_000, 60_000, 120_000, 240_000, 300_000, 300_000,
 		]);
+	});
+});
+
+describe("wakes while Y² is working (2026-11-25)", () => {
+	it("the first event wakes at once; one that arrives mid-turn is steered into it", async () => {
+		const w = world();
+		w.note1(finish("t1", "Fix sign-up"), T0);
+		expect(w.alarm()).toBe(T0);
+		await w.fire();
+		expect(w.y2.turns).toHaveLength(1);
+		w.y2.busy = true;
+		w.note1(finish("t2", "Add logout"), T0 + 20_000);
+		expect(w.alarm()).toBe(T0 + 20_000);
+		await w.fire();
+		expect(w.y2.turns).toHaveLength(1);
+		expect(w.y2.queued).toHaveLength(0);
+		expect(w.y2.steered).toHaveLength(1);
+		expect(w.y2.steered[0]).toContain('"Add logout" finished');
+	});
+
+	it("on a route that cannot be steered, events during the turn go out as ONE wake right after it", async () => {
+		const w = world();
+		w.y2.busy = true;
+		w.y2.noSteer = true;
+		w.note1(finish("t1", "One"), T0);
+		await w.fire();
+		expect(w.y2.turns).toHaveLength(0);
+		w.note1(finish("t2", "Two"), T0 + 2_000);
+		w.note1(
+			note({
+				sessionId: "t3",
+				title: "Three",
+				state: "waiting",
+				waitingOn: "question",
+			}),
+			T0 + 3_000,
+		);
+		await w.fire();
+		expect(w.y2.turns).toHaveLength(0);
+		w.y2.busy = false;
+		await w.fire();
+		expect(w.y2.turns).toHaveLength(1);
+		const body = w.y2.turns[0] as string;
+		for (const title of ["One", "Two", "Three"])
+			expect(body).toContain(`"${title}"`);
+		expect(w.store.wakeState().pending).toBe(false);
+	});
+
+	it("a wake held for 5 minutes queues behind the running turn instead of waiting for ever", async () => {
+		const w = world();
+		w.y2.busy = true;
+		w.y2.noSteer = true;
+		w.note1(finish("t1", "One"), T0);
+		for (let held = 0; held < 80 && !w.y2.queued.length; held++) await w.fire();
+		expect(w.y2.queued).toHaveLength(1);
+		expect(w.now() - T0).toBeGreaterThanOrEqual(5 * 60_000);
 	});
 });
