@@ -52,6 +52,7 @@ import {
 } from "../adapters/environment-build-steps";
 import { latestEnvironmentRecipes } from "../adapters/environment-recipes";
 import { DETACHED_COMMAND_ROOT } from "../adapters/freestyle/detached-command";
+import { resumableMachineStart } from "../adapters/freestyle/machine-failure";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { authorizedRepository, repositoryBranchSha } from "../adapters/github";
 import { receiveBrokeredRepository } from "../adapters/github/git-broker";
@@ -73,6 +74,10 @@ import {
 	restoreDependencyCache,
 	startDependencyCacheUpload,
 } from "./dependency-cache";
+import {
+	EnvironmentMachineFailure,
+	environmentMachineFailure,
+} from "./environment-build-failure";
 import { diagnoseEnvironmentFailure } from "./environment-diagnosis";
 import {
 	releaseUntakenEnvironmentMachine,
@@ -454,15 +459,22 @@ export async function provisionEnvironmentBuild(
 	).catch(() => null);
 	const providerRef =
 		early ??
-		(await runtime
-			.provision(`ytimesy-build-${id}`, {
-				...(from ? { snapshotId: from } : {}),
-				maxRunSeconds: ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
-			})
-			.catch(async (cause: unknown) => {
-				await steps.finish("machine", "failed");
-				throw cause;
-			}));
+		(await resumableMachineStart(
+			// Keyed by the build's slug, so a repeat finds what an earlier try
+			// made; a provider limit or blip is waited out first.
+			() =>
+				runtime.provision(`ytimesy-build-${id}`, {
+					...(from ? { snapshotId: from } : {}),
+					maxRunSeconds: ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
+				}),
+			{
+				operation: "provisionEnvironmentBuild",
+				slug: `ytimesy-build-${id}`,
+			},
+		).catch(async (cause: unknown) => {
+			await steps.finish("machine", "failed");
+			throw environmentMachineFailure(cause);
+		}));
 	await steps.finish(
 		"machine",
 		"done",
@@ -1158,7 +1170,9 @@ export async function finishEnvironmentBuild(
 			cause instanceof EnvironmentCommandFailure ? cause.failure : null;
 		const message = failure
 			? environmentFailureSummary(failure)
-			: "Environment build did not complete. Check the repository setup commands and retry.";
+			: cause instanceof EnvironmentMachineFailure
+				? cause.message
+				: "Environment build did not complete. Check the repository setup commands and retry.";
 		const failed = await database().query(
 			"update environment_build set status='failed',error_message=$2,failure=$3::jsonb,completed_at=now() where id=$1 and status='running' returning id",
 			[id, message, failure ? JSON.stringify(failure) : null],

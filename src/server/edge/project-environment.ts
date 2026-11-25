@@ -13,6 +13,7 @@ import { withDatabaseScope } from "../adapters/database-scope";
 import { databaseBuildSteps } from "../adapters/environment-build-steps";
 import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { environmentFreestyleFetch } from "../adapters/freestyle/environment-fetch";
+import { machineFailureDetail } from "../adapters/freestyle/machine-failure";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import {
 	ResumeLater,
@@ -35,6 +36,7 @@ import {
 	resolveEnvironmentBuildInput,
 	verifyEnvironmentRepositories,
 } from "../services/environment-build";
+import { EnvironmentMachineFailure } from "../services/environment-build-failure";
 import { startBackgroundJob } from "./background-jobs";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { failureReason } from "./failure-reason";
@@ -134,6 +136,10 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 				requestId: request.requestId,
 				// Messages can carry provider or SQL diagnostics; log the class only.
 				error: error instanceof Error ? error.name : "unknown",
+				// A machine failure's redacted provider status and code (no SQL).
+				...(error instanceof EnvironmentMachineFailure
+					? { machine: machineFailureDetail(error.cause) }
+					: {}),
 			});
 		}
 		this.ctx.storage.sql.exec(
