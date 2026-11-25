@@ -67,3 +67,12 @@ Limits of the design: latency is checked at 5-minute tick granularity (a pass is
 ## Tests
 
 `pnpm exec vitest run src/domain/interruption-report.test.ts src/domain/canary-timeline.test.ts src/server/adapters/interruption-events.test.ts src/server/services/interruption-monitoring.test.ts`
+
+## Why the canary is still off (2026-11-25)
+
+It needs a project, and a project needs a GitHub repository. The test account (`ytimesy-test-account`,
+docs/testing-live.md) has no GitHub connection or repository, creating repositories is forbidden, and it has no
+model connection. To turn it on: connect the test account to GitHub with one tiny repository, add a cheap API key as
+its model connection, then set `YTIMESY_CANARY_USER_ID=ytimesy-test-account`, `YTIMESY_CANARY_PROJECT_ID` and
+`YTIMESY_CANARY_MODEL_ID` on the edge Worker and deploy. Until then the daily digest (07:00 UTC) and the
+user-visible alert are the live signals, and `interruption_event` is the record.
