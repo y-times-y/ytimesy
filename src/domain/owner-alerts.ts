@@ -61,17 +61,38 @@ export function fleetBudgetAlerts(input: {
 	return alerts;
 }
 
-/** A Codex egress path started failing; later requests skip it for a cooldown. */
+/** What an operator does about each path; paths are configuration names, never URLs. */
+const CODEX_PATH_REMEDY: Record<string, string> = {
+	tunnel:
+		"The tunnel is the AWS proxy (t4g.nano ytimesy-codex-proxy, us-east-2, Elastic IP, tcp/443; docs/research/codex-tunnel-production-2026-11-07.md): check the instance is running and its status checks pass, that the service is active and the Elastic IP is still attached, that OpenAI has not blocked the IP, and that YTIMESY_CODEX_TUNNEL_SIGNING_KEY on the Workers matches the proxy's public key. A refused credential and an unreachable host both read as transport.",
+	vpc: "The Workers VPC network binding CODEX_EGRESS (Cloudflare Gateway egress): check the binding is on both production Workers and that OpenAI has not blocked Cloudflare's egress IPs.",
+};
+const remedyFor = (path: string) =>
+	CODEX_PATH_REMEDY[path] ??
+	"Check the relay host, its IP and its signing key (docs/research/codex-egress-failover-2026-10-20.md).";
+
+/**
+ * A Codex egress path started failing; later requests skip it for a cooldown.
+ * `fallbacks` are the paths this request still had to try, in order: with
+ * none, Codex subscription chats are failing right now.
+ */
 export function codexEgressBlockedAlert(
 	path: string,
 	reason: string,
+	context: { fallbacks?: readonly string[]; detail?: string } = {},
 	now = new Date(),
 ): OwnerAlert {
+	const fallbacks = context.fallbacks ?? [];
+	const state = fallbacks.length
+		? `Codex chats are still being served: requests now use ${fallbacks.join(", then ")} and retry ${path} after a 5 minute cooldown. Nothing needs doing at once, but ${path} is down, so you are one failure from an outage.`
+		: `No other path is configured, so Codex subscription chats are failing right now (each request retries ${path} every 5 minutes). Act now.`;
 	return {
 		kind: "codex-egress",
 		key: `${path}:blocked:${alertHour(now)}`,
-		subject: `ytimesy: Codex egress path ${path} blocked (${reason})`,
-		text: `The Codex subscription egress path ${path} was blocked (${reason}). Requests now use the next configured path and retry ${path} after its cooldown. If every path fails, Codex subscription chats stop. Check the path (Workers VPC egress, or the relay host and its IP) and docs/research/codex-cloudflare-egress-2026-10-08.md. Further blocks of this path this hour are not emailed.`,
+		subject: fallbacks.length
+			? `ytimesy: Codex egress path ${path} blocked (${reason}); served by ${fallbacks[0]}`
+			: `ytimesy: Codex chats failing: egress path ${path} blocked (${reason}), no fallback`,
+		text: `The Codex subscription egress path ${path} was blocked (${reason}${context.detail ? `: ${context.detail}` : ""}). ${state}\n\nWhat to do: ${remedyFor(path)} To add a second independent path, configure a relay (YTIMESY_CODEX_RELAY_URL with its signing key). Further blocks of this path this hour are not emailed.\n\nAlert: codex-egress (${path}:blocked:${alertHour(now)})`,
 	};
 }
 
@@ -84,8 +105,8 @@ export function codexEgressExhaustedAlert(
 	return {
 		kind: "codex-egress",
 		key: `all:${alertHour(now)}`,
-		subject: "ytimesy: every Codex egress path is blocked",
-		text: `No Codex subscription egress path could reach chatgpt.com: ${tried || "none configured"}. Codex subscription chats fail (or fail over to another model) until a path recovers. Add or repair a relay (YTIMESY_CODEX_RELAY_URL_N with its signing key) or check Workers VPC egress. Further occurrences this hour are not emailed.`,
+		subject: "ytimesy: Codex chats failing: every egress path is blocked",
+		text: `No Codex subscription egress path could reach chatgpt.com: ${tried || "none configured"}. Codex subscription chats are failing right now (or failing over to another model where one is configured) until a path recovers; blocked paths are retried every 5 minutes.\n\nWhat to do: ${attempts.map((row) => `${row.path}: ${remedyFor(row.path)}`).join(" ")} Add or repair a relay (YTIMESY_CODEX_RELAY_URL_N with its signing key) for a second independent path. Further occurrences this hour are not emailed.`,
 	};
 }
 

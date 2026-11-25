@@ -107,7 +107,7 @@ function relaySecret() {
 }
 
 type EgressPath =
-	| { id: "vpc" | "direct"; kind: "upstream"; request: typeof fetch }
+	| { id: "vpc" | "tunnel" | "direct"; kind: "upstream"; request: typeof fetch }
 	| { id: string; kind: "relay"; url: URL; secret: string };
 type RelayPath = Extract<EgressPath, { kind: "relay" }>;
 
@@ -152,11 +152,18 @@ function egressPaths(): EgressPath[] {
 	const relays = configuredRelays();
 	if (vpc)
 		return [
-			{
-				id: "vpc",
-				kind: "upstream",
-				request: process.env.YTIMESY_CODEX_TUNNEL_URL ? codexTunnelFetch : vpc,
-			},
+			// Production's first path is the AWS proxy tunnel; the Workers VPC
+			// binding stays behind it as a second, independent path.
+			...(process.env.YTIMESY_CODEX_TUNNEL_URL
+				? [
+						{
+							id: "tunnel" as const,
+							kind: "upstream" as const,
+							request: codexTunnelFetch,
+						},
+					]
+				: []),
+			{ id: "vpc", kind: "upstream", request: vpc },
 			...relays,
 		];
 	if (relays.length) return relays;
@@ -236,6 +243,8 @@ type Attempt =
 	| {
 			block: CodexEgressBlock;
 			status?: number;
+			/** The failure's name and message with addresses removed, for the log and the alert. */
+			detail?: string;
 			/** What the caller saw before failover existed, when no path is left. */
 			outcome: () => Response;
 	  };
@@ -291,6 +300,7 @@ async function attemptPath(
 		if (!block) throw error;
 		return {
 			block,
+			detail: failureDetail(original),
 			outcome: () => {
 				throw original;
 			},
@@ -320,15 +330,35 @@ async function attemptPath(
 	return { response: rebuilt() };
 }
 
+/** An error's name and message with URLs, addresses and long tokens removed. */
+function failureDetail(error: unknown) {
+	const name = error instanceof Error ? error.name : typeof error;
+	const message = error instanceof Error ? error.message : "";
+	return `${name}${message ? `: ${message}` : ""}`
+		.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>")
+		.replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, "<ip>")
+		.replace(/[A-Za-z0-9+/_=-]{24,}/g, "<token>")
+		.slice(0, 160);
+}
+
 function reportBlocked(
 	userId: string,
 	path: string,
 	block: CodexEgressBlock,
 	outcome: "switched" | "exhausted",
+	fallbacks: readonly string[] = [],
+	detail?: string,
 ) {
 	if (!health.markBlocked(path, block)) return;
-	console.warn("Codex egress path blocked.", { path, reason: block });
-	trackInvocationTask(alertOwner(codexEgressBlockedAlert(path, block)));
+	console.warn("Codex egress path blocked.", {
+		path,
+		reason: block,
+		detail,
+		fallbacks,
+	});
+	trackInvocationTask(
+		alertOwner(codexEgressBlockedAlert(path, block, { fallbacks, detail })),
+	);
 	void captureServerAnalytics(
 		userId,
 		"codex_egress_failover",
@@ -393,6 +423,8 @@ async function throughEgress(
 			path.id,
 			attempt.block,
 			final ? "exhausted" : "switched",
+			candidates.slice(index + 1).map((next) => next.id),
+			attempt.detail,
 		);
 	}
 	console.warn("Every Codex egress path is blocked.", { blocked });
@@ -472,7 +504,7 @@ function sendOverPath(
 		// across long model steps. The edge's VPC binding has no such pool of
 		// ours; there it would only force a new connection (TCP and TLS) to
 		// chatgpt.com through the egress for every request.
-		if (path.id === "vpc") headers.delete("Connection");
+		if (path.id === "vpc" || path.id === "tunnel") headers.delete("Connection");
 		headers.set("Authorization", `Bearer ${tokens.accessToken}`);
 		headers.set("ChatGPT-Account-ID", tokens.chatgptAccountId);
 		headers.set("User-Agent", "ytimesy/1.0");
@@ -550,7 +582,14 @@ export async function probeCodexEgress(userId: string) {
 		);
 		const ms = Date.now() - startedAt;
 		if ("block" in attempt) {
-			reportBlocked(userId, path.id, attempt.block, "switched");
+			reportBlocked(
+				userId,
+				path.id,
+				attempt.block,
+				"switched",
+				paths.filter((other) => other.id !== path.id).map((other) => other.id),
+				attempt.detail,
+			);
 			results.push({
 				path: path.id,
 				outcome: attempt.block,

@@ -30,8 +30,8 @@ export const CODEX_EGRESS_BLOCKS = [
 	"timeout",
 ] as const satisfies readonly CodexEgressBlock[];
 
-/** Path ids are configuration names, never URLs: `vpc`, `direct`, `relay-1`... */
-export const CODEX_EGRESS_PATH_ID = /^(vpc|direct|relay-[1-8])$/;
+/** Path ids are configuration names, never URLs: `tunnel`, `vpc`, `direct`, `relay-1`... */
+export const CODEX_EGRESS_PATH_ID = /^(vpc|tunnel|direct|relay-[1-8])$/;
 export const MAX_CODEX_RELAYS = 8;
 export const CODEX_EGRESS_COOLDOWN_MS = 5 * 60_000;
 

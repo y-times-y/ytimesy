@@ -29,6 +29,7 @@ import {
 	productionBuildSourceProblem,
 	readBuildSource,
 } from "./production-source";
+import { liveWorkerBindingProblems } from "./worker-bindings-guard";
 
 const STACKS = {
 	aws: { file: "aws.run.ts", stages: ["production"] },
@@ -222,6 +223,18 @@ try {
 	if (command === "deploy") {
 		runAlchemy("deploy", env);
 		console.log(`Infrastructure ${stackName} deployed to ${stage}.`);
+		// Alchemy cannot express every binding; prove the live Workers kept them.
+		if (stackName.includes("cloudflare") && stage === "production") {
+			const token =
+				process.env.CLOUDFLARE_API_TOKEN ?? process.env.CLOUDFLARE_DEPLOY_TOKEN;
+			const lost = token
+				? await liveWorkerBindingProblems(token)
+				: ["No Cloudflare token to check the live Worker bindings."];
+			if (lost.length)
+				throw new Error(
+					`The deploy dropped required Worker bindings; redeploy through scripts/deploy-production-from-secret.ts or roll back:\n- ${lost.join("\n- ")}`,
+				);
+		}
 	} else console.log(`Plan for ${stackName} (${stage}) passes the guard.`);
 } finally {
 	release();
