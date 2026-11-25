@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
+import { isTestAccountId } from "#/domain/test-account";
 import type { GithubConnectionFailureReason } from "../../domain/github-connection-callback";
 import { githubAppIdentityMatchesSignIn } from "../../domain/github-sign-in";
 import { database } from "../adapters/database";
 import { exchangeGithubToken, githubClient } from "../adapters/github";
 import { serverConfig } from "../config";
+import { testAccountGithubToken } from "./test-account-github";
 import { githubCredentials, seal, unseal } from "./token-vault";
 
 /** A connection attempt that failed for a reason the callback can explain. */
@@ -91,6 +93,9 @@ export async function finishGithubConnection(
 }
 /** Row locking serializes refresh-token rotation across web processes. */
 export async function githubAccessToken(userId: string) {
+	// The synthetic test account has no GitHub sign-in: it reads the seed repository only.
+	const testToken = await testAccountGithubToken(userId);
+	if (testToken) return testToken;
 	const connection = await database().connect();
 	try {
 		await connection.query("begin");
@@ -138,6 +143,7 @@ export async function githubAccessToken(userId: string) {
 	}
 }
 export async function githubConnectionExists(userId: string) {
+	if (isTestAccountId(userId)) return true;
 	const result = await database().query(
 		"select 1 from github_connection where user_id=$1",
 		[userId],

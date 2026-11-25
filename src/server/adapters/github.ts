@@ -269,6 +269,24 @@ export async function authorizedRepository(
 	installationId: number,
 	repositoryId: number,
 ) {
+	// An installation token (the synthetic test account's) cannot list a user's installations: ask the installation.
+	if (token.startsWith("ghs_")) {
+		const github = githubClient(token);
+		const repos = await github.paginate(
+			github.apps.listReposAccessibleToInstallation,
+			{ per_page: 100 },
+		);
+		const repo = repos.find((item) => item.id === repositoryId);
+		if (repo && !repo.archived && !repo.disabled)
+			return {
+				installationId,
+				repositoryId: repo.id,
+				fullName: repo.full_name,
+				defaultBranch: repo.default_branch,
+				private: repo.private,
+			};
+		throw new Response("Repository access is unavailable.", { status: 403 });
+	}
 	const github = githubClient(token);
 	const [installations, repository] = await Promise.allSettled([
 		github.paginate(github.apps.listInstallationsForAuthenticatedUser, {
