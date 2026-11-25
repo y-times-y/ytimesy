@@ -113,7 +113,12 @@ export function CanvasStage({
 	onPrompt?: (text: string) => void;
 	composer?: { readonly markKey: string; readonly node: ReactNode } | null;
 }) {
-	const stage = useRef<HTMLDivElement>(null);
+	const [menuHost, setMenuHost] = useState<HTMLElement | null>(null);
+	const stage = useRef<HTMLDivElement | null>(null);
+	const attachStage = useCallback((element: HTMLDivElement | null) => {
+		stage.current = element;
+		setMenuHost(element);
+	}, []);
 	const frame = useRef<HTMLIFrameElement>(null);
 	const id = useRef(Symbol("canvas-stage"));
 	const [size, setSize] = useState<Size | null>(null);
@@ -121,6 +126,8 @@ export function CanvasStage({
 	const [mode, setMode] = useState<ViewMode>(() => rememberedMode(canvasKey));
 	const [revealed, setRevealed] = useState(false);
 	const [expanded, setExpanded] = useState(false);
+	const expandedNow = useRef(expanded);
+	expandedNow.current = expanded;
 	const [spaceDown, setSpaceDown] = useState(false);
 	const [dragging, setDragging] = useState(false);
 	const layoutWidth = deviceWidth ?? CANVAS_LAYOUT_WIDTH;
@@ -284,6 +291,26 @@ export function CanvasStage({
 		return () => observer.disconnect();
 	}, []);
 
+	// Expanded is the browser's full screen (the panel sits inside containers
+	// a fixed element cannot leave); without it the stage fills the window.
+	useEffect(() => {
+		const element = stage.current;
+		const onChange = () => setExpanded(document.fullscreenElement === element);
+		document.addEventListener("fullscreenchange", onChange);
+		return () => document.removeEventListener("fullscreenchange", onChange);
+	}, []);
+	const toggleExpanded = () => {
+		const element = stage.current;
+		if (!element) return;
+		if (expandedNow.current) {
+			if (document.fullscreenElement === element)
+				void document.exitFullscreen();
+			else setExpanded(false);
+		} else if (element.requestFullscreen) {
+			element.requestFullscreen().catch(() => setExpanded(true));
+		} else setExpanded(true);
+	};
+
 	// Shown once placed (no jump from the unplaced frame), or after a wait.
 	useEffect(() => {
 		if (revealed) return;
@@ -321,8 +348,6 @@ export function CanvasStage({
 
 	// Keys act on the stage last used (two stages exist while comparing).
 	const stageId = id.current;
-	const expandedNow = useRef(expanded);
-	expandedNow.current = expanded;
 	const annotatingNow = useRef(annotating);
 	annotatingNow.current = annotating;
 	useEffect(() => {
@@ -422,7 +447,7 @@ export function CanvasStage({
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: dragging pans; the zoom bar and keys do the same by keyboard.
 		<div
-			ref={stage}
+			ref={attachStage}
 			className="canvas-stage"
 			data-annotating={annotating ? "true" : undefined}
 			data-expanded={expanded ? "true" : undefined}
@@ -549,7 +574,8 @@ export function CanvasStage({
 				onZoomOut={() => step(-1)}
 				onPreset={zoomTo}
 				onFit={fit}
-				onToggleExpanded={() => setExpanded((on) => !on)}
+				onToggleExpanded={toggleExpanded}
+				menuHost={menuHost}
 			/>
 		</div>
 	);

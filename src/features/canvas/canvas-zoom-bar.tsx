@@ -24,6 +24,7 @@ export function CanvasZoomBar({
 	onPreset,
 	onFit,
 	onToggleExpanded,
+	menuHost,
 }: {
 	zoom: number;
 	fitted: boolean;
@@ -33,6 +34,8 @@ export function CanvasZoomBar({
 	onPreset: (zoom: number) => void;
 	onFit: () => void;
 	onToggleExpanded: () => void;
+	/** Where the menu opens: inside the stage, so full screen still shows it. */
+	menuHost: HTMLElement | null;
 }) {
 	return (
 		<div className="canvas-zoom-bar" role="toolbar" aria-label="Zoom">
@@ -57,7 +60,7 @@ export function CanvasZoomBar({
 						<ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
 					</button>
 				</DropdownMenu.Trigger>
-				<DropdownMenu.Portal>
+				<DropdownMenu.Portal container={menuHost}>
 					<DropdownMenu.Content
 						className="recovery-menu inspector-view-menu canvas-zoom-menu"
 						side="top"
