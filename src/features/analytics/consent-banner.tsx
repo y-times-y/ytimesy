@@ -40,7 +40,7 @@ export function ConsentBanner(props: {
 		<section
 			aria-label="Cookie settings"
 			data-consent-banner={props.tier}
-			className="fixed inset-x-4 bottom-4 z-[260] mx-auto max-w-md rounded-lg border bg-background p-4 text-sm shadow-lg sm:inset-x-auto sm:right-4 sm:mx-0 sm:w-[340px]"
+			className="fixed inset-x-4 bottom-4 z-[260] mx-auto max-w-md rounded-lg border bg-background p-3 text-xs shadow-lg sm:p-4 sm:text-sm sm:inset-x-auto sm:right-4 sm:mx-0 sm:w-[340px]"
 		>
 			<p className="text-muted-foreground">
 				{copy.text}{" "}
@@ -51,7 +51,7 @@ export function ConsentBanner(props: {
 					Cookie settings
 				</a>
 			</p>
-			<div className="mt-3 flex justify-end gap-2">
+			<div className="mt-2 flex justify-end gap-2 sm:mt-3">
 				<Button
 					type="button"
 					variant="outline"

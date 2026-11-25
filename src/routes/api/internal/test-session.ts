@@ -4,6 +4,7 @@ import { serverConfig } from "../../../server/config";
 import {
 	mintTestSession,
 	resetTestAccount,
+	runTestAccountAction,
 	TestSessionRefused,
 } from "../../../server/services/test-account";
 
@@ -18,6 +19,7 @@ export const Route = createFileRoute("/api/internal/test-session")({
 			POST: async ({ request }) => {
 				const body = (await request.json().catch(() => ({}))) as {
 					action?: string;
+					apiKey?: unknown;
 					caller?: unknown;
 				};
 				const token = request.headers
@@ -32,6 +34,16 @@ export const Route = createFileRoute("/api/internal/test-session")({
 				try {
 					const run =
 						body.action === "reset" ? resetTestAccount : mintTestSession;
+					if (body.action === "seed" || body.action === "y-counts")
+						return Response.json(
+							await runTestAccountAction(database(), settings, token, {
+								caller: body.caller,
+								action: body.action,
+								apiKey:
+									typeof body.apiKey === "string" ? body.apiKey : undefined,
+							}),
+							{ headers: { "Cache-Control": "no-store" } },
+						);
 					return Response.json(
 						await run(database(), settings, token, body.caller),
 						{ headers: { "Cache-Control": "no-store" } },
