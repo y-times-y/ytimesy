@@ -441,8 +441,9 @@ export function OwnCommentMenu({
 	onEdit: () => void;
 	onDelete?: () => void;
 }) {
+	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	return (
-		<DropdownMenu.Root>
+		<DropdownMenu.Root onOpenChange={() => setConfirmingDelete(false)}>
 			<DropdownMenu.Trigger asChild>
 				<button
 					type="button"
@@ -464,12 +465,18 @@ export function OwnCommentMenu({
 					{onDelete ? (
 						<DropdownMenu.Item
 							data-tone="bad"
-							onSelect={() => {
-								if (window.confirm("Delete this comment on GitHub?"))
-									onDelete();
+							onSelect={(event) => {
+								if (!confirmingDelete) {
+									event.preventDefault();
+									setConfirmingDelete(true);
+									return;
+								}
+								onDelete();
 							}}
 						>
-							<span className="menu-row-label">Delete</span>
+							<span className="menu-row-label">
+								{confirmingDelete ? "Delete on GitHub?" : "Delete"}
+							</span>
 						</DropdownMenu.Item>
 					) : null}
 				</DropdownMenu.Content>

@@ -4753,7 +4753,9 @@ a.session-title-meta:focus-visible {
 	border-radius: 8px;
 	background: #0f0f0f;
 	color: #ededed;
-	font: 12px ui-monospace, monospace;
+	font:
+		12px ui-monospace,
+		monospace;
 }
 .usage-warning-banner .referral-icon,
 .referral-icon {
@@ -6346,28 +6348,23 @@ details.environment-build[open] > summary .session-activity-chevron {
 body:has([data-new-version]) .usage-warning-banner {
 	bottom: 72px;
 }
-/* The Threads header's project filter: a quiet select beside the + . */
+/* The Threads header's project filter: a quiet MenuSelect beside the + . */
 .sidebar-thread-filter {
 	max-width: 110px;
-	min-width: 0;
 	height: 22px;
 	margin: 0 2px 0 0;
-	padding: 0 2px;
+	padding: 0 2px 0 4px;
+	gap: 2px;
 	border: 0;
 	border-radius: 6px;
 	background: transparent;
 	color: var(--list-text-muted);
-	font: inherit;
 	font-size: 11px;
-	text-overflow: ellipsis;
 }
 .sidebar-thread-filter:hover,
-.sidebar-thread-filter:focus-visible {
+.sidebar-thread-filter:focus-visible,
+.sidebar-thread-filter[data-state="open"] {
 	background: #ffffff14;
-	color: #f2f2f2;
-}
-.sidebar-thread-filter option {
-	background: #1b1b1b;
 	color: #f2f2f2;
 }
 /* The Threads list's state groups: Needs you, Working, Recently finished. */

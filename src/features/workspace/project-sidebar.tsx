@@ -30,6 +30,7 @@ import {
 } from "react";
 import { Wordmark } from "#/components/brand/wordmark";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
+import { MenuSelect } from "#/components/ui/menu-select";
 import { titleWithShortcut } from "#/domain/keyboard-shortcuts";
 import { machineSpecText } from "#/domain/machine-size";
 import { type Project, projectDisplayName } from "#/domain/projects";
@@ -647,21 +648,20 @@ export function ProjectSidebar({
 					"Threads",
 					<>
 						{projects.length > 1 ? (
-							<select
+							<MenuSelect
 								className="sidebar-thread-filter"
 								aria-label="Show threads of"
+								align="end"
 								value={filterProject?.id ?? ""}
-								onChange={(event) =>
-									setFilterProjectId(event.target.value || null)
-								}
-							>
-								<option value="">All projects</option>
-								{projects.map((project) => (
-									<option key={project.id} value={project.id}>
-										{projectDisplayName(project)}
-									</option>
-								))}
-							</select>
+								onValueChange={(next) => setFilterProjectId(next || null)}
+								options={[
+									{ value: "", label: "All projects" },
+									...projects.map((project) => ({
+										value: project.id,
+										label: projectDisplayName(project),
+									})),
+								]}
+							/>
 						) : null}
 						{filterProject && onDeleteProject ? (
 							<button

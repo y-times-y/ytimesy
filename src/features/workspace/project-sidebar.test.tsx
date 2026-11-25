@@ -239,8 +239,10 @@ describe("left sidebar", () => {
 	it("offers a project filter in the Threads header with several projects, none with one", () => {
 		const html = render();
 		expect(html).toContain('aria-label="Show threads of"');
-		expect(html).toContain(">All projects</option>");
-		expect(html).toContain('<option value="beta">Beta</option>');
+		expect(html).toContain('aria-haspopup="listbox"');
+		expect(html).toContain(">All projects<");
+		expect(html).not.toContain("<select");
+		expect(html).not.toContain("<option");
 		const one = render(true, { projects: [alpha] });
 		expect(one).not.toContain("sidebar-thread-filter");
 	});
