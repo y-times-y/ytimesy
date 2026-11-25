@@ -82,6 +82,10 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		`alter table auth_user add column email text, add column "emailVerified" boolean;` +
+			readFileSync("supabase/migrations/20261125150000_referral.sql", "utf8"),
+	);
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_ADMIN_USER_IDS", "admin");
@@ -91,7 +95,7 @@ beforeEach(async () => {
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "1000");
 	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "false");
 	await db.exec(
-		"truncate infrastructure_usage_window,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_adjustment,infrastructure_usage_policy,api_turn;",
+		"truncate referral_reward,referral,infrastructure_usage_window,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_adjustment,infrastructure_usage_policy,api_turn;",
 	);
 });
 afterAll(async () => {
@@ -884,6 +888,81 @@ it("holds back a new turn while a window is exhausted, naming when it reopens", 
 		/reached your weekly cloud usage limit, so new work cannot start until/,
 	);
 	await assertUsageWindowsOpen("bob");
+});
+
+async function earnReferralReset(userId: string, referredId = "bob") {
+	await query(
+		"insert into referral(referred_user_id,referrer_user_id,code,status) values($1,$2,'r-aaaaaaaa','granted') on conflict do nothing",
+		[referredId, userId === referredId ? "admin" : userId],
+	);
+	await query(
+		"insert into referral_reward(referred_user_id,user_id,role) values($1,$2,$3)",
+		[referredId, userId, userId === referredId ? "referred" : "referrer"],
+	);
+}
+
+it("spends an earned referral reset once, when a new turn would be held back", async () => {
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
+	await reserveInfrastructureUsage(reservation("alice", 100));
+	await earnReferralReset("alice");
+	await assertUsageWindowsOpen("alice");
+	const reset = await db.query<{ reason: string }>(
+		"select reason from infrastructure_usage_adjustment where user_id='alice' and kind='window_reset'",
+	);
+	expect(reset.rows.length).toBeGreaterThan(0);
+	expect(reset.rows.every((row) => row.reason === "referral reset")).toBe(true);
+	expect(
+		(
+			await db.query<{ redeemed_at: Date | null }>(
+				"select redeemed_at from referral_reward",
+			)
+		).rows[0].redeemed_at,
+	).not.toBeNull();
+	// The reward is spent: the next time the window fills, the turn is held back as before.
+	await reserveInfrastructureUsage({
+		...reservation("alice", 100),
+		resourceKey: "vm:two",
+	});
+	await expect(assertUsageWindowsOpen("alice")).rejects.toThrow(/reached your/);
+});
+
+it("spends an earned referral reset when a machine start would be refused", async () => {
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
+	await reserveInfrastructureUsage(reservation("alice", 100));
+	await expect(
+		reserveInfrastructureUsage({
+			...reservation("alice", 50),
+			resourceKey: "vm:two",
+		}),
+	).rejects.toThrow(/reached your/);
+	await earnReferralReset("alice");
+	await reserveInfrastructureUsage({
+		...reservation("alice", 50),
+		resourceKey: "vm:two",
+	});
+	expect(
+		Number(
+			(
+				await db.query<{ count: string }>(
+					"select count(*) from referral_reward where redeemed_at is not null",
+				)
+			).rows[0].count,
+		),
+	).toBe(1);
+});
+
+it("does not spend a referral reset while no window is exhausted", async () => {
+	await earnReferralReset("alice");
+	await assertUsageWindowsOpen("alice");
+	expect(
+		Number(
+			(
+				await db.query<{ count: string }>(
+					"select count(*) from referral_reward where redeemed_at is null",
+				)
+			).rows[0].count,
+		),
+	).toBe(1);
 });
 
 it("keeps the running fleet totals equal to summing every reservation", async () => {

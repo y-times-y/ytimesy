@@ -4,7 +4,13 @@ import {
 	readFirstTouchCookie,
 	serializeFirstTouch,
 } from "#/domain/referral-attribution";
-import { captureFirstTouch, firstTouchEventProperties } from "./first-touch";
+import {
+	captureFirstTouch,
+	captureReferralCode,
+	firstTouchEventProperties,
+	savedReferralCode,
+	saveReferralCode,
+} from "./first-touch";
 
 const CHROME =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
@@ -140,4 +146,81 @@ it("adds the first-touch ref and source to app_viewed", () => {
 		),
 	).toEqual({ initial_ref: "x", initial_utm_source: "twitter" });
 	expect(firstTouchEventProperties("")).toEqual({});
+});
+
+describe("captureReferralCode", () => {
+	const link = "https://ytimesy.com/?ref=r-k3f9x2qa";
+	it("keeps a personal code even under Do Not Track and in opt-in regions", () => {
+		const { win, writes } = fakeWindow(link, { doNotTrack: "1" });
+		captureReferralCode(win);
+		expect(writes).toHaveLength(1);
+		expect(writes[0]).toMatch(
+			/^yt_ref=r-k3f9x2qa; Path=\/; Max-Age=\d+; SameSite=Lax; Secure$/,
+		);
+	});
+	it("ignores platform refs, bots and automation", () => {
+		for (const options of [
+			{},
+			{ webdriver: true },
+			{ userAgent: "Googlebot/2.1" },
+		]) {
+			const target =
+				options.webdriver || options.userAgent
+					? link
+					: "https://ytimesy.com/?ref=hn";
+			const { win, writes } = fakeWindow(target, options);
+			captureReferralCode(win);
+			expect(writes).toHaveLength(0);
+		}
+	});
+});
+
+describe("referral code storage", () => {
+	const link = "https://ytimesy.com/?ref=r-k3f9x2qa";
+	function withStorage(
+		win: ReturnType<typeof fakeWindow>["win"],
+		initial?: string,
+	) {
+		const store = new Map<string, string>(
+			initial ? [["ytimesy:referral-code", initial]] : [],
+		);
+		const storage = {
+			getItem: (key: string) => store.get(key) ?? null,
+			setItem: (key: string, value: string) => void store.set(key, value),
+		};
+		return Object.assign({ ...win }, {
+			localStorage: storage,
+		}) as unknown as Parameters<typeof captureReferralCode>[0] & {
+			localStorage: typeof storage;
+		};
+	}
+	it("keeps a code from a link in the cookie and in local storage", () => {
+		const page = fakeWindow(link);
+		const win = withStorage(page.win);
+		captureReferralCode(win);
+		expect(savedReferralCode(win)).toBe("r-k3f9x2qa");
+		expect(win.localStorage.getItem("ytimesy:referral-code")).toBe(
+			"r-k3f9x2qa",
+		);
+	});
+	it("restores the cookie from local storage when it was cleared before sign-up", () => {
+		const page = fakeWindow("https://ytimesy.com/auth/sign-up");
+		const win = withStorage(page.win, "r-k3f9x2qa");
+		captureReferralCode(win);
+		expect(page.writes[0]).toMatch(/^yt_ref=r-k3f9x2qa;/);
+	});
+	it("keeps a code typed at sign-up like one from a link", () => {
+		const page = fakeWindow("https://ytimesy.com/auth/sign-up");
+		const win = withStorage(page.win);
+		expect(savedReferralCode(win)).toBeNull();
+		saveReferralCode("r-k3f9x2qa", win);
+		expect(page.writes[0]).toMatch(/^yt_ref=r-k3f9x2qa;/);
+		expect(savedReferralCode(win)).toBe("r-k3f9x2qa");
+	});
+	it("a newer link replaces the earlier code", () => {
+		const page = fakeWindow("https://ytimesy.com/?ref=r-bbbbbbbb");
+		const win = withStorage(page.win, "r-aaaaaaaa");
+		captureReferralCode(win);
+		expect(savedReferralCode(win)).toBe("r-bbbbbbbb");
+	});
 });

@@ -11,7 +11,11 @@ import {
 	setReplayChoice,
 } from "./client";
 import { ConsentBanner, consentBannerVisible } from "./consent-banner";
-import { captureFirstTouch, firstTouchEventProperties } from "./first-touch";
+import {
+	captureFirstTouch,
+	captureReferralCode,
+	firstTouchEventProperties,
+} from "./first-touch";
 import { useReplayChoice } from "./use-replay-choice";
 import { startWebVitals } from "./web-vitals";
 
@@ -38,6 +42,7 @@ export function Analytics() {
 	// After hydration, so the first paint is untouched: where this visitor
 	// first came from, then ref/utm_* removed from the address bar.
 	useEffect(() => {
+		captureReferralCode();
 		captureFirstTouch({ strictRegion });
 	}, [strictRegion]);
 	useEffect(() => {

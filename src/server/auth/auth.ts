@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { captcha, emailOTP } from "better-auth/plugins";
+import { referralCookieValue } from "#/domain/referral";
 import {
 	type FirstTouch,
 	initialAttributionProperties,
@@ -17,6 +18,7 @@ import {
 	recordLegalAcceptance,
 	recordLegalAcceptanceAtSignIn,
 } from "../adapters/legal-acceptance";
+import { attributeReferral } from "../adapters/referral";
 import { recordUserAttribution } from "../adapters/user-attribution";
 import { serverConfig } from "../config";
 import {
@@ -58,7 +60,7 @@ export const oauthAccountPolicy = {
  * Terms" notice on their next visit instead of a broken sign-up.
  */
 export async function accountCreated(
-	user: { id: string; createdAt: Date },
+	user: { id: string; email?: string; createdAt: Date },
 	context?: SignUpRequestContext | null,
 ) {
 	await recordLegalAcceptance(user.id, "signup").catch((error: unknown) => {
@@ -75,6 +77,7 @@ export async function accountCreated(
 				error: error instanceof Error ? error.message : String(error),
 			});
 		});
+	await recordReferral(user, context);
 	const initial = initialAttributionProperties(touch);
 	void captureServerAnalytics(user.id, "account_created", initial, {
 		key: user.id,
@@ -100,6 +103,34 @@ export function signUpFirstTouch(
 	const headers = context?.headers ?? context?.request?.headers;
 	if (!headers || isBotUserAgent(headers.get("user-agent"))) return null;
 	return readFirstTouchCookie(headers.get("cookie"));
+}
+
+/**
+ * A sign-up that came through a personal referral link (the yt_ref cookie):
+ * recorded, never rewarded here; the reward waits for the new account's first
+ * completed turn. Not for bots. A failed write is logged, not thrown.
+ */
+async function recordReferral(
+	user: { id: string; email?: string },
+	context: SignUpRequestContext | null | undefined,
+) {
+	const headers = context?.headers ?? context?.request?.headers;
+	if (!headers || !user.email || isBotUserAgent(headers.get("user-agent")))
+		return;
+	const code = referralCookieValue(headers.get("cookie"));
+	if (!code) return;
+	await attributeReferral({
+		userId: user.id,
+		email: user.email,
+		code,
+		ip: headers.get("cf-connecting-ip"),
+		userAgent: headers.get("user-agent"),
+	}).catch((error: unknown) => {
+		console.error("Could not record the referral.", {
+			userId: user.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	});
 }
 
 /**

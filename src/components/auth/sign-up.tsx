@@ -32,6 +32,7 @@ import {
 import { Input } from "#/components/ui/input.tsx";
 import { safeReturnTo, withReturnTo } from "#/domain/return-to";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
+import { ReferralCodeField } from "#/features/auth/referral-code-field";
 import { TermsNotice } from "#/features/auth/terms-consent";
 import { cn } from "#/lib/utils.ts";
 import {
@@ -428,6 +429,7 @@ export function SignUp({
 						</>
 					)}
 
+					<ReferralCodeField />
 					<TermsNotice />
 				</div>
 

@@ -5,7 +5,9 @@ const mocks = vi.hoisted(() => ({
 	recordAtSignIn: vi.fn(async (_userId: string) => undefined),
 	capture: vi.fn(async (..._args: unknown[]) => undefined),
 	attribution: vi.fn(async (_userId: string, _touch: unknown) => undefined),
+	referral: vi.fn(async (_input: unknown) => "attributed"),
 }));
+vi.mock("../adapters/referral", () => ({ attributeReferral: mocks.referral }));
 vi.mock("../adapters/user-attribution", () => ({
 	recordUserAttribution: mocks.attribution,
 }));
@@ -122,4 +124,93 @@ it("records acceptance of the current versions at every sign-in", async () => {
 	await expect(signedIn({ userId: "u3" })).resolves.toBeUndefined();
 	expect(error).toHaveBeenCalled();
 	error.mockRestore();
+});
+
+it("attributes a sign-up that came through a referral link, with the network and browser", async () => {
+	mocks.referral.mockClear();
+	const headers = new Headers({
+		cookie: "yt_ref=r-k3f9x2qa",
+		"user-agent": CHROME,
+		"cf-connecting-ip": "203.0.113.9",
+	});
+	await accountCreated(
+		{ id: "joined", email: "joined@example.test", createdAt: new Date() },
+		{ headers },
+	);
+	expect(mocks.referral).toHaveBeenCalledWith({
+		userId: "joined",
+		email: "joined@example.test",
+		code: "r-k3f9x2qa",
+		ip: "203.0.113.9",
+		userAgent: CHROME,
+	});
+});
+
+it("ignores a bad code, a bot and a missing email, and never fails sign-up on a referral error", async () => {
+	mocks.referral.mockClear();
+	const user = { id: "u5", email: "u5@example.test", createdAt: new Date() };
+	await accountCreated(user, {
+		headers: new Headers({ cookie: "yt_ref=hn", "user-agent": CHROME }),
+	});
+	await accountCreated(user, {
+		headers: new Headers({
+			cookie: "yt_ref=r-k3f9x2qa",
+			"user-agent": "curl/8.0",
+		}),
+	});
+	await accountCreated(
+		{ id: "u6", createdAt: new Date() },
+		{
+			headers: new Headers({
+				cookie: "yt_ref=r-k3f9x2qa",
+				"user-agent": CHROME,
+			}),
+		},
+	);
+	expect(mocks.referral).not.toHaveBeenCalled();
+	mocks.referral.mockRejectedValueOnce(new Error("database down"));
+	const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+	await expect(
+		accountCreated(user, {
+			headers: new Headers({
+				cookie: "yt_ref=r-k3f9x2qa",
+				"user-agent": CHROME,
+			}),
+		}),
+	).resolves.toBeUndefined();
+	expect(error).toHaveBeenCalled();
+	error.mockRestore();
+});
+
+it.each([
+	["email sign-up (code step follows)", (headers: Headers) => ({ headers })],
+	[
+		"a GitHub callback",
+		(headers: Headers) => ({
+			request: new Request("https://ytimesy.com/api/auth/callback/github", {
+				headers,
+			}),
+		}),
+	],
+	[
+		"a Google callback",
+		(headers: Headers) => ({
+			request: new Request("https://ytimesy.com/api/auth/callback/google", {
+				headers,
+			}),
+		}),
+	],
+])("attributes the referral at %s", async (_, context) => {
+	mocks.referral.mockClear();
+	const headers = new Headers({
+		cookie: "other=1; yt_ref=r-k3f9x2qa",
+		"user-agent": CHROME,
+	});
+	await accountCreated(
+		{ id: "any-method", email: "any@example.test", createdAt: new Date() },
+		context(headers),
+	);
+	expect(mocks.referral).toHaveBeenCalledWith(
+		expect.objectContaining({ userId: "any-method", code: "r-k3f9x2qa" }),
+	);
 });

@@ -13,6 +13,7 @@ export type SettingsSection =
 	| "plugins"
 	| "mcp"
 	| "usage"
+	| "referral"
 	| "archived"
 	| "support";
 
@@ -31,6 +32,7 @@ export function settingsNavItems(): readonly {
 		{ id: "plugins", label: "Plugins" },
 		{ id: "mcp", label: "MCP servers" },
 		{ id: "usage", label: "Usage" },
+		{ id: "referral", label: "Referral" },
 		{ id: "archived", label: "Archived" },
 		{ id: "support", label: "Support" },
 	];

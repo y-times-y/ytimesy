@@ -20,6 +20,7 @@ describe("workspace settings", () => {
 			"plugins",
 			"mcp",
 			"usage",
+			"referral",
 			"archived",
 			"support",
 		]);

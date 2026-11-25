@@ -13,6 +13,7 @@ import {
 	Plug,
 	Shield,
 	User,
+	UserPlus,
 	X,
 } from "lucide-react";
 import { ScrollArea } from "radix-ui";
@@ -77,6 +78,7 @@ import { DefaultBranchPushSettings } from "./default-branch-push-settings";
 import { EnvironmentSettings } from "./environment-settings";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
+import { infrastructureUsageFn } from "./infrastructure-usage.fn";
 import { MachineSizeSettings } from "./machine-size-settings";
 import { MemorySettings } from "./memory-settings";
 import { NetworkAccessSettings } from "./network-access-settings";
@@ -87,6 +89,7 @@ import {
 	listProjectSecretsFn,
 	saveProjectSecretFn,
 } from "./project-secrets.fn";
+import { ReferralSection } from "./referral-invite";
 import { prefetchSettings } from "./settings-prefetch";
 import { codexSubscriptionUsageFn } from "./subscription-usage.fn";
 import {
@@ -128,6 +131,7 @@ const sectionIcon = {
 	plugins: Blocks,
 	mcp: Plug,
 	usage: Gauge,
+	referral: UserPlus,
 	archived: Archive,
 	support: LifeBuoy,
 } as const;
@@ -188,6 +192,15 @@ export function ProjectSettings({
 		() => void subscriptionUsage.refetch({ cancelRefetch: false }),
 		{ enabled: open && section === "agents", minIntervalMs: 60_000 },
 	);
+	const readUsage = useServerFn(infrastructureUsageFn);
+	// Shared with the usage banner's cache; only the operator's flag is read here.
+	const admin = useQuery({
+		queryKey: ["infrastructure-usage"],
+		queryFn: () => readUsage(),
+		enabled: open && section === "referral",
+		staleTime: 60_000,
+		retry: false,
+	});
 	const account = useQuery({
 		queryKey: ["account"],
 		queryFn: () => requestJson<AccountView>("/api/account"),
@@ -290,6 +303,9 @@ export function ProjectSettings({
 								{section === "memory" ? <MemorySettings /> : null}
 								{section === "archived" ? <ArchivedSettings /> : null}
 								{section === "support" ? <SupportSection /> : null}
+								{section === "referral" ? (
+									<ReferralSection admin={admin.data?.admin === true} />
+								) : null}
 								{section === "usage" ? (
 									<UsageSection
 										planConnected={

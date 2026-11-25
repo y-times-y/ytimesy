@@ -28,6 +28,7 @@ import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admissio
 import { settleRetainedWorkspaces } from "../adapters/freestyle/workspace-retention";
 import { memoryReposAvailable } from "../adapters/memory-repos";
 import { memoryDreamCandidates } from "../adapters/memory-settings";
+import { settleReferrals } from "../adapters/referral";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import { enqueueSessionCheckpoint } from "../jobs/queue";
@@ -176,6 +177,16 @@ export async function deliverBackgroundJob(
 							run: () => releaseReplacedTemplateSnapshots(client),
 						},
 						{ name: "fleet-budget", run: () => alertFleetBudget() },
+						// Referral rewards: qualify, then decide the ones whose delay
+						// has passed. Counts are logged for the operator's monitoring.
+						{
+							name: "settle-referrals",
+							run: async () => {
+								const settled = await settleReferrals();
+								if (Object.values(settled).some(Boolean))
+									console.info("Referral pass.", settled);
+							},
+						},
 						// Daily digest and the synthetic canary ride this tick
 						// (docs/interruption-monitoring.md); never fails the job.
 						{

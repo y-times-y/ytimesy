@@ -115,6 +115,18 @@ created" event, so we can see which channels bring sign-ups. It is not set for
 visitors in the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec until
 they accept analytics, or under "Do Not Track" or Global Privacy Control.
 
+**Invitation links.** Every account has a personal invitation link
+(`?ref=r-…`). When you open someone's link, the web app keeps its code in a
+first-party cookie (`yt_ref`) for 30 days so that, if you create an account, the
+person who invited you can be credited. You asked to be credited by opening the
+link, so this cookie is set even under "Do Not Track" and in the regions above;
+it carries only the code. When you create an account with it we save who invited
+you. To stop one person claiming a reward with several accounts of their own,
+we keep one-way hashes (not the values) of your normalised email address and of
+your sign-up network (the first part of the IP address and the browser family),
+and compare them with the inviter's. Nothing else is kept for this, and the
+records are deleted with your account.
+
 **Session replays.** PostHog records masked session replays of how the site
 and the web app are used (clicks, scrolling, which screens are opened), so we
 can fix bugs and improve the product. This applies whether or not you are
@@ -168,7 +180,8 @@ our addresses is forwarded to a mailbox hosted by Google.
 
 **Cookies and browser storage.** We use a sign-in cookie, a few cookies
 that remember interface state (such as open panels) and the referral
-attribution cookie described above (`yt_first_touch`). The browser also stores
+attribution cookie described above (`yt_first_touch`) and, after you open an
+invitation link, the invitation cookie (`yt_ref`). The browser also stores
 unsent message drafts. For analytics and session replays, PostHog's script
 keeps a random analytics identifier and the current session's id in the
 browser's local storage and session storage, under names beginning with
@@ -338,6 +351,7 @@ whoever can see the repository on GitHub.
 | Session replays | 30 days, or until your account is deleted |
 | Analytics events | PostHog's retention for our project, or until your account is deleted |
 | Referral attribution | The browser cookie for 90 days; on your account until it is deleted |
+| Invitation link | The browser cookie for 30 days; who invited you and the hashes above, until your account is deleted |
 | Hosting logs | The hosting provider's log retention period |
 | Database backups | Rolled off on our database provider's backup schedule |
 

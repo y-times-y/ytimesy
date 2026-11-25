@@ -41,6 +41,7 @@ import {
 import { withReturnTo } from "#/domain/return-to";
 import { useIdentityOptions } from "#/features/auth/identity-options";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
+import { ReferralCodeField } from "#/features/auth/referral-code-field";
 import { TermsNotice } from "#/features/auth/terms-consent";
 import { useSignInContinuation } from "#/lib/auth/use-sign-in-continuation.ts";
 import { cn } from "#/lib/utils.ts";
@@ -363,6 +364,7 @@ export function SignIn({
 						</>
 					)}
 
+					<ReferralCodeField />
 					<TermsNotice />
 				</div>
 

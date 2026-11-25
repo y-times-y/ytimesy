@@ -15,6 +15,11 @@ import {
 	infrastructureUsageFn,
 	infrastructureUsersFn,
 } from "./infrastructure-usage.fn";
+import {
+	ReferralInviteCard,
+	referralOfferText,
+	useReferral,
+} from "./referral-invite";
 import { UsageWindowBars } from "./usage-windows";
 import {
 	anyChatTurn,
@@ -95,7 +100,31 @@ export function UsageWarningBanner() {
 			return null;
 		}
 	});
+	const referral = useReferral();
 	if (!warning || dismissed === step) return null;
+	const dismiss = () => {
+		setDismissed(step);
+		try {
+			if (step) sessionStorage.setItem(DISMISSED_USAGE_WARNING, step);
+		} catch {
+			// Dismissal is a convenience; it may not persist.
+		}
+	};
+	// An invitation takes the place of the heads-up and of the limit notice;
+	// a notice that a window was reset for the user stays as it is.
+	if (referral && warning.level !== "reset")
+		return (
+			<ReferralInviteCard
+				title={
+					warning.level === "exhausted"
+						? "Your usage window is full"
+						: "Your usage window is nearly full"
+				}
+				message={`${warning.message} ${referralOfferText(referral.rewardsInPeriod >= referral.rewardsCap)}`}
+				link={referral.link}
+				onDismiss={dismiss}
+			/>
+		);
 	return (
 		<div
 			className="usage-warning-banner"
@@ -103,17 +132,7 @@ export function UsageWarningBanner() {
 			role="status"
 		>
 			<p>{warning.message}</p>
-			<button
-				type="button"
-				onClick={() => {
-					setDismissed(step);
-					try {
-						if (step) sessionStorage.setItem(DISMISSED_USAGE_WARNING, step);
-					} catch {
-						// Dismissal is a convenience; it may not persist.
-					}
-				}}
-			>
+			<button type="button" onClick={dismiss}>
 				Dismiss
 			</button>
 		</div>

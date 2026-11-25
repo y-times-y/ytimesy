@@ -4708,6 +4708,85 @@ a.session-title-meta:focus-visible {
 	cursor: pointer;
 }
 
+.usage-warning-banner.referral-invite {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
+	width: min(440px, calc(100vw - 32px));
+}
+.referral-invite p {
+	margin: 0;
+}
+.referral-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.usage-warning-banner .referral-dismiss {
+	padding: 0 6px;
+	border: 0;
+	background: transparent;
+	color: #8f8f8f;
+	font-size: 18px;
+	line-height: 1;
+}
+.referral-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 4px;
+}
+.referral-link {
+	display: flex;
+	flex: 1 1 200px;
+	min-width: 0;
+	gap: 6px;
+}
+.referral-link input {
+	flex: 1;
+	min-width: 0;
+	height: 32px;
+	padding: 0 10px;
+	border: 1px solid #2a2a2a;
+	border-radius: 8px;
+	background: #0f0f0f;
+	color: #ededed;
+	font: 12px ui-monospace, monospace;
+}
+.usage-warning-banner .referral-icon,
+.referral-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 1px solid #2a2a2a;
+	border-radius: 8px;
+	background: transparent;
+	color: #d6d6d6;
+	cursor: pointer;
+}
+.referral-x {
+	gap: 6px;
+}
+.referral-status {
+	min-width: 64px;
+	color: #8f8f8f;
+	font-size: 11px;
+}
+.referral-link-row .settings-row-text {
+	width: 100%;
+}
+.referral-note {
+	margin-top: 10px;
+}
+.referral-admin {
+	margin-top: 16px;
+}
+
 .network-domains {
 	display: grid;
 	gap: 6px;

@@ -173,7 +173,13 @@ export async function assertUsageWindowsOpen(
 	const usage = await readWindows(client, userId, limits);
 	const blocking = blockingUsageWindow(usage.windows);
 	if (!blocking) return;
-	if (!usage.autoReset) throw new UsageWindowExhausted(blocking);
+	if (!usage.autoReset) {
+		const redeemed = await usageTransaction((locked) =>
+			redeemReferralResetIfBlocked(locked, userId),
+		);
+		if (!redeemed) throw new UsageWindowExhausted(blocking);
+		return;
+	}
 	// Read again under the budget lock: a concurrent admission may have
 	// reset the window already.
 	await usageTransaction(async (locked) => {
@@ -202,6 +208,10 @@ async function resetUsageWindows(
 	client: Pick<PoolClient, "query">,
 	userId: string,
 	windows: readonly UsageWindowState[],
+	audit: { readonly actor: string; readonly reason: string } = {
+		actor: AUTO_RESET_ACTOR,
+		reason: AUTO_RESET_REASON,
+	},
 ) {
 	const period = utcUsageMonth();
 	for (const window of windows) {
@@ -219,14 +229,15 @@ async function resetUsageWindows(
 			"insert into infrastructure_usage_adjustment(id,actor_id,user_id,kind,period,amount_micro_usd,reason) values($1,$2,$3,'window_reset',$4,$5,$6)",
 			[
 				randomUUID(),
-				AUTO_RESET_ACTOR,
+				audit.actor,
 				userId,
 				period,
 				window.usedMicroUsd,
-				AUTO_RESET_REASON,
+				audit.reason,
 			],
 		);
-		console.info("Usage window auto-reset.", {
+		console.info("Usage window reset.", {
+			reason: audit.reason,
 			window: window.id,
 			clearedMicroUsd: window.usedMicroUsd,
 		});
@@ -267,6 +278,73 @@ export async function fleetInfrastructureUsage() {
 		lifetimeUsedMicroUsd: Number(result.rows[0]?.lifetime ?? 0),
 		lifetimeCapMicroUsd: limits.lifetimeFleetMicroUsd,
 	};
+}
+
+export const REFERRAL_RESET_ACTOR = "referral";
+export const REFERRAL_RESET_REASON = "referral reset";
+
+/**
+ * Spends one unspent referral reward (referral_reward) of the user: marks it
+ * redeemed. False when there is none, or when the ledger cannot be read; the
+ * caller then refuses as before. A savepoint keeps a failed read from
+ * aborting the caller's transaction.
+ */
+async function redeemReferralCredit(
+	client: Pick<PoolClient, "query">,
+	userId: string,
+) {
+	await client.query("savepoint referral_credit");
+	try {
+		const spent = await client.query(
+			`update referral_reward set redeemed_at=now()
+			 where id=(select id from referral_reward where user_id=$1 and redeemed_at is null
+			  order by granted_at limit 1 for update skip locked)
+			 returning id`,
+			[userId],
+		);
+		await client.query("release savepoint referral_credit");
+		return spent.rows.length > 0;
+	} catch (error) {
+		await client.query("rollback to savepoint referral_credit");
+		console.warn("Could not read referral rewards.", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return false;
+	}
+}
+
+/**
+ * When the user is held back by an exhausted window and has an unspent
+ * referral reward, spends it and restarts the exhausted windows. True when it
+ * did. Call inside withUsageLock.
+ */
+export async function redeemReferralResetIfBlocked(
+	client: PoolClient,
+	userId: string,
+) {
+	const current = await readWindows(
+		client,
+		userId,
+		infrastructureUsageLimits(),
+	);
+	const exhausted = current.windows.filter((window) => window.exhausted);
+	if (!exhausted.length || !(await redeemReferralCredit(client, userId)))
+		return false;
+	await resetUsageWindows(client, userId, exhausted, {
+		actor: REFERRAL_RESET_ACTOR,
+		reason: REFERRAL_RESET_REASON,
+	});
+	return true;
+}
+
+/**
+ * Runs `operation` in one transaction under the budget lock, so a reward and
+ * the reset it triggers commit together with the ledger row that records it.
+ */
+export function withUsageLock<T>(
+	operation: (client: PoolClient) => Promise<T>,
+) {
+	return usageTransaction(operation);
 }
 
 /** Short transactions serialize budget admission across every worker replica. No provider calls hold this lock. */
@@ -429,8 +507,15 @@ export async function reserveInfrastructureUsage(
 					[input.userId, input.resourceKey],
 				);
 				if (!running.rows.length) {
-					if (!autoReset) throw new UsageWindowExhausted(blocking);
-					await resetInstead(windows.filter((window) => window.exhausted));
+					const exhausted = windows.filter((window) => window.exhausted);
+					if (autoReset) await resetInstead(exhausted);
+					else if (await redeemReferralCredit(client, input.userId)) {
+						await resetUsageWindows(client, input.userId, exhausted, {
+							actor: REFERRAL_RESET_ACTOR,
+							reason: REFERRAL_RESET_REASON,
+						});
+						({ windows } = await readWindows(client, input.userId, limits));
+					} else throw new UsageWindowExhausted(blocking);
 				}
 			}
 		}
