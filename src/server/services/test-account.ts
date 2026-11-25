@@ -170,12 +170,17 @@ export async function runTestAccountAction(
 	db: TestAccountDb,
 	settings: Settings,
 	presentedToken: string | undefined,
-	input: { caller: unknown; action: "seed" | "y-counts"; apiKey?: string },
+	input: {
+		caller: unknown;
+		action: "seed" | "y-counts" | "repo-ids";
+		apiKey?: string;
+	},
 ) {
 	const caller = await authorize(db, settings, presentedToken, input.caller);
-	const { seedTestAccount, yDefaultCounts } = await import(
+	const { seedRepositoryIds, seedTestAccount, yDefaultCounts } = await import(
 		"./test-account-seed"
 	);
+	if (input.action === "repo-ids") return seedRepositoryIds(db);
 	if (input.action === "y-counts") return yDefaultCounts(db);
 	const userId = await flaggedTestUser(db);
 	const result = await seedTestAccount(db, userId, { apiKey: input.apiKey });

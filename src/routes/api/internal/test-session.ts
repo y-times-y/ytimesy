@@ -39,7 +39,11 @@ export const Route = createFileRoute("/api/internal/test-session")({
 							: body.action === "seed-usage"
 								? seedTestUsage
 								: mintTestSession;
-					if (body.action === "seed" || body.action === "y-counts")
+					if (
+						body.action === "seed" ||
+						body.action === "y-counts" ||
+						body.action === "repo-ids"
+					)
 						return Response.json(
 							await runTestAccountAction(database(), settings, token, {
 								caller: body.caller,

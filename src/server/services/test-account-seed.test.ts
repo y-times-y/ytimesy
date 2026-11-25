@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	pickSeedRepository,
+	seedRepositoryIds,
 	seedTestAccount,
 	yDefaultCounts,
 } from "./test-account-seed";
@@ -42,4 +43,24 @@ describe("seed repository", () => {
 			]),
 		).toBeUndefined();
 	});
+});
+
+it("reports repository and installation ids only", async () => {
+	const result = await seedRepositoryIds({
+		query: async () =>
+			({
+				rows: [
+					{ repository_id: "5", installation_id: "9", archived: false, n: "1" },
+				],
+			}) as never,
+	});
+	expect(result.stored).toEqual([
+		{ repositoryId: 5, installationId: 9, archived: false, projects: 1 },
+	]);
+	expect(Object.keys(result.stored[0] ?? {}).sort()).toEqual([
+		"archived",
+		"installationId",
+		"projects",
+		"repositoryId",
+	]);
 });

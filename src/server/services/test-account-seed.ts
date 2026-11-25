@@ -95,3 +95,49 @@ export async function seedTestAccount(
 	const ySquaredId = await createProjectYSquared(userId, project.id);
 	return { modelConnected, projectId: project.id, ySquaredId };
 }
+
+/**
+ * Ids only, for the one seed repository: which repository ids the projects
+ * of that name store, and the id GitHub lists for it under each installation.
+ * No project, user or content data leaves the database.
+ */
+export async function seedRepositoryIds(db: TestAccountDb) {
+	const stored = (
+		await db.query<{
+			repository_id: string;
+			installation_id: string;
+			archived: boolean;
+			n: string;
+		}>(
+			`select repository_id::text, installation_id::text, archived_at is not null as archived, count(*)::text as n
+			 from project where full_name=$1 group by 1,2,3 order by 1,2,3`,
+			[SEED_REPOSITORY],
+		)
+	).rows.map((row) => ({
+		repositoryId: Number(row.repository_id),
+		installationId: Number(row.installation_id),
+		archived: row.archived,
+		projects: Number(row.n),
+	}));
+	const listed: Record<string, number | null> = {};
+	for (const installationId of new Set(
+		stored.map((row) => row.installationId),
+	)) {
+		try {
+			const token = await githubInstallationAccessToken(installationId, {
+				repositoryNames: [SEED_REPOSITORY.split("/")[1] as string],
+				contents: "read",
+			});
+			const github = githubClient(token);
+			listed[String(installationId)] =
+				pickSeedRepository(
+					await github.paginate(github.apps.listReposAccessibleToInstallation, {
+						per_page: 100,
+					}),
+				)?.id ?? null;
+		} catch {
+			listed[String(installationId)] = null;
+		}
+	}
+	return { stored, listed };
+}
