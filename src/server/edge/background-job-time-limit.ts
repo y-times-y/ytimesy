@@ -9,6 +9,16 @@
  * sits above that and far below the hours a hung run costs.
  */
 export const JOB_TIME_LIMIT_MS = 30 * 60_000;
+/**
+ * Kinds that only wait on a machine or an upload get a short limit: the
+ * object is billed for the wait, and the backstop retries a capture anyway.
+ */
+const KIND_TIME_LIMIT_MS: Readonly<Record<string, number>> = {
+	checkpoint: 5 * 60_000,
+};
+export function jobTimeLimitMs(kind: string) {
+	return KIND_TIME_LIMIT_MS[kind] ?? JOB_TIME_LIMIT_MS;
+}
 /** A run longer than this is logged with its kind, to learn which kinds run long. */
 export const SLOW_JOB_LOG_MS = 60_000;
 
@@ -30,7 +40,7 @@ export async function runWithJobTimeLimit<T>(
 	run: () => Promise<T>,
 	options: { limitMs?: number; slowMs?: number; now?: () => number } = {},
 ): Promise<T> {
-	const limitMs = options.limitMs ?? JOB_TIME_LIMIT_MS;
+	const limitMs = options.limitMs ?? jobTimeLimitMs(job.kind);
 	const slowMs = options.slowMs ?? SLOW_JOB_LOG_MS;
 	const now = options.now ?? Date.now;
 	const started = now();

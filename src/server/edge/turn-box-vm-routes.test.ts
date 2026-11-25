@@ -49,6 +49,7 @@ async function vmEdge(
 		responses: [] as string[],
 		prepared: 0,
 		handedOff: [] as string[],
+		loads: [] as string[],
 	};
 	const machines = {
 		// The account key is in scope here, as in the real machines.
@@ -131,8 +132,14 @@ async function vmEdge(
 		grant.sessionId === TURN.session_id;
 	const ops = {
 		boxActive: async () => true,
-		loadOwned: async (grant: Parameters<typeof holds>[0]) =>
-			holds(grant) ? TURN : null,
+		loadOwned: async (grant: Parameters<typeof holds>[0]) => {
+			state.loads.push("full");
+			return holds(grant) ? TURN : null;
+		},
+		loadOwnedIdentity: async (grant: Parameters<typeof holds>[0]) => {
+			state.loads.push("identity");
+			return holds(grant) ? TURN : null;
+		},
 		cancelRequested: async () => state.cancel,
 		finalize: async () => "completed" as const,
 		...(options.handOff
@@ -229,6 +236,14 @@ describe("vm/* endpoints", () => {
 		);
 		expect(response.status).toBe(404);
 		expect(edge.state.minted).toEqual([]);
+	});
+
+	it("reads the turn's identity alone, never its messages and items (Postgres egress)", async () => {
+		const edge = await vmEdge();
+		const token = await edge.grant();
+		await edge.fetchEdge(TURN_BOX_VM_PATHS.ensure, token);
+		await edge.fetchEdge(TURN_BOX_VM_PATHS.release, token);
+		expect(edge.state.loads).toEqual(["identity", "identity"]);
 	});
 
 	it("mints the scoped identity once, and again only on remint or a replaced VM", async () => {

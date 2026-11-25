@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { TURN_BOX_HANDOFF_HISTORY_BYTES } from "./turn-box-protocol";
 import {
 	boxTurnBlock,
 	boxTurnUsers,
 	chooseTurnExecutor,
+	historyFitsBox,
 	localTurnsEnabled,
 } from "./turn-executor";
 
@@ -136,5 +138,19 @@ describe("turn box routing: Y² and the turn-box secrets switch", () => {
 		expect(boxTurnBlock(secrets, { YTIMESY_TURN_BOX_SECRETS: "0" })).toBe(
 			"runtime-secrets",
 		);
+	});
+});
+
+describe("historyFitsBox", () => {
+	it("queues a chat whose counted history passes the hand-off size for its object, never for a box", () => {
+		expect(historyFitsBox(TURN_BOX_HANDOFF_HISTORY_BYTES + 1)).toBe(false);
+		expect(historyFitsBox(8_350_000 * 1.0)).toBe(true);
+		expect(historyFitsBox(9 * 1024 * 1024)).toBe(false);
+	});
+
+	it("keeps the box for a chat of the allowed size, or one whose size is not known", () => {
+		expect(historyFitsBox(TURN_BOX_HANDOFF_HISTORY_BYTES)).toBe(true);
+		expect(historyFitsBox(0)).toBe(true);
+		expect(historyFitsBox(undefined)).toBe(true);
 	});
 });

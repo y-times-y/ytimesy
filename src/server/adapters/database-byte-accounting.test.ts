@@ -2,9 +2,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
 	accountQueryBytes,
 	byteAccountingEnabled,
+	EGRESS_SUMMARY_BYTES,
 	estimateRowsBytes,
+	flushEgressSummaryIfDue,
 	queryLabel,
 	queryTag,
+	resetEgressSummary,
 	withQueryLabel,
 } from "./database-byte-accounting";
 
@@ -75,7 +78,7 @@ it("is off under tests unless asked", () => {
 });
 
 it("logs one egress summary per interval with the top tags by bytes, and no per-query lines", async () => {
-	const { EGRESS_SUMMARY_INTERVAL_MS, resetEgressSummary } = await import(
+	const { EGRESS_SUMMARY_INTERVAL_MS } = await import(
 		"./database-byte-accounting"
 	);
 	resetEgressSummary();
@@ -104,7 +107,9 @@ it("logs one egress summary per interval with the top tags by bytes, and no per-
 		expect(info).toHaveBeenCalledTimes(1);
 		const line = JSON.parse(info.mock.calls[0]?.[0] as string);
 		expect(line.event).toBe("db.egress_summary");
-		expect(line.top).toHaveLength(5);
+		// Workers observability indexes a JSON log by its message.
+		expect(line.message).toBe("db.egress_summary");
+		expect(line.top).toHaveLength(7);
 		expect(line.top[0].query).toContain("select c6 from t6");
 		expect(line.top[0]).toMatchObject({ rows: 21, calls: 3 });
 		expect(line.totalCalls).toBe(22);
@@ -132,4 +137,48 @@ it("names a labelled statement's caller in its tag, and leaves other tags as the
 	expect(withQueryLabel("a */ drop table x; /*", "select 1")).not.toContain(
 		"*/ drop",
 	);
+});
+
+it("writes the summary as soon as a window holds enough bytes, without waiting ten minutes", async () => {
+	resetEgressSummary();
+	const info = vi.spyOn(console, "info").mockImplementation(() => {});
+	vi.spyOn(console, "warn").mockImplementation(() => {});
+	// One row of about 2 MB per call: the window crosses EGRESS_SUMMARY_BYTES.
+	const rows = [{ v: "z".repeat(2 * 1024 * 1024) }];
+	const pool = accountQueryBytes({
+		query: async (..._args: unknown[]) => ({ rows }),
+	});
+	const calls = Math.ceil(EGRESS_SUMMARY_BYTES / (2 * 1024 * 1024)) + 1;
+	for (let call = 0; call < calls; call++)
+		await pool.query("select * from api_turn where id=$1", ["x"]);
+	expect(info).toHaveBeenCalledTimes(1);
+	const line = JSON.parse(info.mock.calls[0]?.[0] as string);
+	expect(line.message).toBe("db.egress_summary");
+	expect(line.top[0].query).toContain("select * from api_turn where id=$1");
+	expect(line.totalApproxBytes).toBeGreaterThanOrEqual(EGRESS_SUMMARY_BYTES);
+	resetEgressSummary();
+});
+
+it("writes a window when a database scope ends and it is a minute old, not before", async () => {
+	resetEgressSummary();
+	vi.useFakeTimers();
+	try {
+		vi.setSystemTime(new Date("2026-11-25T00:00:00Z"));
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		const pool = accountQueryBytes({
+			query: async (..._args: unknown[]) => ({ rows: [{ v: 1 }] }),
+		});
+		await pool.query("select 1", []);
+		flushEgressSummaryIfDue();
+		expect(info).not.toHaveBeenCalled();
+		vi.setSystemTime(Date.now() + 61_000);
+		flushEgressSummaryIfDue();
+		expect(info).toHaveBeenCalledTimes(1);
+		// Nothing is held back: an empty window writes nothing.
+		flushEgressSummaryIfDue(Date.now() + 120_000);
+		expect(info).toHaveBeenCalledTimes(1);
+	} finally {
+		vi.useRealTimers();
+		resetEgressSummary();
+	}
 });

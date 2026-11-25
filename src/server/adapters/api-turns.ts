@@ -31,6 +31,7 @@ import {
 	boxTurnUsers,
 	chooseTurnExecutor,
 	configuredTurnExecutor,
+	historyFitsBox,
 	localTurnsEnabled,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
@@ -104,6 +105,11 @@ export type ApiTurn = {
 	queued_at_ms?: number | null;
 	/** How many times a box lost this turn and another took it over. */
 	run_attempts?: number;
+	/**
+	 * A box claim's size of the history it did not read (messages plus items as
+	 * JSON text, counted in the database): the row's content stays in Postgres.
+	 */
+	history_bytes?: number;
 };
 
 /** Internal child starts and wakeups retain the nearest same-model subscription selection. */
@@ -330,6 +336,12 @@ export async function enqueueApiTurn(input: {
 				process.env,
 			) === null;
 	}
+	// A chat whose history already passes what a box may be sent stays in its
+	// object (which holds it): the box would claim it, find it too long and hand
+	// it back, two full reads of the row for nothing. `base.bytes` was counted
+	// in the database when the base turn was read, so this costs no query.
+	if (eligibleForBox && !historyFitsBox(input.base?.bytes))
+		eligibleForBox = false;
 	const chosenExecutor = chooseTurnExecutor({
 		configured: configuredExecutor,
 		userId: input.userId,
@@ -773,6 +785,17 @@ export async function previousTurnMessages(
 const CLAIM_IDENTITY_COLUMNS =
 	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,settings,failover,'[]'::jsonb as messages,'[]'::jsonb as items";
 
+/**
+ * What a turn runner box's claim returns: the turn's identity and its history
+ * size, never the history. A claimed row's messages and items were megabytes
+ * (a Y² chat's turn is up to 8 MB), read in full on every claim and again by
+ * the chat's object when the box handed the turn over (Supabase egress, about
+ * 25 GB a day on 2026-11-23/24). The box loads its history with its own
+ * request (loadOwned) and only when the turn is small enough to run there.
+ */
+const BOX_CLAIM_COLUMNS =
+	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,settings,failover,run_attempts,updated_at,'[]'::jsonb as messages,'[]'::jsonb as items,(octet_length(messages::text)+octet_length(items::text)) as history_bytes";
+
 export async function claimApiTurn(
 	perUserLimit = 2,
 	fleetLimit = modelConcurrencyLimits().fleet,
@@ -780,6 +803,8 @@ export async function claimApiTurn(
 	sessionId?: string,
 	/** Users whose turns stay queued this pass (compute budget); ids that are not plain are ignored. */
 	excludedUserIds: readonly string[] = [],
+	/** "box": the turn runner boxes' claim, which returns no history (BOX_CLAIM_COLUMNS). */
+	shape: "full" | "box" = "full",
 ): Promise<ApiTurn | null> {
 	if (
 		!Number.isInteger(perUserLimit) ||
@@ -792,6 +817,8 @@ export async function claimApiTurn(
 		throw new Error("Turn admission limits must be positive bounded integers.");
 	if (executor !== "node" && executor !== "durable-object")
 		throw new Error("Unknown turn executor.");
+	if (shape !== "full" && shape !== "box")
+		throw new Error("Unknown claim shape.");
 	if (sessionId !== undefined && !UUID.test(sessionId))
 		throw new Error("Invalid chat id.");
 	const lease = randomUUID();
@@ -821,7 +848,7 @@ with admission as (select pg_try_advisory_xact_lock(81738419) as acquired)
  and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<${perUserLimit}
  and (select count(*) from api_turn r where r.state='running')<${fleetLimit}
  order by q.created_at for update skip locked limit 1)
- returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : "*"};
+ returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : shape === "box" ? BOX_CLAIM_COLUMNS : "*"};
 commit;`;
 	const client = await database().connect();
 	let discardConnection = false;
@@ -1225,6 +1252,34 @@ export async function releaseClaimedApiTurn(
 		[turnId, leaseId, executor],
 	);
 	return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * The two items the chat's crew note needs when a box turn starts (the first
+ * user message, for the title, then the last item, the request the turn began
+ * with), read in the database so the turn's whole history never leaves it.
+ * Empty when the turn's items are not a stored array (a chat-items turn
+ * keeps its items elsewhere) or the lease no longer matches.
+ */
+export async function readTurnNoteItems(
+	turnId: string,
+	leaseId: string,
+): Promise<SessionItem[]> {
+	const result = await database().query<{
+		first_user: SessionItem | null;
+		last_item: SessionItem | null;
+	}>(
+		`select (select e from jsonb_array_elements(t.items) e
+		   where e->>'kind'='userMessage' and coalesce(e->>'wake','false')<>'true' limit 1) as first_user,
+		   t.items->-1 as last_item
+		 from api_turn t where t.id=$1 and t.lease_id=$2 and jsonb_typeof(t.items)='array'`,
+		[turnId, leaseId],
+	);
+	const row = result.rows[0];
+	if (!row?.last_item) return [];
+	return row.first_user && row.first_user !== row.last_item
+		? [row.first_user, row.last_item]
+		: [row.last_item];
 }
 
 /**

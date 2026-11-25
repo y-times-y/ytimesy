@@ -180,6 +180,8 @@ type ClientOptions = {
 	readonly now?: () => number;
 	readonly randomNonce?: () => string;
 	readonly socket?: BoxSocketFactory;
+	/** Renew the lease over the open socket, which wakes the chat's object each time. Off: HTTP. */
+	readonly renewOverSocket?: boolean;
 };
 
 function nonce() {
@@ -495,17 +497,20 @@ export class TurnBoxTurnSession {
 		return portResponse.parse(await response.json()).result;
 	}
 
-	/** Lease renewal: over the socket when open, else HTTP. */
+	/**
+	 * Lease renewal: over HTTP, a request to the Worker that never wakes the
+	 * chat's Durable Object. A socket message does wake it, and Cloudflare bills
+	 * the object for every second it then stays awake (about 10 s each), which
+	 * kept it awake for a whole turn when a renewal went every 5 s. The socket
+	 * carries renewals only when `renewOverSocket` asks for it. An HTTP renewal
+	 * also replaces the grant (10 min) when it is near its end.
+	 */
 	async renew(): Promise<"renewed" | "cancel" | "lost"> {
 		if (this.cancelled) return "cancel";
-		// Only an HTTP renewal replaces the grant (10 min): a socket renewal
-		// keeps the lease but not the grant, and a Claude step of over 10
-		// minutes then had every request refused (Nov 23). Once the grant is
-		// in its refresh window, renew over HTTP.
 		const grantAging =
 			this.clock() - this.grantIssuedAt >=
 			TURN_BOX_GRANT_TTL_MS - TURN_BOX_GRANT_REFRESH_MS;
-		if (this.socket && !grantAging) {
+		if (this.socket && this.options.renewOverSocket && !grantAging) {
 			const seq = ++this.seq;
 			const acked = await new Promise<boolean>((resolve) => {
 				const timer = setTimeout(() => resolve(false), 10_000);

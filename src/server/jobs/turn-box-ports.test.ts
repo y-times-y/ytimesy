@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { CoordinationFailure } from "#/domain/conversation-turn-control";
+import {
+	CoordinationFailure,
+	TURN_COORDINATION_RENEW_EVERY_MS,
+} from "#/domain/conversation-turn-control";
 import { boxPortOps, TurnBoxPortForbidden } from "#/domain/turn-box-protocol";
 import { fakeEdge } from "../edge/turn-box-fake-edge";
 import { TurnBoxEdgeClient, TurnBoxLeaseLost } from "./turn-box-client";
@@ -123,7 +126,7 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 		expect((failure as CoordinationFailure).retryable).toBe(true);
 	});
 
-	it("a later step's acquire renews the chat's coordination lease once 10 s have passed (short steps once let it lapse)", async () => {
+	it("a later step's acquire renews the chat's coordination lease once half a renewal period has passed (short steps once let it lapse)", async () => {
 		const { ports, served } = await setup();
 		const seen = served("coordinateTurn", true);
 		const control = {
@@ -138,11 +141,11 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 			expect(await ports.coordinateConversationTurn("acquire", control)).toBe(
 				true,
 			);
-			now += 7_000;
+			now += TURN_COORDINATION_RENEW_EVERY_MS / 2 - 1_000;
 			expect(await ports.coordinateConversationTurn("acquire", control)).toBe(
 				true,
 			);
-			now += 7_000;
+			now += 2_000;
 			expect(await ports.coordinateConversationTurn("acquire", control)).toBe(
 				true,
 			);

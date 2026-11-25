@@ -73,6 +73,8 @@ export async function settleHelperReport(
 	input: {
 		readonly state: "completed" | "failed" | "cancelled";
 		readonly items: readonly SessionItem[];
+		/** The final messages the box sent with its finalize (the turn row is read without them). */
+		readonly messages?: readonly ModelMessage[];
 	},
 	deps: TurnBoxHelperDeps & {
 		readonly machines: () => WorkspaceMachines;
@@ -98,7 +100,10 @@ export async function settleHelperReport(
 	if (input.state === "completed") {
 		let lastUser = items.length - 1;
 		while (lastUser >= 0 && items[lastUser]?.kind !== "userMessage") lastUser--;
-		const messages = (turn as { messages?: ModelMessage[] }).messages ?? [];
+		// The checker's forced-final notice is in the messages the box sent with
+		// finalize; a row read whole (a test, an older caller) still has its own.
+		const messages =
+			input.messages ?? (turn as { messages?: ModelMessage[] }).messages ?? [];
 		summary = await report({
 			machines: deps.machines(),
 			session: owner,
@@ -178,8 +183,11 @@ export async function helperMemoryPort(
 		return memory.attach(call.messages ?? [], call.items ?? []);
 	const run = call.tool ? memory.tools[call.tool]?.execute : undefined;
 	if (!run) throw new TurnBoxPortForbidden("helper:memory-tool");
-	return run(call.input as never, {
-		toolCallId: "box",
-		messages: [],
-	} as never);
+	return run(
+		call.input as never,
+		{
+			toolCallId: "box",
+			messages: [],
+		} as never,
+	);
 }
