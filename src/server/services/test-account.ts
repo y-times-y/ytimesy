@@ -206,6 +206,11 @@ export async function runTestAccountAction(
 const SEED_PROJECTS = [
 	{ repositoryId: 9_000_000_001, name: "synthetic/web-app" },
 	{ repositoryId: 9_000_000_002, name: "synthetic/api-service" },
+	// A long name, so the sidebar's project filter can be checked for truncation.
+	{
+		repositoryId: 9_000_000_003,
+		name: "synthetic/a-repository-with-an-unusually-long-name-for-truncation-checks",
+	},
 ] as const;
 
 /**
