@@ -2,6 +2,10 @@ import { z } from "zod";
 import { readBoundedRequestBody } from "#/domain/bounded-request-body";
 import { database } from "../adapters/database";
 import {
+	addCodexAccount,
+	extraAccountSeal,
+} from "../adapters/subscription-accounts";
+import {
 	codexAccessTokenExpiresAt,
 	codexPlanType,
 	managedAuth,
@@ -36,6 +40,8 @@ const pendingLogin = z.object({
 	intervalSeconds: z.number().positive(),
 	expiresAt: z.number(),
 	nextPollAt: z.number(),
+	/** Set when this sign-in adds another account (its name) instead of replacing the main one. */
+	addAs: z.string().min(1).max(60).optional(),
 });
 type PendingLogin = z.infer<typeof pendingLogin>;
 
@@ -126,9 +132,23 @@ export async function deviceLoginFromSealed(
 /** Starts a sign-in, or returns the one already waiting for approval. */
 export async function startCodexDeviceLogin(
 	userId: string,
+	/** A name: sign in another ChatGPT account next to the main one. */
+	options: { addAs?: string } = {},
 ): Promise<CodexDeviceLogin> {
 	const existing = await readCodexDeviceLogin(userId);
-	if (existing.status === "pending") return existing;
+	if (existing.status === "pending") {
+		// A waiting code is reused only when it has the same purpose.
+		const waiting = await openPending(
+			(
+				await database().query<{ encrypted_device_login: string | null }>(
+					"select encrypted_device_login from agent_account where user_id=$1 and provider='codex'",
+					[userId],
+				)
+			).rows[0]?.encrypted_device_login ?? null,
+			userId,
+		);
+		if (waiting?.addAs === options.addAs) return existing;
+	}
 	const response = await post("/api/accounts/deviceauth/usercode", {
 		client_id: CODEX_OAUTH_CLIENT_ID,
 	});
@@ -154,6 +174,7 @@ export async function startCodexDeviceLogin(
 			now + LOGIN_LIFETIME_MS,
 		),
 		nextPollAt: now,
+		...(options.addAs ? { addAs: options.addAs } : {}),
 	};
 	// A connected or expired account keeps its status until the new login lands.
 	await database().query(
@@ -301,6 +322,38 @@ export async function advanceCodexDeviceLogin(
 				status: "failed",
 				message: "ChatGPT returned an expired login. Sign in again.",
 			});
+		if (login.addAs) {
+			// Another account: the main login is untouched; a repeat of an
+			// account already connected is refused, not duplicated.
+			const mainAccountId = row?.encrypted_codex_auth
+				? managedAuth(
+						JSON.parse(
+							await unseal(row.encrypted_codex_auth, {
+								purpose: "codex-auth",
+								userId,
+							}),
+						),
+					).tokens.account_id
+				: null;
+			const accountId = auth.tokens.account_id;
+			const added =
+				accountId === mainAccountId
+					? "duplicate"
+					: await addCodexAccount(client, userId, {
+							accountId,
+							label: login.addAs,
+							email: idTokenEmail(tokens.id_token),
+							planType: codexPlanType(auth),
+							sealedAuth: (id) =>
+								extraAccountSeal(userId, id, JSON.stringify(auth)),
+						});
+			if (added === "duplicate")
+				return await finish({
+					status: "failed",
+					message: "That ChatGPT account is already connected.",
+				});
+			return await finish({ status: "connected" });
+		}
 		await client.query(
 			`update agent_account set status='connected',encrypted_codex_auth=$2,
 			 plan_type=$3,message=null,encrypted_device_login=null,updated_at=now()
@@ -318,6 +371,17 @@ export async function advanceCodexDeviceLogin(
 		throw cause;
 	} finally {
 		client.release();
+	}
+}
+
+function idTokenEmail(idToken: string): string | null {
+	try {
+		const claims = JSON.parse(
+			Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString(),
+		) as { email?: unknown };
+		return typeof claims.email === "string" ? claims.email : null;
+	} catch {
+		return null;
 	}
 }
 

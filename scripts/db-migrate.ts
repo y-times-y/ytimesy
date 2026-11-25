@@ -5,6 +5,7 @@
  *
  *   pnpm db:migrate            # show what would be applied
  *   pnpm db:migrate --apply    # apply
+ *   pnpm db:migrate --apply --only 2026..._name.sql   # apply only that file
  *
  * Target: MIGRATION_DATABASE_URL, else DATABASE_URL (session pooler or direct).
  * TLS verifies the server against SUPABASE_CA_PATH (default .secrets/supabase-ca.crt).
@@ -14,6 +15,9 @@ import pg from "pg";
 import { supabaseCertificate } from "./supabase-certificate";
 
 const apply = process.argv.includes("--apply");
+// --only <file>: apply just that migration (when others on the branch are another thread's).
+const onlyIndex = process.argv.indexOf("--only");
+const only = onlyIndex === -1 ? null : process.argv[onlyIndex + 1];
 const url = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL;
 if (!url) throw new Error("Set MIGRATION_DATABASE_URL or DATABASE_URL.");
 const caPath = process.env.SUPABASE_CA_PATH ?? ".secrets/supabase-ca.crt";
@@ -44,7 +48,8 @@ try {
 	const pending = readdirSync("supabase/migrations")
 		.filter((file) => /^\d{14}_.+\.sql$/.test(file))
 		.sort()
-		.filter((file) => !recorded.has(file.slice(0, 14)));
+		.filter((file) => !recorded.has(file.slice(0, 14)))
+		.filter((file) => !only || file === only);
 	if (!pending.length) {
 		console.log("Database is up to date.");
 	} else {
