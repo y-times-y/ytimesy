@@ -17,6 +17,7 @@ Recorded today (hooks in `src/server/adapters/api-turns.ts`):
 | `turn-abandoned` | `executor-stopped` | no | yes | `abandonApiTurn`: the executor stopped driving the turn, the chat gets the error item |
 | `turn-abandoned` | `lease-expired` | no | yes | `expireApiTurnLeases`: "The worker disconnected" |
 | `lease-takeover` | `box-heartbeat-lost` | yes | no | `requeueInterruptedBoxTurns`: another box takes the turn after 45 s |
+| `machine.rate_limited` | `<operation> attempt <n>` | yes | no | `resumableMachineStart`: Freestyle answered 429 (also the log line `machine.rate_limited`, JSON: operation, slug, attempt, retryAfterMs, detail) |
 
 **Not yet recorded (another builder owns the files).** `src/server/jobs/api-turn.ts` already logs `turn.interrupted` (cause `reset`, `connection`, `edge-outage`), `src/server/jobs/box-runner.ts` and the executor handle delayed starts. They should call `reportInterruption({ kind: "turn.interrupted", turnId, cause, recovered: true, userVisible: false })` next to the existing `console.warn`, and a delayed start `{ kind: "delayed-start", ... }`. `queued_message.restored` (`src/server/adapters/queued-user-messages.ts`) and `queued_message.restore_failed` (`src/server/services/queued-user-messages.ts`) can do the same with their kind names. Until then, count those from the logs (below).
 
@@ -76,3 +77,7 @@ model connection. To turn it on: connect the test account to GitHub with one tin
 its model connection, then set `YTIMESY_CANARY_USER_ID=ytimesy-test-account`, `YTIMESY_CANARY_PROJECT_ID` and
 `YTIMESY_CANARY_MODEL_ID` on the edge Worker and deploy. Until then the daily digest (07:00 UTC) and the
 user-visible alert are the live signals, and `interruption_event` is the record.
+
+## Machine start limits (2026-11-25)
+
+Evidence: 18:33-18:41 UTC, 4 chats retried `POST /v5/vms` and got 429 `LIMIT_EXCEEDED` "Account resource limit exceeded" (an account resource cap, not a request rate; 32+ hits in about 5 minutes). Each retry also spent one of the owner's 60 `vm-create` counts, so the 60/hour count (ours) ran out and the chats showed "too many new machines". Fixes: a failed create gives its count back; a machine refusal is waited out by the turn's 15-minute step retry; each hit logs `machine.rate_limited` and records an `interruption_event`. Not done: a global cross-isolate queue and an alert before the cap (needs a shared counter).

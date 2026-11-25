@@ -15,7 +15,7 @@ import {
 	settleInfrastructureUsage,
 } from "../infrastructure-usage";
 import { loadToolsSnapshotSetting } from "../product-settings";
-import { consumeUserAction } from "../user-action-rate";
+import { consumeUserAction, refundUserAction } from "../user-action-rate";
 import { machineBudgetSpent } from "./machine-failure";
 import { CHEAP_BASE_RESOURCES, CHEAP_BASE_SNAPSHOT } from "./product-vm";
 import { sessionSlugMatch, uuidSlugMatch } from "./slug-sql";
@@ -646,6 +646,7 @@ export async function admitVmCreate(
 						: undefined,
 				})),
 			);
+	let owner: string | undefined;
 	const cap = await lockedVm(slug, async (connection) => {
 		const prior = await connection.query<Admission>(
 			"select * from infrastructure_vm_admission where slug=$1",
@@ -697,7 +698,8 @@ export async function admitVmCreate(
 		}
 		// Every new machine counts against its owner's creation limit.
 		const context = await admissionContext(connection, slug);
-		await consumeUserAction(verifiedOwner(context), "vm-create", connection);
+		owner = verifiedOwner(context);
+		await consumeUserAction(owner, "vm-create", connection);
 		const admitted = await admittedCap(
 			slug,
 			requestedResources
@@ -712,7 +714,16 @@ export async function admitVmCreate(
 		);
 		return admitted.cap;
 	});
-	const vmId = await create(cap);
+	let vmId: string;
+	try {
+		vmId = await create(cap);
+	} catch (error) {
+		// A refused or failed create is retried by the caller: it must not
+		// spend the owner's hourly count each time (2026-11-25: four chats
+		// retrying a provider limit used all 60 and were then refused by us).
+		if (owner) await refundUserAction(owner, "vm-create");
+		throw error;
+	}
 	await database().query(
 		"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and vm_id is null",
 		[slug, vmId],

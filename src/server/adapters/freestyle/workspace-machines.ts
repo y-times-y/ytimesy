@@ -29,6 +29,7 @@ import type {
 	ProofWorkspace,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
+import { recordInterruption } from "../interruption-events";
 import { abortableFreestyleFetch, callSignalFetch } from "./abortable-fetch";
 import { boundedFreestyleFetch, fastPollFreestyleFetch } from "./bounded-fetch";
 import {
@@ -44,6 +45,8 @@ import {
 import { forkRunningVm } from "./fork-vm";
 import {
 	logMachineFailure,
+	MACHINE_START_RETRY_DELAYS_MS,
+	type MachineRateLimitHit,
 	machineFailureDetail,
 	machineFailureKind,
 	requestIdRecordingFetch,
@@ -100,6 +103,17 @@ class MachineSizeRejected extends Error {
 		);
 		this.name = "MachineSizeRejected";
 	}
+}
+
+/** One monitoring row per provider limit hit; recovered because the start keeps waiting. */
+function recordMachineRateLimit(hit: MachineRateLimitHit) {
+	void recordInterruption({
+		kind: "machine.rate_limited",
+		sessionId: hit.slug,
+		cause: `${hit.operation} attempt ${hit.attempt}`,
+		recovered: true,
+		userVisible: false,
+	});
 }
 
 /** Fixed wording for the failure kinds machineFailureReason (api-turn-failure.ts) names. */
@@ -355,6 +369,9 @@ export function createFreestyleWorkspaceMachines(
 								await resumeProductVm(vm, "Workspace VM", 60, data);
 						},
 						{ operation: "ensureRunning", vmId: workspaceId },
+						MACHINE_START_RETRY_DELAYS_MS,
+						undefined,
+						recordMachineRateLimit,
 					),
 				);
 				// Never throws; the turn need not wait for the bookkeeping.
@@ -657,10 +674,13 @@ export function createFreestyleWorkspaceMachines(
 			try {
 				// Slug-keyed: a repeat finds and resumes a VM an earlier attempt
 				// created, so passing failures are waited out, not surfaced.
-				return await resumableMachineStart(provision, {
-					operation: "provisionSession",
-					slug,
-				});
+				return await resumableMachineStart(
+					provision,
+					{ operation: "provisionSession", slug },
+					MACHINE_START_RETRY_DELAYS_MS,
+					undefined,
+					recordMachineRateLimit,
+				);
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
 					operation: "create",

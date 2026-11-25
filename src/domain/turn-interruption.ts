@@ -38,13 +38,34 @@ export function isEdgeOutage(error: unknown) {
 	);
 }
 
+/**
+ * The machine could not start because the provider's account limit, its
+ * request limit or our own hourly creation count was hit. All pass as other
+ * machines pause or the hour turns, so the step waits and resumes (calm
+ * "Starting machine" status) instead of failing the turn.
+ */
+const MACHINE_REFUSAL_THAT_PASSES =
+	/limiting requests|LIMIT_EXCEEDED|too many new machines|resource limit exceeded/i;
+
+function isMachineRefusalThatPasses(cause: Error): boolean {
+	const tag = (cause as { _tag?: unknown })._tag;
+	if (
+		cause.name !== "WorkspaceProvisionError" &&
+		tag !== "WorkspaceProvisionError"
+	)
+		return false;
+	const detail = String((cause as { detail?: unknown }).detail ?? "");
+	return MACHINE_REFUSAL_THAT_PASSES.test(`${cause.message} ${detail}`);
+}
+
 /** True when retrying the step from its checkpoint is the right answer, whatever the person did not do. */
 export function isTransientInfrastructureFailure(cause: unknown): boolean {
 	if (cause instanceof CoordinationFailure) return cause.retryable;
 	if (cause instanceof Error)
 		return (
 			cause.message === TURN_NOT_STARTED ||
-			TRANSIENT_ABORT_MESSAGES.has(cause.message)
+			TRANSIENT_ABORT_MESSAGES.has(cause.message) ||
+			isMachineRefusalThatPasses(cause)
 		);
 	return false;
 }
