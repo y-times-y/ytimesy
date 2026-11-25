@@ -1,15 +1,27 @@
 import { Effect } from "effect";
 import { TEST_ACCOUNT_ID } from "#/domain/test-account";
+import { githubClient } from "../adapters/github";
+import { githubInstallationAccessToken } from "../adapters/github/installation-token";
 import { listModelConnections } from "../adapters/model-connections";
 import { saveProject } from "../adapters/projects";
 import { connectApiModels } from "./model-connections";
+import type { TestAccountDb } from "./test-account";
 import { enqueueProjectWorkspace } from "./workspaces";
 import { createProjectYSquared } from "./y-on-add";
-import type { TestAccountDb } from "./test-account";
 
 /** The one repository the synthetic account may be given (the canary's, docs/interruption-monitoring.md). */
 export const SEED_REPOSITORY = "y-times-y/ytimesy";
 export const SEED_MODEL_LABEL = "Test account model";
+
+/** The seed repository among what the installation lists: GitHub's current id, not a stored one that a rename may have left behind. */
+export function pickSeedRepository<
+	T extends { id: number; full_name: string; archived?: boolean },
+>(repositories: readonly T[]) {
+	return repositories.find(
+		(repo) =>
+			repo.full_name.toLowerCase() === SEED_REPOSITORY && !repo.archived,
+	);
+}
 
 /** Aggregate only: no ids, names or user data leave the database. */
 export async function yDefaultCounts(db: TestAccountDb) {
@@ -55,14 +67,29 @@ export async function seedTestAccount(
 		)
 	).rows[0];
 	if (!source) return { modelConnected, projectId: null };
+	const installationId = Number(source.installation_id);
+	const token = await githubInstallationAccessToken(installationId, {
+		repositoryNames: [SEED_REPOSITORY.split("/")[1] as string],
+		contents: "read",
+	});
+	const github = githubClient(token);
+	const listed = pickSeedRepository(
+		await github.paginate(github.apps.listReposAccessibleToInstallation, {
+			per_page: 100,
+		}),
+	);
+	if (!listed)
+		throw new Error("The installation does not list the seed repository.");
 	const project = await saveProject(
 		userId,
 		{
-			repositoryId: Number(source.repository_id),
-			installationId: Number(source.installation_id),
-			fullName: SEED_REPOSITORY,
-		} as Parameters<typeof saveProject>[1],
-		"main",
+			repositoryId: listed.id,
+			installationId,
+			fullName: listed.full_name,
+			defaultBranch: listed.default_branch,
+			private: listed.private,
+		},
+		listed.default_branch,
 	);
 	await Effect.runPromise(enqueueProjectWorkspace(userId, project.id));
 	const ySquaredId = await createProjectYSquared(userId, project.id);

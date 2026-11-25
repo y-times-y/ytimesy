@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { seedTestAccount, yDefaultCounts } from "./test-account-seed";
+import {
+	pickSeedRepository,
+	seedTestAccount,
+	yDefaultCounts,
+} from "./test-account-seed";
 
 describe("test account extras", () => {
 	it("counts only live projects and returns numbers, nothing identifying", async () => {
@@ -19,5 +23,23 @@ describe("test account extras", () => {
 		await expect(
 			seedTestAccount({ query: async () => ({ rows: [] }) }, "real-user", {}),
 		).rejects.toThrow("not the test account");
+	});
+});
+
+describe("seed repository", () => {
+	it("takes the id GitHub lists now, not a stored one", () => {
+		expect(
+			pickSeedRepository([
+				{ id: 1, full_name: "y-times-y/other" },
+				{ id: 1462101001, full_name: "y-times-y/ytimesy" },
+			])?.id,
+		).toBe(1462101001);
+	});
+	it("ignores an archived or missing repository", () => {
+		expect(
+			pickSeedRepository([
+				{ id: 2, full_name: "y-times-y/ytimesy", archived: true },
+			]),
+		).toBeUndefined();
 	});
 });
