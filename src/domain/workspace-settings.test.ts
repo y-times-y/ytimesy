@@ -21,6 +21,7 @@ describe("workspace settings", () => {
 			"mcp",
 			"usage",
 			"archived",
+			"support",
 		]);
 	});
 

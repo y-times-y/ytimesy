@@ -4672,7 +4672,7 @@ a.session-title-meta:focus-visible {
 
 .settings-usage-warning {
 	margin: 8px 0 0;
-	color: #fca5a5;
+	color: #ededed;
 	font-size: 13px;
 }
 .usage-warning-banner {
@@ -4685,17 +4685,12 @@ a.session-title-meta:focus-visible {
 	gap: 12px;
 	max-width: min(440px, calc(100vw - 32px));
 	padding: 10px 12px;
-	border: 1px solid #3a2a12;
-	border-radius: 10px;
-	background: #1a1408;
-	color: #fcd34d;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--popover);
+	color: var(--popover-foreground);
 	font-size: 13px;
 	line-height: 1.4;
-}
-.usage-warning-banner[data-level="exhausted"] {
-	border-color: #4a1d1d;
-	background: #1c0d0d;
-	color: #fca5a5;
 }
 .usage-warning-banner p {
 	margin: 0;

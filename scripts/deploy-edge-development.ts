@@ -7,6 +7,10 @@ import {
 } from "../src/domain/codex-egress";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 import { PRODUCTION_RETENTION_ENROLL_AFTER } from "./production-settings";
+import {
+	DEFAULT_USER_SHORT_WINDOW_MICRO_USD,
+	DEFAULT_USER_WEEKLY_MICRO_USD,
+} from "./usage-allowance-defaults";
 
 // Deliberately fixed to development. Secrets travel over stdin, never shell arguments or logs.
 const configuration = "wrangler.edge-executor.jsonc";
@@ -79,9 +83,9 @@ secrets.YTIMESY_DURABLE_OBJECT_LOCATION_HINT =
 // Codex login and carry per-run harness variants. Production never sets it.
 secrets.YTIMESY_DEV_EVAL_USERS = "1";
 secrets.YTIMESY_USER_5H_MICRO_USD =
-	process.env.YTIMESY_USER_5H_MICRO_USD || "5000000";
+	process.env.YTIMESY_USER_5H_MICRO_USD || DEFAULT_USER_SHORT_WINDOW_MICRO_USD;
 secrets.YTIMESY_USER_WEEKLY_MICRO_USD =
-	process.env.YTIMESY_USER_WEEKLY_MICRO_USD || "25000000";
+	process.env.YTIMESY_USER_WEEKLY_MICRO_USD || DEFAULT_USER_WEEKLY_MICRO_USD;
 for (const name of [
 	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_LIFETIME_MICRO_USD",

@@ -42,6 +42,10 @@ import {
 } from "./production-source";
 import { readRunningTurns, runningTurnsDecision } from "./running-turns-check";
 import { supabaseCertificate } from "./supabase-certificate";
+import {
+	DEFAULT_USER_SHORT_WINDOW_MICRO_USD,
+	DEFAULT_USER_WEEKLY_MICRO_USD,
+} from "./usage-allowance-defaults";
 import { liveWorkerBindingProblems } from "./worker-bindings-guard";
 
 /**
@@ -180,9 +184,9 @@ if (!/^\d+$/.test(secrets.GITHUB_APP_BOT_USER_ID))
 // Per-user rolling usage windows (micro-USD of VM cost); the deployment's
 // environment tunes them, these are the defaults.
 secrets.YTIMESY_USER_5H_MICRO_USD =
-	process.env.YTIMESY_USER_5H_MICRO_USD || "5000000";
+	process.env.YTIMESY_USER_5H_MICRO_USD || DEFAULT_USER_SHORT_WINDOW_MICRO_USD;
 secrets.YTIMESY_USER_WEEKLY_MICRO_USD =
-	process.env.YTIMESY_USER_WEEKLY_MICRO_USD || "25000000";
+	process.env.YTIMESY_USER_WEEKLY_MICRO_USD || DEFAULT_USER_WEEKLY_MICRO_USD;
 
 const database = new URL(secrets.DATABASE_URL);
 if (
