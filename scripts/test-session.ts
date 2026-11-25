@@ -31,6 +31,9 @@ const COMMANDS = [
 	"repo-ids",
 	"vm-map",
 	"seed-github-unlinked",
+	"seed-setup-building",
+	"seed-setup-failed",
+	"seed-setup-ready",
 ] as const;
 
 export function callerFromEnvironment(env: NodeJS.ProcessEnv) {
@@ -61,7 +64,7 @@ export function parseCli(argv: string[]) {
 	const command = positionals[0];
 	if (!COMMANDS.includes(command as (typeof COMMANDS)[number]))
 		throw new Error(
-			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|y-counts|repo-ids|vm-map|seed-github-unlinked> [options]",
+			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|y-counts|repo-ids|vm-map|seed-github-unlinked|seed-setup-building|seed-setup-failed|seed-setup-ready> [options]",
 		);
 	if (command === "shot" && !values.out)
 		throw new Error("Pass --out <file.png>.");
@@ -80,7 +83,10 @@ export async function requestTestSession(input: {
 		| "y-counts"
 		| "repo-ids"
 		| "vm-map"
-		| "seed-github-unlinked";
+		| "seed-github-unlinked"
+		| "seed-setup-building"
+		| "seed-setup-failed"
+		| "seed-setup-ready";
 	/** Only `seed`: the model key to connect, sealed server-side; never printed. */
 	apiKey?: string;
 	/** Only `vm-map`: machine slugs to classify. */
@@ -192,7 +198,9 @@ if (process.argv[1]?.endsWith("test-session.ts")) {
 				? JSON.parse(readFileSync(process.env.YTIMESY_VM_SLUGS_FILE, "utf8"))
 				: undefined,
 		apiKey:
-			options.command === "seed" || options.command === "seed-github-unlinked"
+			options.command === "seed" ||
+			options.command.startsWith("seed-github") ||
+			options.command.startsWith("seed-setup")
 				? process.env.ANTHROPIC_API_KEY
 				: undefined,
 	});

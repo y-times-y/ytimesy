@@ -175,6 +175,9 @@ export async function runTestAccountAction(
 		action:
 			| "seed"
 			| "seed-github-unlinked"
+			| "seed-setup-building"
+			| "seed-setup-failed"
+			| "seed-setup-ready"
 			| "y-counts"
 			| "repo-ids"
 			| "vm-map";
@@ -197,6 +200,14 @@ export async function runTestAccountAction(
 	const result = await seedTestAccount(db, userId, {
 		apiKey: input.apiKey,
 		githubUnlinked: input.action === "seed-github-unlinked",
+		setupState:
+			input.action === "seed-setup-building"
+				? "building"
+				: input.action === "seed-setup-failed"
+					? "failed"
+					: input.action === "seed-setup-ready"
+						? "ready"
+						: undefined,
 	});
 	console.log(JSON.stringify({ event: "test_session.seed", caller }));
 	return result;

@@ -330,6 +330,7 @@ import {
 } from "./pull-request-detail-query";
 import type { PullRequestChat } from "./pull-request-marks";
 import { chatRemoval, projectRemoval } from "./sidebar-removals";
+import { ThreadEmptyState } from "./thread-empty-state";
 import { useCompactLayout } from "./use-compact-layout";
 import {
 	askForFinishNotifications,
@@ -4223,7 +4224,9 @@ export function WorkspaceHome({
 												emptyState={
 													ySquaredOpen
 														? (send) => <YSquaredEmptyState onSend={send} />
-														: undefined
+														: selectedProject
+															? (send) => <ThreadEmptyState onSend={send} />
+															: undefined
 												}
 												setupHold={
 													heldView && selectedProject

@@ -816,6 +816,13 @@ export function SessionLauncher({
 	const identities = useMemo(() => helperIdentities(childTasks), [childTasks]);
 	const [selectedAgentId, setSelectedAgentId] = useState(LEAD_ROW_ID);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	// A fresh thread is ready to type in; on a phone the keyboard waits for a tap.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: once per opened chat.
+	useEffect(() => {
+		if (session.agentSessionId || !window.matchMedia("(pointer: fine)").matches)
+			return;
+		textareaRef.current?.focus({ preventScroll: true });
+	}, [session.agentSessionId, selectedProject?.id]);
 	/** The composer's caret, for the "@" popover. */
 	const [caret, setCaret] = useState(0);
 	const [mentionIndex, setMentionIndex] = useState(0);

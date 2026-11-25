@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { EnvironmentBuildProgress } from "#/domain/environment-build-progress";
 import { ENVIRONMENT_SETUP_PROMPT } from "#/domain/environment-setup";
 import {
@@ -9,6 +9,10 @@ import {
 	SetupProjectContext,
 	SetupRequestItem,
 } from "./environment-build-progress";
+
+vi.mock("./github-setup-step", () => ({
+	GithubSetupStep: ({ message }: { message: string }) => <p>{message}</p>,
+}));
 
 const text = (html: string) =>
 	html
@@ -151,7 +155,7 @@ it("offers Fix with the agent only for a new chat's first message", () => {
 	const html = text(
 		render({ build: null, steps: [] }, { failed: true, setUp: false }),
 	);
-	expect(html).toContain("Setup did not finish.");
+	expect(html).toContain("Setup stopped before it finished.");
 	expect(html).toContain("Send anyway");
 	expect(html).not.toContain("Fix with the agent");
 });

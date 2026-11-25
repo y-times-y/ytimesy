@@ -44,6 +44,9 @@ export const Route = createFileRoute("/api/internal/test-session")({
 						body.action === "seed" ||
 						body.action === "vm-map" ||
 						body.action === "seed-github-unlinked" ||
+						body.action === "seed-setup-building" ||
+						body.action === "seed-setup-failed" ||
+						body.action === "seed-setup-ready" ||
 						body.action === "y-counts" ||
 						body.action === "repo-ids"
 					)

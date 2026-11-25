@@ -9,7 +9,6 @@ import {
 	X,
 } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import {
 	type EnvironmentBuildFailure,
 	type EnvironmentBuildProgress,
@@ -21,6 +20,7 @@ import {
 	isSetupRequestMessage,
 	PROJECT_SETUP_NAME,
 } from "#/domain/environment-setup";
+import { setupCard } from "#/domain/setup-card";
 import { hubTopic } from "#/domain/user-hub";
 import { useAutoGrow } from "../app/use-auto-grow";
 import {
@@ -29,6 +29,8 @@ import {
 	useHubRead,
 } from "../workspace/user-hub-store";
 import { requestJson } from "./api";
+import { GithubSetupStep } from "./github-setup-step";
+import { SetupCard } from "./setup-card";
 
 /** How often the live view reads a running build (ms). */
 export const BUILD_PROGRESS_POLL_MS = 1_500;
@@ -385,65 +387,65 @@ export function ProjectSetupBuild({
 				<EnvironmentBuildSteps steps={steps} />
 			</details>
 		);
+	const model = setupCard({
+		status: showFailure ? "failed" : build ? "provisioning" : "queued",
+		build,
+		retrying: Boolean(actions?.pending) && showFailure,
+	});
+	const runningStep = steps.find((step) => step.state === "running");
+	const shown = {
+		...model,
+		title:
+			model.state === "building" && !build?.rebuild
+				? "Setting up project"
+				: model.title,
+		reason: runningStep?.label ?? model.reason,
+	};
+	const failure = build?.failure ?? null;
 	return (
-		<section
-			className="environment-build"
-			aria-label="Project setup"
-			data-state={showFailure ? "failed" : "running"}
-		>
-			<p className="environment-build-title">
-				{showFailure ? <X size={14} aria-hidden="true" /> : <MatrixDotLoader />}
-				<span>
-					{showFailure
-						? "Setup failed"
-						: build?.rebuild
-							? "Updating the environment"
-							: "Setting up project"}
-				</span>
-				{running ? (
-					<span className="session-activity-status">
-						{buildDuration(build, now)}
-					</span>
-				) : null}
-			</p>
-			<EnvironmentBuildSteps steps={steps} />
-			{showFailure ? (
+		<SetupCard
+			model={shown}
+			meta={running ? buildDuration(build, now) : null}
+			{...(actions && showFailure && model.state !== "retrying"
+				? {
+						primary: {
+							label: model.state === "needs-github" ? "Check again" : "Retry",
+							onClick: actions.onRetry,
+							disabled: actions.pending,
+						},
+						secondary: [
+							{
+								label: "Send anyway",
+								onClick: actions.onSendAnyway,
+								disabled: actions.pending,
+								title:
+									"Send on a machine with the repository cloned; the agent installs what it needs",
+							},
+							...(actions.onSetUpWithAgent
+								? [
+										{
+											label: "Fix with the agent",
+											onClick: actions.onSetUpWithAgent,
+											disabled: actions.pending,
+											title: "The agent fixes the setup first, then saves it",
+										},
+									]
+								: []),
+						],
+					}
+				: {})}
+			details={
 				<>
-					<EnvironmentBuildFailureDetail
-						failure={build?.failure ?? null}
-						message={build?.errorMessage ?? null}
-					/>
-					{actions ? (
-						<div className="environment-build-actions">
-							<button
-								type="button"
-								disabled={actions.pending}
-								onClick={actions.onRetry}
-							>
-								Retry
-							</button>
-							<button
-								type="button"
-								disabled={actions.pending}
-								onClick={actions.onSendAnyway}
-								title="Send on a machine with the repository cloned; the agent installs what it needs"
-							>
-								Send anyway
-							</button>
-							{actions.onSetUpWithAgent ? (
-								<button
-									type="button"
-									disabled={actions.pending}
-									onClick={actions.onSetUpWithAgent}
-									title="The agent fixes the setup first, then saves it"
-								>
-									Fix with the agent
-								</button>
-							) : null}
-						</div>
+					<EnvironmentBuildSteps steps={steps} />
+					{failure?.output ? (
+						<pre className="environment-build-output">{failure.output}</pre>
 					) : null}
 				</>
+			}
+		>
+			{model.state === "needs-github" ? (
+				<GithubSetupStep message={model.reason} />
 			) : null}
-		</section>
+		</SetupCard>
 	);
 }

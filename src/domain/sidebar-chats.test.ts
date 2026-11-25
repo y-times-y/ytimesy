@@ -571,6 +571,27 @@ describe("chatOpenedWithProject", () => {
 		).toBeUndefined();
 	});
 
+	it("never opens the Super agent by itself: a new project opens on a fresh thread", () => {
+		expect(
+			chatOpenedWithProject({
+				chats: [
+					{ id: "y2", title: "Y²", role: "y2" as const },
+					{ id: "setup", title: "Set up project" },
+				],
+				composerDraft: false,
+			}),
+		).toBeUndefined();
+		expect(
+			chatOpenedWithProject({
+				chats: [
+					{ id: "y2", title: "Y²", role: "y2" as const },
+					{ id: "task", title: "Fix login" },
+				],
+				composerDraft: false,
+			})?.id,
+		).toBe("task");
+	});
+
 	it("background setup start never changes the selected chat: a new project's empty chat stays open through the whole setup", () => {
 		// What the list holds as the background setup goes: created and held
 		// for the build, its turn running once the build is ready, asking for a

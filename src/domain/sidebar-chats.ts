@@ -386,16 +386,19 @@ export function chatsToReadAhead(input: {
  * list arriving with nothing open): its latest, unless a new-chat draft is
  * on screen (the draft keeps the composer). Never the project's setup chat:
  * setup runs in the background and opens only when the person picks it (its
- * row, View, Rerun setup); with nothing else, a new empty chat stays open.
+ * row, View, Rerun setup), and never the Super agent (in the sidebar, it
+ * opens when picked); with nothing else, a new empty chat stays open.
  */
 export function chatOpenedWithProject<
-	Chat extends Pick<SidebarChat, "id" | "title">,
+	Chat extends Pick<SidebarChat, "id" | "title" | "role">,
 >(input: {
 	readonly chats: readonly Chat[] | undefined;
 	readonly composerDraft: boolean;
 }): Chat | undefined {
 	if (input.composerDraft) return undefined;
-	return input.chats?.find((chat) => !isSetupChatTitle(chat.title));
+	return input.chats?.find(
+		(chat) => chat.role !== "y2" && !isSetupChatTitle(chat.title),
+	);
 }
 
 /**

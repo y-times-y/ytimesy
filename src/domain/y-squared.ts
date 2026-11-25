@@ -220,6 +220,13 @@ export const Y_SQUARED_SUGGESTIONS = [
 	"Summarize today",
 ] as const;
 
+/** First things to ask in a fresh thread (a new project's landing), each one sends as typed. */
+export const THREAD_SUGGESTIONS = [
+	"Explain how this project is organised",
+	"Find the riskiest part of the code",
+	"What should I work on first?",
+] as const;
+
 /** Threads listed in one overview, most recently active first. */
 export const Y_SQUARED_THREAD_LIMIT = 25;
 const SNIPPET = 220;

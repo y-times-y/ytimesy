@@ -30,6 +30,14 @@ export function pickSeedRepository<
 	);
 }
 
+const SEED_SETUP_STATUS = {
+	building: "installing",
+	failed: "failed",
+	ready: "ready",
+} as const;
+const SEED_SETUP_FAILURE =
+	"Installing dependencies: pnpm install failed (exit 1)";
+
 /** Aggregate only: no ids, names or user data leave the database. */
 export async function yDefaultCounts(db: TestAccountDb) {
 	const row = (
@@ -53,7 +61,12 @@ export async function yDefaultCounts(db: TestAccountDb) {
 export async function seedTestAccount(
 	db: TestAccountDb,
 	userId: string,
-	input: { apiKey?: string; githubUnlinked?: boolean },
+	input: {
+		apiKey?: string;
+		githubUnlinked?: boolean;
+		/** A fixed setup state to show, with no build queued (screenshots of the setup card). */
+		setupState?: "building" | "failed" | "ready";
+	},
 ) {
 	if (userId !== TEST_ACCOUNT_ID) throw new Error("not the test account");
 	let modelConnected = (await listModelConnections(userId)).length > 0;
@@ -98,7 +111,14 @@ export async function seedTestAccount(
 		},
 		listed.default_branch,
 	);
-	if (input.githubUnlinked) {
+	if (input.setupState) {
+		const workspace = await insertQueuedWorkspace(userId, project.id);
+		await saveWorkspaceStatus(
+			workspace.id,
+			SEED_SETUP_STATUS[input.setupState],
+			input.setupState === "failed" ? SEED_SETUP_FAILURE : null,
+		);
+	} else if (input.githubUnlinked) {
 		// The state a user whose GitHub link is gone is left in: setup failed with the connect prompt, no build running.
 		const workspace = await insertQueuedWorkspace(userId, project.id);
 		await saveWorkspaceStatus(workspace.id, "failed", GITHUB_SETUP_MESSAGE);

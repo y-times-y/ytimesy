@@ -9,12 +9,12 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { EnvironmentBuildView } from "#/domain/environment-build-progress";
 import type { RepositorySetup } from "#/domain/environment-detection";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
-import { needsGithubSetup } from "#/domain/github-sign-in";
 import { firstBuildRunning } from "#/domain/project-setup-start";
 import {
 	workspacePrepareShowsStatus,
 	workspacePrepareStalled,
 } from "#/domain/project-workspace";
+import { setupCard } from "#/domain/setup-card";
 import { hubTopic } from "#/domain/user-hub";
 import {
 	pollUnlessPushed,
@@ -34,6 +34,7 @@ import {
 } from "./environment-build-progress";
 import { GithubSetupLink } from "./github-setup-link";
 import { GithubSetupStep } from "./github-setup-step";
+import { SetupCard } from "./setup-card";
 
 /** Projects with a message waiting for their environment (workspace-home.tsx). */
 export const HeldForSetupContext = createContext<ReadonlySet<string>>(
@@ -264,80 +265,83 @@ export function WorkspaceStatus({
 			</div>
 		);
 	if (!stalled && !workspacePrepareShowsStatus(current.status)) return null;
+	const model = setupCard({
+		status: current.status,
+		errorMessage: current.errorMessage,
+		build: current.build ?? null,
+		stalled,
+		retrying: retry.isPending,
+	});
+	const retrying = model.state === "retrying";
 	const failure = current.build?.status === "failed" ? current.build : null;
-	if (current.errorMessage && needsGithubSetup(current.errorMessage))
-		return (
-			<div className="workspace-status" role="alert">
-				<GithubSetupStep message={current.errorMessage} />
-				<button
-					type="button"
-					disabled={retry.isPending}
-					onClick={() => retry.mutate({ workspaceId: current.id })}
-				>
-					{retry.isPending ? "Retrying…" : "Retry"}
-				</button>
-			</div>
-		);
-	return (
-		<div className="workspace-status" role="alert">
-			<div className="workspace-status-message">
-				{stalled ? (
-					"Environment setup has not started yet."
-				) : failure?.failure ? (
-					<EnvironmentBuildFailureDetail
-						failure={failure.failure}
-						message={failure.errorMessage}
-					/>
-				) : (
-					(current.errorMessage ?? "Workspace preparation failed.")
-				)}
-				{current.errorMessage ? (
-					<>
-						{" "}
-						<GithubSetupLink message={current.errorMessage} />
-					</>
-				) : null}
-			</div>
-			<button
-				type="button"
-				disabled={retry.isPending}
-				onClick={() => retry.mutate({ workspaceId: current.id })}
-			>
-				{retry.isPending ? "Retrying…" : "Retry"}
-			</button>
-			{stalled ? null : (
-				<button
-					type="button"
-					disabled={retry.isPending}
-					title="Chats start with the repository cloned; the agent installs what it needs"
-					onClick={() =>
-						retry.mutate({ workspaceId: current.id, mode: "plain" })
-					}
-				>
-					Skip setup
-				</button>
-			)}
-			{repairModel && (
-				<button
-					type="button"
-					disabled={retry.isPending}
-					onClick={() =>
+	const repair = repairModel
+		? [
+				{
+					label: `Repair with ${repairModelLabel || "selected model"}`,
+					title:
+						repairModel.harness === "api"
+							? "API charges apply"
+							: "Uses subscription usage",
+					disabled: retry.isPending,
+					onClick: () =>
 						retry.mutate({
 							workspaceId: current.id,
 							repairModel: {
 								...repairModel,
 								allowApi: repairModel.harness === "api",
 							},
-						})
-					}
-				>
-					Repair with {repairModelLabel || "selected model"}
-					{repairModel.harness === "api"
-						? " (API charges apply)"
-						: " (subscription usage)"}
-				</button>
-			)}
-			{retry.error && <span>{retry.error.message}</span>}
-		</div>
+						}),
+				},
+			]
+		: [];
+	return (
+		<SetupCard
+			model={model}
+			{...(retrying
+				? {}
+				: {
+						primary: {
+							label: model.state === "needs-github" ? "Check again" : "Retry",
+							disabled: retry.isPending,
+							onClick: () => retry.mutate({ workspaceId: current.id }),
+						},
+						secondary: [
+							...(stalled || model.state === "needs-github"
+								? []
+								: [
+										{
+											label: "Skip setup",
+											title:
+												"Chats start with the repository cloned; the agent installs what it needs",
+											disabled: retry.isPending,
+											onClick: () =>
+												retry.mutate({
+													workspaceId: current.id,
+													mode: "plain",
+												}),
+										},
+									]),
+							...repair,
+						],
+					})}
+			details={
+				failure?.failure ? (
+					<EnvironmentBuildFailureDetail
+						failure={failure.failure}
+						message={failure.errorMessage}
+					/>
+				) : null
+			}
+		>
+			{model.state === "needs-github" && current.errorMessage ? (
+				<GithubSetupStep message={current.errorMessage} />
+			) : null}
+			{model.state === "failed" && current.errorMessage ? (
+				<GithubSetupLink message={current.errorMessage} />
+			) : null}
+			{retry.error ? (
+				<p className="setup-card-error">{retry.error.message}</p>
+			) : null}
+		</SetupCard>
 	);
 }
