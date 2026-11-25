@@ -59,6 +59,12 @@
 	color: #111;
 	border-color: #00000022;
 }
+.usage-heatmap-tip[data-align="start"] {
+	transform: translate(-8px, calc(-100% - 6px));
+}
+.usage-heatmap-tip[data-align="end"] {
+	transform: translate(calc(-100% + 8px), calc(-100% - 6px));
+}
 .usage-heatmap-split {
 	display: flex;
 	align-items: center;

@@ -137,8 +137,8 @@ export function UsageReportView({
 			{current.unknownTurns ? (
 				<p className="settings-copy">
 					{current.unknownTurns} {current.unknownTurns === 1 ? "turn" : "turns"}{" "}
-					on a subscription or a provider that reports no token counts: not
-					included above. Reasoning tokens are not recorded separately.
+					where the provider reported no token counts: counted as turns, with
+					tokens not reported. Reasoning tokens are not recorded separately.
 				</p>
 			) : null}
 			<div
@@ -169,6 +169,10 @@ export function UsageReportView({
 			<p className="settings-copy">
 				Days are UTC. In All, a day takes the colour of the provider with the
 				most tokens.
+			</p>
+			<p className="settings-copy">
+				Counts chats run through ytimesy only. Usage on your own machine and the
+				cloud-machine-time limits are separate meters.
 			</p>
 			<div className="usage-report-lists">
 				<BreakdownList

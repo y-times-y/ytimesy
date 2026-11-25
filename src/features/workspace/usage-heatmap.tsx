@@ -59,6 +59,28 @@ function slots(today: string): Slot[] {
 	return out;
 }
 
+type Tip = {
+	day: string;
+	x: number;
+	y: number;
+	/** Which side of the cell the tooltip grows toward, so it stays inside the panel. */
+	align: "start" | "center" | "end";
+};
+
+/** Where a cell's tooltip goes, relative to the heatmap; near either edge it opens inward. */
+function tipAt(cell: Element, day: string): Tip {
+	const box = cell.getBoundingClientRect();
+	const host = cell.closest(".usage-heatmap")?.getBoundingClientRect();
+	const x = box.left - (host?.left ?? 0) + CELL / 2;
+	const width = host?.width ?? 0;
+	return {
+		day,
+		x,
+		y: box.top - (host?.top ?? 0),
+		align: x < width * 0.25 ? "start" : x > width * 0.75 ? "end" : "center",
+	};
+}
+
 type DayData = ReturnType<HeatmapData["get"]>;
 
 function describe(day: string, data: DayData) {
@@ -98,9 +120,7 @@ export function UsageHeatmap({
 		[data, filter],
 	);
 	const [active, setActive] = useState(today);
-	const [tip, setTip] = useState<{ day: string; x: number; y: number } | null>(
-		null,
-	);
+	const [tip, setTip] = useState<Tip | null>(null);
 	const scroller = useRef<HTMLDivElement>(null);
 	const cells = useRef(new Map<string, SVGRectElement>());
 
@@ -190,28 +210,12 @@ export function UsageHeatmap({
 											data-provider={cell.provider ?? undefined}
 											style={{ fill: cellFill(cell) }}
 											onMouseEnter={(e) => {
-												const box = e.currentTarget.getBoundingClientRect();
-												const host = e.currentTarget
-													.closest(".usage-heatmap")
-													?.getBoundingClientRect();
-												setTip({
-													day: s.day,
-													x: box.left - (host?.left ?? 0) + CELL / 2,
-													y: box.top - (host?.top ?? 0),
-												});
+												setTip(tipAt(e.currentTarget, s.day));
 											}}
 											onMouseLeave={() => setTip(null)}
 											onFocus={(e) => {
 												setActive(s.day);
-												const box = e.currentTarget.getBoundingClientRect();
-												const host = e.currentTarget
-													.closest(".usage-heatmap")
-													?.getBoundingClientRect();
-												setTip({
-													day: s.day,
-													x: box.left - (host?.left ?? 0) + CELL / 2,
-													y: box.top - (host?.top ?? 0),
-												});
+												setTip(tipAt(e.currentTarget, s.day));
 											}}
 											onBlur={() => setTip(null)}
 											onKeyDown={(e) => {
@@ -235,6 +239,7 @@ export function UsageHeatmap({
 			{tip ? (
 				<div
 					className="usage-heatmap-tip"
+					data-align={tip.align}
 					role="tooltip"
 					style={{ left: tip.x, top: tip.y }}
 				>

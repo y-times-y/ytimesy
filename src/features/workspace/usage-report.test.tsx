@@ -38,6 +38,7 @@ describe("UsageReportView", () => {
 			expect(html).toContain(`aria-label="${name}"`);
 		expect(html).not.toMatch(/biome|would add/);
 		expect(html).toContain("no token counts");
+		expect(html).toContain("separate meters");
 		expect(html).toContain("Days are UTC");
 	});
 
