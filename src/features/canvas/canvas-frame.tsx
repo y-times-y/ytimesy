@@ -13,6 +13,7 @@ export function CanvasFrame({
 	preview,
 	frameRef,
 	onLoad,
+	fixed,
 }: {
 	html: string;
 	title: string;
@@ -21,6 +22,8 @@ export function CanvasFrame({
 	onLoad?: () => void;
 	/** A small, inert thumbnail: loaded lazily and out of the tab order. */
 	preview?: boolean;
+	/** Sized to its document by the viewer: no scrollbars of its own. */
+	fixed?: boolean;
 }) {
 	return (
 		<iframe
@@ -31,6 +34,7 @@ export function CanvasFrame({
 			sandbox={CANVAS_SANDBOX}
 			srcDoc={canvasDocument(html)}
 			referrerPolicy="no-referrer"
+			{...(fixed ? { scrolling: "no" } : {})}
 			{...(preview
 				? { loading: "lazy" as const, tabIndex: -1, "aria-hidden": true }
 				: {})}

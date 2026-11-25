@@ -14,7 +14,7 @@ import type { SessionItem } from "#/domain/session-item";
 import { redactToolText } from "#/domain/tool-detail";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
-const DESCRIPTION = `Open a design canvas the user and you iterate on together: a self-contained HTML document shown as a card in the conversation and live beside the chat, where the user previews it at desktop, tablet and mobile widths, pins notes on its elements, and compares revisions side by side.
+const DESCRIPTION = `Open a design canvas the user and you iterate on together: a self-contained HTML document shown as a card in the conversation and live beside the chat, where the user zooms and pans it like a design tool's canvas (it opens fitted to the panel), pins notes on its elements, and compares revisions side by side.
 Use it to work on a design with the user:
 - UI mockups and clickable prototypes before you build a frontend change, and the built page after (with path, the real file).
 - Exploration: put two or three options side by side in ONE canvas, each clearly labelled (Option A, B, C) with a one-line rationale, so the user can compare and point at parts of each.
@@ -28,7 +28,8 @@ Rules:
 - One complete document (<!doctype html>…) with all CSS, JavaScript, fonts and images inline (images as data: URIs or inline SVG). The preview is offline and sandboxed: it cannot load any URL (no CDN scripts or stylesheets, web fonts, remote images, fetch or forms), and has no cookies or storage. Bundle a framework build into one file (for example vite-plugin-singlefile) before showing it.
 - Pass html for a short document; for anything larger, or to show what you built, write the file and pass path (a .html file in the workspace), which keeps the document out of the conversation.
 - Never type or copy base64, binary or other long encoded data into html by hand: one wrong character shows a broken image. Build such a document with a script that reads the real files and writes the .html, check that it renders, then pass path.
-- Design for a dark or light background deliberately, make it responsive, give elements meaningful text and ids (notes point at them), and use realistic content instead of lorem ipsum.
+- The viewer is an infinite canvas: it measures your document and fits it to the panel, so never design for the panel's width (the panel can be narrow) and never rely on the viewport. Lay the page out wide, and put each design on its own artboard: an element with a fixed pixel size at its real size (a page at 1440 px wide, a sidebar at 300x760, a phone at 390x844) and the attribute data-artboard, side by side in a row (display: flex; gap: 48px; flex-wrap: nowrap; padding: 48px) with a short label above each. The viewer fits all artboards on open; without any, it fits the document's own size, laid out 1280 px wide.
+- Design for a dark or light background deliberately, give elements meaningful text and ids (notes point at them), and use realistic content instead of lorem ipsum.
 - The user sees the canvas, not your HTML: do not paste the HTML into your reply; say what to look at and what to decide.
 - The result is a short confirmation (title, revision, size, where the user sees it), never the document back.
 At most ${CANVAS_HTML_LIMIT.toLocaleString("en-US")} characters.`;

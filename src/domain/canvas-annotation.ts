@@ -50,7 +50,34 @@ export type CanvasFrameMessage =
 	/** Where the tracked elements are now, in the order the app asked for. */
 	| { readonly type: "rects"; readonly rects: readonly (CanvasRect | null)[] }
 	/** Escape pressed inside the canvas: stop annotating. */
-	| { readonly type: "escape" };
+	| { readonly type: "escape" }
+	/**
+	 * The document's natural size: the box around its `data-artboard`
+	 * elements (null when it declares none) and its scroll size.
+	 */
+	| {
+			readonly type: "size";
+			readonly bounds: CanvasRect | null;
+			readonly width: number;
+			readonly height: number;
+	  }
+	/** A wheel or pinch over the canvas, in the canvas's own coordinates. */
+	| {
+			readonly type: "wheel";
+			readonly x: number;
+			readonly y: number;
+			readonly dx: number;
+			readonly dy: number;
+			readonly mode: number;
+			/** Ctrl or Cmd held, which is how a trackpad pinch arrives. */
+			readonly zoom: boolean;
+	  }
+	/** Cmd/Ctrl with +, - or 0 inside the canvas. */
+	| { readonly type: "zoomkey"; readonly key: "in" | "out" | "reset" }
+	/** Space pressed or released inside the canvas (hand tool). */
+	| { readonly type: "space"; readonly down: boolean }
+	/** A middle-button or space drag inside the canvas, in screen pixels. */
+	| { readonly type: "pan"; readonly dx: number; readonly dy: number };
 
 /** A message from the app to a canvas. */
 export type CanvasHostMessage =
@@ -203,6 +230,49 @@ export function canvasFrameMessage(data: unknown): CanvasFrameMessage | null {
 		}
 		case `${CHANNEL}escape`:
 			return hasExactKeys(data, ["type"]) ? { type: "escape" } : null;
+		case `${CHANNEL}size`: {
+			if (!hasExactKeys(data, ["type", "bounds", "width", "height"]))
+				return null;
+			const bounds = data.bounds === null ? null : canvasRect(data.bounds);
+			if (
+				(data.bounds !== null && !bounds) ||
+				!coordinate(data.width, 0) ||
+				!coordinate(data.height, 0)
+			)
+				return null;
+			return { type: "size", bounds, width: data.width, height: data.height };
+		}
+		case `${CHANNEL}wheel`: {
+			if (!hasExactKeys(data, ["type", "x", "y", "dx", "dy", "mode", "zoom"]))
+				return null;
+			const { x, y, dx, dy, mode, zoom } = data;
+			if (
+				!coordinate(x, -COORDINATE_LIMIT) ||
+				!coordinate(y, -COORDINATE_LIMIT) ||
+				!coordinate(dx, -COORDINATE_LIMIT) ||
+				!coordinate(dy, -COORDINATE_LIMIT) ||
+				(mode !== 0 && mode !== 1 && mode !== 2) ||
+				typeof zoom !== "boolean"
+			)
+				return null;
+			return { type: "wheel", x, y, dx, dy, mode, zoom };
+		}
+		case `${CHANNEL}zoomkey`:
+			return hasExactKeys(data, ["type", "key"]) &&
+				(data.key === "in" || data.key === "out" || data.key === "reset")
+				? { type: "zoomkey", key: data.key }
+				: null;
+		case `${CHANNEL}space`:
+			return hasExactKeys(data, ["type", "down"]) &&
+				typeof data.down === "boolean"
+				? { type: "space", down: data.down }
+				: null;
+		case `${CHANNEL}pan`:
+			return hasExactKeys(data, ["type", "dx", "dy"]) &&
+				coordinate(data.dx, -COORDINATE_LIMIT) &&
+				coordinate(data.dy, -COORDINATE_LIMIT)
+				? { type: "pan", dx: data.dx, dy: data.dy }
+				: null;
 		default:
 			return null;
 	}
@@ -343,4 +413,4 @@ export function canvasFeedbackMessage(input: {
  * sends nothing but these messages; inline scripts are allowed by the
  * policy, so it runs under the same CSP as the canvas.
  */
-export const CANVAS_BRIDGE_SCRIPT = `<script>(function(){var P="${CHANNEL}",up=window.parent;if(!up||up===window)return;var on=false,box=null,cur=null,tracked=[],queued=false;function post(m){try{up.postMessage(m,"*")}catch(e){}}function element(t){if(!t||t.nodeType!==1)t=t&&t.parentElement;if(!t||t===document.documentElement||t===document.body||t===box)return null;return t}function esc(v){return window.CSS&&CSS.escape?CSS.escape(v):v.replace(/[^a-zA-Z0-9_-]/g,"\\\\$&")}function uniqueId(n){if(!n.id)return null;var s="#"+esc(n.id);try{return document.querySelectorAll(s).length===1?s:null}catch(e){return null}}function selector(el){var own=uniqueId(el);if(own)return own;var parts=[],n=el;while(n&&n.nodeType===1&&n!==document.documentElement&&parts.length<12){var id=uniqueId(n);if(id){parts.unshift(id);break}var tag=n.localName,i=1,more=false,s=n;while((s=s.previousElementSibling))if(s.localName===tag)i++;s=n;while((s=s.nextElementSibling))if(s.localName===tag){more=true;break}parts.unshift(i===1&&!more?tag:tag+":nth-of-type("+i+")");if(n===document.body)break;n=n.parentElement}while(parts.join(" > ").length>${CANVAS_SELECTOR_LIMIT}&&parts.length>1)parts.shift();return parts.join(" > ").slice(0,${CANVAS_SELECTOR_LIMIT})}function label(el){var t=el.getAttribute("aria-label")||el.getAttribute("alt")||el.getAttribute("title")||el.innerText||el.textContent||el.getAttribute("placeholder")||el.value||"";return String(t).replace(/\\s+/g," ").trim().slice(0,${CANVAS_PICK_TEXT_LIMIT})}function rect(el){var r=el.getBoundingClientRect();return{x:Math.round(r.left),y:Math.round(r.top),width:Math.round(r.width),height:Math.round(r.height)}}function outline(el){if(!box){box=document.createElement("div");var s=box.style;s.position="fixed";s.pointerEvents="none";s.zIndex="2147483647";s.boxSizing="border-box";s.border="2px solid #3b82f6";s.borderRadius="4px";s.background="rgba(59,130,246,.10)";s.transition="all 60ms ease-out";(document.body||document.documentElement).appendChild(box)}if(!el){box.style.display="none";return}var r=el.getBoundingClientRect();box.style.display="block";box.style.left=(r.left-2)+"px";box.style.top=(r.top-2)+"px";box.style.width=(r.width+4)+"px";box.style.height=(r.height+4)+"px"}function report(){queued=false;if(!tracked.length)return;var out=[];for(var i=0;i<tracked.length;i++){var el=null;try{el=document.querySelector(tracked[i])}catch(e){}out.push(el?rect(el):null)}post({type:P+"rects",rects:out})}function soon(){if(!queued){queued=true;requestAnimationFrame(report)}}function block(e){if(on){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation()}}["pointerdown","mousedown","pointerup","mouseup","dblclick","auxclick","contextmenu","submit"].forEach(function(t){window.addEventListener(t,block,true)});window.addEventListener("pointermove",function(e){if(on)outline(element(e.target))},true);document.addEventListener("mouseleave",function(){if(on)outline(null)});window.addEventListener("click",function(e){if(on){block(e);var el=element(e.target);if(el)post({type:P+"pick",selector:selector(el),tag:String(el.localName).slice(0,64),text:label(el),rect:rect(el)});return}var t=e.target&&e.target.closest?e.target.closest("[data-ytimesy-prompt]"):null;if(t)post({type:P+"prompt",text:String(t.getAttribute("data-ytimesy-prompt")||"").slice(0,${CANVAS_PROMPT_LIMIT})})},true);window.addEventListener("keydown",function(e){if(on&&e.key==="Escape"){block(e);post({type:P+"escape"})}},true);window.addEventListener("scroll",soon,true);window.addEventListener("resize",soon);window.addEventListener("load",soon);window.addEventListener("message",function(e){if(e.source!==up)return;var m=e.data;if(!m||typeof m!=="object")return;if(m.type===P+"annotate"){on=m.on===true;if(!cur){cur=document.createElement("style");cur.textContent="*{cursor:crosshair!important}";}if(on)(document.head||document.documentElement).appendChild(cur);else if(cur.parentNode)cur.parentNode.removeChild(cur);if(!on)outline(null)}else if(m.type===P+"track"&&Array.isArray(m.selectors)){tracked=m.selectors.filter(function(s){return typeof s==="string"}).slice(0,${CANVAS_NOTES_LIMIT});soon()}})})()</script>`;
+export const CANVAS_BRIDGE_SCRIPT = `<script>(function(){var P="${CHANNEL}",up=window.parent;if(!up||up===window)return;var on=false,box=null,cur=null,tracked=[],queued=false,space=false,panning=false,suppress=false,sizing=false,lx=0,ly=0;function post(m){try{up.postMessage(m,"*")}catch(e){}}function element(t){if(!t||t.nodeType!==1)t=t&&t.parentElement;if(!t||t===document.documentElement||t===document.body||t===box)return null;return t}function esc(v){return window.CSS&&CSS.escape?CSS.escape(v):v.replace(/[^a-zA-Z0-9_-]/g,"\\\\$&")}function uniqueId(n){if(!n.id)return null;var s="#"+esc(n.id);try{return document.querySelectorAll(s).length===1?s:null}catch(e){return null}}function selector(el){var own=uniqueId(el);if(own)return own;var parts=[],n=el;while(n&&n.nodeType===1&&n!==document.documentElement&&parts.length<12){var id=uniqueId(n);if(id){parts.unshift(id);break}var tag=n.localName,i=1,more=false,s=n;while((s=s.previousElementSibling))if(s.localName===tag)i++;s=n;while((s=s.nextElementSibling))if(s.localName===tag){more=true;break}parts.unshift(i===1&&!more?tag:tag+":nth-of-type("+i+")");if(n===document.body)break;n=n.parentElement}while(parts.join(" > ").length>${CANVAS_SELECTOR_LIMIT}&&parts.length>1)parts.shift();return parts.join(" > ").slice(0,${CANVAS_SELECTOR_LIMIT})}function label(el){var t=el.getAttribute("aria-label")||el.getAttribute("alt")||el.getAttribute("title")||el.innerText||el.textContent||el.getAttribute("placeholder")||el.value||"";return String(t).replace(/\\s+/g," ").trim().slice(0,${CANVAS_PICK_TEXT_LIMIT})}function rect(el){var r=el.getBoundingClientRect();return{x:Math.round(r.left),y:Math.round(r.top),width:Math.round(r.width),height:Math.round(r.height)}}function outline(el){if(!box){box=document.createElement("div");var s=box.style;s.position="fixed";s.pointerEvents="none";s.zIndex="2147483647";s.boxSizing="border-box";s.border="2px solid #3b82f6";s.borderRadius="4px";s.background="rgba(59,130,246,.10)";s.transition="all 60ms ease-out";(document.body||document.documentElement).appendChild(box)}if(!el){box.style.display="none";return}var r=el.getBoundingClientRect();box.style.display="block";box.style.left=(r.left-2)+"px";box.style.top=(r.top-2)+"px";box.style.width=(r.width+4)+"px";box.style.height=(r.height+4)+"px"}function report(){queued=false;if(!tracked.length)return;var out=[];for(var i=0;i<tracked.length;i++){var el=null;try{el=document.querySelector(tracked[i])}catch(e){}out.push(el?rect(el):null)}post({type:P+"rects",rects:out})}function soon(){if(!queued){queued=true;requestAnimationFrame(report)}}function block(e){if(on&&!space&&!panning&&e.button!==1){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation()}}["pointerdown","mousedown","pointerup","mouseup","dblclick","auxclick","contextmenu","submit"].forEach(function(t){window.addEventListener(t,block,true)});window.addEventListener("pointermove",function(e){if(on)outline(element(e.target))},true);document.addEventListener("mouseleave",function(){if(on)outline(null)});window.addEventListener("click",function(e){if(suppress){suppress=false;e.preventDefault();e.stopImmediatePropagation();return}if(on){block(e);var el=element(e.target);if(el)post({type:P+"pick",selector:selector(el),tag:String(el.localName).slice(0,64),text:label(el),rect:rect(el)});return}var t=e.target&&e.target.closest?e.target.closest("[data-ytimesy-prompt]"):null;if(t)post({type:P+"prompt",text:String(t.getAttribute("data-ytimesy-prompt")||"").slice(0,${CANVAS_PROMPT_LIMIT})})},true);window.addEventListener("keydown",function(e){if(on&&e.key==="Escape"){block(e);post({type:P+"escape"})}},true);window.addEventListener("scroll",soon,true);window.addEventListener("resize",soon);window.addEventListener("load",soon);window.addEventListener("message",function(e){if(e.source!==up)return;var m=e.data;if(!m||typeof m!=="object")return;if(m.type===P+"annotate"){on=m.on===true;if(!cur){cur=document.createElement("style");cur.textContent="*{cursor:crosshair!important}";}if(on)(document.head||document.documentElement).appendChild(cur);else if(cur.parentNode)cur.parentNode.removeChild(cur);if(!on)outline(null)}else if(m.type===P+"track"&&Array.isArray(m.selectors)){tracked=m.selectors.filter(function(s){return typeof s==="string"}).slice(0,${CANVAS_NOTES_LIMIT});soon()}});function size(){sizing=false;var de=document.documentElement,bd=document.body,sx=window.scrollX||0,sy=window.scrollY||0,l=1e9,t=1e9,r=-1e9,b=-1e9,n=0,list=document.querySelectorAll("[data-artboard]");for(var i=0;i<list.length&&i<200;i++){var q=list[i].getBoundingClientRect();if(!q.width||!q.height)continue;n++;l=Math.min(l,q.left+sx);t=Math.min(t,q.top+sy);r=Math.max(r,q.right+sx);b=Math.max(b,q.bottom+sy)}post({type:P+"size",bounds:n?{x:Math.round(l),y:Math.round(t),width:Math.round(r-l),height:Math.round(b-t)}:null,width:Math.ceil(Math.max(de.scrollWidth,bd?bd.scrollWidth:0)),height:Math.ceil(Math.max(de.scrollHeight,bd?bd.scrollHeight:0))})}function sizeSoon(){if(!sizing){sizing=true;requestAnimationFrame(size)}}window.addEventListener("load",sizeSoon);window.addEventListener("resize",sizeSoon);if(window.ResizeObserver)new ResizeObserver(sizeSoon).observe(document.documentElement);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(sizeSoon);setTimeout(sizeSoon,300);setTimeout(sizeSoon,1500);sizeSoon();window.addEventListener("wheel",function(e){e.preventDefault();post({type:P+"wheel",x:e.clientX,y:e.clientY,dx:e.deltaX,dy:e.deltaY,mode:e.deltaMode,zoom:e.ctrlKey||e.metaKey})},{passive:false,capture:true});function typing(t){return t&&(t.isContentEditable||/^(input|textarea|select|button|a|summary)$/i.test(t.localName||""))}window.addEventListener("keydown",function(e){if(e.ctrlKey||e.metaKey){var k=e.key==="+"||e.key==="="?"in":e.key==="-"||e.key==="_"?"out":e.key==="0"?"reset":null;if(k){e.preventDefault();post({type:P+"zoomkey",key:k});return}}if(e.key===" "&&!typing(e.target)&&!e.ctrlKey&&!e.metaKey){e.preventDefault();if(!space){space=true;post({type:P+"space",down:true})}}},true);window.addEventListener("keyup",function(e){if(e.key===" "&&space){space=false;post({type:P+"space",down:false})}},true);window.addEventListener("blur",function(){if(space){space=false;post({type:P+"space",down:false})}});window.addEventListener("mousedown",function(e){if(e.button===1)e.preventDefault()},true);window.addEventListener("pointerdown",function(e){if(e.button===1||(space&&e.button===0)){e.preventDefault();panning=true;lx=e.screenX;ly=e.screenY;try{e.target.setPointerCapture(e.pointerId)}catch(x){}}},true);window.addEventListener("pointermove",function(e){if(!panning)return;var dx=e.screenX-lx,dy=e.screenY-ly;lx=e.screenX;ly=e.screenY;if(dx||dy)post({type:P+"pan",dx:dx,dy:dy})},true);function endPan(){if(!panning)return;panning=false;suppress=true;setTimeout(function(){suppress=false},0)}window.addEventListener("pointerup",endPan,true);window.addEventListener("pointercancel",endPan,true)})()</script>`;
