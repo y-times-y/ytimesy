@@ -267,7 +267,7 @@ export function WorkspaceStatus({
 	const failure = current.build?.status === "failed" ? current.build : null;
 	if (current.errorMessage && needsGithubSetup(current.errorMessage))
 		return (
-			<div className="workspace-status">
+			<div className="workspace-status" role="alert">
 				<GithubSetupStep message={current.errorMessage} />
 				<button
 					type="button"

@@ -33,7 +33,7 @@ export function GithubSetupStep({ message }: { message: string }) {
 			aria-label="Connect GitHub"
 			className="flex w-full flex-col gap-2 text-xs"
 		>
-			<p role="alert">{message}</p>
+			<p>{message}</p>
 			<GithubOptions
 				signedIn={Boolean(state.data?.githubConnected)}
 				checking={state.isPending}
