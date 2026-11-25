@@ -1,15 +1,17 @@
 import { Effect } from "effect";
 import { DEFAULT_COMPOSER_HARNESS_ID } from "#/domain/agent-provider";
+import { canaryConfigRow } from "../adapters/interruption-events";
 import type { CanaryDeps } from "./interruption-monitoring";
 import { canaryConfig } from "./interruption-monitoring";
 import { sendComposerMessage } from "./queued-user-messages";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** The canary's production dependencies, or null while its account is not configured. */
-export function productionCanary(
+export async function productionCanary(
 	machines: WorkspaceMachines,
-): CanaryDeps | null {
-	const config = canaryConfig();
+): Promise<CanaryDeps | null> {
+	// The environment wins; otherwise the operator's row. Any read failure: inert.
+	const config = canaryConfig() ?? (await canaryConfigRow().catch(() => null));
 	if (!config) return null;
 	return {
 		config,
