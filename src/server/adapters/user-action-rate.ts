@@ -46,6 +46,29 @@ export async function consumeUserAction(
 		throw new UserActionRateLimited(action);
 }
 
+/**
+ * Gives one count back, for an action that was counted before it was known to
+ * happen (a machine create the provider then refused). Never throws: it is
+ * bookkeeping, and the worst case is the old over-count.
+ */
+export async function refundUserAction(
+	userId: string,
+	action: UserAction,
+	client: Pick<PoolClient, "query"> = database(),
+) {
+	if (!userActionLimitsEnabled()) return;
+	const { windowSeconds } = USER_ACTION_LIMITS[action];
+	try {
+		await client.query(
+			`update user_action_rate set count=greatest(count-1,0)
+			 where user_id=$1 and action=$2 and window_start=to_timestamp(floor(extract(epoch from now())/$3)*$3)`,
+			[userId, action, windowSeconds],
+		);
+	} catch {
+		console.warn("user_action.refund_failed", { action });
+	}
+}
+
 /** For JSON endpoints: the same refusal as an HTTP 429. */
 export async function requireUserAction(userId: string, action: UserAction) {
 	try {

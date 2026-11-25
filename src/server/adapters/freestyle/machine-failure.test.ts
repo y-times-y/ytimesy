@@ -5,6 +5,7 @@ import {
 	machineFailureDetail,
 	machineFailureKind,
 	machineStartUnstartable,
+	rateLimitDelayMs,
 	resumableMachineStart,
 } from "./machine-failure";
 import { isPlatformRestart } from "./provider-retry";
@@ -243,4 +244,40 @@ it("recognises a spent runtime budget so the chat's VM is replaced at once", () 
 		),
 	).toBe(true);
 	expect(machineBudgetSpent(new Error("fetch failed"))).toBe(false);
+});
+
+const limit = () =>
+	api(429, "LIMIT_EXCEEDED", "Account resource limit exceeded");
+
+it("logs machine.rate_limited and reports every provider limit hit, then succeeds without surfacing an error", async () => {
+	const hits: string[] = [];
+	let calls = 0;
+	const result = await resumableMachineStart(
+		async () => {
+			if (++calls < 4) throw limit();
+			return "vm";
+		},
+		{ operation: "provisionSession", slug: "s" },
+		[1, 1, 1, 1],
+		async () => {},
+		(hit) => hits.push(hit.operation),
+	);
+	expect(result).toBe("vm");
+	expect(hits).toHaveLength(3);
+	const lines = vi
+		.mocked(console.warn)
+		.mock.calls.filter((call) => call[0] === "machine.rate_limited");
+	expect(lines).toHaveLength(3);
+	expect(JSON.stringify(lines[0])).not.toMatch(/token|secret/i);
+});
+
+it("waits longer after a provider limit than after a 5xx, with jitter, and honours Retry-After", () => {
+	const base = 8_000;
+	for (const random of [0, 0.5, 0.999]) {
+		const wait = rateLimitDelayMs(base, undefined, () => random);
+		expect(wait).toBeGreaterThanOrEqual(base);
+		expect(wait).toBeLessThanOrEqual(base * 1.5);
+	}
+	expect(rateLimitDelayMs(1_000, 20_000, () => 0)).toBe(20_000);
+	expect(rateLimitDelayMs(1_000, 10 * 60_000, () => 0)).toBe(60_000);
 });

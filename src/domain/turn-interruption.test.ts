@@ -87,3 +87,38 @@ describe("turn interruption rules", () => {
 		).toBe(false);
 	});
 });
+
+describe("machine refusals that pass with time", () => {
+	const provision = (message: string, detail = "") =>
+		Object.assign(new Error(message), {
+			name: "WorkspaceProvisionError",
+			detail,
+		});
+	it("treats the provider's limit and our own creation count as infrastructure trouble to wait out", () => {
+		expect(
+			isTransientInfrastructureFailure(
+				provision("The machine provider is limiting requests right now."),
+			),
+		).toBe(true);
+		expect(
+			isTransientInfrastructureFailure(
+				provision(
+					"Could not start",
+					"FreestyleApiError 429 LIMIT_EXCEEDED /v5/vms: Account resource limit exceeded",
+				),
+			),
+		).toBe(true);
+		expect(
+			isTransientInfrastructureFailure(
+				provision(
+					"This account started too many new machines in the last hour. Wait a few minutes, then retry; your work is preserved.",
+				),
+			),
+		).toBe(true);
+	});
+	it("does not retry a refusal that will not pass", () => {
+		expect(
+			isTransientInfrastructureFailure(provision("Choose a smaller machine")),
+		).toBe(false);
+	});
+});

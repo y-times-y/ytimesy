@@ -142,6 +142,8 @@ export function machineFailureRetryable(kind: MachineFailureKind) {
 /** Freestyle's x-request-id of recent failed responses, by method and path (bounded). */
 const failedRequestIds = new Map<string, string>();
 const FAILED_REQUEST_IDS_KEPT = 200;
+/** Retry-After (ms) the provider sent with its latest 429, by path. */
+const retryAfterMs = new Map<string, number>();
 
 function requestKey(path: string) {
 	return path.split("?")[0] ?? path;
@@ -156,6 +158,18 @@ export function requestIdRecordingFetch(transport: typeof fetch): typeof fetch {
 		const response = await transport(request, init);
 		if (!response.ok && response.status !== 202) {
 			const id = response.headers.get("x-request-id");
+			const retryAfter = Number(response.headers.get("retry-after"));
+			if (
+				response.status === 429 &&
+				Number.isFinite(retryAfter) &&
+				retryAfter > 0
+			) {
+				const url = new URL(
+					request instanceof Request ? request.url : String(request),
+				);
+				if (retryAfterMs.size > FAILED_REQUEST_IDS_KEPT) retryAfterMs.clear();
+				retryAfterMs.set(requestKey(url.pathname), retryAfter * 1000);
+			}
 			if (id) {
 				const url = new URL(
 					request instanceof Request ? request.url : String(request),
@@ -226,6 +240,36 @@ export function logMachineFailure(input: {
 }
 
 const MAX_STUCK_REPEATS = 1;
+const RATE_LIMIT_DELAY_CAP_MS = 60_000;
+
+/**
+ * How long to wait after a provider limit: the backoff step with up to 50%
+ * jitter (several chats hitting the limit together must not retry in step),
+ * or the provider's Retry-After when it sent a longer one, capped at a minute.
+ */
+export function rateLimitDelayMs(
+	baseMs: number,
+	retryAfter: number | undefined,
+	random: () => number = Math.random,
+): number {
+	const jittered = baseMs * (1 + random() * 0.5);
+	return Math.min(Math.max(jittered, retryAfter ?? 0), RATE_LIMIT_DELAY_CAP_MS);
+}
+
+export type MachineRateLimitHit = {
+	readonly operation: string;
+	readonly slug?: string;
+	readonly attempt: number;
+	readonly status?: number;
+	readonly retryAfterMs?: number;
+};
+
+function rateLimitedRetryAfter(error: unknown): number | undefined {
+	for (const link of chain(error))
+		if (link instanceof FreestyleApiError && link.path)
+			return retryAfterMs.get(requestKey(link.path));
+	return undefined;
+}
 
 /**
  * Backoff for a machine start that met a passing condition: about 90 s in
@@ -254,6 +298,7 @@ export async function resumableMachineStart<T>(
 	delaysMs: readonly number[] = MACHINE_START_RETRY_DELAYS_MS,
 	wait: (ms: number) => Promise<void> = (ms) =>
 		new Promise((resolve) => setTimeout(resolve, ms)),
+	onRateLimited?: (hit: MachineRateLimitHit) => void,
 ): Promise<T> {
 	let stuckRepeats = 0;
 	for (let attempt = 0; ; attempt++) {
@@ -271,8 +316,33 @@ export async function resumableMachineStart<T>(
 				!stuckExhausted;
 			if (kind === "stuck" && willRetry) stuckRepeats++;
 			logMachineFailure({ ...context, error, attempt: attempt + 1, willRetry });
+			let delay = delaysMs[attempt] ?? 0;
+			if (kind === "rate-limited") {
+				const retryAfter = rateLimitedRetryAfter(error);
+				// One email-free line and one monitoring row per hit, whether or
+				// not the user ever sees anything.
+				console.warn("machine.rate_limited", {
+					operation: context.operation,
+					slug: context.slug,
+					attempt: attempt + 1,
+					retryAfterMs: retryAfter,
+					willRetry,
+					detail: machineFailureDetail(error),
+				});
+				try {
+					onRateLimited?.({
+						operation: context.operation,
+						slug: context.slug,
+						attempt: attempt + 1,
+						retryAfterMs: retryAfter,
+					});
+				} catch {
+					// Bookkeeping never blocks the start.
+				}
+				delay = rateLimitDelayMs(delay, retryAfter);
+			}
 			if (!willRetry) throw error;
-			await wait(delaysMs[attempt] ?? 0);
+			await wait(delay);
 		}
 	}
 }

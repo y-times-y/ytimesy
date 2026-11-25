@@ -9,6 +9,7 @@ import {
 const mocks = vi.hoisted(() => ({
 	query: vi.fn(),
 	release: vi.fn(),
+	refund: vi.fn(),
 	order: [] as string[],
 }));
 vi.mock("../database", () => ({
@@ -19,7 +20,10 @@ vi.mock("../infrastructure-usage", () => ({
 		input.amountMicroUsd,
 	settleInfrastructureUsage: vi.fn(),
 }));
-vi.mock("../user-action-rate", () => ({ consumeUserAction: vi.fn() }));
+vi.mock("../user-action-rate", () => ({
+	consumeUserAction: vi.fn(),
+	refundUserAction: mocks.refund,
+}));
 vi.mock("../product-settings", () => ({
 	loadToolsSnapshotSetting: async () => undefined,
 }));
@@ -28,6 +32,7 @@ beforeEach(() => {
 	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "true");
 	forgetRecentAdmission();
 	mocks.order = [];
+	mocks.refund.mockReset();
 	mocks.query.mockReset().mockImplementation(async (sql: string) => {
 		if (sql.includes("insert into infrastructure_vm_lease")) {
 			mocks.order.push("lease");
@@ -107,4 +112,28 @@ it("still refuses to spend when the snapshot's source cannot be read", async () 
 	).rejects.toThrow("provider unavailable");
 	expect(create).not.toHaveBeenCalled();
 	expect(recentAdmissionCovers(running(300), 60)).toBe(false);
+});
+
+it("gives the owner's creation count back when the provider refuses the create, so retries never burn the hourly limit", async () => {
+	await expect(
+		admitVmCreate(
+			provider(async () => ({ resources })),
+			"copy",
+			"sh-template",
+			async () => {
+				throw new Error("429 LIMIT_EXCEEDED");
+			},
+		),
+	).rejects.toThrow("LIMIT_EXCEEDED");
+	expect(mocks.refund).toHaveBeenCalledWith("owner", "vm-create");
+});
+
+it("keeps the count for a machine that was created", async () => {
+	await admitVmCreate(
+		provider(async () => ({ resources })),
+		"copy",
+		"sh-template",
+		async () => "vm-new",
+	);
+	expect(mocks.refund).not.toHaveBeenCalled();
 });
