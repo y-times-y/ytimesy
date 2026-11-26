@@ -307,7 +307,7 @@ export async function removeProjectMachine(
 	const targets = await projectCleanupTargets(input.userId, input.projectId);
 	// Running turns stop before their chats' state goes (cancel, then purge).
 	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
-		cancelServerTurn(input.userId, sessionId),
+		cancelServerTurn(input.userId, sessionId, "project-remove"),
 	).catch(() => {
 		throw new Response(
 			"The project was not removed because a running turn could not be stopped. Try again.",

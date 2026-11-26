@@ -613,7 +613,8 @@ export async function deleteAgentSessionMachine(
 	);
 	const removed = [session, ...children];
 	// Their running turns stop before their state goes (cancel, then purge).
-	for (const chat of removed) await cancelServerTurn(input.userId, chat.id);
+	for (const chat of removed)
+		await cancelServerTurn(input.userId, chat.id, "chat-delete");
 	if (checkpointStorageConfigured())
 		for (const chat of removed) await removeChatObjects(input.userId, chat.id);
 	for (const chat of removed)

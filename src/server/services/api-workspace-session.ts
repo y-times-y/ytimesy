@@ -718,11 +718,15 @@ async function sentView(
 export async function stopApiWorkspaceTask(scope: CodexSessionScope) {
 	if (!scope.sessionId) throw new Error("Select a chat first.");
 	const { userId, sessionId } = scope;
-	await cancelServerTurn(userId, sessionId);
+	await cancelServerTurn(userId, sessionId, "user-stop");
 	// Stop on a parent stops its whole subagent tree; cancelled children send no reports.
 	await Promise.all(
 		(await descendantAgentSessionMetadata(userId, sessionId))
 			.filter((child) => child.agentRole && child.turnStatus === "running")
-			.map((child) => cancelServerTurn(userId, child.id).catch(() => {})),
+			.map((child) =>
+				cancelServerTurn(userId, child.id, "user-stop-subagent").catch(
+					() => {},
+				),
+			),
 	);
 }

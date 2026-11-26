@@ -420,5 +420,5 @@ export async function sendSubscriptionTask(
 /** Stops first, like stopApiWorkspaceTask; the caller reads the view after. */
 export async function stopSubscriptionTask(scope: CodexSessionScope) {
 	if (!scope.sessionId) throw new Error("Select a chat first.");
-	await cancelServerTurn(scope.userId, scope.sessionId);
+	await cancelServerTurn(scope.userId, scope.sessionId, "user-stop");
 }

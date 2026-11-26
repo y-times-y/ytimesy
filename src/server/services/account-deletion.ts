@@ -66,7 +66,7 @@ export async function deleteAccount(
 	// stops the deletion for a retry. (A purged chat's object also refuses
 	// anything an in-flight turn still writes.)
 	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
-		cancelServerTurn(userId, sessionId),
+		cancelServerTurn(userId, sessionId, "account-delete"),
 	).catch(() => {
 		throw new Response(
 			"Your account was not deleted because a running turn could not be stopped. Try again.",

@@ -28,7 +28,7 @@ export async function archiveOwned(
 	id: string,
 ) {
 	const chats = kind === "chat" ? [id] : await projectRootChatIds(userId, id);
-	for (const chatId of chats) await cancelServerTurn(userId, chatId);
+	for (const chatId of chats) await cancelServerTurn(userId, chatId, "archive");
 	const archived =
 		kind === "chat"
 			? await setChatArchived(userId, id, true)
