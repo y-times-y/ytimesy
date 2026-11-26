@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TURN_NOT_STARTED } from "./api-turn-failure";
+import { MachineNotResponding, TURN_NOT_STARTED } from "./api-turn-failure";
 import { CoordinationFailure } from "./conversation-turn-control";
 import {
 	GENUINE_STEP_RETRIES,
@@ -33,6 +33,13 @@ describe("turn interruption rules", () => {
 			"Turn heartbeat or coordination service became unavailable.",
 		])
 			expect(isTransientInfrastructureFailure(new Error(message))).toBe(true);
+	});
+	it("treats a machine that stayed down through a whole recovery as transient", () => {
+		expect(
+			isTransientInfrastructureFailure(
+				new MachineNotResponding(new Error("x")),
+			),
+		).toBe(true);
 	});
 	it("never retries a refusal, a Stop or an ordinary bug as infrastructure", () => {
 		expect(
