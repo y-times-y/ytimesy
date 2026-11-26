@@ -41,7 +41,7 @@ const HOST_CANNOT_RUN_VM =
 	/started but is not answering|server is at capacity/i;
 const LEASE_BUSY = /another operation is updating this machine/i;
 const QUOTA =
-	/LIMIT_EXCEEDED|limit of \d+ VMs|at its VM limit|allowance for vcpu_time|memory_time has been used|compute allowance/i;
+	/LIMIT_EXCEEDED|limit of \d+ VMs|at its VM limit|allowance for vcpu_time|memory_time has been used|compute allowance|workspace storage is nearly full/i;
 
 function chain(error: unknown): unknown[] {
 	const seen: unknown[] = [];

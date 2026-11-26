@@ -8,7 +8,8 @@ export type OwnerAlertKind =
 	| "interruption"
 	| "interruption-digest"
 	| "canary-failed"
-	| "provider-account-limit";
+	| "provider-account-limit"
+	| "storage-quota";
 
 export type OwnerAlert = {
 	readonly kind: OwnerAlertKind;

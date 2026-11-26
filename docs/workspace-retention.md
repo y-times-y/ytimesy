@@ -1,5 +1,33 @@
 # Workspace retention
 
+## Decision 2026-11-26: scheduled storage retention and a creation guard
+
+Freestyle storage (Hobby plan, 3,125 GiB) hit 99.8% on 2026-11-25 and 2026-11-26
+after archived chats and test seeds kept their 32 GiB machines. The
+`infrastructure` background job (the existing runner path; no Durable Object,
+cron-only) now runs `runStorageRetention` (`adapters/freestyle/storage-retention.ts`):
+
+- **Archived chats:** the existing `releaseArchivedMachines` (archive-expiry job)
+  deletes the machine once the chat's workspace checkpoint is current.
+- **Idle chats (7 days, `IDLE_WORKSPACE_DAYS`):** a machine goes when every chat
+  bound to it is not canary, has no running or queued turn, has not changed for 7
+  days, the provider shows no network activity for 7 days, and the chat is
+  archived or has a current checkpoint taken on that machine. Never template,
+  build, retained-recovery or running machines.
+- **Stale builds:** the machine of an environment build that failed over a day ago
+  and that no workspace uses.
+- **Alerts:** owner email at 80%, 90% and 95%, once per level per UTC day
+  (`storage-quota` alert). Usage = machine disks + 32 GiB per snapshot (the list
+  API has no snapshot size); quota override `YTIMESY_STORAGE_QUOTA_GIB`.
+- **Guard:** above 95% a new machine is refused before the hourly create count is
+  spent, with a calm "queued" message classified as a provider-quota wait
+  (`storage-guard.ts`). A stale (>30 min), missing or unreadable reading never blocks.
+- **Hourly cap:** the count is consumed at admission and refunded when the create
+  fails (`refundUserAction`, shipped 2026-11-25), so only successful creations count.
+- **Not automated:** orphan snapshots. Development and production share one Freestyle
+  account, and each database only knows its own snapshots, so one cannot tell an
+  orphan from the other's. Do it by hand against both databases.
+
 ## Experiment 2026-11-16: pausing while the model thinks (off by default)
 
 `YTIMESY_PAUSE_VM_WHILE_THINKING=true` pauses a turn's VM 10 s

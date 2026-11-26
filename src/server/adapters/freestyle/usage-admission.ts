@@ -16,6 +16,7 @@ import {
 } from "../infrastructure-usage";
 import { loadToolsSnapshotSetting } from "../product-settings";
 import { consumeUserAction, refundUserAction } from "../user-action-rate";
+import { assertStorageHasRoom } from "./storage-guard";
 import { machineBudgetSpent } from "./machine-failure";
 import { CHEAP_BASE_RESOURCES, CHEAP_BASE_SNAPSHOT } from "./product-vm";
 import { sessionSlugMatch, uuidSlugMatch } from "./slug-sql";
@@ -699,6 +700,8 @@ export async function admitVmCreate(
 		// Every new machine counts against its owner's creation limit.
 		const context = await admissionContext(connection, slug);
 		owner = verifiedOwner(context);
+		// Before the hourly count is spent: a held-back create costs nothing.
+		await assertStorageHasRoom();
 		await consumeUserAction(owner, "vm-create", connection);
 		const admitted = await admittedCap(
 			slug,

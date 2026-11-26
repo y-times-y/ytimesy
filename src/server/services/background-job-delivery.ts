@@ -28,6 +28,7 @@ import {
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
+import { runStorageRetention } from "../adapters/freestyle/storage-retention";
 import { releaseReplacedTemplateSnapshots } from "../adapters/freestyle/template-snapshot-release";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { settleRetainedWorkspaces } from "../adapters/freestyle/workspace-retention";
@@ -227,6 +228,11 @@ export async function deliverBackgroundJob(
 							run: () => reconcileInfrastructureVms(client),
 						},
 						{ name: "fleet-costs", run: () => observeFleetCosts(client) },
+						// Idle chat machines, stale builds, 80/90% alerts (docs/workspace-retention.md).
+						{
+							name: "storage-retention",
+							run: () => runStorageRetention(client),
+						},
 						{
 							name: "settle-retained-workspaces",
 							run: () => settleRetainedWorkspaces(client),
