@@ -335,6 +335,17 @@ export const boxPortArgs = {
 	}),
 	/** Whether the account has a Codex sign-in the turn can use. */
 	codexAuth: z.object({}),
+	/**
+	 * Several subscription accounts of one provider (subscription-accounts.ts):
+	 * the edge puts the chat's pinned or Auto's account in use before a turn
+	 * (`prepare`), or moves to the next one when the plan hit a limit
+	 * (`rotate`). The owner and chat come from the turn, never from the box.
+	 */
+	subscriptionAccount: z.object({
+		action: z.enum(["prepare", "rotate"]),
+		provider: z.enum(["codex", "claude"]),
+		reportedResetAt: z.number().finite().nullable().optional(),
+	}),
 	lifecycleContinuations: z.object({}),
 	conversationPointCodeRef: z.object({ messageId: portKey }),
 	verificationBaseline: z.object({ directory: z.string().max(4096) }),

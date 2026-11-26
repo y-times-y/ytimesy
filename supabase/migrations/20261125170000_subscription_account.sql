@@ -43,8 +43,16 @@ alter table agent_account
   add column label text check (label is null or char_length(label) between 1 and 60),
   add column priority integer not null default 0,
   add column last_used_at timestamptz,
-  add column limited_until timestamptz;
+  add column limited_until timestamptz,
+  add column account_id uuid not null default gen_random_uuid(),
+  add column activated_at timestamptz not null default now();
 alter table claude_subscription
   add column label text check (label is null or char_length(label) between 1 and 60),
   add column priority integer not null default 0,
-  add column last_used_at timestamptz;
+  add column last_used_at timestamptz,
+  add column account_id uuid not null default gen_random_uuid(),
+  add column activated_at timestamptz not null default now();
+-- The row of a provider's main connection holds the account in use ("the
+-- slot"); switching accounts moves an account's whole state into it, so every
+-- existing path (relay, Claude proxy, runner boxes) keeps reading one place.
+-- account_id is the account's own id and travels with it.

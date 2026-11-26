@@ -249,6 +249,11 @@ function sharedSubscriptionConnection(userId: string) {
 	return entry;
 }
 
+/** The user's account in use changed: the next request reads its login afresh. */
+export function forgetSubscriptionConnection(userId: string) {
+	connections.delete(userId);
+}
+
 /** Test hook: forget shared token reads between cases. */
 export function forgetSubscriptionConnectionsForTests() {
 	connections.clear();

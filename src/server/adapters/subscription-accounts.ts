@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import {
+	accountAfterLimit,
+	chooseAccount,
 	effectiveAccountState,
 	limitedUntilFor,
 	maskAccountEmail,
@@ -15,16 +17,29 @@ import {
 } from "./claude-subscription";
 import { database } from "./database";
 
+/**
+ * Several accounts of one provider. A provider's existing main connection row
+ * (agent_account for Codex, claude_subscription for Claude) is "the slot": it
+ * holds the account in use, so the relay, the Claude proxy and the runner
+ * boxes keep reading one place. The other accounts wait in
+ * subscription_account; switching moves an account's whole state (sealed
+ * login, name, limits, order) into the slot and the old one out, under the
+ * same row lock token refresh uses. A user with one account never has an
+ * extra row and nothing here runs for them.
+ */
+
 /** More than this is a sign of pooling; a person owns a handful of plans. */
 export const MAX_ACCOUNTS_PER_PROVIDER = 5;
+/** A limit seen this soon after a switch may come from the previous account's cached login. */
+export const SWITCH_SETTLE_MS = 30_000;
 
-/** The vault binding of an extra account's token: its user and its own id. */
+/** The vault binding of a waiting account's token: its user and its own id. */
 const binding = (userId: string, accountId: string) => ({
 	purpose: `subscription-account:${accountId}`,
 	userId,
 });
-/** The bindings the single (primary) connections already use. */
-const primaryBinding = (provider: SubscriptionProvider, userId: string) => ({
+/** The bindings the main connections already use. */
+const slotBinding = (provider: SubscriptionProvider, userId: string) => ({
 	purpose: provider === "codex" ? "codex-auth" : "claude-subscription",
 	userId,
 });
@@ -42,7 +57,8 @@ export type PublicSubscriptionAccount = {
 	readonly priority: number;
 	readonly lastUsedAt: number | null;
 	readonly connectedAt: number | null;
-	readonly primary: boolean;
+	/** The account serving turns now (the slot). */
+	readonly active: boolean;
 };
 
 type Row = {
@@ -69,7 +85,7 @@ const DEFAULT_LABEL: Record<SubscriptionProvider, string> = {
 function toPublic(
 	provider: SubscriptionProvider,
 	row: Row,
-	primary: boolean,
+	active: boolean,
 	now: number,
 ): PublicSubscriptionAccount {
 	const stored: SubscriptionAccountState =
@@ -77,7 +93,7 @@ function toPublic(
 			? "limited"
 			: row.status === "expired" || row.status === "refused"
 				? "expired"
-				: // The Codex primary has no limited status: a future limited_until is it.
+				: // The Codex slot has no limited status: a future limited_until is it.
 					row.limited_until !== null && row.limited_until > now
 					? "limited"
 					: "valid";
@@ -88,7 +104,7 @@ function toPublic(
 	return {
 		id: row.id,
 		provider,
-		label: row.label ?? (primary ? "Main account" : DEFAULT_LABEL[provider]),
+		label: row.label ?? (active ? "Main account" : DEFAULT_LABEL[provider]),
 		email: maskAccountEmail(row.email),
 		planType: row.plan_type,
 		state,
@@ -97,11 +113,11 @@ function toPublic(
 		priority: row.priority,
 		lastUsedAt: row.last_used_at,
 		connectedAt: row.connected_at,
-		primary,
+		active,
 	};
 }
 
-/** Every account of the user: the primary connections first, then the extras. */
+/** Every account of the user: the ones in use first within each provider. */
 export async function listSubscriptionAccounts(
 	userId: string,
 	now = Date.now(),
@@ -109,7 +125,7 @@ export async function listSubscriptionAccounts(
 	const db = database();
 	const [codex, claude, extras] = await Promise.all([
 		db.query<Row>(
-			`select '${PRIMARY_ACCOUNT_ID}' as id,label,email,plan_type,status,message,
+			`select account_id::text as id,label,email,plan_type,status,message,
 			 ${ms("limited_until")} as limited_until,priority,${ms("last_used_at")} as last_used_at,
 			 ${ms("updated_at")} as connected_at
 			 from agent_account where user_id=$1 and provider='codex'
@@ -117,7 +133,7 @@ export async function listSubscriptionAccounts(
 			[userId],
 		),
 		db.query<Row>(
-			`select '${PRIMARY_ACCOUNT_ID}' as id,label,null as email,null as plan_type,
+			`select account_id::text as id,label,null as email,null as plan_type,
 			 status,message,${ms("limited_until")} as limited_until,priority,
 			 ${ms("last_used_at")} as last_used_at,${ms("connected_at")} as connected_at
 			 from claude_subscription where user_id=$1`,
@@ -177,6 +193,67 @@ async function assertRoom(userId: string, provider: SubscriptionProvider) {
 		);
 }
 
+/** The slot table's statement for one provider; `$1` is the user, `$2` the account id. */
+const SLOT = {
+	codex: {
+		table: "agent_account",
+		where: "user_id=$1 and provider='codex' and account_id=$2::uuid",
+	},
+	claude: {
+		table: "claude_subscription",
+		where: "user_id=$1 and account_id=$2::uuid",
+	},
+} as const;
+
+async function slotAccountId(userId: string, provider: SubscriptionProvider) {
+	if (provider === "grok") return null;
+	const row = (
+		await database().query<{ id: string }>(
+			provider === "codex"
+				? "select account_id::text as id from agent_account where user_id=$1 and provider='codex' and encrypted_codex_auth is not null"
+				: "select account_id::text as id from claude_subscription where user_id=$1",
+			[userId],
+		)
+	).rows[0];
+	return row?.id ?? null;
+}
+
+/** "primary" (the old name for the main connection) means the account in the slot. */
+async function resolveAccountId(
+	userId: string,
+	provider: SubscriptionProvider,
+	accountId: string,
+) {
+	return accountId === PRIMARY_ACCOUNT_ID
+		? ((await slotAccountId(userId, provider)) ?? accountId)
+		: accountId;
+}
+
+/** Runs the slot's statement for the account, else the waiting account's. */
+async function updateAccount(
+	userId: string,
+	provider: SubscriptionProvider,
+	accountId: string,
+	slotSql: string,
+	extraSql: string,
+	values: readonly unknown[],
+) {
+	if (provider === "grok") return 0;
+	const id = await resolveAccountId(userId, provider, accountId);
+	if (!/^[0-9a-f-]{36}$/i.test(id)) return 0;
+	const slot = SLOT[provider];
+	const inSlot = await database().query(
+		`update ${slot.table} set ${slotSql} where ${slot.where}`,
+		[userId, id, ...values],
+	);
+	if (inSlot.rowCount) return inSlot.rowCount;
+	const waiting = await database().query(
+		`update subscription_account set ${extraSql} where user_id=$1 and id=$2::uuid and provider='${provider}'`,
+		[userId, id, ...values],
+	);
+	return waiting.rowCount ?? 0;
+}
+
 /** An extra Claude account, from a `claude setup-token` token (the existing add flow). */
 export async function addClaudeAccount(
 	userId: string,
@@ -196,15 +273,15 @@ export async function addClaudeAccount(
 		);
 	const externalId = createHash("sha256").update(token).digest("hex");
 	// The main Claude connection may already hold this very token.
-	const primary = await database().query<{ sealed_token: string }>(
+	const held = await database().query<{ sealed_token: string }>(
 		"select sealed_token from claude_subscription where user_id=$1",
 		[userId],
 	);
 	if (
-		primary.rows[0] &&
+		held.rows[0] &&
 		(await unseal(
-			primary.rows[0].sealed_token,
-			primaryBinding("claude", userId),
+			held.rows[0].sealed_token,
+			slotBinding("claude", userId),
 		).catch(() => null)) === token
 	)
 		throw new Error("This Claude account is already connected.");
@@ -223,7 +300,7 @@ export async function addClaudeAccount(
 
 /**
  * An extra Codex account from a finished device sign-in. The caller holds the
- * row lock that serialised the login; `auth` is the managed login JSON.
+ * row lock that serialised the login.
  */
 export async function addCodexAccount(
 	client: {
@@ -237,7 +314,16 @@ export async function addCodexAccount(
 		email: string | null;
 		label: string;
 	},
-): Promise<"added" | "duplicate"> {
+): Promise<"added" | "duplicate" | "full"> {
+	const count = await client.query(
+		"select count(*)::int as n from subscription_account where user_id=$1 and provider='codex'",
+		[userId],
+	);
+	if (
+		((count.rows[0] as { n: number }).n ?? 0) + 1 >=
+		MAX_ACCOUNTS_PER_PROVIDER
+	)
+		return "full";
 	const id = crypto.randomUUID();
 	const inserted = await client.query(
 		`insert into subscription_account(id,user_id,provider,label,external_id,email,plan_type,sealed_auth,priority)
@@ -257,7 +343,7 @@ export async function addCodexAccount(
 	return inserted.rows.length ? "added" : "duplicate";
 }
 
-/** The seal an extra account's login uses, so the device flow can store it. */
+/** The seal a waiting account's login uses, so the device flow can store it. */
 export const extraAccountSeal = (
 	userId: string,
 	accountId: string,
@@ -276,41 +362,117 @@ export async function renameSubscriptionAccount(
 	label: string,
 ) {
 	const name = cleanLabel(label);
-	const result =
-		accountId === PRIMARY_ACCOUNT_ID
-			? await database().query(
-					provider === "codex"
-						? "update agent_account set label=$2,updated_at=now() where user_id=$1 and provider='codex'"
-						: "update claude_subscription set label=$2,updated_at=now() where user_id=$1",
-					[userId, name],
-				)
-			: await database().query(
-					"update subscription_account set label=$3,updated_at=now() where user_id=$1 and id=$2::uuid and provider=$4",
-					[userId, accountId, name, provider],
-				);
-	if (!result.rowCount) throw new Error("That account no longer exists.");
+	const changed = await updateAccount(
+		userId,
+		provider,
+		accountId,
+		"label=$3,updated_at=now()",
+		"label=$3,updated_at=now()",
+		[name],
+	);
+	if (!changed) throw new Error("That account no longer exists.");
 }
 
-/**
- * Disconnects one account. Disconnecting the main one promotes the next
- * account into its place (re-sealed under the main binding), because every
- * existing code path reads the main connection.
- */
-export async function removeSubscriptionAccount(
+/** The whole state of one account, opened, so it can move between the slot and the waiting rows. */
+type Held = {
+	accountId: string;
+	externalId: string;
+	secret: string;
+	label: string | null;
+	email: string | null;
+	planType: string | null;
+	state: SubscriptionAccountState;
+	message: string | null;
+	limitedUntil: Date | null;
+	priority: number;
+	lastUsedAt: Date | null;
+	planUsage: unknown;
+	planUsageAt: Date | null;
+};
+
+type Client = {
+	query: <R = Record<string, unknown>>(
+		sql: string,
+		values?: unknown[],
+	) => Promise<{ rows: R[]; rowCount?: number | null }>;
+};
+
+function codexExternalId(secret: string) {
+	return (JSON.parse(secret) as { tokens: { account_id: string } }).tokens
+		.account_id;
+}
+
+async function readSlot(
+	client: Client,
+	provider: "codex" | "claude",
 	userId: string,
-	provider: SubscriptionProvider,
+): Promise<Held | null> {
+	const row = (
+		await client.query<{
+			account_id: string;
+			secret: string;
+			label: string | null;
+			email: string | null;
+			plan_type: string | null;
+			status: string;
+			message: string | null;
+			limited_until: Date | null;
+			priority: number;
+			last_used_at: Date | null;
+			plan_usage: unknown;
+			plan_usage_at: Date | null;
+		}>(
+			provider === "codex"
+				? `select account_id::text,encrypted_codex_auth as secret,label,email,plan_type,status,message,
+				   limited_until,priority,last_used_at,null as plan_usage,null as plan_usage_at
+				   from agent_account where user_id=$1 and provider='codex' and encrypted_codex_auth is not null for update`
+				: `select account_id::text,sealed_token as secret,label,null as email,null as plan_type,status,message,
+				   limited_until,priority,last_used_at,plan_usage,plan_usage_at
+				   from claude_subscription where user_id=$1 for update`,
+			[userId],
+		)
+	).rows[0];
+	if (!row) return null;
+	const secret = await unseal(row.secret, slotBinding(provider, userId));
+	const limited =
+		row.status === "limited" ||
+		(provider === "codex" &&
+			row.limited_until !== null &&
+			new Date(row.limited_until).getTime() > Date.now());
+	return {
+		accountId: row.account_id,
+		externalId:
+			provider === "codex"
+				? codexExternalId(secret)
+				: createHash("sha256").update(secret).digest("hex"),
+		secret,
+		label: row.label,
+		email: row.email,
+		planType: row.plan_type,
+		state:
+			row.status === "expired" || row.status === "refused"
+				? "expired"
+				: limited
+					? "limited"
+					: "valid",
+		message: row.message,
+		limitedUntil: row.limited_until,
+		priority: row.priority,
+		lastUsedAt: row.last_used_at,
+		planUsage: row.plan_usage,
+		planUsageAt: row.plan_usage_at,
+	};
+}
+
+async function readWaiting(
+	client: Client,
+	userId: string,
 	accountId: string,
-) {
-	if (accountId !== PRIMARY_ACCOUNT_ID) {
-		await database().query(
-			"delete from subscription_account where user_id=$1 and id=$2::uuid and provider=$3",
-			[userId, accountId, provider],
-		);
-		return;
-	}
-	const next = (
-		await database().query<{
+): Promise<Held | null> {
+	const row = (
+		await client.query<{
 			id: string;
+			external_id: string;
 			sealed_auth: string;
 			label: string;
 			email: string | null;
@@ -318,9 +480,185 @@ export async function removeSubscriptionAccount(
 			status: string;
 			message: string | null;
 			limited_until: Date | null;
+			priority: number;
+			last_used_at: Date | null;
+			plan_usage: unknown;
+			plan_usage_at: Date | null;
 		}>(
-			`select id::text,sealed_auth,label,email,plan_type,status,message,limited_until
-			 from subscription_account where user_id=$1 and provider=$2
+			`select id::text,external_id,sealed_auth,label,email,plan_type,status,message,limited_until,
+			 priority,last_used_at,plan_usage,plan_usage_at
+			 from subscription_account where user_id=$1 and id=$2::uuid for update`,
+			[userId, accountId],
+		)
+	).rows[0];
+	if (!row) return null;
+	return {
+		accountId: row.id,
+		externalId: row.external_id,
+		secret: await unseal(row.sealed_auth, binding(userId, row.id)),
+		label: row.label,
+		email: row.email,
+		planType: row.plan_type,
+		state:
+			row.status === "limited"
+				? "limited"
+				: row.status === "expired" || row.status === "refused"
+					? "expired"
+					: "valid",
+		message: row.message,
+		limitedUntil: row.limited_until,
+		priority: row.priority,
+		lastUsedAt: row.last_used_at,
+		planUsage: row.plan_usage,
+		planUsageAt: row.plan_usage_at,
+	};
+}
+
+async function writeSlot(
+	client: Client,
+	provider: "codex" | "claude",
+	userId: string,
+	held: Held,
+) {
+	const sealed = await seal(held.secret, slotBinding(provider, userId));
+	if (provider === "codex")
+		await client.query(
+			`update agent_account set account_id=$2::uuid,encrypted_codex_auth=$3,label=$4,email=$5,plan_type=$6,
+			 status=$7,message=$8,limited_until=$9,priority=$10,last_used_at=$11,
+			 activated_at=now(),updated_at=now() where user_id=$1 and provider='codex'`,
+			[
+				userId,
+				held.accountId,
+				sealed,
+				held.label,
+				held.email,
+				held.planType,
+				held.state === "expired" ? "expired" : "connected",
+				held.message,
+				held.limitedUntil,
+				held.priority,
+				held.lastUsedAt,
+			],
+		);
+	else
+		await client.query(
+			`update claude_subscription set account_id=$2::uuid,sealed_token=$3,label=$4,
+			 status=$5,message=$6,limited_until=$7,priority=$8,last_used_at=$9,
+			 plan_usage=$10::jsonb,plan_usage_at=$11,activated_at=now(),updated_at=now() where user_id=$1`,
+			[
+				userId,
+				held.accountId,
+				sealed,
+				held.label,
+				held.state === "expired"
+					? "refused"
+					: held.state === "limited"
+						? "limited"
+						: "connected",
+				held.message,
+				held.limitedUntil,
+				held.priority,
+				held.lastUsedAt,
+				held.planUsage === null ? null : JSON.stringify(held.planUsage),
+				held.planUsageAt,
+			],
+		);
+}
+
+async function writeWaiting(
+	client: Client,
+	provider: "codex" | "claude",
+	userId: string,
+	replacedId: string,
+	held: Held,
+) {
+	await client.query(
+		`update subscription_account set id=$3::uuid,external_id=$4,sealed_auth=$5,label=$6,email=$7,plan_type=$8,
+		 status=$9,message=$10,limited_until=$11,priority=$12,last_used_at=$13,
+		 plan_usage=$14::jsonb,plan_usage_at=$15,updated_at=now()
+		 where user_id=$1 and id=$2::uuid and provider='${provider}'`,
+		[
+			userId,
+			replacedId,
+			held.accountId,
+			held.externalId,
+			await seal(held.secret, binding(userId, held.accountId)),
+			held.label ?? "Main account",
+			held.email,
+			held.planType,
+			held.state === "expired"
+				? "expired"
+				: held.state === "limited"
+					? "limited"
+					: "connected",
+			held.message,
+			held.limitedUntil,
+			held.priority,
+			held.lastUsedAt,
+			held.planUsage === null ? null : JSON.stringify(held.planUsage),
+			held.planUsageAt,
+		],
+	);
+}
+
+/**
+ * Puts the account in the slot (and the slot's account in its place), under
+ * the row locks token refresh takes. "already" when it is there.
+ */
+export async function activateSubscriptionAccount(
+	userId: string,
+	provider: SubscriptionProvider,
+	accountId: string,
+): Promise<"switched" | "already" | "missing"> {
+	if (provider === "grok") return "missing";
+	const client = await database().connect();
+	try {
+		await client.query("begin");
+		const slot = await readSlot(client, provider, userId);
+		if (!slot) {
+			await client.query("rollback");
+			return "missing";
+		}
+		if (slot.accountId === accountId) {
+			await client.query("rollback");
+			return "already";
+		}
+		const waiting = await readWaiting(client, userId, accountId);
+		if (!waiting) {
+			await client.query("rollback");
+			return "missing";
+		}
+		await writeWaiting(client, provider, userId, waiting.accountId, slot);
+		await writeSlot(client, provider, userId, waiting);
+		await client.query("commit");
+		return "switched";
+	} catch (cause) {
+		await client.query("rollback").catch(() => undefined);
+		throw cause;
+	} finally {
+		client.release();
+	}
+}
+
+/** Disconnects one account; the slot's goes first-in-line account into its place. */
+export async function removeSubscriptionAccount(
+	userId: string,
+	provider: SubscriptionProvider,
+	accountId: string,
+) {
+	if (provider === "grok") return;
+	const id = await resolveAccountId(userId, provider, accountId);
+	const slotId = await slotAccountId(userId, provider);
+	if (id !== slotId) {
+		await database().query(
+			"delete from subscription_account where user_id=$1 and id=$2::uuid and provider=$3",
+			[userId, id, provider],
+		);
+		return;
+	}
+	const next = (
+		await database().query<{ id: string }>(
+			`select id::text from subscription_account where user_id=$1 and provider=$2
 			 order by priority,connected_at limit 1`,
 			[userId, provider],
 		)
@@ -334,42 +672,12 @@ export async function removeSubscriptionAccount(
 		);
 		return;
 	}
-	const plain = await unseal(next.sealed_auth, binding(userId, next.id));
-	const sealed = await seal(plain, primaryBinding(provider, userId));
-	if (provider === "codex")
-		await database().query(
-			`insert into agent_account(user_id,provider,status,encrypted_codex_auth,plan_type,email,label,priority,limited_until)
-			 values($1,'codex','connected',$2,$3,$4,$5,0,$6)
-			 on conflict(user_id,provider) do update set status='connected',encrypted_codex_auth=excluded.encrypted_codex_auth,
-			 plan_type=excluded.plan_type,email=excluded.email,label=excluded.label,priority=0,
-			 limited_until=excluded.limited_until,message=null,updated_at=now()`,
-			[
-				userId,
-				sealed,
-				next.plan_type,
-				next.email,
-				next.label,
-				next.limited_until,
-			],
-		);
-	else
-		await database().query(
-			`insert into claude_subscription(user_id,sealed_token,status,message,limited_until,label,priority)
-			 values($1,$2,$3,$4,$5,$6,0)
-			 on conflict(user_id) do update set sealed_token=excluded.sealed_token,status=excluded.status,
-			 message=excluded.message,limited_until=excluded.limited_until,label=excluded.label,priority=0,updated_at=now()`,
-			[
-				userId,
-				sealed,
-				next.status === "expired" ? "refused" : next.status,
-				next.message,
-				next.limited_until,
-				next.label,
-			],
-		);
-	await database().query("delete from subscription_account where id=$1::uuid", [
-		next.id,
-	]);
+	// Swap the next account in, then drop the one that was disconnected.
+	await activateSubscriptionAccount(userId, provider, next.id);
+	await database().query(
+		"delete from subscription_account where user_id=$1 and id=$2::uuid",
+		[userId, id],
+	);
 }
 
 /** Sets the order tried first to last (priority 0, 1, 2 ...). Unknown ids are ignored. */
@@ -380,18 +688,9 @@ export async function reorderSubscriptionAccounts(
 ) {
 	let priority = 0;
 	for (const id of orderedIds) {
-		if (id === PRIMARY_ACCOUNT_ID)
-			await database().query(
-				provider === "codex"
-					? "update agent_account set priority=$2 where user_id=$1 and provider='codex'"
-					: "update claude_subscription set priority=$2 where user_id=$1",
-				[userId, priority],
-			);
-		else
-			await database().query(
-				"update subscription_account set priority=$3 where user_id=$1 and id=$2::uuid and provider=$4",
-				[userId, id, priority, provider],
-			);
+		await updateAccount(userId, provider, id, "priority=$3", "priority=$3", [
+			priority,
+		]);
 		priority += 1;
 	}
 }
@@ -403,11 +702,9 @@ export async function pinSessionAccount(
 	accountId: string | null,
 ) {
 	if (accountId !== null && accountId !== PRIMARY_ACCOUNT_ID) {
-		const exists = await database().query(
-			"select 1 from subscription_account where user_id=$1 and id=$2::uuid",
-			[userId, accountId],
-		);
-		if (!exists.rowCount) throw new Error("That account no longer exists.");
+		const accounts = await listSubscriptionAccounts(userId);
+		if (!accounts.some((a) => a.id === accountId))
+			throw new Error("That account no longer exists.");
 	}
 	const result = await database().query(
 		"update agent_session set subscription_pin=$3 where id=$1 and user_id=$2",
@@ -443,18 +740,16 @@ export async function markAccountLimited(
 	});
 	const message = input.message ?? "This plan's usage is used up for now.";
 	try {
-		if (accountId === PRIMARY_ACCOUNT_ID)
-			await database().query(
-				provider === "codex"
-					? "update agent_account set limited_until=to_timestamp($2::float8/1000),message=$3 where user_id=$1 and provider='codex'"
-					: "update claude_subscription set status='limited',limited_until=to_timestamp($2::float8/1000),message=$3,updated_at=now() where user_id=$1",
-				[userId, until, message],
-			);
-		else
-			await database().query(
-				"update subscription_account set status='limited',limited_until=to_timestamp($3::float8/1000),message=$4,updated_at=now() where user_id=$1 and id=$2::uuid",
-				[userId, accountId, until, message],
-			);
+		await updateAccount(
+			userId,
+			provider,
+			accountId,
+			provider === "codex"
+				? "limited_until=to_timestamp($3::float8/1000),message=$4"
+				: "status='limited',limited_until=to_timestamp($3::float8/1000),message=$4,updated_at=now()",
+			"status='limited',limited_until=to_timestamp($3::float8/1000),message=$4,updated_at=now()",
+			[until, message],
+		);
 	} catch (error) {
 		console.warn("Could not record an account limit.", {
 			reason: error instanceof Error ? error.name : "unknown",
@@ -463,24 +758,165 @@ export async function markAccountLimited(
 	return until;
 }
 
-/** Notes that an account served a turn (the round robin). Never throws. */
+/** Notes that an account served a turn. Never throws. */
 export async function recordAccountUsed(
 	userId: string,
 	provider: SubscriptionProvider,
 	accountId: string,
 ) {
 	try {
-		await database().query(
-			accountId === PRIMARY_ACCOUNT_ID
-				? provider === "codex"
-					? "update agent_account set last_used_at=now() where user_id=$1 and provider='codex' and $2::text is not null"
-					: "update claude_subscription set last_used_at=now() where user_id=$1 and $2::text is not null"
-				: "update subscription_account set last_used_at=now() where user_id=$1 and id=$2::uuid",
-			[userId, accountId],
+		await updateAccount(
+			userId,
+			provider,
+			accountId,
+			"last_used_at=now()",
+			"last_used_at=now()",
+			[],
 		);
 	} catch (error) {
 		console.warn("Could not record which account served a turn.", {
 			reason: error instanceof Error ? error.name : "unknown",
 		});
+	}
+}
+
+async function otherTurnRunning(userId: string, turnId: string | null) {
+	const result = await database().query(
+		`select 1 from api_turn where user_id=$1 and state='running'
+		 and ($2::uuid is null or id <> $2::uuid) limit 1`,
+		[userId, turnId],
+	);
+	return (result.rowCount ?? 0) > 0;
+}
+
+export type TurnAccount = {
+	readonly accountId: string;
+	readonly label: string;
+	readonly switched: boolean;
+};
+
+/**
+ * Before a turn on a Codex or Claude subscription: the chat's pinned account,
+ * or Auto's pick, goes into the slot. A user with one account is untouched.
+ * Auto stays on the account in use while it is as good as any (no churn); a
+ * switch is skipped while another of the user's turns runs, so no running
+ * turn changes account under itself. Never throws: on any doubt the turn runs
+ * on the account in the slot, as before.
+ */
+export async function prepareTurnAccount(
+	userId: string,
+	provider: SubscriptionProvider,
+	input: { sessionId: string; turnId: string | null; now?: number },
+): Promise<TurnAccount | null> {
+	try {
+		const now = input.now ?? Date.now();
+		const all = (await listSubscriptionAccounts(userId, now)).filter(
+			(a) => a.provider === provider,
+		);
+		if (all.length < 2) return null;
+		const active = all.find((a) => a.active);
+		if (!active) return null;
+		const pinRaw = await sessionAccountPin(userId, input.sessionId);
+		const pin = pinRaw
+			? await resolveAccountId(userId, provider, pinRaw)
+			: null;
+		const accounts = selectionAccounts(all);
+		let chosen = chooseAccount({ accounts, pinnedId: pin, now, provider });
+		const current = accounts.find((a) => a.id === active.id);
+		if (
+			chosen &&
+			current &&
+			chosen.id !== current.id &&
+			!(pin && chosen.id === pin) &&
+			effectiveAccountState(current, now) === "valid" &&
+			current.priority === chosen.priority
+		)
+			chosen = current; // as good as any: stay (no churn)
+		if (!chosen) return null;
+		let switched = false;
+		if (
+			chosen.id !== active.id &&
+			!(await otherTurnRunning(userId, input.turnId))
+		)
+			switched =
+				(await activateSubscriptionAccount(userId, provider, chosen.id)) ===
+				"switched";
+		const serving = switched ? chosen : (current ?? chosen);
+		await recordAccountUsed(userId, provider, serving.id);
+		return { accountId: serving.id, label: serving.label, switched };
+	} catch (error) {
+		console.warn(
+			"Choosing a subscription account failed; using the current one.",
+			{
+				reason: error instanceof Error ? error.name : "unknown",
+			},
+		);
+		return null;
+	}
+}
+
+export type LimitRotation =
+	| { readonly kind: "rotated"; readonly to: TurnAccount }
+	| { readonly kind: "stale" }
+	| { readonly kind: "none" };
+
+/**
+ * The account in use hit a plan limit: it rests until the reported reset and
+ * the next account of the same provider takes over, so the turn goes on
+ * without the person seeing an interruption. "none" when no other account can
+ * serve (the caller then falls to another provider); "stale" when the limit
+ * came right after a switch and may belong to the previous account's cached
+ * login (nothing is recorded). Never throws.
+ */
+export async function rotateAfterLimit(
+	userId: string,
+	provider: SubscriptionProvider,
+	input: { reportedResetAt: number | null; now?: number },
+): Promise<LimitRotation> {
+	try {
+		const now = input.now ?? Date.now();
+		const all = (await listSubscriptionAccounts(userId, now)).filter(
+			(a) => a.provider === provider,
+		);
+		const active = all.find((a) => a.active);
+		if (!active || all.length < 2) return { kind: "none" };
+		const activated = (
+			await database().query<{ at: number }>(
+				provider === "codex"
+					? `select ${ms("activated_at")} as at from agent_account where user_id=$1 and provider='codex'`
+					: `select ${ms("activated_at")} as at from claude_subscription where user_id=$1`,
+				[userId],
+			)
+		).rows[0]?.at;
+		if (activated !== undefined && now - activated < SWITCH_SETTLE_MS)
+			return { kind: "stale" };
+		await markAccountLimited(userId, provider, active.id, {
+			reportedResetAt: input.reportedResetAt,
+			now,
+		});
+		const rested = (await listSubscriptionAccounts(userId, now)).filter(
+			(a) => a.provider === provider,
+		);
+		const next = accountAfterLimit({
+			accounts: selectionAccounts(rested),
+			failedId: active.id,
+			now,
+		});
+		if (!next) return { kind: "none" };
+		if (
+			(await activateSubscriptionAccount(userId, provider, next.id)) !==
+			"switched"
+		)
+			return { kind: "none" };
+		await recordAccountUsed(userId, provider, next.id);
+		return {
+			kind: "rotated",
+			to: { accountId: next.id, label: next.label, switched: true },
+		};
+	} catch (error) {
+		console.warn("Switching subscription account after a limit failed.", {
+			reason: error instanceof Error ? error.name : "unknown",
+		});
+		return { kind: "none" };
 	}
 }

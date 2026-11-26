@@ -51,6 +51,10 @@ import {
 } from "../adapters/prepared-checkout";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
+import {
+	prepareTurnAccount,
+	rotateAfterLimit,
+} from "../adapters/subscription-accounts";
 import { readVerificationBaseline } from "../adapters/turn-verification";
 import { noteUserHub } from "../adapters/user-hub-notes";
 import { projectYMode } from "../adapters/y-mode";
@@ -84,6 +88,17 @@ const lazy = <T extends (...args: never[]) => unknown>(get: () => T): T =>
 		(get() as unknown as (...inner: unknown[]) => unknown)(
 			...args,
 		)) as unknown as T;
+
+/** A switched account's login is read afresh (the Codex token read is shared for seconds). */
+const forgetCodexConnection = async (userId: string) => {
+	try {
+		(
+			await import("../adapters/codex-subscription")
+		).forgetSubscriptionConnection(userId);
+	} catch {
+		// A cached read expires in seconds anyway; this never blocks the turn.
+	}
+};
 
 export const localTurnPorts: TurnPorts = {
 	renewApiTurn: lazy(() => renewApiTurn),
@@ -133,6 +148,24 @@ export const localTurnPorts: TurnPorts = {
 	claudeSubscriptionStatus: lazy(() => claudeSubscriptionStatus),
 	warmCodexSubscriptionCatalog: lazy(() => warmCodexSubscriptionCatalog),
 	hasManagedCodexAuth: lazy(() => hasManagedCodexAuth),
+	subscriptionAccounts: {
+		prepare: async (provider, turn) => {
+			const chosen = await prepareTurnAccount(turn.user_id, provider, {
+				sessionId: turn.session_id,
+				turnId: turn.id,
+			});
+			if (chosen?.switched) await forgetCodexConnection(turn.user_id);
+			return chosen;
+		},
+		rotate: async (provider, turn, reportedResetAt) => {
+			const rotation = await rotateAfterLimit(turn.user_id, provider, {
+				reportedResetAt,
+			});
+			if (rotation.kind === "rotated")
+				await forgetCodexConnection(turn.user_id);
+			return rotation;
+		},
+	},
 	get gitPushRequests() {
 		return gitPushRequests;
 	},

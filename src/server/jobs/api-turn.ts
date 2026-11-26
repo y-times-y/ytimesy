@@ -1080,6 +1080,22 @@ async function runApiTurnAttempt(
 		turn.user_id,
 		isDevEvalUser,
 	);
+	// Several accounts of the plan's provider: the chat's pinned account, or
+	// Auto's pick, is in use before the turn's first request. One account (the
+	// usual case) and any doubt leave the account in use as it was.
+	const accountProvider: "codex" | "claude" | null = claudeCode
+		? "claude"
+		: subscription && !route.connectionId
+			? "codex"
+			: null;
+	if (
+		accountProvider &&
+		ports.subscriptionAccounts &&
+		(step ? step.index === 1 : !continued)
+	)
+		await ports.subscriptionAccounts
+			.prepare(accountProvider, turn)
+			.catch(() => null);
 	for (const loading of [
 		checkingCodexAuth,
 		loadingConnection,
@@ -3882,6 +3898,65 @@ async function runApiTurnAttempt(
 				? (failoverReason(error) ??
 					(turnFailover(turn.failover) ? fallbackAccountReason(error) : null))
 				: null;
+		// A spent plan with another account of the same provider: that account
+		// takes over and the step runs again on the same route, unseen. Only when
+		// none is left does the turn fall to another provider below.
+		if (
+			reason === "usage-limit" &&
+			accountProvider &&
+			ports.subscriptionAccounts &&
+			!failedAttempt?.inFlight
+		) {
+			try {
+				const rotation = await ports.subscriptionAccounts.rotate(
+					accountProvider,
+					turn,
+					subscriptionLimitResetsAt(error) ?? null,
+				);
+				if (
+					rotation.kind === "rotated" ||
+					(rotation.kind === "stale" &&
+						retried < MODEL_STEP_RETRY_DELAYS_MS.length)
+				) {
+					// The CLI that hit the limit stops; the retry starts a fresh one.
+					if (!abort.signal.aborted) await stopClaudeCodeRun?.();
+					await abortableDelay(
+						rotation.kind === "stale"
+							? (MODEL_STEP_RETRY_DELAYS_MS[retried] ?? 0)
+							: 0,
+						abort.signal,
+					);
+					const partial = failedAttempt?.uncommittedIds ?? [];
+					if (partial.length)
+						items = applyApiProgress(items, turn.id, {
+							type: "retract",
+							ids: step
+								? partial.map((id) => `step-${step.index}:${id}`)
+								: [...partial],
+						});
+					if (failedAttempt?.droppedStepSaved)
+						messages = failedAttempt.committed;
+					const failover = withRouteRetries(
+						turn.failover,
+						route,
+						rotation.kind === "stale" ? retried + 1 : retried,
+					);
+					await checkpointApiTurn(turn, messages, items, failover);
+					console.info("Subscription account switched after a plan limit.", {
+						provider: accountProvider,
+						outcome: rotation.kind,
+					});
+					coordinated = false;
+					leaseCarried = true;
+					return { failedOver: { ...turn, failover, messages, items } };
+				}
+			} catch (cause) {
+				if (!abort.signal.aborted)
+					console.warn("Account switch after a limit failed", {
+						...apiTurnFailureClassification(cause),
+					});
+			}
+		}
 		// A transient failure first runs the step again on the same route, from
 		// the same checkpoint a failover would continue from, after a short
 		// wait. A step whose tools had started is not repeated here: the

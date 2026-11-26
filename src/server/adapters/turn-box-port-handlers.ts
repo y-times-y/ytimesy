@@ -19,7 +19,10 @@ import {
 } from "./agent-task-events";
 import { captureServerAnalytics } from "./analytics";
 import { type ApiTurn, otherRunningTurnOnMachine } from "./api-turns";
-import { codexSubscriptionSelection } from "./codex-subscription";
+import {
+	codexSubscriptionSelection,
+	forgetSubscriptionConnection,
+} from "./codex-subscription";
 import { archiveModelContext } from "./context-archives";
 import { conversationPointCodeRef } from "./conversation-recovery";
 import { coordinateConversationTurn } from "./conversation-turn-control";
@@ -36,6 +39,7 @@ import {
 } from "./prepared-checkout";
 import { acceptPeerInbox, readPeerInbox } from "./server-peer-inbox";
 import { subagentAncestors } from "./subagents";
+import { prepareTurnAccount, rotateAfterLimit } from "./subscription-accounts";
 import { gitRuntimeOverMachines } from "./turn-box-edge-work";
 import { readVerificationBaseline } from "./turn-verification";
 import { noteUserHub } from "./user-hub-notes";
@@ -148,6 +152,24 @@ async function handle(
 			);
 		case "codexAuth":
 			return hasManagedCodexAuth(user);
+		case "subscriptionAccount": {
+			const result =
+				call.args.action === "prepare"
+					? await prepareTurnAccount(user, call.args.provider, {
+							sessionId: session,
+							turnId: turn.id,
+						})
+					: await rotateAfterLimit(user, call.args.provider, {
+							reportedResetAt: call.args.reportedResetAt ?? null,
+						});
+			// A switched account's login is read afresh, not from the shared read.
+			if (
+				result &&
+				("switched" in result ? result.switched : result.kind === "rotated")
+			)
+				forgetSubscriptionConnection(user);
+			return result;
+		}
 		case "lifecycleContinuations":
 			return completedLifecycleContinuations(session, turn.id);
 		case "conversationPointCodeRef":

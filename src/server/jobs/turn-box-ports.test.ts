@@ -340,6 +340,32 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 			],
 			["codexAuth", () => ports.hasManagedCodexAuth(USER), {}, true],
 			[
+				"subscriptionAccount",
+				() =>
+					ports.subscriptionAccounts?.prepare("codex", {
+						id: "turn-1",
+						user_id: USER,
+						session_id: SESSION,
+					}),
+				{ action: "prepare", provider: "codex" },
+				null,
+			],
+			[
+				"subscriptionAccount",
+				() =>
+					ports.subscriptionAccounts?.rotate(
+						"claude",
+						{ user_id: USER },
+						1_800_000_000_000,
+					),
+				{
+					action: "rotate",
+					provider: "claude",
+					reportedResetAt: 1_800_000_000_000,
+				},
+				{ kind: "none" },
+			],
+			[
 				"commitTurn",
 				() => ports.commitSessionTurn({} as never, []),
 				{ items: [] },

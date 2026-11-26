@@ -2,6 +2,9 @@ import { expect, it, vi } from "vitest";
 
 vi.mock("../adapters/interruption-events", () => ({}));
 vi.mock("../adapters/owner-alerts", () => ({ alertOwner: async () => "sent" }));
+
+import { canaryPrompts } from "#/domain/canary-timeline";
+import type { SessionItem } from "#/domain/session-item";
 import {
 	canaryConfig,
 	reportInterruption,
@@ -9,8 +12,6 @@ import {
 	runInterruptionMonitoring,
 	sendInterruptionDigest,
 } from "./interruption-monitoring";
-import { canaryPrompts } from "#/domain/canary-timeline";
-import type { SessionItem } from "#/domain/session-item";
 
 const now = new Date("2026-11-24T07:00:00Z");
 

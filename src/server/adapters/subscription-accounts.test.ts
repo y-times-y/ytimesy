@@ -4,6 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seal, unseal } from "../auth/token-vault";
 import {
+	activateSubscriptionAccount,
 	addClaudeAccount,
 	addCodexAccount,
 	extraAccountSeal,
@@ -12,17 +13,31 @@ import {
 	markAccountLimited,
 	openExtraAccount,
 	pinSessionAccount,
+	prepareTurnAccount,
 	recordAccountUsed,
 	removeSubscriptionAccount,
 	renameSubscriptionAccount,
 	reorderSubscriptionAccounts,
+	rotateAfterLimit,
 	sessionAccountPin,
 } from "./subscription-accounts";
 
 const holder = vi.hoisted(() => {
 	process.env.BETTER_AUTH_SECRET = "b".repeat(40);
 	process.env.TOKEN_VAULT_KEY = "v".repeat(40);
-	return { query: vi.fn() };
+	// One transaction at a time, like the row locks the real code takes.
+	const lockImpl = {
+		tail: Promise.resolve() as Promise<void>,
+		acquire(): Promise<() => void> {
+			const previous = this.tail;
+			let release: () => void = () => undefined;
+			this.tail = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			return previous.then(() => release);
+		},
+	};
+	return { query: vi.fn(), connect: vi.fn(), lock: lockImpl };
 });
 vi.mock("./database", () => ({ database: () => holder }));
 
@@ -41,15 +56,36 @@ beforeEach(async () => {
 	 create table agent_account(user_id text not null,provider text not null,
 	   status text not null,encrypted_codex_auth text,plan_type text,email text,message text,
 	   updated_at timestamptz not null default now(),primary key(user_id,provider));
+	 create table api_turn(id uuid primary key,user_id text,state text);
 	 create table claude_subscription(user_id text primary key,sealed_token text not null,
 	   status text not null,message text,limited_until timestamptz,
-	   connected_at timestamptz not null default now(),updated_at timestamptz not null default now());`);
+	   connected_at timestamptz not null default now(),updated_at timestamptz not null default now(),
+	   plan_usage jsonb,plan_usage_at timestamptz);`);
 	await db.exec(
 		readFileSync(
 			"supabase/migrations/20261125170000_subscription_account.sql",
 			"utf8",
 		),
 	);
+	holder.connect.mockImplementation(async () => {
+		const unlock = await holder.lock.acquire();
+		let held = true;
+		const release = () => {
+			if (held) unlock();
+			held = false;
+		};
+		return {
+			query: async (sql: string, values: unknown[]) => {
+				const result = await db.query(sql, values);
+				if (/^(commit|rollback)/i.test(sql.trim())) release();
+				return {
+					...result,
+					rowCount: result.rows.length || (result.affectedRows ?? 0),
+				};
+			},
+			release,
+		};
+	});
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
 		const result = await db.query(sql, values);
 		return {
@@ -83,9 +119,8 @@ describe("back-compat: a single existing connection", () => {
 		const accounts = await listSubscriptionAccounts(user);
 		expect(accounts).toHaveLength(1);
 		expect(accounts[0]).toMatchObject({
-			id: "primary",
 			provider: "claude",
-			primary: true,
+			active: true,
 			state: "valid",
 			label: "Main account",
 		});
@@ -230,8 +265,8 @@ describe("rename, order, remove, promote", () => {
 		await primaryClaude(1);
 		const id = await addClaudeAccount(user, { token: token(2), label: "B" });
 		await removeSubscriptionAccount(user, "claude", id);
-		expect((await listSubscriptionAccounts(user)).map((a) => a.id)).toEqual([
-			"primary",
+		expect((await listSubscriptionAccounts(user)).map((a) => a.label)).toEqual([
+			"Main account",
 		]);
 	});
 	it("disconnecting the main account promotes the next one under the main binding", async () => {
@@ -240,7 +275,7 @@ describe("rename, order, remove, promote", () => {
 		await removeSubscriptionAccount(user, "claude", "primary");
 		const [only, ...rest] = await listSubscriptionAccounts(user);
 		expect(rest).toEqual([]);
-		expect(only).toMatchObject({ id: "primary", label: "Work" });
+		expect(only).toMatchObject({ active: true, label: "Work" });
 		const row = (await db.query("select sealed_token from claude_subscription"))
 			.rows[0] as { sealed_token: string };
 		expect(
@@ -340,5 +375,304 @@ describe("pinning a chat", () => {
 		await expect(
 			pinSessionAccount(user, session, randomUUID()),
 		).rejects.toThrow(/no longer exists/);
+	});
+});
+
+const HOUR = 3_600_000;
+async function slotToken() {
+	const row = (await db.query("select sealed_token from claude_subscription"))
+		.rows[0] as { sealed_token: string };
+	return unseal(row.sealed_token, {
+		purpose: "claude-subscription",
+		userId: user,
+	});
+}
+/** Two Claude accounts, the first in the slot; settled long enough that a limit counts. */
+async function twoClaude() {
+	await primaryClaude(1);
+	const second = await addClaudeAccount(user, {
+		token: token(2),
+		label: "Second",
+	});
+	await db.query(
+		"update claude_subscription set activated_at=now()-interval '1 hour'",
+	);
+	const [first] = (await listSubscriptionAccounts(user)).filter(
+		(a) => a.active,
+	);
+	return { firstId: first?.id as string, secondId: second };
+}
+const chatFor = async () => {
+	const id = randomUUID();
+	await db.query("insert into agent_session(id,user_id) values($1,$2)", [
+		id,
+		user,
+	]);
+	return id;
+};
+
+describe("switching the account in use", () => {
+	it("moves the whole account into the slot and the old one out, keeping ids and names", async () => {
+		const { firstId, secondId } = await twoClaude();
+		expect(await activateSubscriptionAccount(user, "claude", secondId)).toBe(
+			"switched",
+		);
+		expect(await slotToken()).toBe(token(2));
+		const accounts = await listSubscriptionAccounts(user);
+		expect(accounts.find((a) => a.active)).toMatchObject({
+			id: secondId,
+			label: "Second",
+		});
+		expect(accounts.find((a) => !a.active)).toMatchObject({
+			id: firstId,
+			label: "Main account",
+		});
+		const waiting = (
+			await db.query("select sealed_auth from subscription_account")
+		).rows[0] as { sealed_auth: string };
+		expect(await openExtraAccount(user, firstId, waiting.sealed_auth)).toBe(
+			token(1),
+		);
+		expect(await activateSubscriptionAccount(user, "claude", secondId)).toBe(
+			"already",
+		);
+		expect(
+			await activateSubscriptionAccount(user, "claude", randomUUID()),
+		).toBe("missing");
+	});
+	it("switches a Codex slot too, re-sealing under the codex-auth binding", async () => {
+		const auth = (n: number) =>
+			JSON.stringify({
+				auth_mode: "chatgpt",
+				tokens: {
+					access_token: `a${n}`,
+					refresh_token: `r${n}`,
+					account_id: `acct-${n}`,
+				},
+			});
+		await db.query(
+			"insert into agent_account(user_id,provider,status,encrypted_codex_auth,email) values($1,'codex','connected',$2,'one@x.io')",
+			[user, await seal(auth(1), { purpose: "codex-auth", userId: user })],
+		);
+		const client = {
+			query: (sql: string, values?: unknown[]) =>
+				holder.query(sql, values as unknown[]),
+		};
+		await addCodexAccount(client, user, {
+			accountId: "acct-2",
+			label: "Two",
+			email: "two@x.io",
+			planType: "plus",
+			sealedAuth: (id) => extraAccountSeal(user, id, auth(2)),
+		});
+		const waiting = (
+			await db.query("select id::text from subscription_account")
+		).rows[0] as { id: string };
+		expect(await activateSubscriptionAccount(user, "codex", waiting.id)).toBe(
+			"switched",
+		);
+		const slot = (
+			await db.query(
+				"select encrypted_codex_auth,email,label from agent_account",
+			)
+		).rows[0] as { encrypted_codex_auth: string; email: string; label: string };
+		expect(
+			JSON.parse(
+				await unseal(slot.encrypted_codex_auth, {
+					purpose: "codex-auth",
+					userId: user,
+				}),
+			).tokens.account_id,
+		).toBe("acct-2");
+		expect(slot).toMatchObject({ email: "two@x.io", label: "Two" });
+		const out = (await db.query("select external_id from subscription_account"))
+			.rows[0] as { external_id: string };
+		expect(out.external_id).toBe("acct-1");
+	});
+	it("concurrent switches leave exactly the two accounts, one in the slot, none lost", async () => {
+		const { firstId, secondId } = await twoClaude();
+		await Promise.all([
+			activateSubscriptionAccount(user, "claude", secondId),
+			activateSubscriptionAccount(user, "claude", firstId),
+			activateSubscriptionAccount(user, "claude", secondId),
+		]);
+		const accounts = await listSubscriptionAccounts(user);
+		expect(accounts.map((a) => a.id).sort()).toEqual(
+			[firstId, secondId].sort(),
+		);
+		expect(accounts.filter((a) => a.active)).toHaveLength(1);
+		const active = accounts.find((a) => a.active);
+		expect(await slotToken()).toBe(
+			active?.id === firstId ? token(1) : token(2),
+		);
+	});
+});
+
+describe("choosing the account for a turn", () => {
+	it("does nothing for a user with one account (existing behaviour)", async () => {
+		await primaryClaude(1);
+		expect(
+			await prepareTurnAccount(user, "claude", {
+				sessionId: await chatFor(),
+				turnId: null,
+			}),
+		).toBeNull();
+		expect(await slotToken()).toBe(token(1));
+	});
+	it("a pinned chat gets its account, Auto keeps the one in use", async () => {
+		const { firstId, secondId } = await twoClaude();
+		const chat = await chatFor();
+		const auto = await prepareTurnAccount(user, "claude", {
+			sessionId: chat,
+			turnId: null,
+		});
+		expect(auto).toMatchObject({ accountId: firstId, switched: false });
+		await pinSessionAccount(user, chat, secondId);
+		const pinned = await prepareTurnAccount(user, "claude", {
+			sessionId: chat,
+			turnId: null,
+		});
+		expect(pinned).toMatchObject({ accountId: secondId, switched: true });
+		expect(await slotToken()).toBe(token(2));
+	});
+	it("does not change the account under a turn that is running", async () => {
+		const { firstId, secondId } = await twoClaude();
+		const chat = await chatFor();
+		await pinSessionAccount(user, chat, secondId);
+		await db.query(
+			"insert into api_turn(id,user_id,state) values($1,$2,'running')",
+			[randomUUID(), user],
+		);
+		const result = await prepareTurnAccount(user, "claude", {
+			sessionId: chat,
+			turnId: randomUUID(),
+		});
+		expect(result).toMatchObject({ accountId: firstId, switched: false });
+		expect(await slotToken()).toBe(token(1));
+	});
+	it("a pin on a limited account falls back to the account that works", async () => {
+		const { firstId, secondId } = await twoClaude();
+		const chat = await chatFor();
+		await pinSessionAccount(user, chat, secondId);
+		await markAccountLimited(user, "claude", secondId, {
+			reportedResetAt: Date.now() + HOUR,
+		});
+		expect(
+			await prepareTurnAccount(user, "claude", {
+				sessionId: chat,
+				turnId: null,
+			}),
+		).toMatchObject({ accountId: firstId });
+	});
+	it("Auto uses a higher-priority account again once it has reset", async () => {
+		const { firstId, secondId } = await twoClaude();
+		const chat = await chatFor();
+		await reorderSubscriptionAccounts(user, "claude", [secondId, firstId]);
+		const now = Date.now();
+		await markAccountLimited(user, "claude", secondId, {
+			reportedResetAt: now + HOUR,
+			now,
+		});
+		expect(
+			(
+				await prepareTurnAccount(user, "claude", {
+					sessionId: chat,
+					turnId: null,
+					now,
+				})
+			)?.accountId,
+		).toBe(firstId);
+		const later = now + 2 * HOUR;
+		expect(
+			(
+				await prepareTurnAccount(user, "claude", {
+					sessionId: chat,
+					turnId: null,
+					now: later,
+				})
+			)?.accountId,
+		).toBe(secondId);
+	});
+});
+
+describe("failover when the account in use hits a plan limit", () => {
+	it("rests it until the reported reset and moves to the next account of the provider", async () => {
+		const { firstId, secondId } = await twoClaude();
+		const now = Date.now();
+		const result = await rotateAfterLimit(user, "claude", {
+			reportedResetAt: now + 2 * HOUR,
+			now,
+		});
+		expect(result).toMatchObject({
+			kind: "rotated",
+			to: { accountId: secondId },
+		});
+		expect(await slotToken()).toBe(token(2));
+		const limited = (await listSubscriptionAccounts(user, now)).find(
+			(a) => a.id === firstId,
+		);
+		expect(limited?.state).toBe("limited");
+		expect(limited?.limitedUntil).toBeCloseTo(now + 2 * HOUR, -4);
+		// "limited, resets at …" clears itself once the time passes.
+		expect(
+			(await listSubscriptionAccounts(user, now + 3 * HOUR)).find(
+				(a) => a.id === firstId,
+			)?.state,
+		).toBe("valid");
+	});
+	it("reports none when every other account is limited, so the caller falls to another provider", async () => {
+		const { secondId } = await twoClaude();
+		const now = Date.now();
+		await markAccountLimited(user, "claude", secondId, {
+			reportedResetAt: now + HOUR,
+			now,
+		});
+		expect(
+			(
+				await rotateAfterLimit(user, "claude", {
+					reportedResetAt: now + HOUR,
+					now,
+				})
+			).kind,
+		).toBe("none");
+		expect(await slotToken()).toBe(token(1));
+	});
+	it("a user with one account gets none (the old provider failover runs)", async () => {
+		await primaryClaude(1);
+		expect(
+			(await rotateAfterLimit(user, "claude", { reportedResetAt: null })).kind,
+		).toBe("none");
+		expect((await listSubscriptionAccounts(user))[0]?.state).toBe("valid");
+	});
+	it("a limit right after a switch is stale and blames nobody", async () => {
+		const { secondId } = await twoClaude();
+		await activateSubscriptionAccount(user, "claude", secondId);
+		const result = await rotateAfterLimit(user, "claude", {
+			reportedResetAt: Date.now() + HOUR,
+		});
+		expect(result.kind).toBe("stale");
+		expect(
+			(await listSubscriptionAccounts(user)).every((a) => a.state === "valid"),
+		).toBe(true);
+	});
+	it("walks through three accounts, then runs out", async () => {
+		await primaryClaude(1);
+		await addClaudeAccount(user, { token: token(2), label: "B" });
+		await addClaudeAccount(user, { token: token(3), label: "C" });
+		const now = Date.now();
+		const settle = () =>
+			db.query(
+				"update claude_subscription set activated_at=now()-interval '1 hour'",
+			);
+		const seen: string[] = [];
+		for (let i = 0; i < 3; i++) {
+			await settle();
+			const result = await rotateAfterLimit(user, "claude", {
+				reportedResetAt: now + HOUR,
+				now,
+			});
+			seen.push(result.kind);
+		}
+		expect(seen).toEqual(["rotated", "rotated", "none"]);
 	});
 });

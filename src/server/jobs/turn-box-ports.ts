@@ -24,6 +24,7 @@ import {
 } from "#/domain/turn-box-protocol";
 import { subscriptionErrorOf } from "#/domain/turn-box-subscription";
 import type { CodexSelection } from "../adapters/codex-subscription-runtime";
+import type { LimitRotation } from "../adapters/subscription-accounts";
 import type { YSquaredCrewClient } from "../adapters/y-squared-crew-client";
 import type { MachineGitStep } from "../services/machine-git";
 import type { McpCatalogEntry } from "../services/mcp-tools";
@@ -628,6 +629,21 @@ export function boxTurnPorts(session: TurnBoxTurnSession): BoxTurnPorts {
 			once("codex-auth", () =>
 				call<boolean>("codexAuth", {}),
 			)) as unknown as TurnPorts["hasManagedCodexAuth"],
+		// The edge picks and switches the subscription account (it holds the
+		// logins); the owner and chat come from the turn, not from this call.
+		subscriptionAccounts: {
+			prepare: (provider) =>
+				call<{ label: string; switched: boolean } | null>(
+					"subscriptionAccount",
+					{ action: "prepare", provider },
+				),
+			rotate: (provider, _turn, reportedResetAt) =>
+				call<LimitRotation>("subscriptionAccount", {
+					action: "rotate",
+					provider,
+					reportedResetAt,
+				}),
+		},
 		warmCodexSubscriptionCatalog: (() =>
 			undefined) as unknown as TurnPorts["warmCodexSubscriptionCatalog"],
 		evaluationRunForTask: unavailable("evaluationRunForTask"),

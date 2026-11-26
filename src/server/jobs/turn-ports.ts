@@ -58,6 +58,7 @@ import type {
 	recordSubagentStep,
 	subagentAncestors,
 } from "../adapters/subagents";
+import type { LimitRotation } from "../adapters/subscription-accounts";
 import type { readVerificationBaseline } from "../adapters/turn-verification";
 import type { noteUserHub } from "../adapters/user-hub-notes";
 import type { projectYMode } from "../adapters/y-mode";
@@ -159,6 +160,22 @@ export interface TurnPorts {
 	readonly claudeSubscriptionStatus: typeof claudeSubscriptionStatus;
 	readonly warmCodexSubscriptionCatalog: typeof warmCodexSubscriptionCatalog;
 	readonly hasManagedCodexAuth: typeof hasManagedCodexAuth;
+	/**
+	 * Several accounts of one subscription provider: pick the chat's account
+	 * before a turn, switch to the next one on a plan limit. Optional: absent,
+	 * the account in use serves the turn as it always has.
+	 */
+	readonly subscriptionAccounts?: {
+		readonly prepare: (
+			provider: "codex" | "claude",
+			turn: { id: string; user_id: string; session_id: string },
+		) => Promise<{ label: string; switched: boolean } | null>;
+		readonly rotate: (
+			provider: "codex" | "claude",
+			turn: { user_id: string },
+			reportedResetAt: number | null,
+		) => Promise<LimitRotation>;
+	};
 
 	/**
 	 * Set on a box: how the model is reached (the edge's proxy with the turn's

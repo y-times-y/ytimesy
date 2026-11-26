@@ -33,11 +33,17 @@ const mocks = vi.hoisted(() => ({
 	result: vi.fn(),
 	claudeStatus: vi.fn(),
 	stopClaudeCode: vi.fn(),
+	prepareAccount: vi.fn(),
+	rotateAccount: vi.fn(),
 	// Same-route retry waits; the failover tests below run without retries.
 	retryDelays: [] as number[],
 }));
 
 // The project switch for Y reads the database; these turns run with it off.
+vi.mock("../adapters/subscription-accounts", () => ({
+	prepareTurnAccount: (...args: unknown[]) => mocks.prepareAccount(...args),
+	rotateAfterLimit: (...args: unknown[]) => mocks.rotateAccount(...args),
+}));
 vi.mock("../adapters/y-mode", () => ({ projectYMode: async () => null }));
 vi.mock("#/domain/model-failover", async (importOriginal) => ({
 	...(await importOriginal<typeof import("#/domain/model-failover")>()),
@@ -135,6 +141,7 @@ vi.mock("../adapters/model-failover-preferences", () => ({
 }));
 vi.mock("../adapters/codex-subscription", () => ({
 	warmCodexSubscriptionCatalog: vi.fn(),
+	forgetSubscriptionConnection: vi.fn(),
 	codexSubscriptionCatalog: vi.fn(async () => [
 		{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
 	]),
@@ -227,6 +234,8 @@ beforeEach(() => {
 	mocks.result.mockResolvedValue(null);
 	mocks.claudeStatus.mockResolvedValue({ status: "disconnected" });
 	mocks.stopClaudeCode.mockResolvedValue(undefined);
+	mocks.prepareAccount.mockResolvedValue(null);
+	mocks.rotateAccount.mockResolvedValue({ kind: "none" });
 	mocks.preferences.mockResolvedValue({
 		enabled: true,
 		askBeforePaid: false,
@@ -885,4 +894,71 @@ it("moves a refused Claude Code turn to the ChatGPT plan before a paid key, and 
 		delete process.env.YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED;
 		connections.listModelConnections.mockResolvedValue([openRouter]);
 	}
+});
+
+const completingStep = () =>
+	vi.fn(async (input) => {
+		await input.onEvent({ type: "text-delta", id: "r", text: "Done." });
+		return { messages: input.messages, outcome: "completed" };
+	});
+
+it("a spent plan with another account switches account and runs the step again on the same route, unseen", async () => {
+	mocks.rotateAccount.mockResolvedValueOnce({
+		kind: "rotated",
+		to: { accountId: "b", label: "Second", switched: true },
+	});
+	const resetsAt = new Date("2026-10-26T20:00:00Z");
+	mocks.subscriptionStep.mockRejectedValueOnce(
+		new SubscriptionUsageLimitReached(resetsAt),
+	);
+	let turn = codexTurn();
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(1))).toBe(
+		"continue",
+	);
+	turn = afterCheckpoint(turn);
+	// The limit and its reset go to the account bookkeeping, never to the person.
+	expect(mocks.rotateAccount).toHaveBeenCalledWith("owner", "codex", {
+		reportedResetAt: resetsAt.getTime(),
+	});
+	expect(switchItem(turn)).toBeUndefined();
+	expect(routeRetries(turn.failover, codexRoute)).toBe(0);
+	expect(turn.failover).toEqual({});
+	mocks.subscriptionStep.mockImplementationOnce(completingStep());
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(2))).toBe(
+		"completed",
+	);
+	expect(mocks.apiStep).not.toHaveBeenCalled();
+});
+
+it("with no other account left, the plan limit falls to another provider as before", async () => {
+	mocks.rotateAccount.mockResolvedValueOnce({ kind: "none" });
+	mocks.subscriptionStep.mockRejectedValueOnce(
+		new SubscriptionUsageLimitReached(null),
+	);
+	let turn = codexTurn();
+	await runApiTurn({} as WorkspaceMachines, turn, step(1));
+	turn = afterCheckpoint(turn);
+	expect((turn.failover as TurnFailover).route.connectionId).toBe(OPENROUTER);
+	expect(switchItem(turn)).toMatchObject({ reason: "usage-limit" });
+});
+
+it("a limit right after a switch is retried (counted) instead of blaming the new account", async () => {
+	mocks.retryDelays = [0, 0];
+	mocks.rotateAccount.mockResolvedValueOnce({ kind: "stale" });
+	mocks.subscriptionStep.mockRejectedValueOnce(
+		new SubscriptionUsageLimitReached(null),
+	);
+	let turn = codexTurn();
+	await runApiTurn({} as WorkspaceMachines, turn, step(1));
+	turn = afterCheckpoint(turn);
+	expect(routeRetries(turn.failover, codexRoute)).toBe(1);
+	expect(switchItem(turn)).toBeUndefined();
+});
+
+it("picks the chat's account before the first request, not on later steps", async () => {
+	mocks.subscriptionStep.mockImplementation(completingStep());
+	await runApiTurn({} as WorkspaceMachines, codexTurn(), step(1));
+	expect(mocks.prepareAccount).toHaveBeenCalledTimes(1);
+	await runApiTurn({} as WorkspaceMachines, codexTurn(), step(2));
+	expect(mocks.prepareAccount).toHaveBeenCalledTimes(1);
 });
