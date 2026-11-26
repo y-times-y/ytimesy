@@ -1,4 +1,5 @@
 import type { LanguageModel, ModelMessage } from "ai";
+import { ANTHROPIC_THINKING_BINDING } from "#/domain/anthropic-thinking-binding";
 import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { defaultMaxOutputTokens } from "#/domain/api-output-limit";
 import { ApiModelPreparationFailure } from "#/domain/api-turn-failure";
@@ -321,9 +322,7 @@ export async function apiModelRuntime(
 									...cacheSettings.providerOptions,
 									anthropic: {
 										...cacheSettings.providerOptions?.anthropic,
-										thinking: {
-											blockBinding: { prefixMismatchBehavior: "error" },
-										},
+										thinking: ANTHROPIC_THINKING_BINDING,
 									},
 								},
 							}
