@@ -4,7 +4,7 @@ import {
 } from "./failure-message";
 
 /** How long a chat's VM may keep refusing to start before the chat gets a new one. */
-export const MACHINE_START_ABANDON_WINDOW_MS = 5 * 60_000;
+export const MACHINE_START_ABANDON_WINDOW_MS = 2 * 60_000;
 
 /** Refusals needed before the window counts: one slow start is not a streak. */
 export const MACHINE_START_ABANDON_MIN_FAILURES = 2;

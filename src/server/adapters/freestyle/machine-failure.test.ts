@@ -7,6 +7,7 @@ import {
 	machineStartUnstartable,
 	rateLimitDelayMs,
 	resumableMachineStart,
+	spentBudgetEvidence,
 } from "./machine-failure";
 import { isPlatformRestart } from "./provider-retry";
 
@@ -280,4 +281,22 @@ it("waits longer after a provider limit than after a 5xx, with jitter, and honou
 	}
 	expect(rateLimitDelayMs(1_000, 20_000, () => 0)).toBe(20_000);
 	expect(rateLimitDelayMs(1_000, 10 * 60_000, () => 0)).toBe(60_000);
+});
+
+it("names a stopped VM whose runtime cap is used up, so it is replaced at once instead of after four failed wakes (2026-11-26: vm-124b… stopped at 2628 of 2628 s, 4 'did not become running' rounds)", () => {
+	const detail = spentBudgetEvidence({
+		state: "stopped",
+		totalRunSeconds: 2628,
+		maxRunTotalSeconds: 2628,
+	});
+	expect(detail).toMatch(/runtime budget/);
+	expect(machineBudgetSpent({ detail })).toBe(true);
+	expect(
+		spentBudgetEvidence({
+			state: "stopped",
+			totalRunSeconds: 100,
+			maxRunTotalSeconds: 2628,
+		}),
+	).toBeUndefined();
+	expect(spentBudgetEvidence({ state: "stopped" })).toBeUndefined();
 });

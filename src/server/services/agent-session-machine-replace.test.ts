@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
-import { machineStartAbandoned } from "#/domain/machine-replacement";
+import {
+	MACHINE_START_ABANDON_WINDOW_MS,
+	machineStartAbandoned,
+} from "#/domain/machine-replacement";
 import { machineStartUnstartable } from "../adapters/freestyle/machine-failure.ts";
 import { executeSessionMachinePlan } from "./agent-session-machine.ts";
 
 const SESSION = "11111111-2222-3333-4444-555555555555";
 const STUCK = new Error("Workspace VM did not become running");
 const START = 60_000;
-const WINDOW = 5 * 60_000;
+const WINDOW = MACHINE_START_ABANDON_WINDOW_MS;
 
 /** A provider whose VM `stuck-vm` never starts, and whose slug-keyed copies are adopted like Freestyle's. */
 function fleet(options: { unstartable?: (cause: unknown) => boolean } = {}) {

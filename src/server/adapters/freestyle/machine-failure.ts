@@ -103,6 +103,24 @@ export function machineBudgetSpent(error: unknown): boolean {
 }
 
 /**
+ * Evidence, read from the VM's own data after a start that never ran, that
+ * its runtime cap is used up (the provider then accepts the start and never
+ * reports it running, so the error alone says only "did not become running").
+ * Returns text machineBudgetSpent recognises, or undefined.
+ */
+export function spentBudgetEvidence(data: {
+	readonly state?: string | null;
+	readonly totalRunSeconds?: number | null;
+	readonly maxRunTotalSeconds?: number | null;
+}): string | undefined {
+	if (data.totalRunSeconds == null || data.maxRunTotalSeconds == null) return;
+	if (data.state === "running") return;
+	return data.totalRunSeconds >= data.maxRunTotalSeconds
+		? `runtime budget is spent (${Math.floor(data.totalRunSeconds)} of ${data.maxRunTotalSeconds} s)`
+		: undefined;
+}
+
+/**
  * A failed start of an existing VM that is the VM's own (the provider never
  * brought it up: a 5xx/timeout, "did not become running"), not our account's
  * (capacity, usage allowance, quota, auth) and not a gone VM. Works on the

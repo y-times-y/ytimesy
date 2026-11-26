@@ -49,6 +49,7 @@ import {
 	machineFailureKind,
 	requestIdRecordingFetch,
 	resumableMachineStart,
+	spentBudgetEvidence,
 } from "./machine-failure";
 import { reportMachineRateLimit } from "./machine-rate-limit-report";
 import {
@@ -367,11 +368,25 @@ export function createFreestyleWorkspaceMachines(
 				return workspaceId;
 			} catch (cause) {
 				await recordWakeFailure(workspaceId, cause);
+				// A start that "did not become running" on a VM whose runtime cap is
+				// used up is certain, not transient: say so, so the chat gets a new
+				// machine at once (machineBudgetSpent) instead of after four rounds.
+				const spent =
+					machineFailureKind(cause) === "stuck"
+						? spentBudgetEvidence(
+								await freestyle.vms
+									.ref(workspaceId)
+									.data()
+									.catch(() => ({})),
+							)
+						: undefined;
 				throw new WorkspaceProvisionError({
 					operation: "create",
 					message: providerMessage(cause),
 					providerWorkspaceId: workspaceId,
-					detail: machineFailureDetail(cause),
+					detail: [machineFailureDetail(cause), spent]
+						.filter(Boolean)
+						.join(" <- "),
 				});
 			}
 		},
