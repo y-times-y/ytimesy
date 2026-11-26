@@ -25,6 +25,8 @@ interface SessionControlsProps {
 	providerConnected: boolean;
 	/** Y²: the picker leaves the Claude subscription out. */
 	withoutClaudeCode?: boolean;
+	/** The saved chat (for pinning one of several plan accounts). */
+	agentSessionId?: string | null;
 }
 
 export function SessionControls({
@@ -47,6 +49,7 @@ export function SessionControls({
 	catalogStatus,
 	providerConnected,
 	withoutClaudeCode,
+	agentSessionId,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const model = models.find((candidate) => candidate.id === modelId);
@@ -86,6 +89,7 @@ export function SessionControls({
 					catalogStatus={catalogStatus}
 					providerConnected={providerConnected}
 					withoutClaudeCode={withoutClaudeCode}
+					agentSessionId={agentSessionId}
 					reasoningId={reasoningId}
 					onReasoningIdChange={onReasoningIdChange}
 					speed={speed}

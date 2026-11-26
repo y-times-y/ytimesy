@@ -70,6 +70,7 @@ import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
+import { SubscriptionAccountsSection } from "../sessions/subscription-accounts";
 import { SubscriptionConnectionRow } from "../sessions/subscription-connection-row";
 import { disconnectXaiSubscriptionFn } from "../sessions/xai-subscription.fn";
 import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
@@ -1216,6 +1217,7 @@ function AgentsSection({
 					<ClaudeSubscriptionRow />
 				</ul>
 			</section>
+			<SubscriptionAccountsSection />
 			<ModelConnections />
 			<ModelFailoverSettings />
 		</>

@@ -342,7 +342,11 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 			[
 				"subscriptionAccount",
 				() =>
-					ports.subscriptionAccounts?.prepare("codex", {
+					(
+						ports.subscriptionAccounts as NonNullable<
+							typeof ports.subscriptionAccounts
+						>
+					).prepare("codex", {
 						id: "turn-1",
 						user_id: USER,
 						session_id: SESSION,
@@ -353,11 +357,11 @@ describe("boxTurnPorts over the edge's port endpoint", () => {
 			[
 				"subscriptionAccount",
 				() =>
-					ports.subscriptionAccounts?.rotate(
-						"claude",
-						{ user_id: USER },
-						1_800_000_000_000,
-					),
+					(
+						ports.subscriptionAccounts as NonNullable<
+							typeof ports.subscriptionAccounts
+						>
+					).rotate("claude", { user_id: USER }, 1_800_000_000_000),
 				{
 					action: "rotate",
 					provider: "claude",

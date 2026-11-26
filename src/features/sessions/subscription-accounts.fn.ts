@@ -9,6 +9,7 @@ import {
 	removeSubscriptionAccount,
 	renameSubscriptionAccount,
 	reorderSubscriptionAccounts,
+	sessionAccountPin,
 } from "#/server/adapters/subscription-accounts";
 import { requireUser } from "#/server/auth/auth";
 import { startCodexDeviceLogin } from "#/server/auth/codex-device-login";
@@ -127,4 +128,14 @@ export const pinChatAccountFn = createServerFn({ method: "POST" })
 			throw await readableServerError(cause);
 		}
 		return { accountId: data.accountId };
+	});
+
+/** The chat's pinned account id, or `null` for Auto. */
+export const getChatAccountPinFn = createServerFn({ method: "GET" })
+	.validator((data: unknown) =>
+		z.object({ sessionId: z.string().uuid() }).strict().parse(data),
+	)
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		return { accountId: await sessionAccountPin(user.id, data.sessionId) };
 	});

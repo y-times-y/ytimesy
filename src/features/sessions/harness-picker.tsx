@@ -65,6 +65,7 @@ import {
 	usePlanUsageLine,
 	usePrefetchPlanUsage,
 } from "./plan-usage";
+import { AccountPin } from "./subscription-accounts";
 import { SubscriptionMark } from "./subscription-mark";
 import { useCodexCatalog } from "./use-codex-catalog";
 
@@ -134,7 +135,10 @@ export function HarnessPicker({
 	alternateContext = false,
 	onAlternateContextChange,
 	withoutClaudeCode = false,
+	agentSessionId,
 }: {
+	/** The saved chat, for choosing which of several plan accounts it uses. */
+	agentSessionId?: string | null;
 	/** Y²: no Claude subscription section (it has no machine for the CLI). */
 	withoutClaudeCode?: boolean;
 	connectionContent?: ReactNode;
@@ -569,11 +573,17 @@ export function HarnessPicker({
 									renderFavorite={renderFavorite("api")}
 									models={claudeData.models}
 									usage={
-										<SectionPlanUsage
-											line={claudeUsage}
-											label="Claude plan"
-											hint={CLAUDE_PLAN_USAGE_HINT}
-										/>
+										<>
+											<SectionPlanUsage
+												line={claudeUsage}
+												label="Claude plan"
+												hint={CLAUDE_PLAN_USAGE_HINT}
+											/>
+											<AccountPin
+												provider="claude"
+												sessionId={agentSessionId}
+											/>
+										</>
 									}
 									selectedRoute={harnessId === "api" ? modelId : ""}
 									onSelect={(id) => {
@@ -625,7 +635,10 @@ export function HarnessPicker({
 										harnessId === "codex" ? connectionContent : null
 									}
 									usage={
-										<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
+										<>
+											<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
+											<AccountPin provider="codex" sessionId={agentSessionId} />
+										</>
 									}
 									renderFavorite={renderFavorite("codex")}
 									onSelect={(id) => {

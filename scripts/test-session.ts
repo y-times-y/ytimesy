@@ -27,6 +27,8 @@ const COMMANDS = [
 	"reset",
 	"seed",
 	"seed-usage",
+	"seed-accounts",
+	"simulate-limit",
 	"y-counts",
 	"repo-ids",
 	"vm-map",
@@ -64,7 +66,7 @@ export function parseCli(argv: string[]) {
 	const command = positionals[0];
 	if (!COMMANDS.includes(command as (typeof COMMANDS)[number]))
 		throw new Error(
-			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|y-counts|repo-ids|vm-map|seed-github-unlinked|seed-setup-building|seed-setup-failed|seed-setup-ready> [options]",
+			"Usage: test-session.ts <mint|shot|reset|seed|seed-usage|seed-accounts|simulate-limit|y-counts|repo-ids|vm-map|seed-github-unlinked|seed-setup-building|seed-setup-failed|seed-setup-ready> [options]",
 		);
 	if (command === "shot" && !values.out)
 		throw new Error("Pass --out <file.png>.");
@@ -80,6 +82,8 @@ export async function requestTestSession(input: {
 		| "reset"
 		| "seed"
 		| "seed-usage"
+		| "seed-accounts"
+		| "simulate-limit"
 		| "y-counts"
 		| "repo-ids"
 		| "vm-map"

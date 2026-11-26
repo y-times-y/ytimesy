@@ -150,6 +150,7 @@ export async function resetTestAccount(
 	// Seeded usage keeps its rows when its project goes (set null), so it is deleted first.
 	await db.query("delete from usage_daily where user_id=$1", [userId]);
 	await db.query("delete from usage_turn_counted where user_id=$1", [userId]);
+	await clearSyntheticAccounts(db, userId);
 	const removed = await db.query(
 		"delete from project where user_id=$1 returning id",
 		[userId],
@@ -180,7 +181,9 @@ export async function runTestAccountAction(
 			| "seed-setup-ready"
 			| "y-counts"
 			| "repo-ids"
-			| "vm-map";
+			| "vm-map"
+			| "seed-accounts"
+			| "simulate-limit";
 		apiKey?: string;
 		slugs?: string[];
 	},
@@ -196,6 +199,15 @@ export async function runTestAccountAction(
 			input.slugs ?? [],
 		);
 	if (input.action === "y-counts") return yDefaultCounts(db);
+	if (input.action === "seed-accounts" || input.action === "simulate-limit") {
+		const userId = await flaggedTestUser(db);
+		console.log(
+			JSON.stringify({ event: `test_session.${input.action}`, caller }),
+		);
+		return input.action === "seed-accounts"
+			? seedSyntheticAccounts(db, userId)
+			: simulateSyntheticLimit(userId);
+	}
 	const userId = await flaggedTestUser(db);
 	const result = await seedTestAccount(db, userId, {
 		apiKey: input.apiKey,
@@ -294,4 +306,77 @@ export async function seedTestUsage(
 		}),
 	);
 	return { usageRows: rows.length };
+}
+
+/** The made-up tokens of seeded accounts: the right shape, valid nowhere. */
+const SYNTHETIC_TOKEN = (n: number) =>
+	`sk-ant-oat01-synthetic-test-account-${n}-${"x".repeat(24)}`;
+
+async function clearSyntheticAccounts(db: TestAccountDb, userId: string) {
+	await db.query("delete from subscription_account where user_id=$1", [userId]);
+	await db.query("delete from claude_subscription where user_id=$1", [userId]);
+	await db.query(
+		"update agent_session set subscription_pin=null where user_id=$1",
+		[userId],
+	);
+}
+
+/**
+ * Three made-up Claude plan accounts for the test user (the first in use),
+ * sealed like real ones, with tokens valid nowhere, to look at the accounts
+ * UI and to run limit failover without a real provider. Only the test user's
+ * rows; `reset` removes them. No turn is run with them.
+ */
+export async function seedSyntheticAccounts(db: TestAccountDb, userId: string) {
+	const { seal } = await import("../auth/token-vault");
+	await clearSyntheticAccounts(db, userId);
+	await db.query(
+		`insert into claude_subscription(user_id,sealed_token,status,label,priority,activated_at)
+		 values($1,$2,'connected','Personal',0,now()-interval '1 hour')`,
+		[
+			userId,
+			await seal(SYNTHETIC_TOKEN(1), {
+				purpose: "claude-subscription",
+				userId,
+			}),
+		],
+	);
+	const names = ["Work", "Team"];
+	for (const [index, label] of names.entries()) {
+		const id = randomUUID();
+		await db.query(
+			`insert into subscription_account(id,user_id,provider,label,external_id,sealed_auth,priority)
+			 values($1,$2,'claude',$3,$4,$5,$6)`,
+			[
+				id,
+				userId,
+				label,
+				`synthetic-${index + 2}`,
+				await seal(SYNTHETIC_TOKEN(index + 2), {
+					purpose: `subscription-account:${id}`,
+					userId,
+				}),
+				index + 1,
+			],
+		);
+	}
+	return { accounts: 3 };
+}
+
+/**
+ * A simulated plan-limit answer for the account in use: the real rotation
+ * runs (the account rests until a reported reset 90 minutes away and the
+ * next takes over). Returns what happened, never a token.
+ */
+export async function simulateSyntheticLimit(userId: string) {
+	const { rotateAfterLimit } = await import(
+		"../adapters/subscription-accounts"
+	);
+	const rotation = await rotateAfterLimit(userId, "claude", {
+		reportedResetAt: Date.now() + 90 * 60_000,
+	});
+	return {
+		outcome: rotation.kind,
+		...(rotation.kind === "rotated" ? { nowServing: rotation.to.label } : {}),
+	};
 }

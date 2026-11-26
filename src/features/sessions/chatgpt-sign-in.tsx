@@ -4,6 +4,7 @@ import { ArrowUpRight, Check } from "lucide-react";
 import { useState } from "react";
 import type { CodexDeviceLogin } from "#/server/auth/codex-device-login";
 import { pollCodexLogin, startChatgptSignIn } from "./codex-session.fn";
+import { startAddChatgptAccountFn } from "./subscription-accounts.fn";
 
 /**
  * Sign in with ChatGPT in place: the button starts a device sign-in, the code
@@ -13,17 +14,22 @@ export function ChatgptSignIn({
 	label = "Sign in with ChatGPT",
 	onConnected,
 	showHint = true,
+	addAs,
 }: {
+	/** A name: sign in another ChatGPT account next to the one already connected. */
+	addAs?: string;
 	label?: string;
 	onConnected?: () => void;
 	/** False where the caller shows DeviceCodeHint itself (a settings row's text column). */
 	showHint?: boolean;
 }) {
 	const start = useServerFn(startChatgptSignIn);
+	const startAnother = useServerFn(startAddChatgptAccountFn);
 	const poll = useServerFn(pollCodexLogin);
 	const [login, setLogin] = useState<CodexDeviceLogin | null>(null);
 	const signIn = useMutation({
-		mutationFn: () => start({ data: {} }),
+		mutationFn: () =>
+			addAs ? startAnother({ data: { label: addAs } }) : start({ data: {} }),
 		onSuccess: setLogin,
 	});
 	useQuery({

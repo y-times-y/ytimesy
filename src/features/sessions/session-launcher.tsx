@@ -1802,6 +1802,7 @@ export function SessionLauncher({
 						) : null}
 						<div className="session-toolbar">
 							<SessionControls
+								agentSessionId={session.agentSessionId}
 								contextIndicator={
 									selectedTask ? (
 										// A sub-agent has its own context window: show its own.

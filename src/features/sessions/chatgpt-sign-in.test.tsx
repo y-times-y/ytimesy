@@ -11,6 +11,10 @@ vi.mock("./codex-session.fn", () => ({
 	startChatgptSignIn: vi.fn(),
 }));
 
+vi.mock("./subscription-accounts.fn", () => ({
+	startAddChatgptAccountFn: vi.fn(),
+}));
+
 import { ChatgptSignIn } from "./chatgpt-sign-in";
 
 it("tells people to turn on device code sign-in in ChatGPT's security settings", () => {

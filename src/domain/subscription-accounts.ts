@@ -153,3 +153,33 @@ export function resolveLegacyAccount(
 		lastUsedAt: null,
 	};
 }
+
+/** The status chip an account shows: what it is, and when a limit clears. */
+export function accountChip(
+	account: Pick<SubscriptionAccount, "state" | "limitedUntil">,
+	now: number,
+	formatTime: (epochMs: number) => string,
+): { readonly text: string; readonly tone: "ok" | "limited" | "attention" } {
+	const state = effectiveAccountState(account, now);
+	if (state === "limited")
+		return {
+			text:
+				account.limitedUntil !== null
+					? `Limited · resets ${formatTime(account.limitedUntil)}`
+					: "Limited for now",
+			tone: "limited",
+		};
+	if (state === "expired") return { text: "Sign in again", tone: "attention" };
+	return { text: "Ready", tone: "ok" };
+}
+
+/** "5 min ago", "2 h ago", "3 d ago"; "Not used yet" when never. */
+export function lastUsedLabel(lastUsedAt: number | null, now: number): string {
+	if (lastUsedAt === null) return "Not used yet";
+	const minutes = Math.max(0, Math.round((now - lastUsedAt) / 60_000));
+	if (minutes < 1) return "Used just now";
+	if (minutes < 60) return `Used ${minutes} min ago`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 48) return `Used ${hours} h ago`;
+	return `Used ${Math.round(hours / 24)} d ago`;
+}

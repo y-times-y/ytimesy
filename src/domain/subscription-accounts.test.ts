@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	accountAfterLimit,
+	accountChip,
 	chooseAccount,
 	effectiveAccountState,
+	lastUsedLabel,
 	limitedUntilFor,
 	maskAccountEmail,
 	resolveLegacyAccount,
@@ -178,5 +180,37 @@ describe("back-compat with the single connection", () => {
 	});
 	it("returns null when there is no connection", () => {
 		expect(resolveLegacyAccount(null)).toBeNull();
+	});
+});
+
+describe("status chip", () => {
+	const at = (ms: number) => `T${ms - now}`;
+	it("shows when a limit clears, and nothing once it has", () => {
+		expect(
+			accountChip({ state: "limited", limitedUntil: now + HOUR }, now, at),
+		).toEqual({ text: `Limited · resets T${HOUR}`, tone: "limited" });
+		expect(
+			accountChip({ state: "limited", limitedUntil: now - 1 }, now, at),
+		).toEqual({ text: "Ready", tone: "ok" });
+	});
+	it("says so when the provider gave no reset", () => {
+		expect(
+			accountChip({ state: "limited", limitedUntil: null }, now, at).text,
+		).toBe("Limited for now");
+	});
+	it("asks to sign in again for an expired login", () => {
+		expect(
+			accountChip({ state: "expired", limitedUntil: null }, now, at),
+		).toEqual({ text: "Sign in again", tone: "attention" });
+	});
+});
+
+describe("last used label", () => {
+	it("reads calmly", () => {
+		expect(lastUsedLabel(null, now)).toBe("Not used yet");
+		expect(lastUsedLabel(now - 10_000, now)).toBe("Used just now");
+		expect(lastUsedLabel(now - 5 * 60_000, now)).toBe("Used 5 min ago");
+		expect(lastUsedLabel(now - 3 * HOUR, now)).toBe("Used 3 h ago");
+		expect(lastUsedLabel(now - 72 * HOUR, now)).toBe("Used 3 d ago");
 	});
 });
