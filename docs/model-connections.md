@@ -144,3 +144,48 @@ The only authority on what a ChatGPT plan may use is ChatGPT's live catalog (`co
 2. Add the model to the places that know new OpenAI models: api-model-list, model-pricing, model-context-windows and model-failover (src/domain).
 3. Retiring a model is the same bump: filter the id (`isRetiredModel`) and bump the epoch so saved copies refresh (epoch 2: GPT-5 family retired).
 4. Changing the pinned Codex CLI version (`PINNED_CODEX_CLI_VERSION`) also changes the key, so it needs no separate bump.
+
+## Several subscription accounts per provider (2026-11-26)
+
+A person can connect up to five ChatGPT (Codex) accounts and five Claude plans
+and the platform uses them in order, moving to the next when one is spent.
+
+- **Storage.** A provider's existing connection row (`agent_account` for Codex,
+  `claude_subscription` for Claude) is the *slot*: the account in use. Every
+  other account waits in `subscription_account` (sealed per account with the
+  binding `subscription-account:<id>` + user; never sent to a box or logged).
+  A user with one account has no extra row and nothing new runs for them.
+  Each account has its own id (`account_id`, travels with it), a name, an
+  order (`priority`), `last_used_at`, and limit state (`limited_until`).
+- **Switching** (`src/server/adapters/subscription-accounts.ts`) moves an
+  account's whole state into the slot and the old one out, in one transaction
+  under the row lock token refresh already takes, so the relay, the Claude
+  proxy and the runner boxes keep reading one place. Pure rules (choosing,
+  limits, reset times) are in `src/domain/subscription-accounts.ts`.
+- **Before a turn** (`prepareTurnAccount`): the chat's pin, else Auto (priority
+  order, staying on the account in use while it is as good as any). Skipped
+  while another of the user's turns runs, so no running turn changes account
+  under itself; on any doubt the turn uses the account in the slot.
+- **On a plan limit** (`rotateAfterLimit`, called from the step-failure path in
+  `api-turn.ts` before provider failover): the account rests until the reset the
+  provider reported (15 min if none, at most 8 days), the next account takes over
+  and the step runs again on the same route, unseen. Only when none is left does
+  the turn fall to another provider. A limit within 30 s of a switch may come from
+  the previous account's cached login and is retried, not recorded.
+- **Boxes** reach it through one optional port, `subscriptionAccounts`
+  (`subscriptionAccount` op in the box protocol); the edge owns the choice.
+- **Known limits.** Chats of one user share the account in use (pins apply when no
+  other turn is running); Grok plans are not included; Y²'s `list_models` does
+  not list accounts yet.
+- **Terms.** The Settings panel says "Use accounts you own; follow each
+  provider's terms." Anthropic's Consumer Terms and OpenAI's Terms of Use bar
+  sharing credentials or making an account available to anyone else, and
+  circumventing rate limits or protective measures; neither says anything about
+  one person holding several accounts. Rotating a person's own paid plans is not
+  addressed either way, so it is a judgement call for them; nothing here pools,
+  shares or resells access, and the Codex egress path is unchanged.
+- **Live check.** `scripts/test-session.ts seed-accounts` creates three synthetic
+  Claude accounts (tokens valid nowhere) on the test account and
+  `simulate-limit` runs the real rotation; the Settings list is then
+  screenshot-able. Removing them in Settings (or seeding again) clears them;
+  `reset` removes only these synthetic accounts.
