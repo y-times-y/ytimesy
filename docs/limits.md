@@ -195,6 +195,98 @@ machines is about $16 per user per month, so 100 users hold 25,600 GiB.
 These are estimates, not a quote; real usage depends on the share of time
 machines are awake.
 
+### 2b. Cost-down design and runway (total infrastructure, target under $1,000 a month at 100 power users)
+
+Target: total infrastructure under $1,000 a month at 100 power users, so the
+runway lasts to September 2027. Freestyle is only part of it; the rest is
+Cloudflare, Supabase, AWS runner boxes and email/analytics. Model API costs are
+excluded (users bring their own plans). Estimates at list rates, not quotes.
+
+**The design** (each item changes what Freestyle bills):
+
+1. A VM only while a tool call runs. Chatting, reasoning and reading never
+   hold a VM; attach on a tool call, pause after about 60 s idle. Running VMs
+   equal users executing: 5-10% of users, so 5-10 at 100 users (cap 3 per user).
+2. One VM per project with a Git worktree per thread, not one per chat. Saved
+   cap about 2 per user.
+3. Disks from a shared project snapshot and smaller defaults (8-16 GiB, 12 on
+   average here, against 32 now). Assumes Freestyle bills the allocated disk,
+   so copy-on-write sharing is not counted as a saving.
+4. Delete on archive and after 7 idle days (shipped). Snapshot-and-delete does
+   not save money (snapshots bill like disks), so rebuild from the repository
+   and a base snapshot instead.
+5. Heavy builds and long jobs on our own AWS capacity (spot, scale to zero),
+   if cheaper once measured. Not counted below except as a lever.
+6. Per-user budget: running cap 3, saved cap 2.
+
+**Plan fit.** Under this design 100 users need about 10 running (Hobby: 40),
+200 saved (Hobby: 200, no headroom, so the cap of 2 must be enforced) and about
+2,400 GiB of disk at 12 GiB (Hobby: 3,125, 77%). Hobby is enough at 100 users;
+at 16 GiB it would not be (3,200 GiB). Pro is not needed, and at 100 users it
+would cost the same because usage is above the $500 fee.
+
+**Assumptions.** Current design as in the table above (8 saved at 32 GiB, 2
+running 4 h/day, 2 vCPU / 4 GiB at $0.132 per hour). Cost-down: 40 VM-hours
+per user a month on the same size, 2 saved at 12 GiB. Cloudflare Workers Paid
+$5 plus Durable Object duration, which has a hard spend cap of $10 (so $5-15).
+Supabase Pro $25, $35 from 100 users for more compute. AWS runner boxes
+(`t3.small`, about $23 each with disk): 2 up to 30 users, 4 at 60, 6 at 100.
+Email and analytics $20. Freestyle is billed as usage minus the monthly
+included allowances ($18), never below the plan fee. Promotional credits on the
+account offset Freestyle usage until they expire
+(`docs/infrastructure-usage.md`); the table below is cash before credits.
+
+| Users | Design | Freestyle plan | Running | Saved | Disk GiB | Freestyle | Cloudflare | Supabase | AWS | Email, analytics | Total / month |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 10 | current | Hobby | 20 | 80 | 2,560 | $460 | $5 | $25 | $46 | $20 | **$556** |
+| 30 | current | Pro | 60 | 240 | 7,680 | $1,416 | $7 | $25 | $46 | $20 | **$1,514** |
+| 60 | current | Pro | 120 | 480 | 15,360 | $2,850 | $12 | $25 | $92 | $20 | **$2,999** |
+| 100 | current | Pro | 200 | 800 | 25,600 | $4,763 | $15 | $35 | $138 | $20 | **$4,971** |
+| 10 | cost-down | Hobby | 3 | 20 | 240 | $50 | $5 | $25 | $46 | $20 | **$146** |
+| 30 | cost-down | Hobby | 3 | 60 | 720 | $186 | $7 | $25 | $46 | $20 | **$284** |
+| 60 | cost-down | Hobby | 6 | 120 | 1,440 | $389 | $12 | $25 | $92 | $20 | **$538** |
+| 100 | cost-down | Hobby | 10 | 200 | 2,400 | $661 | $15 | $35 | $138 | $20 | **$869** |
+
+Cost-down at 100 users is about $869 a month, 13% under the target.
+With a 1 vCPU / 2 GiB default size and 30 VM-hours per user it is about
+$539.
+
+**Runway, cumulative cash spend December 2026 to September 2027** (flat
+monthly cost at that user count; Freestyle credits not deducted):
+
+| Month | Now 10 | Now 30 | Now 60 | Now 100 | Down 10 | Down 30 | Down 60 | Down 100 |
+|---|---|---|---|---|---|---|---|---|
+| Dec 2026 | $556 | $1,514 | $2,999 | $4,971 | $146 | $284 | $538 | $869 |
+| Jan 2027 | $1,111 | $3,028 | $5,998 | $9,941 | $292 | $567 | $1,077 | $1,738 |
+| Feb 2027 | $1,667 | $4,542 | $8,998 | $14,912 | $438 | $851 | $1,615 | $2,608 |
+| Mar 2027 | $2,223 | $6,056 | $11,997 | $19,882 | $584 | $1,134 | $2,154 | $3,477 |
+| Apr 2027 | $2,779 | $7,569 | $14,996 | $24,853 | $730 | $1,418 | $2,692 | $4,346 |
+| May 2027 | $3,334 | $9,083 | $17,995 | $29,823 | $876 | $1,701 | $3,230 | $5,215 |
+| Jun 2027 | $3,890 | $10,597 | $20,994 | $34,794 | $1,022 | $1,985 | $3,769 | $6,085 |
+| Jul 2027 | $4,446 | $12,111 | $23,993 | $39,764 | $1,168 | $2,268 | $4,307 | $6,954 |
+| Aug 2027 | $5,001 | $13,625 | $26,993 | $44,735 | $1,314 | $2,552 | $4,846 | $7,823 |
+| Sep 2027 | $5,557 | $15,139 | $29,992 | $49,705 | $1,460 | $2,835 | $5,384 | $8,692 |
+
+The current design at 100 users spends $49,705 by September; the cost-down
+design $8,692, and $5,390 with the smaller default size. With the promotional
+credits the Freestyle share of that is not paid in cash until they run out.
+
+**Biggest levers at 100 users, ranked by monthly saving** (against the current
+design's Freestyle bill of about $4,760):
+
+| # | Lever | Saves per month |
+|---|---|---|
+| 1 | VM only while a tool call runs (240 to 40 VM-hours per user) | about $2,640 |
+| 2 | One VM per project, saved cap 2 instead of 8 (256 to 64 GiB per user) | about $1,200 |
+| 3 | Smaller default size, 1 vCPU / 2 GiB where it is enough | about $330 |
+| 4 | Disks 12 GiB instead of 32 | about $250 |
+| 5 | AWS runner boxes on spot instances (assumed about 65% off) | about $90 |
+| 6 | Heavy builds on AWS spot instead of Freestyle | unmeasured, small |
+| 7 | Staying on Hobby instead of Pro | $0 at 100 users (it lets us fit, but usage is above the fee either way); $450 at 10 users or fewer |
+
+Delete-on-archive and 7-day retention are shipped and only keep the saved
+count at its cap. Snapshotting saves nothing.
+
 ## 3. Model usage
 
 - **Platform usage window.** The platform's own included cloud usage is
