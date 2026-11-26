@@ -41,6 +41,7 @@ const account = (
 	priority: 0,
 	lastUsedAt: null,
 	connectedAt: 1,
+	windows: [],
 	active: true,
 	...over,
 });
@@ -103,4 +104,19 @@ it("the picker pin appears only with two or more accounts of the provider", () =
 	);
 	expect(html).toContain("Auto");
 	expect(html).toContain("Work");
+});
+
+it("shows the provider's usage windows and when they reset", () => {
+	const html = render([
+		account({
+			windows: [
+				{ id: "5h", usedPercent: 62, resetsAt: Date.now() + 3_600_000 },
+				{ id: "7d", usedPercent: 18, resetsAt: Date.now() + 4 * 86_400_000 },
+			],
+		}),
+		account({ id: "b", label: "Work", active: false }),
+	]);
+	expect(html).toContain("5 h 62%");
+	expect(html).toContain("7 d 18%");
+	expect(html).toContain("resets");
 });

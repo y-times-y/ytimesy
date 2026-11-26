@@ -87,6 +87,30 @@ export function useSubscriptionAccounts() {
 	};
 }
 
+/** "3:24 AM" today, "Mon 3:24 AM" later: a reset days away needs its day. */
+const formatReset = (epochMs: number, now: number) =>
+	new Date(epochMs).toLocaleString([], {
+		...(epochMs - now > 18 * 3_600_000 ? { weekday: "short" as const } : {}),
+		hour: "numeric",
+		minute: "2-digit",
+	});
+
+/** "5 h 62% · 7 d 18% · resets 3:24 AM": the provider's windows, next reset last. */
+function usageLine(
+	windows: PublicSubscriptionAccount["windows"],
+	now: number,
+): string | null {
+	if (!windows.length) return null;
+	const parts = windows.map(
+		(w) => `${w.id === "5h" ? "5 h" : "7 d"} ${w.usedPercent}%`,
+	);
+	const next = Math.min(
+		...windows.map((w) => w.resetsAt ?? Number.POSITIVE_INFINITY),
+	);
+	if (Number.isFinite(next)) parts.push(`resets ${formatReset(next, now)}`);
+	return parts.join(" · ");
+}
+
 const formatClock = (epochMs: number) =>
 	new Date(epochMs).toLocaleTimeString([], {
 		hour: "numeric",
@@ -210,6 +234,7 @@ function AccountRow({
 	const meta = [
 		account.planType ? `${account.planType} plan` : null,
 		account.email,
+		usageLine(account.windows, now),
 		// "Not used yet" says nothing; show it only once it has served a turn.
 		account.lastUsedAt === null ? null : lastUsedLabel(account.lastUsedAt, now),
 	]

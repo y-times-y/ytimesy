@@ -676,3 +676,39 @@ describe("failover when the account in use hits a plan limit", () => {
 		expect(seen).toEqual(["rotated", "rotated", "none"]);
 	});
 });
+
+describe("the provider's usage windows", () => {
+	it("lists each account's last reading, drops windows that have reset, and moves with the account", async () => {
+		const { firstId, secondId } = await twoClaude();
+		const now = Date.now();
+		const reading = (resetsAt: number) =>
+			JSON.stringify({
+				status: "allowed",
+				resetsAt,
+				readAt: now,
+				windows: [
+					{ id: "5h", usedPercent: 62, resetsAt },
+					{ id: "7d", usedPercent: 18, resetsAt: now - 1000 },
+				],
+			});
+		await db.query("update claude_subscription set plan_usage=$1::jsonb", [
+			reading(now + HOUR),
+		]);
+		const [slot] = (await listSubscriptionAccounts(user, now)).filter(
+			(a) => a.id === firstId,
+		);
+		// The 7 d window already reset: only the live one shows.
+		expect(slot?.windows).toEqual([
+			{ id: "5h", usedPercent: 62, resetsAt: now + HOUR },
+		]);
+		await activateSubscriptionAccount(user, "claude", secondId);
+		const moved = (await listSubscriptionAccounts(user, now)).find(
+			(a) => a.id === firstId,
+		);
+		expect(moved?.windows).toHaveLength(1);
+		expect(
+			(await listSubscriptionAccounts(user, now)).find((a) => a.id === secondId)
+				?.windows,
+		).toEqual([]);
+	});
+});

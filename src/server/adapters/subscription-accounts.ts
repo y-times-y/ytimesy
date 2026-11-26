@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import {
+	type ClaudePlanWindow,
+	claudePlanUsageFromJson,
+} from "#/domain/claude-plan-usage";
+import {
 	accountAfterLimit,
 	chooseAccount,
 	effectiveAccountState,
@@ -57,6 +61,11 @@ export type PublicSubscriptionAccount = {
 	readonly priority: number;
 	readonly lastUsedAt: number | null;
 	readonly connectedAt: number | null;
+	/**
+	 * The provider's own usage windows for this account (Claude: 5 h and 7 d),
+	 * as last read, with those already reset dropped. Empty when unknown.
+	 */
+	readonly windows: readonly ClaudePlanWindow[];
 	/** The account serving turns now (the slot). */
 	readonly active: boolean;
 };
@@ -72,6 +81,7 @@ type Row = {
 	priority: number;
 	last_used_at: number | null;
 	connected_at: number | null;
+	plan_usage?: unknown;
 };
 
 const ms = (column: string) => `(extract(epoch from ${column})*1000)::float8`;
@@ -113,8 +123,16 @@ function toPublic(
 		priority: row.priority,
 		lastUsedAt: row.last_used_at,
 		connectedAt: row.connected_at,
+		windows: currentWindows(row.plan_usage, now),
 		active,
 	};
+}
+
+/** The readings whose window has not reset yet: a spent window's old number says nothing now. */
+function currentWindows(usage: unknown, now: number): ClaudePlanWindow[] {
+	return (claudePlanUsageFromJson(usage)?.windows ?? []).filter(
+		(window) => window.resetsAt === null || window.resetsAt > now,
+	);
 }
 
 /** Every account of the user: the ones in use first within each provider. */
@@ -135,14 +153,14 @@ export async function listSubscriptionAccounts(
 		db.query<Row>(
 			`select account_id::text as id,label,null as email,null as plan_type,
 			 status,message,${ms("limited_until")} as limited_until,priority,
-			 ${ms("last_used_at")} as last_used_at,${ms("connected_at")} as connected_at
+			 ${ms("last_used_at")} as last_used_at,${ms("connected_at")} as connected_at,plan_usage
 			 from claude_subscription where user_id=$1`,
 			[userId],
 		),
 		db.query<Row & { provider: SubscriptionProvider }>(
 			`select id::text,provider,label,email,plan_type,status,message,
 			 ${ms("limited_until")} as limited_until,priority,${ms("last_used_at")} as last_used_at,
-			 ${ms("connected_at")} as connected_at
+			 ${ms("connected_at")} as connected_at,plan_usage
 			 from subscription_account where user_id=$1`,
 			[userId],
 		),
