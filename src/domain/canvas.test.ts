@@ -5,6 +5,7 @@ import {
 	CANVAS_CSP,
 	CANVAS_HTML_LIMIT,
 	CANVAS_SANDBOX,
+	canvasConfirmation,
 	canvasDocument,
 	canvasInstructions,
 	canvasStandalonePage,
@@ -256,5 +257,57 @@ describe("canvasInstructions", () => {
 		expect(text).toContain("fixed size");
 		expect(text).toContain("compare it with the real app");
 		expect(text).toContain("cannot reproduce");
+	});
+});
+
+describe("canvas versus inline artifacts", () => {
+	it("tells agents to prefer an inline artifact for anything that fits in a message, with examples both ways", () => {
+		const text = canvasInstructions();
+		expect(text).toContain(
+			"prefer an inline artifact for anything that fits in a message",
+		);
+		expect(text).toContain("```artifact");
+		expect(text).toMatch(/chart of weekly signups.*inline/is);
+		expect(text).toMatch(/landing page mockup.*canvas/is);
+		expect(text).not.toContain("secondary use");
+	});
+
+	it("keeps the canvas for large standalone pages and for when the person asks", () => {
+		const text = canvasInstructions();
+		expect(text).toMatch(/large standalone/);
+		expect(text).toMatch(/asks for a canvas/);
+	});
+
+	it("names the tool it was given, so Claude Code's MCP name works", () => {
+		expect(canvasInstructions("mcp__ytimesy__canvas")).toContain(
+			"mcp__ytimesy__canvas",
+		);
+	});
+
+	it("nudges the model, not the person, when a canvas is small enough to have been inline", () => {
+		const small =
+			'<!doctype html><svg viewBox="0 0 10 10"><rect width="5" height="5"/></svg>';
+		const sentence = canvasConfirmation({
+			title: "Chart",
+			revision: 1,
+			html: small,
+		});
+		expect(sentence).toContain("small enough to show inline");
+		expect(sentence).toContain("```artifact");
+	});
+
+	it("does not nudge a real design: artboards, prompts, large or non-chart documents", () => {
+		const note = (html: string) =>
+			canvasConfirmation({ title: "T", revision: 1, html });
+		expect(note("<div data-artboard><svg></svg></div>")).not.toContain(
+			"inline",
+		);
+		expect(
+			note('<button data-ytimesy-prompt="Go"></button><svg></svg>'),
+		).not.toContain("small enough");
+		expect(
+			note(`<table>${"<tr><td>x</td></tr>".repeat(600)}</table>`),
+		).not.toContain("small enough");
+		expect(note("<h1>Hi</h1>")).not.toContain("small enough");
 	});
 });

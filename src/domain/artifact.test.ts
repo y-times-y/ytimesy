@@ -319,3 +319,20 @@ describe("chart axes", () => {
 		expect(() => chartLayout(flat, 440, 172)).not.toThrow();
 	});
 });
+
+describe("artifact guidance is the default for what fits in a message", () => {
+	const text = artifactInstructions();
+	it("says it is the default and keeps the canvas for large pages", () => {
+		expect(text).toMatch(/default/i);
+		expect(text).toMatch(/fits in a message/);
+		expect(text).toMatch(/large standalone/);
+	});
+	it("gives short concrete examples, including a small diagram as an html card with inline SVG", () => {
+		expect(text).toMatch(/chart of weekly signups/);
+		expect(text).toMatch(/table/);
+		expect(text).toMatch(/diagram[\s\S]*"html"[\s\S]*SVG|SVG[\s\S]*diagram/i);
+	});
+	it("stays cheap: under 3,600 characters", () => {
+		expect(text.length).toBeLessThan(3_600);
+	});
+});

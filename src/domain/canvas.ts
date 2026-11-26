@@ -262,7 +262,8 @@ function inOrder(revisions: readonly CanvasItem[]): CanvasItem[] {
 
 /** The few lines of system guidance; the tool's description has the rules. */
 export function canvasInstructions(toolName: string = CANVAS_TOOL): string {
-	return `Canvas: design with the user, don't describe. When ${toolName} is offered, use it to iterate on a design together: UI mockups, layout and visual options, flows, and comparisons (before/after, screenshots or options side by side). For exploration, put two or three labelled options (A/B/C) side by side in one canvas, with data-ytimesy-prompt buttons such as "Go with option B", and ask the user to pick or annotate. The user can pin notes on elements and send them as a "Canvas feedback on …" message: apply every note, then call ${toolName} again with the same title for the next revision (never a new title for the same design). Charts and diagrams are a secondary use. When the canvas shows an existing UI (a component, a page, a change to one), show the real thing, not a drawing and not a browser-window screenshot: render the real component with the app's own compiled CSS and inline its markup, styles and assets (logo, icons) into one file by script. Design for the viewer: it is an infinite canvas where the user zooms and pans, and it opens fitted to the panel, so never assume the panel is wide and never rely on the viewer's width. Lay the artboards out on one wide page (a row with gaps, no wrapping), mark each artboard with the attribute data-artboard, and keep each at a realistic fixed size (a page 1440 px wide, a sidebar 300x760, a phone 390x844), with a short label above it; the viewer measures the artboards and fits them all. Give each variant its own artboard so fixed or absolute children cannot overlap, and set the page state the app relies on (for example the attributes on <html>). Before showing it, compare it with the real app: a preview without the app's CSS or assets shows what the user never sees (broken logos, screen-reader-only text, duplicate toggles, overlaps), and the user will rightly distrust the rest. Say what the canvas cannot reproduce (hover, scripts, live data). The user sees it beside the chat, so your reply only says what changed and what to look at.`;
+	return `Canvas vs inline: prefer an inline artifact for anything that fits in a message (a chart, stat card, table, timeline, checklist or small diagram: a fenced \`\`\`artifact block in your reply, see Artifacts). The canvas is only for a large standalone page or document the user will iterate on (a full HTML page, a landing page mockup, a multi-screen flow, layout options side by side, a long report), or when the user asks for a canvas. "A chart of weekly signups" or "a dashboard of these numbers" is inline; "a landing page mockup" or "three layout options for the settings page" is a canvas.
+Canvas: design with the user, don't describe. When ${toolName} is offered, use it to iterate on a design together: UI mockups, layout and visual options, flows, and comparisons (before/after, screenshots or options side by side). For exploration, put two or three labelled options (A/B/C) side by side in one canvas, with data-ytimesy-prompt buttons such as "Go with option B", and ask the user to pick or annotate. The user can pin notes on elements and send them as a "Canvas feedback on …" message: apply every note, then call ${toolName} again with the same title for the next revision (never a new title for the same design). When the canvas shows an existing UI (a component, a page, a change to one), show the real thing, not a drawing and not a browser-window screenshot: render the real component with the app's own compiled CSS and inline its markup, styles and assets (logo, icons) into one file by script. Design for the viewer: it is an infinite canvas where the user zooms and pans, and it opens fitted to the panel, so never assume the panel is wide and never rely on the viewer's width. Lay the artboards out on one wide page (a row with gaps, no wrapping), mark each artboard with the attribute data-artboard, and keep each at a realistic fixed size (a page 1440 px wide, a sidebar 300x760, a phone 390x844), with a short label above it; the viewer measures the artboards and fits them all. Give each variant its own artboard so fixed or absolute children cannot overlap, and set the page state the app relies on (for example the attributes on <html>). Before showing it, compare it with the real app: a preview without the app's CSS or assets shows what the user never sees (broken logos, screen-reader-only text, duplicate toggles, overlaps), and the user will rightly distrust the rest. Say what the canvas cannot reproduce (hover, scripts, live data). The user sees it beside the chat, so your reply only says what changed and what to look at.`;
 }
 
 /**
@@ -274,5 +275,21 @@ export function canvasConfirmation(
 	shown: Pick<CanvasToolResult, "title" | "revision" | "html" | "path">,
 ): string {
 	const kb = Math.round((shown.html.length / 1024) * 10) / 10;
-	return `Shown to the user as canvas '${shown.title}' (revision ${shown.revision}), ${kb} KB${shown.path ? ` from ${shown.path}` : ""}: a card in this chat that opens in the Canvas panel beside it, where they preview it and pin notes.`;
+	return `Shown to the user as canvas '${shown.title}' (revision ${shown.revision}), ${kb} KB${shown.path ? ` from ${shown.path}` : ""}: a card in this chat that opens in the Canvas panel beside it, where they preview it and pin notes.${inlineNudge(shown.html)}`;
+}
+
+/** The most characters of a canvas that could have been an inline artifact. */
+const INLINE_NUDGE_LIMIT = 6_000;
+
+/**
+ * A short hint for the model (never the person) after it opened a canvas
+ * that looks like a small chart, table or diagram: those belong inline. Not
+ * for a real design (artboards, prompt buttons) or anything large.
+ */
+export function inlineNudge(html: string): string {
+	if (html.length > INLINE_NUDGE_LIMIT) return "";
+	if (/data-artboard|data-ytimesy-prompt|<form|<input|<button/i.test(html))
+		return "";
+	if (!/<svg|<table|<canvas|chart/i.test(html)) return "";
+	return " This was small enough to show inline: next time put charts, tables, timelines, checklists and small diagrams in your reply as a ```artifact block (see Artifacts) and keep the canvas for large pages.";
 }

@@ -15,11 +15,11 @@ import { redactToolText } from "#/domain/tool-detail";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 const DESCRIPTION = `Open a design canvas the user and you iterate on together: a self-contained HTML document shown as a card in the conversation and live beside the chat, where the user zooms and pans it like a design tool's canvas (it opens fitted to the panel), pins notes on its elements, and compares revisions side by side.
+Only for a large standalone page or document: not for anything that fits in a message. Charts, stat cards, tables, timelines, checklists and small diagrams go inline, as a fenced \`\`\`artifact block in your reply (see the Artifacts instructions).
 Use it to work on a design with the user:
 - UI mockups and clickable prototypes before you build a frontend change, and the built page after (with path, the real file).
 - Exploration: put two or three options side by side in ONE canvas, each clearly labelled (Option A, B, C) with a one-line rationale, so the user can compare and point at parts of each.
 - Layout, visual and copy options, user flows (screens in a row), and comparisons such as before/after or screenshots side by side.
-- Secondary: charts, tables and diagrams (inline SVG) when a picture explains a plan or data better than prose.
 Iterating:
 - Keep the same title for the same design: each call adds the next revision, the user steps between and compares them. Use a new title only for a different artifact. Keep titles short and stable, e.g. "Pricing page".
 - The user's pinned notes arrive as one message starting "Canvas feedback on "<title>" (revision N)", each note with the element it is on (tag, text and CSS selector). Apply every note, then call this tool again with the same title; in your reply, say briefly what changed per note.
