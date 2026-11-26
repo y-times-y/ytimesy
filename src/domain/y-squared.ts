@@ -2,6 +2,7 @@ import { z } from "zod";
 import { artifactInstructions } from "./artifact";
 import { SHOW_CANVAS_TOOL } from "./canvas";
 import { CANVAS_SOURCE_PAGE, CANVAS_SOURCE_PAGE_LIMIT } from "./canvas-text";
+import { captainInstructions } from "./captain";
 import { isClaudeCodeRoute } from "./claude-code-route";
 import { REFERENCE_WRITING_RULE } from "./reference-writing";
 import type { SessionItem } from "./session-item";
@@ -52,7 +53,14 @@ export function openChatIsSuperAgent(input: {
 	readonly activeChat?: { readonly role?: string } | undefined;
 	readonly activeSessionId?: string | null | undefined;
 	readonly project?: { readonly ySquaredId?: string | null } | undefined;
+	/** The project's captains' chats (src/domain/captain.ts): Super agents too. */
+	readonly captainChatIds?: readonly string[] | undefined;
 }): boolean {
+	if (
+		input.activeSessionId &&
+		input.captainChatIds?.includes(input.activeSessionId)
+	)
+		return true;
 	if (input.activeChat) return input.activeChat.role === "y2";
 	return Boolean(
 		input.activeSessionId &&
@@ -231,6 +239,19 @@ export const THREAD_SUGGESTIONS = [
 /** Threads listed in one overview, most recently active first. */
 export const Y_SQUARED_THREAD_LIMIT = 25;
 const SNIPPET = 220;
+
+/** Y²'s instructions, or a captain's role in front of them (src/domain/captain.ts). */
+export function superAgentInstructions(
+	captain?: {
+		readonly name: string;
+		readonly label: string | null;
+		readonly rolePrompt: string;
+	} | null,
+) {
+	return captain
+		? `${captainInstructions(captain)}\n\n${ySquaredInstructions()}`
+		: ySquaredInstructions();
+}
 
 export function ySquaredInstructions() {
 	return [

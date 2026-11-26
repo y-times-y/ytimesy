@@ -29,7 +29,7 @@ beforeEach(async () => {
 	create table auth_user(id text primary key);
 	create table project(id uuid primary key, user_id text not null references auth_user(id),
 	 repository_id bigint not null, installation_id bigint not null, full_name text not null,
-	 branch text not null, name text, machine_size text, y_enabled boolean not null default false,
+	 branch text not null, name text, machine_size text, y_enabled boolean not null default false, leader_name text,
 	 repository_set_key text not null default '', archived_at timestamptz,
 	 created_at timestamptz default now(), unique(user_id,repository_id,repository_set_key));
 	create table project_repository(project_id uuid, repository_id bigint, installation_id bigint,

@@ -10,6 +10,7 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
+import { lastAgentText } from "#/domain/captain";
 import {
 	CLAUDE_CODE_REVISION_PREFIX,
 	isClaudeCodeRevision,
@@ -50,6 +51,7 @@ import { startAfterResponse } from "./after-response";
 import { modelConcurrencyLimits } from "./agent-capacity";
 import { TURN_DEADLINE_REQUEST_ID } from "./attempt-loop-store";
 import { dispatchBackgroundJob } from "./background-job-dispatch";
+import { recordCaptainLine } from "./captains";
 import { wakeConversationProgress } from "./conversation-progress-wake";
 import {
 	recordConversationPoint,
@@ -397,7 +399,7 @@ export async function enqueueApiTurn(input: {
 			 chat as (select id,turn_status,parent_session_id,task_state,task_access,project_id,chat_role,archived_at from agent_session where id=$1 and user_id=$2 for update)
 			 select exists(select 1 from connection) as connected,chat.id is not null as found,
 			 chat.turn_status,chat.parent_session_id,chat.task_state,chat.task_access,chat.project_id,
-			 (chat.chat_role='y2' and chat.archived_at is null and exists(select 1 from project p where p.id=chat.project_id and p.user_id=$2 and p.y_enabled)) as y_squared,
+			 (chat.chat_role in ('y2','captain') and chat.archived_at is null and exists(select 1 from project p where p.id=chat.project_id and p.user_id=$2 and p.y_enabled)) as y_squared,
 			 ($3::text is not null and exists(select 1 from api_turn t where t.session_id=$1 and t.user_id=$2 and t.idempotency_key=$3::text)) as existing
 			 from (select 1) one left join chat on true`,
 				subscription || claudeCode
@@ -1118,6 +1120,7 @@ export async function finalizeApiTurn(
 				version: string;
 				previous: string;
 				items_rev: string;
+				chat_role: string | null;
 			}
 	>(
 		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=${write.apiTurn},messages=coalesce($5::jsonb,messages),
@@ -1126,7 +1129,7 @@ export async function finalizeApiTurn(
 		 update agent_session s set items=${write.session},turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
 		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
 		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS},
-		 saved.updated_at::text as version,${PREVIOUS_VERSION},s.items_rev::text as items_rev`,
+		 saved.updated_at::text as version,${PREVIOUS_VERSION},s.items_rev::text as items_rev,s.chat_role`,
 		[
 			turn.id,
 			turn.lease_id,
@@ -1152,6 +1155,13 @@ export async function finalizeApiTurn(
 		);
 		// Bookkeeping: never fails the settled turn (recordTurnUsage catches).
 		await recordTurnUsage(turn.id, turn.model_id, turnUsageFact(items));
+		// A captain's sidebar row shows the first line of its last answer. One
+		// small update, only for captains, and never a reason to fail the turn.
+		if (settledRow.chat_role === "captain" && settledRow.state === "completed")
+			await recordCaptainLine(turn.session_id, lastAgentText(items)).catch(
+				(error) =>
+					console.warn("captain.line_failed", (error as Error).message),
+			);
 		await wakeConversationProgress();
 	}
 	return settledRow?.state ?? null;

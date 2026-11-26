@@ -223,6 +223,7 @@ import {
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { authClient } from "../auth/client";
 import type { CanvasFocus } from "../canvas/canvas-open-context";
+import { listCaptainsFn } from "../captains/captains.fn";
 import { useImportFinishAlert } from "../local-import/use-import-finish-alert";
 import { requestJson, retryTransientRead } from "../projects/api";
 import {
@@ -2876,6 +2877,8 @@ export function WorkspaceHome({
 		if (!chatId || !projectId || session.turnStatus === "running") return;
 		// Y² has no machine to copy or wake.
 		if (sidebarChats.find((chat) => chat.id === chatId)?.role === "y2") return;
+		// Nor does a captain.
+		if (captainList?.some((captain) => captain.chatId === chatId)) return;
 		if (session.items.length) {
 			wakeChatMachine(projectId, chatId);
 			return;
@@ -3449,10 +3452,23 @@ export function WorkspaceHome({
 	}
 
 	const activeChat = sidebarChats.find((chat) => chat.id === activeSessionId);
+	// The project's captains (src/domain/captain.ts): their chats are not in the
+	// thread list, so the open chat is looked up here. Shares the sidebar's read.
+	const captainList = useQuery({
+		queryKey: ["captains", selectedProject?.id],
+		queryFn: () =>
+			listCaptainsFn({ data: { projectId: selectedProject?.id as string } }),
+		enabled: Boolean(selectedProject?.yEnabled),
+		staleTime: 30_000,
+	}).data;
+	const activeCaptain = captainList?.find(
+		(captain) => captain.chatId === activeSessionId,
+	);
 	const ySquaredOpen = openChatIsSuperAgent({
 		activeChat,
 		activeSessionId,
 		project: selectedProject,
+		captainChatIds: captainList?.map((captain) => captain.chatId),
 	});
 	const splitRatio = inspectorSplitRatio({
 		custom: customSplit,
@@ -4145,6 +4161,8 @@ export function WorkspaceHome({
 														superAgent={ySquaredOpen}
 														listedTitle={listedTitle}
 														sessionTitle={sessionTitle}
+														captain={activeCaptain}
+														leaderName={selectedProject?.leaderName}
 													/>
 													{activeThreadLabel && !ySquaredOpen ? (
 														<span
