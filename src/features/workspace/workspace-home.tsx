@@ -1635,9 +1635,23 @@ export function WorkspaceHome({
 		busyChatIds,
 	});
 	const openTurnStatus = session.turnStatus;
-	const listedTitle = sidebarChats.find(
-		(chat) => chat.id === activeSessionId,
-	)?.title;
+	// The project's captains (src/domain/captain.ts): their chats are not in the
+	// thread list, so the open chat is looked up here. Shares the sidebar's read.
+	const captainList = useQuery({
+		queryKey: ["captains", selectedProject?.id],
+		queryFn: () =>
+			listCaptainsFn({ data: { projectId: selectedProject?.id as string } }),
+		enabled: Boolean(selectedProject?.yEnabled),
+		staleTime: 30_000,
+	}).data;
+	const activeCaptain = captainList?.find(
+		(captain) => captain.chatId === activeSessionId,
+	);
+	// A captain's chat is not in the thread list: its name is its listed title,
+	// so the chat shows as a chat (not the empty launcher) from its welcome on.
+	const listedTitle =
+		sidebarChats.find((chat) => chat.id === activeSessionId)?.title ??
+		activeCaptain?.name;
 	const followUpLayout = sessionUsesFollowUpLayout({
 		items: session.items,
 		turnStatus: session.turnStatus,
@@ -3452,18 +3466,6 @@ export function WorkspaceHome({
 	}
 
 	const activeChat = sidebarChats.find((chat) => chat.id === activeSessionId);
-	// The project's captains (src/domain/captain.ts): their chats are not in the
-	// thread list, so the open chat is looked up here. Shares the sidebar's read.
-	const captainList = useQuery({
-		queryKey: ["captains", selectedProject?.id],
-		queryFn: () =>
-			listCaptainsFn({ data: { projectId: selectedProject?.id as string } }),
-		enabled: Boolean(selectedProject?.yEnabled),
-		staleTime: 30_000,
-	}).data;
-	const activeCaptain = captainList?.find(
-		(captain) => captain.chatId === activeSessionId,
-	);
 	const ySquaredOpen = openChatIsSuperAgent({
 		activeChat,
 		activeSessionId,

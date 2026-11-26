@@ -219,3 +219,20 @@ describe("superAgentInstructions", () => {
 		expect(captain.endsWith(ySquaredInstructions())).toBe(true);
 	});
 });
+
+import { captainWelcome } from "./captain";
+
+describe("captainWelcome", () => {
+	it("greets with the first sentence of the role, cut at a word when long", () => {
+		expect(captainWelcome("seo", "You own SEO. Audit pages weekly.")).toBe(
+			"I'm seo, a captain on this project. You own SEO.",
+		);
+		const long = captainWelcome("seo", `${"word ".repeat(80)}end`);
+		expect(long.endsWith("…")).toBe(true);
+		expect(long.length).toBeLessThan(200);
+		expect(long).not.toMatch(/wor…$/);
+	});
+	it("asks what to look after when there is no role", () => {
+		expect(captainWelcome("seo", "")).toContain("Tell me what you want");
+	});
+});
