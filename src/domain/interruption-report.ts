@@ -18,6 +18,18 @@ export type InterruptionRow = {
 	readonly cause: string;
 	readonly recovered: boolean;
 	readonly user_visible: boolean;
+	/** Short hash of the chat id (never the id itself). */
+	readonly chat?: string | null;
+};
+
+/** Causes with a shipped fix: the digest says so, so a repeat is a regression. Add an entry with the fix. */
+export const FIXED_INTERRUPTION_CAUSES: Readonly<Record<string, string>> = {
+	"turn-abandoned/lease-expired":
+		"stopped turns settle quietly when their executor dies; 2026-11-26",
+	"lease-takeover/box-heartbeat-lost":
+		"renewal requests time out and retry; 2026-11-26",
+	"delayed-start/no-box-took-turn":
+		"moves to the chat's object after 45 s; 2026-11-24",
 };
 
 export type InterruptionDay = {
@@ -80,6 +92,8 @@ export function interruptionDigestText(
 	days: readonly InterruptionDay[],
 	day: string,
 	canary?: { readonly runs: number; readonly failures: number },
+	/** The day's rows (with chat hashes) for the top-causes list. */
+	rows: readonly InterruptionRow[] = [],
 ) {
 	const found = days.find((entry) => entry.day === day);
 	const lines = [
@@ -93,6 +107,14 @@ export function interruptionDigestText(
 		lines.push("", "By kind/cause:");
 		for (const [key, count] of sorted(found.byCause))
 			lines.push(`  ${count}  ${key}`);
+	}
+	const top = topCauses(rows, day);
+	if (top.length) {
+		lines.push("", "Top causes:");
+		for (const cause of top)
+			lines.push(
+				`  ${cause.count}  ${cause.key}  chats ${cause.chats.join(", ")}  ${cause.fix ? `fixed (${cause.fix})` : "not fixed"}`,
+			);
 	}
 	const earlier = days.filter((entry) => entry.day !== day).slice(-6);
 	if (earlier.length) {
@@ -112,4 +134,25 @@ export function interruptionRateLimited(
 	windowMs = INTERRUPTION_RATE_LIMIT_MS,
 ) {
 	return lastAt !== undefined && now - lastAt < windowMs;
+}
+
+function topCauses(rows: readonly InterruptionRow[], day: string, limit = 5) {
+	const groups = new Map<string, { count: number; chats: Set<string> }>();
+	for (const row of rows) {
+		if (utcDay(row.at) !== day) continue;
+		const key = `${row.kind}/${row.cause}`;
+		const group = groups.get(key) ?? { count: 0, chats: new Set<string>() };
+		group.count += 1;
+		if (row.chat) group.chats.add(row.chat);
+		groups.set(key, group);
+	}
+	return [...groups.entries()]
+		.sort(([a, x], [b, y]) => y.count - x.count || a.localeCompare(b))
+		.slice(0, limit)
+		.map(([key, group]) => ({
+			key,
+			count: group.count,
+			chats: [...group.chats].slice(0, 5),
+			fix: FIXED_INTERRUPTION_CAUSES[key],
+		}));
 }

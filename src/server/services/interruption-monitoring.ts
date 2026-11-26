@@ -69,9 +69,8 @@ export async function sendInterruptionDigest(
 	} = {},
 ) {
 	const day = utcDay(new Date(now.getTime() - 24 * 3_600_000));
-	const days = dailyInterruptionReport(
-		await (deps.rows ?? interruptionRowsSince)(8),
-	);
+	const rows = await (deps.rows ?? interruptionRowsSince)(8);
+	const days = dailyInterruptionReport(rows);
 	const canary = await (deps.canary ?? canaryCountsSince)(1).catch(
 		() => undefined,
 	);
@@ -80,7 +79,7 @@ export async function sendInterruptionDigest(
 		kind: "interruption-digest",
 		key: day,
 		subject: `ytimesy: ${found?.total ?? 0} interruptions on ${day} (${found?.userVisible ?? 0} user-visible)`,
-		text: interruptionDigestText(days, day, canary),
+		text: interruptionDigestText(days, day, canary, rows),
 	});
 	await (deps.prune ?? pruneInterruptionHistory)().catch(() => undefined);
 }

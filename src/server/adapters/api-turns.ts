@@ -1607,8 +1607,47 @@ export async function requeueInterruptedBoxTurns() {
 	return result.rowCount ?? 0;
 }
 
+/**
+ * A turn the user asked to stop whose executor then died (its box or object
+ * stopped heartbeating) settles as stopped: nothing is left to finish it, the
+ * stop was what the user wanted, and the takeover above skips it. It used to
+ * fall through to the failure below and show "The worker disconnected"
+ * (production 2026-11-25 19:37, three turns). The chat's queued messages run.
+ */
+export async function settleStoppedAbandonedTurns() {
+	const result = await database().query<SettledTurnRow>(`with saved as (
+	 update api_turn set state='cancelled',updated_at=now()
+	 where state='running' and cancel_requested and heartbeat_at < now()-case when executor='durable-object'
+	  then interval '3 minutes' else interval '45 seconds' end
+	 returning session_id,id,state,created_at
+	) update agent_session s set turn_status='idle',updated_at=now()
+	 from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`);
+	captureSettledTurns(result.rows ?? []);
+	await Promise.all(
+		(result.rows ?? []).map((row) =>
+			reportInterruption({
+				kind: "turn-abandoned",
+				turnId: row.turn_id,
+				sessionId: row.session_id,
+				cause: "stopped-executor-lost",
+				recovered: true,
+				userVisible: false,
+			}),
+		),
+	);
+	await noteTurnsSettledElsewhere(
+		(result.rows ?? []).map((row) => ({
+			userId: row.user_id,
+			sessionId: row.session_id,
+			turnId: row.turn_id,
+			turnStatus: "idle" as const,
+		})),
+	);
+}
+
 export async function expireApiTurnLeases() {
 	await requeueInterruptedBoxTurns();
+	await settleStoppedAbandonedTurns().catch(() => {});
 	const result = await database().query<SettledTurnRow>(`with saved as (
 	 update api_turn set state='failed',updated_at=now()
 	 where state='running' and heartbeat_at < now()-case when executor='durable-object'

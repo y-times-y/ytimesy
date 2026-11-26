@@ -46,3 +46,15 @@ probes the machine itself (`src/domain/machine-health.ts`, `src/server/services/
 
 Open: limiting the machine's own load (type-check/test concurrency, memory, `nice`, sizing up for heavy checks) is not
 done; the recovery above only keeps the turn from going silent. Owner: this work, next step.
+
+## Digest 2026-11-25 findings (fixed 2026-11-26)
+
+- **3 user-visible `turn-abandoned/lease-expired` (11-25 19:37:25, one sweep):** box turns with `cancel_requested=true` whose box stopped heartbeating
+  at ~19:36. The takeover skips a turn asked to stop, so the sweep failed it with "The worker disconnected". Now
+  `settleStoppedAbandonedTurns` settles such a turn as `cancelled` (chat idle, no error item, recorded as recovered, `stopped-executor-lost`).
+  What set `cancel_requested` on all three (one was the canary chat, which people cannot stop) is not recorded anywhere: open.
+- **4 `lease-takeover/box-heartbeat-lost` (11-25 23:30-11-26 00:03):** not the ASG (no scaling activity after 11-23). They began after #26 moved box
+  lease renewals from the socket to HTTP; that request had no timeout, so one hung request pinned the turn's single in-flight heartbeat until the 45 s
+  lease lapsed. Renewal now times out after 8 s and retries once (`TURN_BOX_RENEW_ATTEMPT_TIMEOUT_MS`).
+- Not done: scale-in protection for boxes with running turns (the CPU target-tracking policy can still terminate a box mid-turn; a termination
+  lifecycle hook or `SetInstanceProtection` from the box is the fix), and park-and-retry after 15 minutes.

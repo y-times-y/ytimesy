@@ -78,7 +78,7 @@ export function resetInterruptionLimiter() {
 
 export async function interruptionRowsSince(days: number) {
 	const result = await database().query<InterruptionRow>(
-		"select at,kind,cause,recovered,user_visible from interruption_event where at >= now() - $1::int * interval '1 day' order by at",
+		"select at,kind,cause,recovered,user_visible,left(md5(session_id::text),8) as chat from interruption_event where at >= now() - $1::int * interval '1 day' order by at",
 		[days],
 	);
 	return result.rows;

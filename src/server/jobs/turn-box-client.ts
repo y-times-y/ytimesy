@@ -171,6 +171,9 @@ export const runtimeBoxSocket: BoxSocketFactory = (url, grant, signal) =>
 		});
 	});
 
+/** One lease-renewal request waits this long; two attempts stay well inside the 45 s lease. */
+export const TURN_BOX_RENEW_ATTEMPT_TIMEOUT_MS = 8_000;
+
 type ClientOptions = {
 	/** The edge Worker's origin, e.g. https://ytimesy.example. */
 	readonly edgeUrl: string;
@@ -360,11 +363,18 @@ export class TurnBoxTurnSession {
 		};
 	}
 
-	private async post(path: string, body: unknown) {
+	private async post(path: string, body: unknown, timeoutMs?: number) {
 		const json = JSON.stringify(body);
 		// A long chat's history can pass the edge's body limit as JSON; sent
 		// gzipped (the edge inflates it with its own, larger, limit).
 		const gzipped = json.length > TURN_BOX_GZIP_ABOVE_BYTES;
+		const cutoff = timeoutMs ? new AbortController() : undefined;
+		const timer = cutoff
+			? setTimeout(
+					() => cutoff.abort(new Error("request timed out")),
+					timeoutMs,
+				)
+			: undefined;
 		const response = await (this.options.fetch ?? fetch)(
 			new URL(path, this.options.edgeUrl).href,
 			{
@@ -375,8 +385,9 @@ export class TurnBoxTurnSession {
 					...(gzipped ? { "content-encoding": "gzip" } : {}),
 				},
 				body: gzipped ? new Uint8Array(gzipSync(json)) : json,
+				...(cutoff ? { signal: cutoff.signal } : {}),
 			},
-		);
+		).finally(() => clearTimeout(timer));
 		if (response.status === 409) {
 			const refused = (await response.json().catch(() => ({}))) as {
 				reason?: string;
@@ -393,6 +404,34 @@ export class TurnBoxTurnSession {
 			throw new TurnBoxLeaseLost();
 		}
 		return response;
+	}
+
+	/**
+	 * The renewal request, cut off after TURN_BOX_RENEW_ATTEMPT_TIMEOUT_MS and
+	 * sent once more: a request that never answers must not pin the turn's
+	 * one in-flight heartbeat until its 45 s lease lapses and another box takes
+	 * over a turn that is running fine (production 2026-11-25, after renewals
+	 * moved from the socket to HTTP).
+	 */
+	private async postRenewal() {
+		try {
+			return await this.post(
+				TURN_BOX_PATHS.renew,
+				{},
+				TURN_BOX_RENEW_ATTEMPT_TIMEOUT_MS,
+			);
+		} catch (error) {
+			if (
+				error instanceof ApiTurnCancelled ||
+				error instanceof TurnBoxLeaseLost
+			)
+				throw error;
+			return this.post(
+				TURN_BOX_PATHS.renew,
+				{},
+				TURN_BOX_RENEW_ATTEMPT_TIMEOUT_MS,
+			);
+		}
 	}
 
 	private markCancelled() {
@@ -530,7 +569,7 @@ export class TurnBoxTurnSession {
 			// No answer: the HTTP path decides.
 		}
 		const response = renewResponse.parse(
-			await (await this.post(TURN_BOX_PATHS.renew, {})).json(),
+			await (await this.postRenewal()).json(),
 		);
 		if (response.grant) {
 			this.grantToken = response.grant;
