@@ -1,0 +1,344 @@
+/*
+ * Inline artifacts (artifact-block.tsx). The app's own variables only: the
+ * dark surface, border and muted text of the chat, and its blue accent for
+ * the first series. No fixed colour except the series palette.
+ */
+.artifact {
+	margin: 10px 0;
+	border: 1px solid var(--menu-border, #ffffff17);
+	border-radius: 12px;
+	background: var(--surface, #141414);
+	overflow: hidden;
+	max-width: 100%;
+	min-width: 0;
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--list-text, #e6e6e6);
+}
+
+.artifact-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 8px 8px 12px;
+	border-bottom: 1px solid var(--menu-border, #ffffff17);
+}
+
+.artifact-title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 600;
+	color: var(--list-text-strong, #f4f4f4);
+}
+
+.artifact-kind {
+	flex: none;
+	border: 1px solid var(--menu-border, #ffffff17);
+	border-radius: 999px;
+	padding: 0 7px;
+	font-size: 10.5px;
+	color: var(--text-muted, #939393);
+}
+
+.artifact-actions {
+	display: inline-flex;
+	flex: none;
+}
+
+.artifact-actions button,
+.artifact-tabs button {
+	background: none;
+	border: 0;
+	cursor: pointer;
+	color: var(--text-muted, #939393);
+	border-radius: 6px;
+	font: inherit;
+}
+
+.artifact-actions button {
+	display: inline-grid;
+	place-items: center;
+	/* A 44 px target on touch screens, a compact one with a pointer. */
+	width: 28px;
+	height: 28px;
+}
+
+@media (pointer: coarse) {
+	.artifact-actions button {
+		width: 40px;
+		height: 40px;
+	}
+}
+
+.artifact-actions button:hover,
+.artifact-tabs button:hover {
+	background: var(--list-hover-bg, #ffffff0d);
+	color: var(--list-text-strong, #f4f4f4);
+}
+
+.artifact :focus-visible {
+	outline: 2px solid var(--accent-blue, #3b82f6);
+	outline-offset: 1px;
+}
+
+.artifact-stats {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+	margin: 0;
+	border-bottom: 1px solid var(--menu-border, #ffffff17);
+}
+
+.artifact-stats > div {
+	padding: 10px 12px;
+	border-right: 1px solid var(--menu-border, #ffffff17);
+	min-width: 0;
+}
+
+.artifact-stats > div:last-child {
+	border-right: 0;
+}
+
+.artifact-stats dt {
+	font-size: 11px;
+	color: var(--text-muted, #939393);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.artifact-stats dd {
+	margin: 0;
+	font-size: 22px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	font-variant-numeric: tabular-nums;
+	color: var(--list-text-strong, #f4f4f4);
+}
+
+.artifact-stats dd small {
+	margin-left: 6px;
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0;
+	color: var(--accent-blue, #3b82f6);
+}
+
+.artifact-note,
+.artifact-stats dd.artifact-note {
+	margin: 0;
+	font-size: 11px;
+	font-weight: 400;
+	color: var(--text-muted, #939393);
+	letter-spacing: 0;
+}
+
+.artifact-tabs {
+	display: flex;
+	gap: 4px;
+	padding: 8px 10px 0;
+	overflow-x: auto;
+}
+
+.artifact-tabs button {
+	padding: 4px 10px;
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+.artifact-tabs button[aria-selected="true"] {
+	background: var(--list-selected-bg, #ffffff14);
+	color: var(--list-text-strong, #f4f4f4);
+}
+
+.artifact-body {
+	padding: 8px 12px 12px;
+}
+
+.artifact-chart {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+.artifact-grid {
+	stroke: var(--menu-border, #ffffff17);
+	stroke-width: 1;
+}
+
+.artifact-axis {
+	fill: var(--text-muted, #939393);
+	font-size: 10px;
+}
+
+.artifact-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 14px;
+	margin: 6px 0 0;
+	padding: 0;
+	list-style: none;
+	font-size: 11px;
+	color: var(--text-muted, #939393);
+}
+
+.artifact-legend i {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	margin-right: 5px;
+	border-radius: 2px;
+}
+
+.artifact-scroll {
+	overflow-x: auto;
+}
+
+.artifact-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12.5px;
+}
+
+.artifact-table th,
+.artifact-table td {
+	padding: 6px 10px 6px 0;
+	text-align: left;
+	border-bottom: 1px solid var(--menu-border, #ffffff17);
+	white-space: nowrap;
+}
+
+.artifact-table th {
+	font-weight: 500;
+	font-size: 11px;
+	color: var(--text-muted, #939393);
+}
+
+.artifact-table td[data-number] {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.artifact-timeline,
+.artifact-checklist {
+	margin: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.artifact-timeline li {
+	display: flex;
+	gap: 10px;
+	align-items: baseline;
+}
+
+.artifact-dot {
+	flex: none;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	border: 1.5px solid var(--text-muted, #939393);
+	transform: translateY(1px);
+}
+
+.artifact-timeline [data-status="done"] .artifact-dot {
+	background: var(--accent-blue, #3b82f6);
+	border-color: var(--accent-blue, #3b82f6);
+}
+
+.artifact-timeline [data-status="active"] .artifact-dot {
+	background: var(--list-text-strong, #f4f4f4);
+	border-color: var(--list-text-strong, #f4f4f4);
+}
+
+.artifact-event {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	overflow-wrap: anywhere;
+}
+
+.artifact-event small,
+.artifact-timeline time {
+	font-size: 11px;
+	color: var(--text-muted, #939393);
+}
+
+.artifact-checklist li {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	overflow-wrap: anywhere;
+}
+
+.artifact-checklist [data-done="true"] span {
+	color: var(--text-muted, #939393);
+	text-decoration: line-through;
+}
+
+.artifact-checklist input {
+	accent-color: var(--accent-blue, #3b82f6);
+}
+
+.artifact-frame {
+	display: block;
+	width: 100%;
+	height: 320px;
+	border: 0;
+	background: #fff;
+}
+
+.artifact-building {
+	padding: 12px;
+}
+
+.artifact-skeleton {
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
+	height: 72px;
+}
+
+.artifact-skeleton i {
+	flex: 1;
+	height: 40px;
+	border-radius: 4px;
+	background: var(--list-selected-bg, #ffffff14);
+	animation: artifact-pulse 1.4s ease-in-out infinite;
+}
+
+.artifact-skeleton i:nth-child(2) {
+	height: 64px;
+	animation-delay: 0.15s;
+}
+
+.artifact-skeleton i:nth-child(3) {
+	height: 28px;
+	animation-delay: 0.3s;
+}
+
+@keyframes artifact-pulse {
+	50% {
+		opacity: 0.45;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.artifact-skeleton i {
+		animation: none;
+	}
+}
+
+@media (max-width: 480px) {
+	.artifact-stats > div:nth-child(odd):last-child {
+		grid-column: 1 / -1;
+	}
+	.artifact-stats dd {
+		font-size: 19px;
+	}
+}
