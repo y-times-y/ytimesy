@@ -689,6 +689,28 @@ describe("wake policy: threads the person starts themselves", () => {
 		expect(crew.wakeState().pending).toBe(true);
 	});
 
+	it("keeps the person's direct message for the thread until Y² sends into it", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		crew.noteThread(direct(), T0);
+		expect(crew.thread("t1")).toMatchObject({
+			personMessage: "Fix the sign-up form",
+			personMessageAt: T0,
+		});
+		crew.noteY2Sent("t1", T0 + 1_000);
+		expect(crew.thread("t1")?.personMessage).toBeNull();
+	});
+
+	it("the wake marks the person's message as already delivered, once", () => {
+		const crew = new SqliteYSquaredCrew(sql() as never);
+		const { alarmAt } = crew.noteThread(direct(), T0);
+		const body = fire(crew, alarmAt as number).body;
+		expect(body).toContain(
+			"Already delivered to the thread by the person; do not re-send.",
+		);
+		expect(body).toContain("never restate what the person said");
+		expect(body.split("never forward, paraphrase").length).toBe(2);
+	});
+
 	it("a Y² mark older than its life no longer hides the person's own message", () => {
 		const crew = new SqliteYSquaredCrew(sql() as never);
 		crew.noteY2Sent("t1", T0);

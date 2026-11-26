@@ -62,6 +62,7 @@ import {
 	crewDigest,
 	crewTitle,
 } from "#/domain/y-squared-crew";
+import { guardAgainstResend } from "#/domain/y-squared-duplicate";
 import {
 	findAttachment,
 	viewImageInput,
@@ -700,10 +701,31 @@ export function ySquaredTools(input: {
 		[Y_SQUARED_MESSAGE_THREAD_TOOL]: tool({
 			description: Y_SQUARED_MESSAGE_THREAD_DESCRIPTION,
 			inputSchema: messageThreadInput,
-			execute: async ({ id, text, mode = "queue", attachments }) => {
+			execute: async ({
+				id,
+				text,
+				mode = "queue",
+				attachments,
+				addsNewInformation,
+				reason,
+			}) => {
 				if (!input.machines || !input.modelId) return noMachines;
 				const chat = await ownThread(id);
 				if (!chat) return noThread;
+				// The person may have told this thread already: do not send it twice.
+				const row = await deps
+					.crew(input.projectId)
+					?.thread?.(chat.id)
+					.catch(() => null);
+				const guard = guardAgainstResend({
+					text,
+					personText: row?.personMessage,
+					personAt: row?.personMessageAt,
+					now: deps.now(),
+					addsNewInformation,
+					reason,
+				});
+				if (guard.kind !== "ok") return guard.notice;
 				const forward = await forwarded(attachments);
 				if (forward.error) return `Not sent: ${forward.error}`;
 				await markSent(chat.id);

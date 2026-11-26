@@ -249,6 +249,13 @@ export type CrewWakeEvent = {
 	readonly detail: string | null;
 };
 
+/** Marks a person's own message as already in its thread (see PERSON_MESSAGE_RULE). */
+export const ALREADY_DELIVERED =
+	"Already delivered to the thread by the person; do not re-send.";
+/** Said once in a wake that carries such a message. */
+export const PERSON_MESSAGE_RULE =
+	"Messages the person sent a thread themselves are already delivered: never forward, paraphrase or repeat them there. Message that thread only for a NEW fact it lacks (that fact alone, one line, addsNewInformation=true). In your reply never restate what the person said: lead with the result.";
+
 const minutesText = (ms: number) =>
 	`${Math.max(1, Math.round(ms / 60_000))} min`;
 
@@ -275,11 +282,11 @@ export function crewWakeBody(input: {
 			case "started":
 				return event.detail?.startsWith('From thread "')
 					? `- Another thread started "${event.title}" with a message, not the person${detail}.`
-					: `- The person started "${event.title}" themselves${detail}.`;
+					: `- The person started "${event.title}" themselves${detail}. ${ALREADY_DELIVERED}`;
 			default:
 				return event.detail?.startsWith('From thread "')
 					? `- You were not part of this: "${event.title}" got a message from another thread, not the person${detail}.`
-					: `- You were not part of this: "${event.title}" got a message from the person${detail}.`;
+					: `- You were not part of this: "${event.title}" got a message from the person${detail}. ${ALREADY_DELIVERED}`;
 		}
 	});
 	const working = input.working.map(
@@ -294,6 +301,13 @@ export function crewWakeBody(input: {
 		...(lines.length ? ["Since your last report:", ...lines] : []),
 		...(working.length ? ["Still working:", ...working] : []),
 		...proactive,
+		...(input.events.some(
+			(event) =>
+				(event.kind === "started" || event.kind === "direct") &&
+				!event.detail?.startsWith('From thread "'),
+		)
+			? [PERSON_MESSAGE_RULE]
+			: []),
 		...(input.events.some((event) => event.detail?.includes("showed canvas"))
 			? [
 					"A thread showed a canvas: if it is a new revision of one you displayed here, call `show_canvas` again with the same title so the person sees it in this chat, and say what changed in one or two lines.",
@@ -547,6 +561,9 @@ export type CrewRow = {
 	readonly lastActiveAt: number;
 	/** When the thread's running turn started; null when it is not working. */
 	readonly workingSince: number | null;
+	/** The person's last direct message to the thread since Y² last sent into it (at most 400 characters); null: none. */
+	readonly personMessage?: string | null;
+	readonly personMessageAt?: number;
 };
 
 /** A crew row as the digest the threads tool prints. */

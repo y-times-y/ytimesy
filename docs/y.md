@@ -83,6 +83,17 @@ Y² does not read thread transcripts. Each Y project has one `YSquaredCrew` Dura
 
 Cost per thread-turn (the new columns ride the same upsert): 2 notes (start, settle) = **2 crew requests** (3 when it ends on a card for the person: the waiting hint), ≤2 row writes plus ≤2 `wake_state` / `wake_events` writes. A wake adds 1 alarm invocation, ≤3 `wake_state` writes, one normal Y² turn (model cost: API tokens, or the person's plan usage on the Claude runner) and its `threads` read (1 request). A Y² `start_thread` / `message_thread` adds 1 mark request. A Y² overview read is 1 request, 0 writes.
 
+## Never re-send what the person told a thread (2026-11-26)
+
+Problem: the person messages a thread directly, the wake says "You were not part of this: <thread> got <request>", and Y² still sent its own rewording with `message_thread` (a duplicate, sometimes a conflicting one) and restated the person's words in its reply.
+
+Four layers, all token-cheap:
+
+- **Wake** (`crewWakeBody`): a person's direct message (`started` or `direct` event, not a peer thread's) carries the marker `ALREADY_DELIVERED` ("Already delivered to the thread by the person; do not re-send.") and, once per wake, `PERSON_MESSAGE_RULE` (new fact only, one line, `addsNewInformation=true`; never restate what the person said).
+- **Instructions** (`ySquaredInstructions`): such a thread is already instructed; never forward, paraphrase or repeat; message it only for a NEW fact; "never begin by restating the person's words: lead with the result".
+- **Tool guard** (`message_thread`, `domain/y-squared-duplicate.ts`): the crew keeps each thread's last direct person message (`person_msg`, `person_msg_at`, up to 400 characters) until Y² next sends into it (`noteY2Sent` clears it). Within 10 minutes of it, a send is refused: a near-identical text (80% shared words, texts of 4+ words) outright, anything else with "the person already messaged this thread: <quote>" unless the call passes `addsNewInformation=true` and a short `reason`. Fails open: no crew or no row means the send goes through.
+- Limits: only a message that started a turn is recorded; one sent into an already running turn does not wake Y² and is not seen by the guard.
+
 ## Needs-you inbox and cleanup (2026-11-24)
 
 From the Capy Captain study (docs/research/y2-captain-ux-study.md).

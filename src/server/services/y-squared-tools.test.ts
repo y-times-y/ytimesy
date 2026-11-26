@@ -389,6 +389,73 @@ describe("ySquaredTools write tools", () => {
 		});
 	});
 
+	it("message_thread does not re-send what the person already told the thread", async () => {
+		const crew = store();
+		const note = {
+			userId: "u",
+			projectId: "p",
+			ySquaredId: "y2",
+			sessionId: "t1",
+			title: "Verbose flag",
+			prUrl: null,
+			lastReply: null,
+			waitingOn: null,
+		};
+		const said =
+			"Add a --verbose flag to the CLI and print debug lines to stderr";
+		crew.noteThread(
+			{ ...note, state: "working", lastRequest: said } as never,
+			NOW - 120_000,
+		);
+		const send = vi.fn(async () => ({ turnStatus: "running" }) as never);
+		const tools = ySquaredTools({
+			userId: "u",
+			projectId: "p",
+			selfId: "y2",
+			machines: {} as never,
+			modelId: "m-y2",
+			harnessId: "api",
+			turnId: "turn-1",
+			deps: {
+				metadata: (async () => chat({ turnStatus: "running" })) as never,
+				send: send as never,
+				list: vi.fn() as never,
+				now: () => NOW,
+				crew: () =>
+					({
+						thread: async (id: string) => crew.thread(id),
+						noteY2Sent: async (id: string | null) => crew.noteY2Sent(id, NOW),
+					}) as never,
+			},
+		});
+		const copy = await run(tools, "message_thread", {
+			id: "t1",
+			text: "Please add a --verbose flag to the CLI, printing debug lines to stderr.",
+		});
+		expect(copy).toContain("already told this thread");
+		const fresh = "The CLI entry is src/cli.ts; run tests with pnpm test";
+		expect(
+			await run(tools, "message_thread", { id: "t1", text: fresh }),
+		).toContain("addsNewInformation=true");
+		expect(send).not.toHaveBeenCalled();
+		expect(
+			await run(tools, "message_thread", {
+				id: "t1",
+				text: fresh,
+				addsNewInformation: true,
+				reason: "entry point",
+			}),
+		).toContain("Queued the message");
+		expect(send).toHaveBeenCalledTimes(1);
+		// Y² has spoken: the person's earlier message no longer blocks.
+		expect(
+			await run(tools, "message_thread", {
+				id: "t1",
+				text: "Also run the linter",
+			}),
+		).toContain("Queued the message");
+	});
+
 	it("rejects an oversized message in the schema", () => {
 		const f = writeFixture({ t1: chat() });
 		const schema = (f.tools.message_thread as { inputSchema: z.ZodType })
@@ -497,8 +564,8 @@ describe("ySquaredTools write tools", () => {
 		await run(f.tools, "message_thread", { id: "t1", text: "x" });
 		await run(f.tools, "stop_thread", { id: "t1" });
 		expect(f.list).not.toHaveBeenCalled();
-		// the crew is only told of Y²'s own sends (start, message), never read
-		expect(f.crew).toHaveBeenCalledTimes(2);
+		// the crew is told of Y²'s own sends (start, message) and read once for the person's message to the thread, never read
+		expect(f.crew).toHaveBeenCalledTimes(3);
 	});
 
 	it("marks its own sends in the crew before sending, so they are not taken for the person's", async () => {

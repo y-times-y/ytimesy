@@ -25,6 +25,7 @@ import {
 	type WakeState,
 	wakeRetryDelayMs,
 } from "../../domain/y-squared-crew";
+import { PERSON_MESSAGE_KEEP } from "../../domain/y-squared-duplicate";
 import {
 	decideProactive,
 	nextDueAt,
@@ -133,6 +134,13 @@ export class SqliteYSquaredCrew {
 		}
 		if (!columns.has("working_since"))
 			sql.exec("alter table crew add column working_since integer");
+		// The person's last direct message to the thread, kept until Y² sends into it.
+		if (!columns.has("person_msg"))
+			sql.exec("alter table crew add column person_msg text");
+		if (!columns.has("person_msg_at"))
+			sql.exec(
+				"alter table crew add column person_msg_at integer not null default 0",
+			);
 		if (!columns.has("start_wake_at"))
 			sql.exec(
 				"alter table crew add column start_wake_at integer not null default 0",
@@ -419,6 +427,13 @@ export class SqliteYSquaredCrew {
 		if (note.state === "working" && existing?.state !== "working") {
 			const byY2 = this.takeY2Sent(note.sessionId, !existing, now);
 			if (!byY2 && request) {
+				if (!request.startsWith('From thread "'))
+					this.sql.exec(
+						"update crew set person_msg=?,person_msg_at=? where session_id=?",
+						request.slice(0, PERSON_MESSAGE_KEEP),
+						now,
+						note.sessionId,
+					);
 				startedWake =
 					now - (existing?.start_wake_at ?? 0) >= CREW_STARTED_WAKE_EVERY_MS;
 				this.addEvent(
@@ -517,6 +532,12 @@ export class SqliteYSquaredCrew {
 	 * Made before the send, so it is always there when the start note comes.
 	 */
 	noteY2Sent(sessionId: string | null, now: number) {
+		// Y² speaking to the thread closes the person's earlier message.
+		if (sessionId)
+			this.sql.exec(
+				"update crew set person_msg=null,person_msg_at=0 where session_id=?",
+				sessionId,
+			);
 		this.sql.exec(
 			"insert into y2_sent(session_id,at) values(?,?)",
 			sessionId ?? "",
@@ -1227,6 +1248,8 @@ function toRow(row: {
 	created_at: number;
 	last_active_at: number;
 	working_since?: number | null;
+	person_msg?: string | null;
+	person_msg_at?: number | null;
 }): CrewRow {
 	return {
 		sessionId: row.session_id,
@@ -1240,5 +1263,7 @@ function toRow(row: {
 		createdAt: row.created_at,
 		lastActiveAt: row.last_active_at || row.updated_at,
 		workingSince: row.state === "working" ? (row.working_since ?? null) : null,
+		personMessage: row.person_msg ?? null,
+		personMessageAt: row.person_msg_at ?? 0,
 	};
 }
