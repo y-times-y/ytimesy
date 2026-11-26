@@ -183,7 +183,9 @@ export async function runTestAccountAction(
 			| "repo-ids"
 			| "vm-map"
 			| "seed-accounts"
-			| "simulate-limit";
+			| "seed-grok-accounts"
+			| "simulate-limit"
+			| "simulate-grok-limit";
 		apiKey?: string;
 		slugs?: string[];
 	},
@@ -199,14 +201,24 @@ export async function runTestAccountAction(
 			input.slugs ?? [],
 		);
 	if (input.action === "y-counts") return yDefaultCounts(db);
-	if (input.action === "seed-accounts" || input.action === "simulate-limit") {
+	if (
+		input.action === "seed-accounts" ||
+		input.action === "seed-grok-accounts" ||
+		input.action === "simulate-limit" ||
+		input.action === "simulate-grok-limit"
+	) {
 		const userId = await flaggedTestUser(db);
 		console.log(
 			JSON.stringify({ event: `test_session.${input.action}`, caller }),
 		);
-		return input.action === "seed-accounts"
-			? seedSyntheticAccounts(db, userId)
-			: simulateSyntheticLimit(userId);
+		if (input.action === "seed-accounts")
+			return seedSyntheticAccounts(db, userId);
+		if (input.action === "seed-grok-accounts")
+			return seedSyntheticGrokAccounts(db, userId);
+		return simulateSyntheticLimit(
+			userId,
+			input.action === "simulate-grok-limit" ? "grok" : "claude",
+		);
 	}
 	const userId = await flaggedTestUser(db);
 	const result = await seedTestAccount(db, userId, {
@@ -343,10 +355,107 @@ async function clearSyntheticAccounts(db: TestAccountDb, userId: string) {
 			await db.query("delete from subscription_account where id=$1::uuid", [
 				row.id,
 			]);
+	await clearSyntheticGrok(db, userId);
 	await db.query(
 		"update agent_session set subscription_pin=null where user_id=$1",
 		[userId],
 	);
+}
+const SYNTHETIC_GROK = "synthetic-grok-test-account";
+
+async function clearSyntheticGrok(db: TestAccountDb, userId: string) {
+	const { unseal } = await import("../auth/token-vault");
+	const synthetic = async (sealed: string, purpose: string) =>
+		(await unseal(sealed, { purpose, userId }).catch(() => "")).includes(
+			SYNTHETIC_GROK,
+		);
+	const slot = (
+		await db.query<{ id: string; sealed_credential: string }>(
+			"select id::text,sealed_credential from model_connection where user_id=$1 and kind='xai-subscription'",
+			[userId],
+		)
+	).rows[0];
+	if (slot && (await synthetic(slot.sealed_credential, "xai-subscription")))
+		await db.query("delete from model_connection where id=$1::uuid", [slot.id]);
+	const waiting = await db.query<{ id: string; sealed_auth: string }>(
+		"select id::text,sealed_auth from subscription_account where user_id=$1 and provider='grok'",
+		[userId],
+	);
+	for (const row of waiting.rows)
+		if (await synthetic(row.sealed_auth, `subscription-account:${row.id}`))
+			await db.query("delete from subscription_account where id=$1::uuid", [
+				row.id,
+			]);
+}
+
+/**
+ * Three made-up Grok plan accounts for the test user (the first in use): a
+ * main connection that is ready, lists no models and has a usage reading
+ * fresh for an hour so nothing is ever sent to xAI, plus two waiting accounts.
+ * Tokens are valid nowhere. `reset` removes only these.
+ */
+export async function seedSyntheticGrokAccounts(
+	db: TestAccountDb,
+	userId: string,
+) {
+	const { seal } = await import("../auth/token-vault");
+	await clearSyntheticGrok(db, userId);
+	const existing = await db.query(
+		"select 1 from model_connection where user_id=$1 and kind='xai-subscription'",
+		[userId],
+	);
+	if (existing.rows.length)
+		throw new Error("The test account already has a Grok connection.");
+	const tokens = (n: number, connectionId: string) =>
+		JSON.stringify({
+			connectionId,
+			userId,
+			accessToken: `${SYNTHETIC_GROK}-access-${n}`,
+			refreshToken: `${SYNTHETIC_GROK}-refresh-${n}`,
+			expiresAt: Date.now() + 6 * 3_600_000,
+		});
+	const rowId = randomUUID();
+	await db.query(
+		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,models,revision,kind,status,
+		   account_label,activated_at,plan_usage,plan_usage_at)
+		 values($1,$2,'compatible','Grok plan','https://api.x.ai/v1',$3,'[]'::jsonb,$4,'xai-subscription','ready',
+		   'SuperGrok',now()-interval '1 hour',$5::jsonb,now()+interval '1 hour')`,
+		[
+			rowId,
+			userId,
+			await seal(tokens(1, rowId), { purpose: "xai-subscription", userId }),
+			randomUUID(),
+			JSON.stringify({
+				readAt: Date.now(),
+				windows: [
+					{
+						id: "weekly",
+						usedPercent: 34,
+						resetsAt: Date.now() + 5 * 86_400_000,
+					},
+				],
+			}),
+		],
+	);
+	for (const [index, label] of ["Heavy", "Team"].entries()) {
+		const id = randomUUID();
+		await db.query(
+			`insert into subscription_account(id,user_id,provider,label,external_id,sealed_auth,priority)
+			 values($1,$2,'grok',$3,$4,$5,$6)`,
+			[
+				id,
+				userId,
+				label,
+				id,
+				await seal(tokens(index + 2, rowId), {
+					purpose: `subscription-account:${id}`,
+					userId,
+				}),
+				index + 1,
+			],
+		);
+	}
+	return { accounts: 3 };
 }
 
 /**
@@ -402,11 +511,14 @@ export async function seedSyntheticAccounts(db: TestAccountDb, userId: string) {
  * runs (the account rests until a reported reset 90 minutes away and the
  * next takes over). Returns what happened, never a token.
  */
-export async function simulateSyntheticLimit(userId: string) {
+export async function simulateSyntheticLimit(
+	userId: string,
+	provider: "claude" | "grok" = "claude",
+) {
 	const { rotateAfterLimit } = await import(
 		"../adapters/subscription-accounts"
 	);
-	const rotation = await rotateAfterLimit(userId, "claude", {
+	const rotation = await rotateAfterLimit(userId, provider, {
 		reportedResetAt: Date.now() + 90 * 60_000,
 	});
 	return {

@@ -167,11 +167,11 @@ export interface TurnPorts {
 	 */
 	readonly subscriptionAccounts?: {
 		readonly prepare: (
-			provider: "codex" | "claude",
+			provider: "codex" | "claude" | "grok",
 			turn: { id: string; user_id: string; session_id: string },
 		) => Promise<{ label: string; switched: boolean } | null>;
 		readonly rotate: (
-			provider: "codex" | "claude",
+			provider: "codex" | "claude" | "grok",
 			turn: { user_id: string },
 			reportedResetAt: number | null,
 		) => Promise<LimitRotation>;

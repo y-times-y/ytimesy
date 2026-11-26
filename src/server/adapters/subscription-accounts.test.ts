@@ -7,6 +7,7 @@ import {
 	activateSubscriptionAccount,
 	addClaudeAccount,
 	addCodexAccount,
+	addGrokAccount,
 	extraAccountSeal,
 	listSubscriptionAccounts,
 	MAX_ACCOUNTS_PER_PROVIDER,
@@ -57,6 +58,11 @@ beforeEach(async () => {
 	   status text not null,encrypted_codex_auth text,plan_type text,email text,message text,
 	   updated_at timestamptz not null default now(),primary key(user_id,provider));
 	 create table api_turn(id uuid primary key,user_id text,state text);
+	 create table model_connection(id uuid primary key,user_id text not null,provider text not null,
+	   label text not null,kind text not null default 'key',status text not null default 'ready',
+	   sealed_credential text,models jsonb not null default '[]',revision text not null default 'r',
+	   plan_usage jsonb,plan_usage_at timestamptz,updated_at timestamptz not null default now());
+	 create table xai_device_login(user_id text primary key,sealed_login text);
 	 create table claude_subscription(user_id text primary key,sealed_token text not null,
 	   status text not null,message text,limited_until timestamptz,
 	   connected_at timestamptz not null default now(),updated_at timestamptz not null default now(),
@@ -64,6 +70,12 @@ beforeEach(async () => {
 	await db.exec(
 		readFileSync(
 			"supabase/migrations/20261125170000_subscription_account.sql",
+			"utf8",
+		),
+	);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261126150000_subscription_account_grok.sql",
 			"utf8",
 		),
 	);
@@ -678,37 +690,218 @@ describe("failover when the account in use hits a plan limit", () => {
 });
 
 describe("the provider's usage windows", () => {
-	it("lists each account's last reading, drops windows that have reset, and moves with the account", async () => {
+	it("lists each account's last reading and it moves with the account", async () => {
 		const { firstId, secondId } = await twoClaude();
 		const now = Date.now();
-		const reading = (resetsAt: number) =>
+		await db.query("update claude_subscription set plan_usage=$1::jsonb", [
 			JSON.stringify({
 				status: "allowed",
-				resetsAt,
+				resetsAt: now + HOUR,
 				readAt: now,
-				windows: [
-					{ id: "5h", usedPercent: 62, resetsAt },
-					{ id: "7d", usedPercent: 18, resetsAt: now - 1000 },
-				],
-			});
-		await db.query("update claude_subscription set plan_usage=$1::jsonb", [
-			reading(now + HOUR),
+				windows: [{ id: "5h", usedPercent: 62, resetsAt: now + HOUR }],
+			}),
 		]);
-		const [slot] = (await listSubscriptionAccounts(user, now)).filter(
+		const slot = (await listSubscriptionAccounts(user, now)).find(
 			(a) => a.id === firstId,
 		);
-		// The 7 d window already reset: only the live one shows.
-		expect(slot?.windows).toEqual([
-			{ id: "5h", usedPercent: 62, resetsAt: now + HOUR },
+		expect(slot?.windows.map((w) => [w.label, w.usedPercent])).toEqual([
+			["5h", 62],
 		]);
 		await activateSubscriptionAccount(user, "claude", secondId);
-		const moved = (await listSubscriptionAccounts(user, now)).find(
-			(a) => a.id === firstId,
+		const accounts = await listSubscriptionAccounts(user, now);
+		expect(accounts.find((a) => a.id === firstId)?.windows).toHaveLength(1);
+		expect(accounts.find((a) => a.id === secondId)?.windows).toEqual([]);
+	});
+	it("a full window ahead of its reset limits the account before any turn finds out", async () => {
+		const { secondId } = await twoClaude();
+		const now = Date.now();
+		await db.query(
+			"update subscription_account set plan_usage=$1::jsonb where id=$2::uuid",
+			[
+				JSON.stringify({
+					status: "rejected",
+					resetsAt: now + HOUR,
+					readAt: now,
+					windows: [{ id: "5h", usedPercent: 100, resetsAt: now + HOUR }],
+				}),
+				secondId,
+			],
 		);
-		expect(moved?.windows).toHaveLength(1);
+		const second = (await listSubscriptionAccounts(user, now)).find(
+			(a) => a.id === secondId,
+		);
+		expect(second?.state).toBe("limited");
+		expect(second?.limitedUntil).toBe(now + HOUR);
+		// It clears once the window has reset.
 		expect(
-			(await listSubscriptionAccounts(user, now)).find((a) => a.id === secondId)
-				?.windows,
-		).toEqual([]);
+			(await listSubscriptionAccounts(user, now + 2 * HOUR)).find(
+				(a) => a.id === secondId,
+			)?.state,
+		).toBe("valid");
+	});
+});
+
+const xaiTokens = (n: number, connectionId: string) =>
+	JSON.stringify({
+		connectionId,
+		userId: user,
+		accessToken: `access-${n}`,
+		refreshToken: `refresh-${n}`,
+		expiresAt: Date.now() + 6 * HOUR,
+	});
+const sealXai = (json: string) =>
+	seal(json, { purpose: "xai-subscription", userId: user });
+/** A Grok main connection (the slot) and one waiting account. */
+async function twoGrok() {
+	const rowId = randomUUID();
+	await db.query(
+		`insert into model_connection(id,user_id,provider,label,kind,status,sealed_credential,account_label)
+		 values($1,$2,'compatible','Grok plan','xai-subscription','ready',$3,'SuperGrok')`,
+		[rowId, user, await sealXai(xaiTokens(1, rowId))],
+	);
+	await db.query(
+		"update model_connection set activated_at=now()-interval '1 hour'",
+	);
+	const waitingId = randomUUID();
+	await db.query(
+		`insert into subscription_account(id,user_id,provider,label,external_id,sealed_auth,priority)
+		 values($1,$2,'grok','Heavy',$4,$3,1)`,
+		[
+			waitingId,
+			user,
+			await extraAccountSeal(user, waitingId, xaiTokens(2, rowId)),
+			waitingId,
+		],
+	);
+	const slot = (
+		await db.query("select account_id::text as id from model_connection")
+	).rows[0] as { id: string };
+	return { rowId, slotId: slot.id, waitingId };
+}
+const slotTokens = async () => {
+	const row = (await db.query("select sealed_credential from model_connection"))
+		.rows[0] as { sealed_credential: string };
+	return JSON.parse(
+		await unseal(row.sealed_credential, {
+			purpose: "xai-subscription",
+			userId: user,
+		}),
+	);
+};
+const grokOnly = async () =>
+	(await listSubscriptionAccounts(user)).filter((a) => a.provider === "grok");
+
+describe("Grok accounts", () => {
+	it("lists the main connection and the waiting account, the first in use", async () => {
+		const { slotId, waitingId } = await twoGrok();
+		const grok = await grokOnly();
+		expect(grok.map((a) => [a.label, a.active])).toEqual([
+			["SuperGrok", true],
+			["Heavy", false],
+		]);
+		expect(grok.map((a) => a.id)).toEqual([slotId, waitingId]);
+	});
+	it("switching keeps the connection row (chat routes point at it) and re-seals the tokens for it", async () => {
+		const { rowId, slotId, waitingId } = await twoGrok();
+		expect(await activateSubscriptionAccount(user, "grok", waitingId)).toBe(
+			"switched",
+		);
+		expect(
+			(await db.query("select id::text from model_connection")).rows,
+		).toEqual([{ id: rowId }]);
+		expect(await slotTokens()).toMatchObject({
+			connectionId: rowId,
+			accessToken: "access-2",
+			refreshToken: "refresh-2",
+		});
+		const grok = await grokOnly();
+		expect(grok.find((a) => a.active)).toMatchObject({
+			id: waitingId,
+			label: "Heavy",
+		});
+		expect(grok.find((a) => !a.active)?.id).toBe(slotId);
+		await activateSubscriptionAccount(user, "grok", slotId);
+		expect(await slotTokens()).toMatchObject({
+			refreshToken: "refresh-1",
+			connectionId: rowId,
+		});
+	});
+	it("a plan limit moves to the other account, resting this one until xAI's own reset", async () => {
+		const { slotId, waitingId } = await twoGrok();
+		const now = Date.now();
+		await db.query("update model_connection set plan_usage=$1::jsonb", [
+			JSON.stringify({
+				readAt: now,
+				windows: [{ id: "weekly", usedPercent: 100, resetsAt: now + 3 * HOUR }],
+			}),
+		]);
+		const result = await rotateAfterLimit(user, "grok", {
+			reportedResetAt: null,
+			now,
+		});
+		expect(result).toMatchObject({
+			kind: "rotated",
+			to: { accountId: waitingId },
+		});
+		expect((await slotTokens()).refreshToken).toBe("refresh-2");
+		const rested = (await listSubscriptionAccounts(user, now)).find(
+			(a) => a.id === slotId,
+		);
+		expect(rested?.state).toBe("limited");
+		expect(rested?.limitedUntil).toBeCloseTo(now + 3 * HOUR, -4);
+	});
+	it("a user with one Grok account is untouched", async () => {
+		const rowId = randomUUID();
+		await db.query(
+			`insert into model_connection(id,user_id,provider,label,kind,status,sealed_credential)
+			 values($1,$2,'compatible','Grok plan','xai-subscription','ready',$3)`,
+			[rowId, user, await sealXai(xaiTokens(1, rowId))],
+		);
+		expect(
+			(await rotateAfterLimit(user, "grok", { reportedResetAt: null })).kind,
+		).toBe("none");
+		expect(
+			await prepareTurnAccount(user, "grok", {
+				sessionId: await chatFor(),
+				turnId: null,
+			}),
+		).toBeNull();
+	});
+	it("renames and orders both, and disconnecting the main one promotes the next", async () => {
+		const { rowId, slotId, waitingId } = await twoGrok();
+		await renameSubscriptionAccount(user, "grok", slotId, "Personal");
+		await renameSubscriptionAccount(user, "grok", waitingId, "Team");
+		await reorderSubscriptionAccounts(user, "grok", [waitingId, slotId]);
+		expect((await grokOnly()).map((a) => a.label)).toEqual([
+			"Team",
+			"Personal",
+		]);
+		await removeSubscriptionAccount(user, "grok", slotId);
+		const left = await grokOnly();
+		expect(left).toHaveLength(1);
+		expect(left[0]).toMatchObject({ id: waitingId, active: true });
+		expect((await slotTokens()).connectionId).toBe(rowId);
+		await removeSubscriptionAccount(user, "grok", waitingId);
+		expect(
+			(await db.query("select 1 from model_connection")).rows,
+		).toHaveLength(0);
+	});
+	it("adds another account only when a main one exists, up to the cap", async () => {
+		const client = {
+			query: (sql: string, values?: unknown[]) =>
+				holder.query(sql, values as unknown[]),
+		};
+		const add = (label: string) =>
+			addGrokAccount(client, user, {
+				label,
+				sealedAuth: (id, rowId) =>
+					extraAccountSeal(user, id, xaiTokens(9, rowId)),
+			});
+		expect(await add("Early")).toBe("no-main");
+		await twoGrok();
+		expect(await add("Third")).toBe("added");
+		expect(await add("Fourth")).toBe("added");
+		expect(await add("Fifth")).toBe("added");
+		expect(await add("Sixth")).toBe("full");
 	});
 });

@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 import {
-	type ClaudePlanWindow,
+	claudePlanUsageBars,
 	claudePlanUsageFromJson,
 } from "#/domain/claude-plan-usage";
+import {
+	grokPlanUsageBars,
+	grokPlanUsageFromJson,
+} from "#/domain/grok-plan-usage";
+import type { PlanUsageBar } from "#/domain/plan-usage-bars";
 import {
 	accountAfterLimit,
 	chooseAccount,
@@ -44,7 +49,12 @@ const binding = (userId: string, accountId: string) => ({
 });
 /** The bindings the main connections already use. */
 const slotBinding = (provider: SubscriptionProvider, userId: string) => ({
-	purpose: provider === "codex" ? "codex-auth" : "claude-subscription",
+	purpose:
+		provider === "codex"
+			? "codex-auth"
+			: provider === "grok"
+				? "xai-subscription"
+				: "claude-subscription",
 	userId,
 });
 
@@ -65,7 +75,7 @@ export type PublicSubscriptionAccount = {
 	 * The provider's own usage windows for this account (Claude: 5 h and 7 d),
 	 * as last read, with those already reset dropped. Empty when unknown.
 	 */
-	readonly windows: readonly ClaudePlanWindow[];
+	readonly windows: readonly PlanUsageBar[];
 	/** The account serving turns now (the slot). */
 	readonly active: boolean;
 };
@@ -107,8 +117,24 @@ function toPublic(
 					row.limited_until !== null && row.limited_until > now
 					? "limited"
 					: "valid";
+	const windows = currentWindows(provider, row.plan_usage, now);
+	// A window the provider reports as full, still ahead of its reset, is a
+	// limit already: the account is skipped before a turn has to find out.
+	const spent = windows
+		.filter((w) => w.usedPercent >= 100 && w.resetsAt !== null)
+		.reduce<number | null>(
+			(latest, w) => Math.max(latest ?? 0, w.resetsAt ?? 0),
+			null,
+		);
+	const limitedUntil =
+		spent !== null && stored === "valid"
+			? Math.max(spent, row.limited_until ?? 0)
+			: row.limited_until;
 	const state = effectiveAccountState(
-		{ state: stored, limitedUntil: row.limited_until },
+		{
+			state: spent !== null && stored === "valid" ? "limited" : stored,
+			limitedUntil,
+		},
 		now,
 	);
 	return {
@@ -119,20 +145,30 @@ function toPublic(
 		planType: row.plan_type,
 		state,
 		message: state === "expired" ? row.message : null,
-		limitedUntil: state === "limited" ? row.limited_until : null,
+		limitedUntil: state === "limited" ? limitedUntil : null,
 		priority: row.priority,
 		lastUsedAt: row.last_used_at,
 		connectedAt: row.connected_at,
-		windows: currentWindows(row.plan_usage, now),
+		windows,
 		active,
 	};
 }
 
-/** The readings whose window has not reset yet: a spent window's old number says nothing now. */
-function currentWindows(usage: unknown, now: number): ClaudePlanWindow[] {
-	return (claudePlanUsageFromJson(usage)?.windows ?? []).filter(
-		(window) => window.resetsAt === null || window.resetsAt > now,
-	);
+/**
+ * The provider's own windows for an account, as last read (Claude: 5 h and
+ * 7 d; Grok: its billing period), with windows that have already reset
+ * dropped. Codex's are read live for the account in use, not stored.
+ */
+function currentWindows(
+	provider: SubscriptionProvider,
+	usage: unknown,
+	now: number,
+): PlanUsageBar[] {
+	if (provider === "claude")
+		return claudePlanUsageBars(claudePlanUsageFromJson(usage), now);
+	if (provider === "grok")
+		return grokPlanUsageBars(grokPlanUsageFromJson(usage), now);
+	return [];
 }
 
 /** Every account of the user: the ones in use first within each provider. */
@@ -141,7 +177,7 @@ export async function listSubscriptionAccounts(
 	now = Date.now(),
 ): Promise<PublicSubscriptionAccount[]> {
 	const db = database();
-	const [codex, claude, extras] = await Promise.all([
+	const [codex, claude, grok, extras] = await Promise.all([
 		db.query<Row>(
 			`select account_id::text as id,label,email,plan_type,status,message,
 			 ${ms("limited_until")} as limited_until,priority,${ms("last_used_at")} as last_used_at,
@@ -157,6 +193,15 @@ export async function listSubscriptionAccounts(
 			 from claude_subscription where user_id=$1`,
 			[userId],
 		),
+		db.query<Row>(
+			`select account_id::text as id,account_label as label,null as email,null as plan_type,
+			 case status when 'ready' then 'connected' when 'reconnect' then 'expired' else 'refused' end as status,
+			 case status when 'not-eligible' then 'xAI refused this plan; trying again soon.' end as message,
+			 ${ms("limited_until")} as limited_until,priority,${ms("last_used_at")} as last_used_at,
+			 ${ms("updated_at")} as connected_at,plan_usage
+			 from model_connection where user_id=$1 and kind='xai-subscription'`,
+			[userId],
+		),
 		db.query<Row & { provider: SubscriptionProvider }>(
 			`select id::text,provider,label,email,plan_type,status,message,
 			 ${ms("limited_until")} as limited_until,priority,${ms("last_used_at")} as last_used_at,
@@ -168,6 +213,7 @@ export async function listSubscriptionAccounts(
 	const all = [
 		...codex.rows.map((row) => toPublic("codex", row, true, now)),
 		...claude.rows.map((row) => toPublic("claude", row, true, now)),
+		...grok.rows.map((row) => toPublic("grok", row, true, now)),
 		...extras.rows.map((row) => toPublic(row.provider, row, false, now)),
 	];
 	return all.sort(
@@ -221,15 +267,20 @@ const SLOT = {
 		table: "claude_subscription",
 		where: "user_id=$1 and account_id=$2::uuid",
 	},
+	grok: {
+		table: "model_connection",
+		where: "user_id=$1 and kind='xai-subscription' and account_id=$2::uuid",
+	},
 } as const;
 
 async function slotAccountId(userId: string, provider: SubscriptionProvider) {
-	if (provider === "grok") return null;
 	const row = (
 		await database().query<{ id: string }>(
 			provider === "codex"
 				? "select account_id::text as id from agent_account where user_id=$1 and provider='codex' and encrypted_codex_auth is not null"
-				: "select account_id::text as id from claude_subscription where user_id=$1",
+				: provider === "grok"
+					? "select account_id::text as id from model_connection where user_id=$1 and kind='xai-subscription'"
+					: "select account_id::text as id from claude_subscription where user_id=$1",
 			[userId],
 		)
 	).rows[0];
@@ -255,19 +306,24 @@ async function updateAccount(
 	slotSql: string,
 	extraSql: string,
 	values: readonly unknown[],
+	extraValues: readonly unknown[] = values,
 ) {
-	if (provider === "grok") return 0;
 	const id = await resolveAccountId(userId, provider, accountId);
 	if (!/^[0-9a-f-]{36}$/i.test(id)) return 0;
 	const slot = SLOT[provider];
+	// The Grok connection row already has a `label` (its own, "Grok plan").
+	const slotSet =
+		provider === "grok"
+			? slotSql.replace(/\blabel=/, "account_label=")
+			: slotSql;
 	const inSlot = await database().query(
-		`update ${slot.table} set ${slotSql} where ${slot.where}`,
+		`update ${slot.table} set ${slotSet} where ${slot.where}`,
 		[userId, id, ...values],
 	);
 	if (inSlot.rowCount) return inSlot.rowCount;
 	const waiting = await database().query(
 		`update subscription_account set ${extraSql} where user_id=$1 and id=$2::uuid and provider='${provider}'`,
-		[userId, id, ...values],
+		[userId, id, ...extraValues],
 	);
 	return waiting.rowCount ?? 0;
 }
@@ -361,6 +417,45 @@ export async function addCodexAccount(
 	return inserted.rows.length ? "added" : "duplicate";
 }
 
+/**
+ * An extra Grok account from a finished xAI sign-in. The caller holds the lock
+ * that serialised the login; `sealedAuth` receives the new account's id and the
+ * main connection's row id (the sealed tokens name it).
+ */
+export async function addGrokAccount(
+	client: Pick<Client, "query">,
+	userId: string,
+	input: {
+		label: string;
+		sealedAuth: (accountId: string, slotRowId: string) => Promise<string>;
+	},
+): Promise<"added" | "full" | "no-main"> {
+	const main = (
+		await client.query<{ id: string; n: number }>(
+			`select id::text,(select count(*)::int from subscription_account where user_id=$1 and provider='grok') as n
+			 from model_connection where user_id=$1 and kind='xai-subscription'`,
+			[userId],
+		)
+	).rows[0];
+	if (!main) return "no-main";
+	if (main.n + 1 >= MAX_ACCOUNTS_PER_PROVIDER) return "full";
+	const id = crypto.randomUUID();
+	await client.query(
+		`insert into subscription_account(id,user_id,provider,label,external_id,sealed_auth,priority)
+		 values($1,$2,'grok',$3,$5,$4,
+		 (select coalesce(max(priority),0)+1 from subscription_account where user_id=$2 and provider='grok'))`,
+		[
+			id,
+			userId,
+			cleanLabel(input.label),
+			await input.sealedAuth(id, main.id),
+			// The account's own id is its external id: xAI names no stable one.
+			id,
+		],
+	);
+	return "added";
+}
+
 /** The seal a waiting account's login uses, so the device flow can store it. */
 export const extraAccountSeal = (
 	userId: string,
@@ -406,6 +501,8 @@ type Held = {
 	lastUsedAt: Date | null;
 	planUsage: unknown;
 	planUsageAt: Date | null;
+	/** Grok: the slot's model_connection id, which chat routes point at. */
+	slotRowId?: string;
 };
 
 type Client = {
@@ -422,7 +519,7 @@ function codexExternalId(secret: string) {
 
 async function readSlot(
 	client: Client,
-	provider: "codex" | "claude",
+	provider: "codex" | "claude" | "grok",
 	userId: string,
 ): Promise<Held | null> {
 	const row = (
@@ -439,12 +536,18 @@ async function readSlot(
 			last_used_at: Date | null;
 			plan_usage: unknown;
 			plan_usage_at: Date | null;
+			row_id?: string;
 		}>(
 			provider === "codex"
 				? `select account_id::text,encrypted_codex_auth as secret,label,email,plan_type,status,message,
 				   limited_until,priority,last_used_at,null as plan_usage,null as plan_usage_at
 				   from agent_account where user_id=$1 and provider='codex' and encrypted_codex_auth is not null for update`
-				: `select account_id::text,sealed_token as secret,label,null as email,null as plan_type,status,message,
+				: provider === "grok"
+					? `select account_id::text,sealed_credential as secret,account_label as label,null as email,
+					   null as plan_type,status,null as message,limited_until,priority,last_used_at,
+					   plan_usage,plan_usage_at,id::text as row_id
+					   from model_connection where user_id=$1 and kind='xai-subscription' for update`
+					: `select account_id::text,sealed_token as secret,label,null as email,null as plan_type,status,message,
 				   limited_until,priority,last_used_at,plan_usage,plan_usage_at
 				   from claude_subscription where user_id=$1 for update`,
 			[userId],
@@ -454,7 +557,7 @@ async function readSlot(
 	const secret = await unseal(row.secret, slotBinding(provider, userId));
 	const limited =
 		row.status === "limited" ||
-		(provider === "codex" &&
+		(provider !== "claude" &&
 			row.limited_until !== null &&
 			new Date(row.limited_until).getTime() > Date.now());
 	return {
@@ -462,13 +565,18 @@ async function readSlot(
 		externalId:
 			provider === "codex"
 				? codexExternalId(secret)
-				: createHash("sha256").update(secret).digest("hex"),
+				: provider === "grok"
+					? row.account_id
+					: createHash("sha256").update(secret).digest("hex"),
 		secret,
 		label: row.label,
 		email: row.email,
 		planType: row.plan_type,
 		state:
-			row.status === "expired" || row.status === "refused"
+			row.status === "expired" ||
+			row.status === "refused" ||
+			row.status === "reconnect" ||
+			row.status === "not-eligible"
 				? "expired"
 				: limited
 					? "limited"
@@ -479,6 +587,7 @@ async function readSlot(
 		lastUsedAt: row.last_used_at,
 		planUsage: row.plan_usage,
 		planUsageAt: row.plan_usage_at,
+		...(row.row_id ? { slotRowId: row.row_id } : {}),
 	};
 }
 
@@ -534,12 +643,40 @@ async function readWaiting(
 
 async function writeSlot(
 	client: Client,
-	provider: "codex" | "claude",
+	provider: "codex" | "claude" | "grok",
 	userId: string,
 	held: Held,
+	/** Grok: the slot row's id, which the sealed tokens name. */
+	slotRowId?: string,
 ) {
-	const sealed = await seal(held.secret, slotBinding(provider, userId));
-	if (provider === "codex")
+	const secret =
+		provider === "grok"
+			? JSON.stringify({
+					...JSON.parse(held.secret),
+					connectionId: slotRowId,
+					userId,
+				})
+			: held.secret;
+	const sealed = await seal(secret, slotBinding(provider, userId));
+	if (provider === "grok")
+		await client.query(
+			`update model_connection set account_id=$2::uuid,sealed_credential=$3,account_label=$4,
+			 status=$5,limited_until=$6,priority=$7,last_used_at=$8,plan_usage=$9::jsonb,plan_usage_at=$10,
+			 activated_at=now(),updated_at=now() where user_id=$1 and kind='xai-subscription'`,
+			[
+				userId,
+				held.accountId,
+				sealed,
+				held.label,
+				held.state === "expired" ? "reconnect" : "ready",
+				held.limitedUntil,
+				held.priority,
+				held.lastUsedAt,
+				held.planUsage === null ? null : JSON.stringify(held.planUsage),
+				held.planUsageAt,
+			],
+		);
+	else if (provider === "codex")
 		await client.query(
 			`update agent_account set account_id=$2::uuid,encrypted_codex_auth=$3,label=$4,email=$5,plan_type=$6,
 			 status=$7,message=$8,limited_until=$9,priority=$10,last_used_at=$11,
@@ -585,7 +722,7 @@ async function writeSlot(
 
 async function writeWaiting(
 	client: Client,
-	provider: "codex" | "claude",
+	provider: "codex" | "claude" | "grok",
 	userId: string,
 	replacedId: string,
 	held: Held,
@@ -628,7 +765,6 @@ export async function activateSubscriptionAccount(
 	provider: SubscriptionProvider,
 	accountId: string,
 ): Promise<"switched" | "already" | "missing"> {
-	if (provider === "grok") return "missing";
 	const client = await database().connect();
 	try {
 		await client.query("begin");
@@ -647,7 +783,7 @@ export async function activateSubscriptionAccount(
 			return "missing";
 		}
 		await writeWaiting(client, provider, userId, waiting.accountId, slot);
-		await writeSlot(client, provider, userId, waiting);
+		await writeSlot(client, provider, userId, waiting, slot.slotRowId);
 		await client.query("commit");
 		return "switched";
 	} catch (cause) {
@@ -664,7 +800,6 @@ export async function removeSubscriptionAccount(
 	provider: SubscriptionProvider,
 	accountId: string,
 ) {
-	if (provider === "grok") return;
 	const id = await resolveAccountId(userId, provider, accountId);
 	const slotId = await slotAccountId(userId, provider);
 	if (id !== slotId) {
@@ -685,9 +820,15 @@ export async function removeSubscriptionAccount(
 		await database().query(
 			provider === "codex"
 				? "delete from agent_account where user_id=$1 and provider='codex'"
-				: "delete from claude_subscription where user_id=$1",
+				: provider === "grok"
+					? "delete from model_connection where user_id=$1 and kind='xai-subscription'"
+					: "delete from claude_subscription where user_id=$1",
 			[userId],
 		);
+		if (provider === "grok")
+			await database().query("delete from xai_device_login where user_id=$1", [
+				userId,
+			]);
 		return;
 	}
 	// Swap the next account in, then drop the one that was disconnected.
@@ -762,10 +903,14 @@ export async function markAccountLimited(
 			userId,
 			provider,
 			accountId,
+			// Codex and Grok slots have no limited status: a future limited_until is it.
 			provider === "codex"
 				? "limited_until=to_timestamp($3::float8/1000),message=$4"
-				: "status='limited',limited_until=to_timestamp($3::float8/1000),message=$4,updated_at=now()",
+				: provider === "grok"
+					? "limited_until=to_timestamp($3::float8/1000)"
+					: "status='limited',limited_until=to_timestamp($3::float8/1000),message=$4,updated_at=now()",
 			"status='limited',limited_until=to_timestamp($3::float8/1000),message=$4,updated_at=now()",
+			provider === "grok" ? [until] : [until, message],
 			[until, message],
 		);
 	} catch (error) {
@@ -902,14 +1047,23 @@ export async function rotateAfterLimit(
 			await database().query<{ at: number }>(
 				provider === "codex"
 					? `select ${ms("activated_at")} as at from agent_account where user_id=$1 and provider='codex'`
-					: `select ${ms("activated_at")} as at from claude_subscription where user_id=$1`,
+					: provider === "grok"
+						? `select ${ms("activated_at")} as at from model_connection where user_id=$1 and kind='xai-subscription'`
+						: `select ${ms("activated_at")} as at from claude_subscription where user_id=$1`,
 				[userId],
 			)
 		).rows[0]?.at;
 		if (activated !== undefined && now - activated < SWITCH_SETTLE_MS)
 			return { kind: "stale" };
+		// Grok's 403 names no time: its own plan windows say when it resets.
+		const spentReset = active.windows
+			.filter((w) => w.usedPercent >= 100 && w.resetsAt !== null)
+			.reduce<number | null>(
+				(latest, w) => Math.max(latest ?? 0, w.resetsAt ?? 0),
+				null,
+			);
 		await markAccountLimited(userId, provider, active.id, {
-			reportedResetAt: input.reportedResetAt,
+			reportedResetAt: input.reportedResetAt ?? spentReset,
 			now,
 		});
 		const rested = (await listSubscriptionAccounts(userId, now)).filter(

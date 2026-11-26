@@ -19,6 +19,8 @@ import type { PublicSubscriptionAccount } from "#/server/adapters/subscription-a
 import { ChatgptSignIn } from "./chatgpt-sign-in";
 import { CodexMark } from "./codex-mark";
 import { ModelProviderLogo } from "./model-provider-logo";
+import type { PlanUsageLine } from "./plan-usage";
+import { useGrokPlanUsageLine, usePlanUsageLine } from "./plan-usage";
 import {
 	addClaudeAccountFn,
 	getChatAccountPinFn,
@@ -28,12 +30,14 @@ import {
 	renameSubscriptionAccountFn,
 	reorderSubscriptionAccountsFn,
 } from "./subscription-accounts.fn";
+import { XaiSubscriptionSignIn } from "./xai-subscription-sign-in";
 
 export const SUBSCRIPTION_ACCOUNTS_KEY = ["subscription-accounts"];
 
-const PROVIDER_NAME: Record<"codex" | "claude", string> = {
+const PROVIDER_NAME: Record<"codex" | "claude" | "grok", string> = {
 	codex: "ChatGPT (Codex)",
 	claude: "Claude",
+	grok: "Grok (xAI)",
 };
 
 /** The accounts, and every change to them; one list is shared by Settings and the picker. */
@@ -95,15 +99,13 @@ const formatReset = (epochMs: number, now: number) =>
 		minute: "2-digit",
 	});
 
-/** "5 h 62% · 7 d 18% · resets 3:24 AM": the provider's windows, next reset last. */
+/** "5h 62% · Week 18% · resets 3:24 AM": the provider's windows, next reset last. */
 function usageLine(
 	windows: PublicSubscriptionAccount["windows"],
 	now: number,
 ): string | null {
 	if (!windows.length) return null;
-	const parts = windows.map(
-		(w) => `${w.id === "5h" ? "5 h" : "7 d"} ${w.usedPercent}%`,
-	);
+	const parts = windows.map((w) => `${w.label} ${w.usedPercent}%`);
 	const next = Math.min(
 		...windows.map((w) => w.resetsAt ?? Number.POSITIVE_INFINITY),
 	);
@@ -125,9 +127,18 @@ const formatClock = (epochMs: number) =>
 export function SubscriptionAccountsSection() {
 	const hub = useSubscriptionAccounts();
 	const all = hub.accounts.data ?? [];
-	const providers = (["codex", "claude"] as const).filter((provider) =>
+	const providers = (["codex", "claude", "grok"] as const).filter((provider) =>
 		all.some((a) => a.provider === provider),
 	);
+	// The account in use is read live where the provider allows it for free
+	// (account-scoped usage endpoints with the stored token; never a new
+	// sign-in). Other accounts keep their last reading or wait to be opened.
+	const codexLive = usePlanUsageLine(providers.includes("codex"));
+	const grokLive = useGrokPlanUsageLine(
+		providers.includes("grok"),
+		providers.includes("grok"),
+	);
+	const live = { codex: codexLive, grok: grokLive };
 	if (!providers.length) return null;
 	const now = Date.now();
 	return (
@@ -148,6 +159,13 @@ export function SubscriptionAccountsSection() {
 					accounts={all.filter((a) => a.provider === provider)}
 					hub={hub}
 					now={now}
+					live={
+						provider === "codex"
+							? live.codex
+							: provider === "grok"
+								? live.grok
+								: undefined
+					}
 				/>
 			))}
 			<p className="account-note">
@@ -162,11 +180,14 @@ function ProviderAccounts({
 	accounts,
 	hub,
 	now,
+	live,
 }: {
-	provider: "codex" | "claude";
+	provider: "codex" | "claude" | "grok";
 	accounts: PublicSubscriptionAccount[];
 	hub: ReturnType<typeof useSubscriptionAccounts>;
 	now: number;
+	/** The account in use, read live (Codex, Grok). */
+	live?: PlanUsageLine;
 }) {
 	const move = (index: number, by: -1 | 1) => {
 		const order = accounts.map((a) => a.id);
@@ -183,6 +204,8 @@ function ProviderAccounts({
 			<div className="account-provider-head">
 				{provider === "claude" ? (
 					<ModelProviderLogo provider="anthropic" size={16} />
+				) : provider === "grok" ? (
+					<ModelProviderLogo provider="grok" size={16} />
 				) : (
 					<CodexMark size={16} />
 				)}
@@ -199,6 +222,7 @@ function ProviderAccounts({
 						last={index === accounts.length - 1}
 						onMove={(by) => move(index, by)}
 						hub={hub}
+						live={account.active ? live : undefined}
 					/>
 				))}
 				<AddAccount provider={provider} hub={hub} />
@@ -219,7 +243,9 @@ function AccountRow({
 	last,
 	onMove,
 	hub,
+	live,
 }: {
+	live?: PlanUsageLine;
 	account: PublicSubscriptionAccount;
 	now: number;
 	first: boolean;
@@ -231,10 +257,23 @@ function AccountRow({
 	const [name, setName] = useState(account.label);
 	const [confirming, setConfirming] = useState(false);
 	const chip = accountChip(account, now, formatClock);
+	// The account in use shows its live reading; the others their last one, or
+	// wait quietly to be opened: reading theirs would need their sign-in.
+	const liveBars = live?.bars.length ? live.bars : null;
+	const usageText = liveBars
+		? usageLine(liveBars, now)
+		: live?.pending
+			? "Reading usage…"
+			: (usageLine(account.windows, now) ??
+				(account.state === "expired"
+					? account.message
+					: account.provider === "claude" || !account.active
+						? "Open to refresh"
+						: null));
 	const meta = [
 		account.planType ? `${account.planType} plan` : null,
 		account.email,
-		usageLine(account.windows, now),
+		usageText,
 		// "Not used yet" says nothing; show it only once it has served a turn.
 		account.lastUsedAt === null ? null : lastUsedLabel(account.lastUsedAt, now),
 	]
@@ -379,7 +418,7 @@ function AddAccount({
 	provider,
 	hub,
 }: {
-	provider: "codex" | "claude";
+	provider: "codex" | "claude" | "grok";
 	hub: ReturnType<typeof useSubscriptionAccounts>;
 }) {
 	const [open, setOpen] = useState(false);
@@ -451,22 +490,36 @@ function AddAccount({
 				</form>
 			) : named ? (
 				<div className="account-add-form">
-					<ChatgptSignIn
-						addAs={label.trim()}
-						label="Sign in with ChatGPT"
-						showHint={false}
-						onConnected={() => {
-							void hub.reload();
-							close();
-						}}
-					/>
+					{provider === "grok" ? (
+						<XaiSubscriptionSignIn
+							addAs={label.trim()}
+							label="Sign in with xAI"
+							onConnected={() => {
+								void hub.reload();
+								close();
+							}}
+						/>
+					) : (
+						<ChatgptSignIn
+							addAs={label.trim()}
+							label="Sign in with ChatGPT"
+							showHint={false}
+							onConnected={() => {
+								void hub.reload();
+								close();
+							}}
+						/>
+					)}
 					<button type="button" className="settings-secondary" onClick={close}>
 						Cancel
 					</button>
 				</div>
 			) : (
 				<div className="account-add-form">
-					<small>Name it, then sign in with that ChatGPT account.</small>
+					<small>
+						Name it, then sign in with that{" "}
+						{provider === "grok" ? "xAI" : "ChatGPT"} account.
+					</small>
 					<button type="button" className="settings-secondary" onClick={close}>
 						Cancel
 					</button>
@@ -475,7 +528,9 @@ function AddAccount({
 			<small className="account-add-hint">
 				{provider === "claude"
 					? "Run claude setup-token while signed in to that account, then paste the token it prints."
-					: "ChatGPT will ask you to approve a code."}
+					: provider === "grok"
+						? "xAI will ask you to approve a code."
+						: "ChatGPT will ask you to approve a code."}
 			</small>
 			{hub.addClaude.error ? (
 				<p role="alert" className="account-error">
@@ -495,7 +550,7 @@ export function AccountPin({
 	provider,
 	sessionId,
 }: {
-	provider: "codex" | "claude";
+	provider: "codex" | "claude" | "grok";
 	sessionId: string | null | undefined;
 }) {
 	const queryClient = useQueryClient();

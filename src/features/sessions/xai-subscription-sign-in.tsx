@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { ArrowUpRight, Check } from "lucide-react";
 import { useState } from "react";
 import type { XaiDeviceLogin } from "#/server/auth/xai-device-login";
+import { startAddXaiAccountFn } from "./subscription-accounts.fn";
 import { pollXaiSignIn, startXaiSignIn } from "./xai-subscription.fn";
 
 /**
@@ -13,15 +14,20 @@ import { pollXaiSignIn, startXaiSignIn } from "./xai-subscription.fn";
 export function XaiSubscriptionSignIn({
 	label = "Sign in with xAI",
 	onConnected,
+	addAs,
 }: {
 	label?: string;
 	onConnected?: () => void;
+	/** A name: sign in another xAI account next to the one already connected. */
+	addAs?: string;
 }) {
 	const start = useServerFn(startXaiSignIn);
+	const startAnother = useServerFn(startAddXaiAccountFn);
 	const poll = useServerFn(pollXaiSignIn);
 	const [login, setLogin] = useState<XaiDeviceLogin | null>(null);
 	const signIn = useMutation({
-		mutationFn: () => start({ data: {} }),
+		mutationFn: () =>
+			addAs ? startAnother({ data: { label: addAs } }) : start({ data: {} }),
 		onSuccess: setLogin,
 	});
 	useQuery({

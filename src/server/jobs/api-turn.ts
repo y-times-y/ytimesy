@@ -1131,7 +1131,7 @@ async function runApiTurnAttempt(
 	// Several accounts of the plan's provider: the chat's pinned account, or
 	// Auto's pick, is in use before the turn's first request. One account (the
 	// usual case) and any doubt leave the account in use as it was.
-	const accountProvider: "codex" | "claude" | null = claudeCode
+	let accountProvider: "codex" | "claude" | "grok" | null = claudeCode
 		? "claude"
 		: subscription && !route.connectionId
 			? "codex"
@@ -1372,6 +1372,17 @@ async function runApiTurnAttempt(
 					"The API connection changed after this turn was submitted.",
 				);
 			if (connection.subscription) prepaidPlan = true;
+			// A Grok plan: its accounts are chosen like Codex's and Claude's.
+			if (
+				connection.subscription?.provider === "xai" &&
+				ports.subscriptionAccounts
+			) {
+				accountProvider = "grok";
+				if (step ? step.index === 1 : !continued)
+					await ports.subscriptionAccounts
+						.prepare("grok", turn)
+						.catch(() => null);
+			}
 			nativePatch =
 				connection.provider === "openai" &&
 				connection.baseUrl.startsWith("https://api.openai.com/");

@@ -16,6 +16,14 @@ vi.mock("./subscription-accounts.fn", () => ({
 	reorderSubscriptionAccountsFn: vi.fn(),
 	startAddChatgptAccountFn: vi.fn(),
 }));
+vi.mock("./plan-usage", () => ({
+	usePlanUsageLine: () => ({ bars: [], pending: false }),
+	useGrokPlanUsageLine: () => ({ bars: [], pending: false }),
+}));
+vi.mock("./xai-subscription.fn", () => ({
+	pollXaiSignIn: vi.fn(),
+	startXaiSignIn: vi.fn(),
+}));
 vi.mock("./codex-session.fn", () => ({
 	pollCodexLogin: vi.fn(),
 	startChatgptSignIn: vi.fn(),
@@ -110,13 +118,41 @@ it("shows the provider's usage windows and when they reset", () => {
 	const html = render([
 		account({
 			windows: [
-				{ id: "5h", usedPercent: 62, resetsAt: Date.now() + 3_600_000 },
-				{ id: "7d", usedPercent: 18, resetsAt: Date.now() + 4 * 86_400_000 },
+				{
+					id: "5h",
+					label: "5h",
+					usedPercent: 62,
+					resetsAt: Date.now() + 3_600_000,
+				},
+				{
+					id: "7d",
+					label: "Week",
+					usedPercent: 18,
+					resetsAt: Date.now() + 4 * 86_400_000,
+				},
 			],
 		}),
 		account({ id: "b", label: "Work", active: false }),
 	]);
-	expect(html).toContain("5 h 62%");
-	expect(html).toContain("7 d 18%");
+	expect(html).toContain("5h 62%");
+	expect(html).toContain("Week 18%");
 	expect(html).toContain("resets");
+});
+
+it("an account whose usage is not known yet says it waits to be opened, not nothing", () => {
+	const html = render([
+		account({ id: "a", label: "Personal", provider: "claude" }),
+		account({ id: "b", label: "Work", active: false, provider: "claude" }),
+	]);
+	expect(html).toContain("Open to refresh");
+});
+
+it("lists Grok accounts with the xAI sign-in for adding another", () => {
+	const html = render([
+		account({ id: "g1", provider: "grok", label: "SuperGrok" }),
+		account({ id: "g2", provider: "grok", label: "Heavy", active: false }),
+	]);
+	expect(html).toContain("Grok (xAI)");
+	expect(html).toContain("SuperGrok");
+	expect(html).toContain("Heavy");
 });

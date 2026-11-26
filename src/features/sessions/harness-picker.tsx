@@ -606,7 +606,10 @@ export function HarnessPicker({
 											: undefined
 									}
 									usage={
-										<SectionPlanUsage line={grokUsage} label="Grok plan" />
+										<>
+											<SectionPlanUsage line={grokUsage} label="Grok plan" />
+											<AccountPin provider="grok" sessionId={agentSessionId} />
+										</>
 									}
 									search={search}
 									selectedRoute={modelId}

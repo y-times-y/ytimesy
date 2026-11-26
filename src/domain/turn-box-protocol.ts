@@ -343,7 +343,7 @@ export const boxPortArgs = {
 	 */
 	subscriptionAccount: z.object({
 		action: z.enum(["prepare", "rotate"]),
-		provider: z.enum(["codex", "claude"]),
+		provider: z.enum(["codex", "claude", "grok"]),
 		reportedResetAt: z.number().finite().nullable().optional(),
 	}),
 	lifecycleContinuations: z.object({}),

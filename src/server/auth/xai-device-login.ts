@@ -8,6 +8,10 @@ import {
 import { database } from "../adapters/database";
 import { discoverConnectionModels } from "../adapters/model-catalog";
 import { modelEndpointTransport } from "../adapters/model-endpoint";
+import {
+	addGrokAccount,
+	extraAccountSeal,
+} from "../adapters/subscription-accounts";
 import { seal, unseal } from "./token-vault";
 import {
 	postXaiOAuth,
@@ -18,7 +22,7 @@ import {
 	xaiOAuthJson,
 	xaiTokenResponse,
 } from "./xai-oauth";
-import { saveXaiSubscription } from "./xai-subscription";
+import { saveXaiSubscription, xaiTokensJson } from "./xai-subscription";
 
 /**
  * SuperGrok sign-in with xAI's device authorization grant, run by the web
@@ -49,6 +53,8 @@ const pendingLogin = z.object({
 	intervalMs: z.number().positive(),
 	expiresAt: z.number(),
 	nextPollAt: z.number(),
+	/** Set when this sign-in adds another account (its name) instead of replacing the main one. */
+	addAs: z.string().min(1).max(60).optional(),
 });
 type PendingLogin = z.infer<typeof pendingLogin>;
 
@@ -120,10 +126,24 @@ export async function readXaiDeviceLogin(
 /** Starts a sign-in, or returns the one already waiting for approval. */
 export async function startXaiDeviceLogin(
 	userId: string,
+	/** A name: sign in another xAI account next to the main one. */
+	options: { addAs?: string } = {},
 ): Promise<XaiDeviceLogin> {
 	if (!xaiSubscriptionEnabled()) disabled();
 	const existing = await readXaiDeviceLogin(userId);
-	if (existing.status === "pending") return existing;
+	if (existing.status === "pending") {
+		// A waiting code is reused only when it has the same purpose.
+		const waiting = await openPending(
+			(
+				await database().query<{ sealed_login: string }>(
+					"select sealed_login from xai_device_login where user_id=$1",
+					[userId],
+				)
+			).rows[0]?.sealed_login,
+			userId,
+		);
+		if (waiting?.addAs === options.addAs) return existing;
+	}
 	let response: Response;
 	try {
 		// OpenCode's device request: client_id, scope and its referrer.
@@ -153,6 +173,7 @@ export async function startXaiDeviceLogin(
 			now + LOGIN_LIFETIME_MS,
 		),
 		nextPollAt: now,
+		...(options.addAs ? { addAs: options.addAs } : {}),
 	};
 	await database().query(
 		`insert into xai_device_login(user_id,sealed_login) values($1,$2)
@@ -295,6 +316,25 @@ export async function advanceXaiDeviceLogin(
 		const models = xaiSubscriptionModels(
 			await discoverModels(tokens.data.access_token),
 		);
+		if (login.addAs) {
+			// Another account: the main sign-in is untouched and waits its turn.
+			const added = await addGrokAccount(client, userId, {
+				label: login.addAs,
+				sealedAuth: (accountId, slotRowId) =>
+					extraAccountSeal(
+						userId,
+						accountId,
+						xaiTokensJson(userId, slotRowId, tokens.data),
+					),
+			});
+			if (added === "added") return await finish({ status: "connected" });
+			if (added === "full")
+				return await finish({
+					status: "failed",
+					message: "You can connect up to 5 Grok accounts.",
+				});
+			// No main sign-in yet: this one becomes it.
+		}
 		await saveXaiSubscription(client, userId, tokens.data, models);
 		return await finish({ status: "connected" });
 	} catch (cause) {

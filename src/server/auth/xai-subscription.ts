@@ -135,6 +135,15 @@ async function openTokens(
 	return value;
 }
 
+/** The sealed-token JSON for a sign-in, to wait as another account (the same shape the main one has). */
+export function xaiTokensJson(
+	userId: string,
+	connectionId: string,
+	tokens: XaiTokenResponse,
+): string {
+	return JSON.stringify(sealedFrom(userId, connectionId, tokens));
+}
+
 function sealedFrom(
 	userId: string,
 	connectionId: string,

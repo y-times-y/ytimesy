@@ -14,10 +14,12 @@ import {
 import { requireUser } from "#/server/auth/auth";
 import { startCodexDeviceLogin } from "#/server/auth/codex-device-login";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
+import { startXaiDeviceLogin } from "#/server/auth/xai-device-login";
+import { loadXaiSubscription } from "#/server/auth/xai-subscription";
 import { requireSameOrigin } from "#/server/http";
 import { readableServerError } from "#/server/public-error";
 
-const provider = z.enum(["codex", "claude"]);
+const provider = z.enum(["codex", "claude", "grok"]);
 const accountId = z.union([z.literal("primary"), z.string().uuid()]);
 const label = z.string().min(1).max(60);
 
@@ -67,6 +69,18 @@ export const startAddChatgptAccountFn = createServerFn({ method: "POST" })
 		return startCodexDeviceLogin(
 			userId,
 			(await hasManagedCodexAuth(userId)) ? { addAs: data.label } : {},
+		);
+	});
+
+/** Starts xAI sign-in for another Grok account (the poll finishes it). With no main one yet it is the first. */
+export const startAddXaiAccountFn = createServerFn({ method: "POST" })
+	.validator((data: unknown) => z.object({ label }).strict().parse(data))
+	.handler(async ({ data }) => {
+		const userId = await owner();
+		const main = await loadXaiSubscription(userId);
+		return startXaiDeviceLogin(
+			userId,
+			main && main.status !== "disconnected" ? { addAs: data.label } : {},
 		);
 	});
 
