@@ -474,13 +474,24 @@ export async function seedSyntheticAccounts(db: TestAccountDb, userId: string) {
 	if (existing.rows.length)
 		throw new Error("The test account already has a Claude connection.");
 	await db.query(
-		`insert into claude_subscription(user_id,sealed_token,status,label,priority,activated_at)
-		 values($1,$2,'connected','Personal',0,now()-interval '1 hour')`,
+		`insert into claude_subscription(user_id,sealed_token,status,label,priority,activated_at,plan_usage,plan_usage_at)
+		 values($1,$2,'connected','Personal',0,now()-interval '1 hour',$3::jsonb,now()+interval '1 hour')`,
 		[
 			userId,
 			await seal(SYNTHETIC_TOKEN(1), {
 				purpose: "claude-subscription",
 				userId,
+			}),
+			// A reading as Anthropic's headers give it, fresh for an hour so no
+			// probe is ever sent with the made-up token.
+			JSON.stringify({
+				status: "allowed",
+				resetsAt: Date.now() + 3 * 3_600_000,
+				readAt: Date.now(),
+				windows: [
+					{ id: "5h", usedPercent: 62, resetsAt: Date.now() + 3 * 3_600_000 },
+					{ id: "7d", usedPercent: 18, resetsAt: Date.now() + 4 * 86_400_000 },
+				],
 			}),
 		],
 	);

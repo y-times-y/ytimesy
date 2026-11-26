@@ -6698,14 +6698,21 @@ body:has([data-new-version]) .usage-warning-banner {
 	flex: none;
 }
 @media (max-width: 600px) {
+	/* Two lines, the same for every row: name and usage, then status and options. */
 	.account-row {
 		align-items: center;
-		flex-direction: row;
-		gap: 10px;
+		flex-wrap: wrap;
+		gap: 6px 10px;
+	}
+	.account-row .settings-row-title,
+	.account-row .settings-row-meta {
+		white-space: normal;
 	}
 	.account-actions {
+		flex: 1 0 100%;
 		gap: 4px;
-		justify-content: flex-end;
+		justify-content: space-between;
+		padding-left: 40px;
 	}
 	.account-add-form {
 		flex-wrap: wrap;
