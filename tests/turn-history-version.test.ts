@@ -32,7 +32,7 @@ let db: PGlite;
 let cache: TurnHistoryCache;
 beforeEach(async () => {
 	db = new PGlite();
-	await db.exec(`create table agent_session(id uuid primary key,user_id text,items jsonb not null default '[]',items_rev bigint not null default 0,updated_at timestamptz default now());
+	await db.exec(`create table agent_session(id uuid primary key,user_id text,chat_role text,items jsonb not null default '[]',items_rev bigint not null default 0,updated_at timestamptz default now());
 	 create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,items jsonb not null default '[]',messages jsonb not null default '[]',
 	 failover jsonb,lease_id text,cancel_requested boolean not null default false,heartbeat_at timestamptz default now(),updated_at timestamptz default now(),
 	 base_turn_id uuid,base_version text,base_count integer,executor text,connection_id uuid,connection_revision text);

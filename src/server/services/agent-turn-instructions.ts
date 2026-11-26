@@ -48,7 +48,7 @@ import {
 	subagentRoleInstructions,
 } from "#/domain/subagent-instructions";
 import { yInstructions } from "#/domain/y-agent";
-import { ySquaredInstructions } from "#/domain/y-squared";
+import { superAgentInstructions } from "#/domain/y-squared";
 import {
 	type DeferredToolEntry,
 	deferredToolsInstructions,
@@ -100,8 +100,11 @@ export function agentTurnInstructions(input: {
 	y?: boolean;
 	/** The project's pinned Y² chat (src/domain/y-squared.ts): it only reads the threads and reports. */
 	ySquared?: boolean;
+	/** A captain of the project (src/domain/captain.ts): Y²'s instructions behind its role. */
+	captain?: { name: string; label: string | null; rolePrompt: string } | null;
 }) {
-	if (input.ySquared && !input.session.agentRole) return ySquaredInstructions();
+	if (input.ySquared && !input.session.agentRole)
+		return superAgentInstructions(input.captain);
 	if (input.y && !input.session.agentRole) return yTurnInstructions(input);
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });

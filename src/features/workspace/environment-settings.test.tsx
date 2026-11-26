@@ -12,7 +12,8 @@ import {
 	environmentQueryKey,
 } from "./environment-settings";
 
-vi.mock("@tanstack/react-start", () => ({
+vi.mock("@tanstack/react-start", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-start")>()),
 	useServerFn: (fn: unknown) => fn,
 }));
 vi.mock("../projects/environment.fn", () => ({

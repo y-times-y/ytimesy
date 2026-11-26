@@ -12,26 +12,54 @@ import { database } from "./database";
 export type ProjectYMode = {
 	readonly enabled: boolean;
 	readonly ySquaredId: string | null;
+	/**
+	 * Who the chat asked about is, when it is a live captain of the project
+	 * (src/domain/captain.ts): the turn runs as a Super agent with that role.
+	 * Only read when a session id is given; null for any other chat.
+	 */
+	readonly captain?: CaptainIdentity | null;
 };
 
-/** Null when the project is not this user's. */
+export type CaptainIdentity = {
+	readonly id: string;
+	readonly name: string;
+	readonly label: string | null;
+	readonly rolePrompt: string;
+};
+
+/**
+ * Null when the project is not this user's. With a `sessionId`, also says
+ * whether that chat is one of the project's live captains: one more indexed
+ * lookup that finds nothing for a project with no captains.
+ */
 export async function projectYMode(
 	userId: string,
 	projectId: string,
+	sessionId?: string,
 ): Promise<ProjectYMode | null> {
 	const result = await database().query<{
 		y_enabled: boolean;
 		y_squared_id: string | null;
+		captain: CaptainIdentity | null;
 	}>(
 		`select p.y_enabled,
 		  (select s.id from agent_session s
 		   where s.user_id=p.user_id and s.project_id=p.id and s.chat_role='y2'
-		     and s.archived_at is null limit 1) as y_squared_id
+		     and s.archived_at is null limit 1) as y_squared_id,
+		  (select json_build_object('id',c.id,'name',c.name,'label',c.label,'rolePrompt',c.role_prompt)
+		   from captain c where c.chat_id=$3::uuid and c.project_id=p.id and c.user_id=p.user_id
+		     and c.archived_at is null) as captain
 		 from project p where p.id=$1 and p.user_id=$2`,
-		[projectId, userId],
+		[projectId, userId, sessionId ?? null],
 	);
 	const row = result.rows[0];
-	return row ? { enabled: row.y_enabled, ySquaredId: row.y_squared_id } : null;
+	return row
+		? {
+				enabled: row.y_enabled,
+				ySquaredId: row.y_squared_id,
+				...(sessionId ? { captain: row.captain } : {}),
+			}
+		: null;
 }
 
 /** Each of the user's Y projects' Y² chat, by project id (one read for a page's sidebar). */
@@ -58,8 +86,13 @@ export async function isActiveYSquaredChat(
 	session: { readonly id: string; readonly parentSessionId?: string | null },
 ): Promise<boolean> {
 	if (session.parentSessionId) return false;
-	const yMode = await projectYMode(userId, projectId).catch(() => null);
-	return !!yMode?.enabled && yMode.ySquaredId === session.id;
+	const yMode = await projectYMode(userId, projectId, session.id).catch(
+		() => null,
+	);
+	// A captain is a Super agent too: no machine, no branch.
+	return (
+		!!yMode?.enabled && (yMode.ySquaredId === session.id || !!yMode.captain)
+	);
 }
 
 /**
@@ -74,7 +107,7 @@ export async function isYSquaredSession(
 	const result = await database().query(
 		`select 1 from agent_session s
 		 join project p on p.id=s.project_id and p.user_id=s.user_id
-		 where s.id=$1 and s.user_id=$2 and s.chat_role='y2'
+		 where s.id=$1 and s.user_id=$2 and s.chat_role in ('y2','captain')
 		   and s.archived_at is null and p.y_enabled`,
 		[sessionId, userId],
 	);
