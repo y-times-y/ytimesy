@@ -6592,6 +6592,10 @@ body:has([data-new-version]) .usage-warning-banner {
 .settings-badge[data-state="attention"] {
 	color: #ededed;
 }
+/* Settings is an overlay at z-index 200: its menus must open above it. */
+.recovery-menu.account-menu {
+	z-index: 300;
+}
 .account-menu-trigger {
 	align-items: center;
 	background: transparent;
@@ -6682,7 +6686,27 @@ body:has([data-new-version]) .usage-warning-banner {
 	font-size: 12px;
 	margin: 12px 2px 0;
 }
+.account-row {
+	flex-direction: row;
+	flex-wrap: nowrap;
+}
+.account-row .settings-row-main {
+	flex: 1;
+	min-width: 0;
+}
+.account-actions {
+	flex: none;
+}
 @media (max-width: 600px) {
+	.account-row {
+		align-items: center;
+		flex-direction: row;
+		gap: 10px;
+	}
+	.account-actions {
+		gap: 4px;
+		justify-content: flex-end;
+	}
 	.account-add-form {
 		flex-wrap: wrap;
 	}

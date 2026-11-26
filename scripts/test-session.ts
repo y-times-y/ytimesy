@@ -4,7 +4,7 @@
  *
  *   node --import tsx scripts/test-session.ts mint
  *   node --import tsx scripts/test-session.ts shot --path / --out /tmp/a.png \
- *       [--step "fill:Message=hi"] [--step "click:Send"] [--step "wait:20000"]
+ *       [--step "fill:Message=hi"] [--step "click:Send"] [--step "clickaria:Options for Work"] [--step "wait:20000"]
  *   node --import tsx scripts/test-session.ts reset
  *
  * It takes no user id or email: the server fixes the target to the one
@@ -162,6 +162,8 @@ async function shot(
 			];
 			if (kind === "click")
 				await page.getByText(rest, { exact: false }).first().click();
+			else if (kind === "clickaria")
+				await page.getByLabel(rest, { exact: false }).first().click();
 			else if (kind === "fill") {
 				const at = rest.indexOf("=");
 				await page

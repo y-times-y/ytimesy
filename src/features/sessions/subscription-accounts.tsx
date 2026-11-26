@@ -304,7 +304,7 @@ function AccountRow({
 							</DropdownMenu.Trigger>
 							<DropdownMenu.Portal>
 								<DropdownMenu.Content
-									className="recovery-menu"
+									className="recovery-menu account-menu"
 									sideOffset={6}
 									align="end"
 								>
