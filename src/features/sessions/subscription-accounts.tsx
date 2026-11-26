@@ -210,7 +210,8 @@ function AccountRow({
 	const meta = [
 		account.planType ? `${account.planType} plan` : null,
 		account.email,
-		lastUsedLabel(account.lastUsedAt, now),
+		// "Not used yet" says nothing; show it only once it has served a turn.
+		account.lastUsedAt === null ? null : lastUsedLabel(account.lastUsedAt, now),
 	]
 		.filter(Boolean)
 		.join(" · ");
@@ -255,7 +256,7 @@ function AccountRow({
 							) : null}
 						</span>
 					)}
-					<span className="settings-row-meta">{meta}</span>
+					{meta ? <span className="settings-row-meta">{meta}</span> : null}
 				</div>
 			</div>
 			<div className="settings-row-actions account-actions">
