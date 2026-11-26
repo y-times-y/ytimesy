@@ -447,6 +447,36 @@ describe("message identity", () => {
 		).toBe(true);
 	});
 
+	it("accepts a settled view that holds the sent message although a wake note or later message follows it", () => {
+		const sent = [user("m1")];
+		const wake = user("wake-1");
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "idle",
+				currentItems: sent,
+				nextItems: [user("m1"), reply("a1"), wake],
+			}),
+		).toBe(true);
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "completed",
+				currentItems: sent,
+				nextItems: [user("m1"), reply("a1"), wake, user("m3")],
+			}),
+		).toBe(true);
+		// A view from before the message landed still never erases it.
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "idle",
+				currentItems: sent,
+				nextItems: [wake],
+			}),
+		).toBe(false);
+	});
+
 	it("unlocks the composer when a stopped turn ends idle", () => {
 		const open = [user("m1")];
 		// Stop pressed: the idle view counts even without the live stream.

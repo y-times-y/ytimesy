@@ -594,8 +594,11 @@ export function sessionViewShouldReplaceOpenTurn(input: {
 	const currentUser = lastUserMessage(input.currentItems);
 	// Nothing was sent from here; the server's state is the only truth.
 	if (!currentUser) return true;
-	const nextUser = lastUserMessage(input.nextItems);
-	if (!nextUser || nextUser.id !== currentUser.id) return false;
+	// The view must hold the message just sent, wherever it sits: a Y² wake note
+	// or a later queued message can come after it, and judging by the last user
+	// message alone refused every settled view, leaving the chat "running"
+	// until a refresh.
+	if (!sendWasQueued(input.nextItems, currentUser.id)) return false;
 	if (input.nextStatus === "idle") return true;
 	return turnSettledAfterUser(input.nextItems, currentUser.id);
 }
