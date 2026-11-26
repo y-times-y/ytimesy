@@ -83,7 +83,6 @@ import {
 	useFirstPaint,
 } from "../app/first-paint";
 import { useShortcutHint } from "../app/keyboard-shortcuts";
-import { CaptainsSection } from "../captains/captains-section";
 import { requestJson } from "../projects/api";
 import { ThreadHoverCard } from "./thread-hover-card";
 import { ThreadMark } from "./thread-mark";
@@ -1092,15 +1091,6 @@ export function ProjectSidebar({
 					{projects.length ? (
 						<div className="sidebar-y-sections">
 							{y2Section(yRows, yPending)}
-							{selected?.yEnabled ? (
-								<CaptainsSection
-									project={selected}
-									selectedChatId={selectedChatId}
-									openTurnStatus={openTurnStatus}
-									nowMs={nowMs}
-									onSelectChat={onSelectChat}
-								/>
-							) : null}
 							{threadsSection()}
 						</div>
 					) : null}

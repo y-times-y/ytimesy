@@ -148,7 +148,7 @@ import {
 } from "#/domain/turn-saving";
 import { hubTopic } from "#/domain/user-hub";
 import { ASK_USER_TOOL } from "#/domain/user-question";
-import { superAgentInstructions } from "#/domain/y-squared";
+import { ySquaredInstructions } from "#/domain/y-squared";
 import { ySquaredModelMessages } from "#/domain/y-squared-images";
 import { apiReasoningEffort } from "#/server/adapters/api-reasoning-effort";
 import {
@@ -1255,9 +1255,7 @@ async function runApiTurnAttempt(
 		// pinned Y² chat Y² (src/domain/y-agent.ts, src/domain/y-squared.ts).
 		// A failed read keeps the turn as it was.
 		const projectY = owner.projectId
-			? await projectYMode(owner.userId, owner.projectId, owner.id).catch(
-					() => null,
-				)
+			? await projectYMode(owner.userId, owner.projectId).catch(() => null)
 			: null;
 		const loadedVariant = await loadingVariant;
 		const variant: HarnessVariant = projectY?.enabled
@@ -1267,9 +1265,7 @@ async function runApiTurnAttempt(
 			variant.y === "on" &&
 			!owner.parentSessionId &&
 			!!projectY?.ySquaredId &&
-			(owner.id === projectY.ySquaredId || !!projectY.captain);
-		// A captain (src/domain/captain.ts) is a Super agent with a role of its own.
-		const captainIdentity = ySquared ? (projectY?.captain ?? null) : null;
+			owner.id === projectY.ySquaredId;
 		if (owner.agentRole && !sideConversation) subagentSession = owner;
 		// Builder subagents (harness variant subagents=on): the agent tools
 		// and per-level budgets. Children carry the role.
@@ -2737,7 +2733,6 @@ async function runApiTurnAttempt(
 					forceDelegation: variant.subagents === "force",
 					y: yAgent,
 					ySquared,
-					captain: captainIdentity,
 					fusionPair:
 						variant.lead === "fusion" && !owner.parentSessionId
 							? fusionPairFor(owner.listedModelId, variant.roleModels)
@@ -3206,9 +3201,7 @@ async function runApiTurnAttempt(
 						// with Y²'s own prompt and only its tools.
 						...(ySquared
 							? {
-									ySquared: {
-										instructions: superAgentInstructions(captainIdentity),
-									},
+									ySquared: { instructions: ySquaredInstructions() },
 								}
 							: {
 									workspace: checkout,

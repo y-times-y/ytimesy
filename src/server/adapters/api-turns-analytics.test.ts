@@ -25,7 +25,7 @@ beforeEach(async () => {
 	holder.capture.mockReset();
 	db = new PGlite();
 	holder.db = db;
-	await db.exec(`create table agent_session(id uuid primary key,user_id text,harness text,chat_role text,parent_session_id uuid,task_access text,task_state text,turn_status text,items jsonb default '[]',items_rev bigint not null default 0,updated_at timestamptz);
+	await db.exec(`create table agent_session(id uuid primary key,user_id text,harness text,parent_session_id uuid,task_access text,task_state text,turn_status text,items jsonb default '[]',items_rev bigint not null default 0,updated_at timestamptz);
 	create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,messages jsonb default '[]',items jsonb default '[]',cancel_requested boolean default false,lease_id uuid,heartbeat_at timestamptz,executor text,run_attempts integer not null default 0,connection_id uuid,connection_revision text,base_turn_id uuid,base_version text,base_count integer,created_at timestamptz default now(),updated_at timestamptz);`);
 	await db.query(
 		`insert into agent_session(id,user_id,harness,parent_session_id,task_access,turn_status) values

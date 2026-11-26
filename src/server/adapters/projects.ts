@@ -6,7 +6,7 @@ import type {
 } from "../../domain/projects";
 import { database } from "./database";
 
-const projectColumns = `p.id,p.name,p.repository_id::float8 as "repositoryId",p.installation_id::float8 as "installationId",p.full_name as "fullName",p.branch,p.machine_size as "machineSize",p.y_enabled as "yEnabled",p.leader_name as "leaderName",
+const projectColumns = `p.id,p.name,p.repository_id::float8 as "repositoryId",p.installation_id::float8 as "installationId",p.full_name as "fullName",p.branch,p.machine_size as "machineSize",p.y_enabled as "yEnabled",
   (select json_agg(json_build_object('repositoryId',r.repository_id::float8,'installationId',r.installation_id::float8,'fullName',r.full_name,'branch',r.branch) order by r.position)
    from project_repository r where r.project_id=p.id) as repositories`;
 export async function listProjects(userId: string): Promise<Project[]> {

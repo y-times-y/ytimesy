@@ -132,8 +132,7 @@ async function handle(
 			return projectImportedSessions(user, call.args.projectId);
 		case "projectYMode":
 			await ownProject(turn, call.args.projectId, call.op);
-			// The turn's own chat: whether it is a captain is read for it alone.
-			return projectYMode(user, call.args.projectId, turn.session_id);
+			return projectYMode(user, call.args.projectId);
 		case "modelConnection": {
 			const connection = await loadModelConnection(user, call.args.id);
 			if (!connection) return null;
