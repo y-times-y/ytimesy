@@ -1,5 +1,6 @@
 import type { HighlightResult } from "@streamdown/code";
 import { useContext, useEffect, useRef, useState } from "react";
+import { hasArtifactFence } from "#/domain/artifact";
 import type { FileChangeEntry } from "#/domain/session-item";
 import { useHydrating } from "../app/first-paint";
 import { AgentMentionContext } from "./agent-chip";
@@ -87,7 +88,13 @@ export function settledMarkdownAdoptable(
 	text: string,
 	mentions: { readonly agents?: readonly unknown[] } | null,
 ) {
-	return !mentions?.agents?.length && !/```\s*mermaid/i.test(text);
+	// Mermaid diagrams and artifact cards are drawn (and interactive: tabs) by
+	// the live renderer, so their replies do not take over server HTML.
+	return (
+		!mentions?.agents?.length &&
+		!/```\s*mermaid/i.test(text) &&
+		!hasArtifactFence(text)
+	);
 }
 
 function serverSettledHtml(segmentKey: string): string | null {

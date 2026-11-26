@@ -14,6 +14,7 @@ export function CanvasFrame({
 	frameRef,
 	onLoad,
 	fixed,
+	lazy,
 }: {
 	html: string;
 	title: string;
@@ -24,6 +25,8 @@ export function CanvasFrame({
 	preview?: boolean;
 	/** Sized to its document by the viewer: no scrollbars of its own. */
 	fixed?: boolean;
+	/** Loaded when it nears the screen (an inline artifact far up a long chat). */
+	lazy?: boolean;
 }) {
 	return (
 		<iframe
@@ -35,6 +38,7 @@ export function CanvasFrame({
 			srcDoc={canvasDocument(html)}
 			referrerPolicy="no-referrer"
 			{...(fixed ? { scrolling: "no" } : {})}
+			{...(lazy ? { loading: "lazy" as const } : {})}
 			{...(preview
 				? { loading: "lazy" as const, tabIndex: -1, "aria-hidden": true }
 				: {})}

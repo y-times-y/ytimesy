@@ -20,6 +20,7 @@ import {
 	echoedTaskLength,
 	type MentionAgent,
 } from "#/domain/agent-mentions";
+import { ARTIFACT_FENCE } from "#/domain/artifact";
 import { linkLabel } from "#/domain/link-label";
 import {
 	withoutDanglingMarker,
@@ -34,6 +35,7 @@ import {
 	sharedFileNames,
 	workspaceFileReference,
 } from "#/domain/workspace-file-mention";
+import { ArtifactBlock } from "../artifacts/artifact-block";
 import { AgentChip, AgentMentionContext } from "./agent-chip";
 import {
 	EventLine,
@@ -424,12 +426,16 @@ export function AgentMarkdown({
 					const agent = agentNameInCode(text, agentNames);
 					return (agent && agentChip(agent)) || <code>{children}</code>;
 				}
-				return (
-					<CodeBlock
-						code={text}
-						lineNumbers={false}
-						language={className?.replace(/^language-/, "") ?? "text"}
-					/>
+				const language = className?.replace(/^language-/, "") ?? "text";
+				const block = (
+					<CodeBlock code={text} lineNumbers={false} language={language} />
+				);
+				// An artifact block is typed JSON drawn as a card; one that is not
+				// valid (or still streaming in) never replaces the message's text.
+				return language === ARTIFACT_FENCE ? (
+					<ArtifactBlock source={text} streaming={streaming} fallback={block} />
+				) : (
+					block
 				);
 			},
 			div: ({ node: _node, children, ...props }) => {
@@ -474,6 +480,7 @@ export function AgentMarkdown({
 		onOpenAgent,
 		sharedNames,
 		allThreads,
+		streaming,
 	]);
 	return (
 		<Streamdown

@@ -20,6 +20,7 @@ import {
 	type CanvasElementPick,
 	canvasFeedbackMessage,
 } from "#/domain/canvas-annotation";
+import { SessionItemId } from "#/domain/ids";
 import type { CanvasItem } from "#/domain/session-item";
 import { useWholeItem } from "../sessions/whole-item";
 import { CanvasNotesPanel, NoteComposer } from "./canvas-notes";
@@ -81,7 +82,7 @@ function comparedWith(
  * message; Compare shows two revisions or canvases side by side.
  */
 export function CanvasInspector({
-	canvases,
+	canvases: chatCanvases,
 	focus,
 	onFocusChange,
 	onCompose,
@@ -92,6 +93,7 @@ export function CanvasInspector({
 	/** The chat's message box; absent where there is none to write in. */
 	onCompose?: Compose;
 }) {
+	const canvases = withExpandedArtifact(chatCanvases, focus);
 	const [width, setWidth] = useState<PreviewWidth>("auto");
 	const [annotating, setAnnotating] = useState(false);
 	const [compare, setCompare] = useState<CanvasFocus | null>(null);
@@ -253,6 +255,29 @@ export function CanvasInspector({
 			)}
 		</section>
 	);
+}
+
+/**
+ * The chat's canvases, plus the inline artifact the user expanded into the
+ * panel (focus.document), shown as one more canvas with a single revision so
+ * the panel's widths, annotation and new-tab view work on it unchanged.
+ */
+function withExpandedArtifact(
+	canvases: readonly CanvasThread[],
+	focus?: CanvasFocus,
+): readonly CanvasThread[] {
+	if (!focus?.document) return canvases;
+	const expanded: CanvasItem = {
+		kind: "canvas",
+		id: SessionItemId(`artifact:${focus.title}`),
+		title: focus.title,
+		revision: 1,
+		html: focus.document,
+	};
+	return [
+		...canvases.filter((entry) => entry.title !== focus.title),
+		{ title: focus.title, revisions: [expanded] },
+	];
 }
 
 function CanvasLoading() {

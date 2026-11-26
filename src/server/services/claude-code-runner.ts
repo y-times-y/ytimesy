@@ -8,6 +8,7 @@ import {
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 } from "#/domain/api-turn-failure";
+import { artifactInstructions } from "#/domain/artifact";
 import { CANVAS_TOOL, canvasInstructions } from "#/domain/canvas";
 import { CLAUDE_AGENT_RUNNER_SCRIPT } from "#/domain/claude-agent-runner";
 import {
@@ -479,6 +480,7 @@ function systemPrompt(
 		reader
 			? ""
 			: canvasInstructions(`mcp__${CLAUDE_CODE_MCP_SERVER}__${CANVAS_TOOL}`),
+		reader ? "" : artifactInstructions(),
 		...claudeWorkspaceCommandsPrompt({ reader }),
 		reader
 			? "You are a read-only helper: do not change files; report what you find."

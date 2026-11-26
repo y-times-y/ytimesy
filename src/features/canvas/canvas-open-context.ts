@@ -4,6 +4,12 @@ import { createContext, useContext } from "react";
 export type CanvasFocus = {
 	readonly title: string;
 	readonly revision?: number;
+	/**
+	 * An inline artifact expanded into the panel (src/domain/artifact.ts): the
+	 * title is its panel title and this is the document to show. It is not a
+	 * canvas the agent showed: one revision, and not kept.
+	 */
+	readonly document?: string;
 };
 
 /**
