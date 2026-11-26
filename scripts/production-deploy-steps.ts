@@ -77,3 +77,31 @@ export function rollbackStep(
 /** Printed after a deploy: what happened to work in flight. */
 export const IN_FLIGHT_WORK_NOTE =
 	"Running chat turns were not failed: each Worker took one new version, Durable Objects move to it once idle (or after the configured delay), and an interrupted step resumes from its checkpoint.";
+
+const sameVersions = (a: ServingVersions, b: ServingVersions) =>
+	a.length === b.length &&
+	a.every((row) =>
+		b.some(
+			(other) =>
+				other.versionId === row.versionId &&
+				other.percentage === row.percentage,
+		),
+	);
+
+/**
+ * Whether a failed smoke check may roll a Worker back. Only while it still
+ * serves exactly what this deploy put there: if another deploy (another
+ * thread on another machine, so the per-machine lock cannot stop it) has
+ * replaced it since, rolling back would undo that newer deploy.
+ */
+export function rollbackDecision(input: {
+	readonly deployed: ServingVersions;
+	readonly previous: ServingVersions;
+	readonly current: ServingVersions;
+}): "roll-back" | "superseded" | "already-previous" | "no-previous" {
+	if (!input.previous.length) return "no-previous";
+	if (sameVersions(input.current, input.previous)) return "already-previous";
+	if (!input.deployed.length || !sameVersions(input.current, input.deployed))
+		return "superseded";
+	return "roll-back";
+}
