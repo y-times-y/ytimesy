@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import {
+	ArrowDown,
+	ArrowUp,
+	MoreHorizontal,
+	Pencil,
+	Plus,
+	Trash2,
+} from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { type FormEvent, useState } from "react";
 import {
 	accountChip,
@@ -9,6 +17,8 @@ import {
 } from "#/domain/subscription-accounts";
 import type { PublicSubscriptionAccount } from "#/server/adapters/subscription-accounts";
 import { ChatgptSignIn } from "./chatgpt-sign-in";
+import { CodexMark } from "./codex-mark";
+import { ModelProviderLogo } from "./model-provider-logo";
 import {
 	addClaudeAccountFn,
 	getChatAccountPinFn,
@@ -79,14 +89,14 @@ export function useSubscriptionAccounts() {
 
 const formatClock = (epochMs: number) =>
 	new Date(epochMs).toLocaleTimeString([], {
-		hour: "2-digit",
+		hour: "numeric",
 		minute: "2-digit",
 	});
 
 /**
- * Settings > Models: the accounts of each plan provider, with their status,
- * order and an "Add another account" flow. Shows a provider once it has an
- * account; the first one is connected in the rows above.
+ * Settings > Models: the accounts of each plan provider. One quiet card per
+ * provider, one row per account; a provider shows once it has an account (the
+ * first is connected in the rows above).
  */
 export function SubscriptionAccountsSection() {
 	const hub = useSubscriptionAccounts();
@@ -96,17 +106,14 @@ export function SubscriptionAccountsSection() {
 	);
 	if (!providers.length) return null;
 	const now = Date.now();
-	const recent = [...all]
-		.filter((a) => a.lastUsedAt !== null)
-		.sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))[0];
 	return (
 		<section className="settings-section" aria-label="Subscription accounts">
 			<header className="settings-section-head">
 				<div>
 					<h3>Accounts</h3>
 					<p>
-						More than one plan per provider? Chats use them in your order and
-						move to the next when one is used up.
+						Chats use your accounts in this order and move to the next one when
+						a plan is used up.
 					</p>
 				</div>
 			</header>
@@ -119,13 +126,6 @@ export function SubscriptionAccountsSection() {
 					now={now}
 				/>
 			))}
-			{recent ? (
-				<p className="account-summary">
-					Most recent: {recent.label} (
-					{PROVIDER_NAME[recent.provider as "codex"]}
-					). {lastUsedLabel(recent.lastUsedAt, now)}.
-				</p>
-			) : null}
 			<p className="account-note">
 				Use accounts you own; follow each provider's terms.
 			</p>
@@ -156,7 +156,15 @@ function ProviderAccounts({
 	};
 	return (
 		<div className="account-provider">
-			<h3 className="account-provider-name">{PROVIDER_NAME[provider]}</h3>
+			<div className="account-provider-head">
+				{provider === "claude" ? (
+					<ModelProviderLogo provider="anthropic" size={16} />
+				) : (
+					<CodexMark size={16} />
+				)}
+				<span>{PROVIDER_NAME[provider]}</span>
+				<span className="account-count">{accounts.length}</span>
+			</div>
 			<ul className="settings-group account-list">
 				{accounts.map((account, index) => (
 					<AccountRow
@@ -169,10 +177,12 @@ function ProviderAccounts({
 						hub={hub}
 					/>
 				))}
+				<AddAccount provider={provider} hub={hub} />
 			</ul>
-			<AddAccount provider={provider} hub={hub} />
 			{hub.reorder.error ? (
-				<p role="alert">{hub.reorder.error.message}</p>
+				<p role="alert" className="account-error">
+					{hub.reorder.error.message}
+				</p>
 			) : null}
 		</div>
 	);
@@ -204,48 +214,44 @@ function AccountRow({
 	]
 		.filter(Boolean)
 		.join(" · ");
-	const submit = (event: FormEvent) => {
+	const save = (event: FormEvent) => {
 		event.preventDefault();
+		if (!name.trim()) return;
 		hub.rename.mutate(
-			{
-				provider: account.provider,
-				accountId: account.id,
-				label: name,
-			},
+			{ provider: account.provider, accountId: account.id, label: name },
 			{ onSuccess: () => setRenaming(false) },
 		);
 	};
 	return (
 		<li className="settings-row account-row" aria-label={account.label}>
 			<div className="settings-row-main">
+				<span className="account-avatar" aria-hidden="true">
+					{account.label.trim().charAt(0).toUpperCase()}
+				</span>
 				<div className="settings-row-text">
 					{renaming ? (
-						<form className="account-rename" onSubmit={submit}>
+						<form className="account-rename" onSubmit={save}>
 							<input
-								// Opened by the Rename click.
-								// biome-ignore lint/a11y/noAutofocus: the field the click asked for.
+								// Opened by the Rename choice, never on load.
+								// biome-ignore lint/a11y/noAutofocus: the field the menu asked for.
 								autoFocus
 								aria-label="Account name"
 								maxLength={60}
 								value={name}
 								onChange={(event) => setName(event.target.value)}
+								onKeyDown={(event) => {
+									if (event.key === "Escape") setRenaming(false);
+								}}
 							/>
 							<button type="submit" className="settings-secondary">
 								Save
-							</button>
-							<button
-								type="button"
-								className="settings-secondary"
-								onClick={() => setRenaming(false)}
-							>
-								Cancel
 							</button>
 						</form>
 					) : (
 						<span className="settings-row-title">
 							{account.label}
 							{account.active ? (
-								<span className="account-inuse"> · in use</span>
+								<span className="account-inuse">In use</span>
 							) : null}
 						</span>
 					)}
@@ -253,29 +259,9 @@ function AccountRow({
 				</div>
 			</div>
 			<div className="settings-row-actions account-actions">
-				<span className="account-chip" data-tone={chip.tone}>
-					{chip.text}
-				</span>
-				<button
-					type="button"
-					className="settings-secondary account-move"
-					aria-label={`Move ${account.label} earlier`}
-					disabled={first}
-					onClick={() => onMove(-1)}
-				>
-					<ArrowUp size={14} />
-				</button>
-				<button
-					type="button"
-					className="settings-secondary account-move"
-					aria-label={`Move ${account.label} later`}
-					disabled={last}
-					onClick={() => onMove(1)}
-				>
-					<ArrowDown size={14} />
-				</button>
 				{confirming ? (
 					<>
+						<span className="account-confirm">Disconnect {account.label}?</span>
 						<button
 							type="button"
 							className="settings-secondary"
@@ -299,34 +285,70 @@ function AccountRow({
 					</>
 				) : (
 					<>
-						<button
-							type="button"
-							className="settings-secondary"
-							onClick={() => {
-								setName(account.label);
-								setRenaming(true);
-							}}
+						<span
+							className="settings-badge"
+							data-tone={chip.tone === "ok" ? "ok" : undefined}
+							data-state={chip.tone}
 						>
-							Rename
-						</button>
-						<button
-							type="button"
-							className="settings-secondary"
-							onClick={() => setConfirming(true)}
-						>
-							Disconnect
-						</button>
+							{chip.text}
+						</span>
+						<DropdownMenu.Root>
+							<DropdownMenu.Trigger asChild>
+								<button
+									type="button"
+									className="account-menu-trigger"
+									aria-label={`Options for ${account.label}`}
+								>
+									<MoreHorizontal size={16} aria-hidden="true" />
+								</button>
+							</DropdownMenu.Trigger>
+							<DropdownMenu.Portal>
+								<DropdownMenu.Content
+									className="recovery-menu"
+									sideOffset={6}
+									align="end"
+								>
+									<DropdownMenu.Item
+										onSelect={() => {
+											setName(account.label);
+											setRenaming(true);
+										}}
+									>
+										<Pencil size={16} aria-hidden="true" />
+										Rename
+									</DropdownMenu.Item>
+									<DropdownMenu.Item
+										disabled={first}
+										onSelect={() => onMove(-1)}
+									>
+										<ArrowUp size={16} aria-hidden="true" />
+										Try earlier
+									</DropdownMenu.Item>
+									<DropdownMenu.Item disabled={last} onSelect={() => onMove(1)}>
+										<ArrowDown size={16} aria-hidden="true" />
+										Try later
+									</DropdownMenu.Item>
+									<DropdownMenu.Separator />
+									<DropdownMenu.Item onSelect={() => setConfirming(true)}>
+										<Trash2 size={16} aria-hidden="true" />
+										Disconnect
+									</DropdownMenu.Item>
+								</DropdownMenu.Content>
+							</DropdownMenu.Portal>
+						</DropdownMenu.Root>
 					</>
 				)}
 			</div>
 			{hub.rename.error && renaming ? (
-				<p role="alert">{hub.rename.error.message}</p>
+				<p role="alert" className="account-error">
+					{hub.rename.error.message}
+				</p>
 			) : null}
 		</li>
 	);
 }
 
-/** "Add another account": the same connect flow as the first account, with a name. */
+/** The last row of a provider's card: the same connect flow as the first account, with a name. */
 function AddAccount({
 	provider,
 	hub,
@@ -344,30 +366,33 @@ function AddAccount({
 	};
 	if (!open)
 		return (
-			<button
-				type="button"
-				className="settings-secondary account-add"
-				onClick={() => setOpen(true)}
-			>
-				Add another account
-			</button>
+			<li className="settings-row account-add-row">
+				<button
+					type="button"
+					className="account-add"
+					onClick={() => setOpen(true)}
+				>
+					<Plus size={14} aria-hidden="true" />
+					Add another account
+				</button>
+			</li>
 		);
 	const named = label.trim().length > 0;
 	return (
-		<div className="account-add-flow">
+		<li className="settings-row account-add-flow">
 			<input
 				// Opened by the click on "Add another account".
 				// biome-ignore lint/a11y/noAutofocus: the field the click asked for.
 				autoFocus
 				aria-label="Name for this account"
-				placeholder="Name, e.g. Work"
+				placeholder="Name, for example Work"
 				maxLength={60}
 				value={label}
 				onChange={(event) => setLabel(event.target.value)}
 			/>
 			{provider === "claude" ? (
 				<form
-					className="claude-token-form"
+					className="account-add-form"
 					onSubmit={(event) => {
 						event.preventDefault();
 						if (named && token.trim())
@@ -389,35 +414,49 @@ function AddAccount({
 					/>
 					<button
 						type="submit"
-						className="chatgpt-sign-in-button"
+						className="settings-secondary"
 						disabled={!named || !token.trim() || hub.addClaude.isPending}
 					>
 						{hub.addClaude.isPending ? "Checking…" : "Add"}
 					</button>
-					<small>
-						Run claude setup-token while signed in to this other account, then
-						paste the token it prints.
-					</small>
+					<button type="button" className="settings-secondary" onClick={close}>
+						Cancel
+					</button>
 				</form>
 			) : named ? (
-				<ChatgptSignIn
-					addAs={label.trim()}
-					label="Sign in with ChatGPT"
-					onConnected={() => {
-						void hub.reload();
-						close();
-					}}
-				/>
+				<div className="account-add-form">
+					<ChatgptSignIn
+						addAs={label.trim()}
+						label="Sign in with ChatGPT"
+						showHint={false}
+						onConnected={() => {
+							void hub.reload();
+							close();
+						}}
+					/>
+					<button type="button" className="settings-secondary" onClick={close}>
+						Cancel
+					</button>
+				</div>
 			) : (
-				<small>Name it first, then sign in with that ChatGPT account.</small>
+				<div className="account-add-form">
+					<small>Name it, then sign in with that ChatGPT account.</small>
+					<button type="button" className="settings-secondary" onClick={close}>
+						Cancel
+					</button>
+				</div>
 			)}
+			<small className="account-add-hint">
+				{provider === "claude"
+					? "Run claude setup-token while signed in to that account, then paste the token it prints."
+					: "ChatGPT will ask you to approve a code."}
+			</small>
 			{hub.addClaude.error ? (
-				<p role="alert">{hub.addClaude.error.message}</p>
+				<p role="alert" className="account-error">
+					{hub.addClaude.error.message}
+				</p>
 			) : null}
-			<button type="button" className="settings-secondary" onClick={close}>
-				Cancel
-			</button>
-		</div>
+		</li>
 	);
 }
 

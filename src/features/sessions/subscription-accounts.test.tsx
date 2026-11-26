@@ -76,12 +76,12 @@ it("lists each account with its status, the one in use, and the add flow", () =>
 		}),
 	]);
 	expect(html).toContain("Personal");
-	expect(html).toContain("in use");
+	expect(html).toContain("In use");
 	expect(html).toContain("Work");
 	expect(html).toContain("Limited · resets");
 	expect(html).toContain("Ready");
 	expect(html).toContain("Add another account");
-	expect(html).toContain("Move Work earlier");
+	expect(html).toContain("Options for Work");
 	expect(html).toContain(
 		"Use accounts you own; follow each provider&#x27;s terms.",
 	);
