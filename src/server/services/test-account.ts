@@ -309,12 +309,40 @@ export async function seedTestUsage(
 }
 
 /** The made-up tokens of seeded accounts: the right shape, valid nowhere. */
+const SYNTHETIC_PREFIX = "sk-ant-oat01-synthetic-test-account-";
 const SYNTHETIC_TOKEN = (n: number) =>
-	`sk-ant-oat01-synthetic-test-account-${n}-${"x".repeat(24)}`;
+	`${SYNTHETIC_PREFIX}${n}-${"x".repeat(24)}`;
 
+/**
+ * Removes only what seed-accounts made: an account whose token is the
+ * synthetic one (read after opening it, since a switch moves accounts
+ * between rows). Another run's real connection is never touched.
+ */
 async function clearSyntheticAccounts(db: TestAccountDb, userId: string) {
-	await db.query("delete from subscription_account where user_id=$1", [userId]);
-	await db.query("delete from claude_subscription where user_id=$1", [userId]);
+	const { unseal } = await import("../auth/token-vault");
+	const synthetic = async (sealed: string, purpose: string) =>
+		(await unseal(sealed, { purpose, userId }).catch(() => "")).startsWith(
+			SYNTHETIC_PREFIX,
+		);
+	const slot = (
+		await db.query<{ sealed_token: string }>(
+			"select sealed_token from claude_subscription where user_id=$1",
+			[userId],
+		)
+	).rows[0];
+	if (slot && (await synthetic(slot.sealed_token, "claude-subscription")))
+		await db.query("delete from claude_subscription where user_id=$1", [
+			userId,
+		]);
+	const waiting = await db.query<{ id: string; sealed_auth: string }>(
+		"select id::text,sealed_auth from subscription_account where user_id=$1 and provider='claude'",
+		[userId],
+	);
+	for (const row of waiting.rows)
+		if (await synthetic(row.sealed_auth, `subscription-account:${row.id}`))
+			await db.query("delete from subscription_account where id=$1::uuid", [
+				row.id,
+			]);
 	await db.query(
 		"update agent_session set subscription_pin=null where user_id=$1",
 		[userId],
@@ -330,6 +358,12 @@ async function clearSyntheticAccounts(db: TestAccountDb, userId: string) {
 export async function seedSyntheticAccounts(db: TestAccountDb, userId: string) {
 	const { seal } = await import("../auth/token-vault");
 	await clearSyntheticAccounts(db, userId);
+	const existing = await db.query(
+		"select 1 from claude_subscription where user_id=$1",
+		[userId],
+	);
+	if (existing.rows.length)
+		throw new Error("The test account already has a Claude connection.");
 	await db.query(
 		`insert into claude_subscription(user_id,sealed_token,status,label,priority,activated_at)
 		 values($1,$2,'connected','Personal',0,now()-interval '1 hour')`,

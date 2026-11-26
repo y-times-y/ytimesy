@@ -101,12 +101,14 @@ export function SubscriptionAccountsSection() {
 		.sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))[0];
 	return (
 		<section className="settings-section" aria-label="Subscription accounts">
-			<header className="settings-header">
-				<h2>Accounts</h2>
-				<p>
-					More than one plan per provider? Chats use them in your order and move
-					to the next when one is used up.
-				</p>
+			<header className="settings-section-head">
+				<div>
+					<h3>Accounts</h3>
+					<p>
+						More than one plan per provider? Chats use them in your order and
+						move to the next when one is used up.
+					</p>
+				</div>
 			</header>
 			{providers.map((provider) => (
 				<ProviderAccounts
