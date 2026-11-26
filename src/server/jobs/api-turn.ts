@@ -20,6 +20,7 @@ import {
 	IncompleteAgentTurn,
 	isYSquaredNoWorkspace,
 	LifecycleHookRefusal,
+	MachineNotResponding,
 	SafeApiModelFailure,
 	TurnNotStarted,
 	Y_SQUARED_NO_WORKSPACE,
@@ -64,6 +65,7 @@ import {
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { HANDOFF_HISTORY_INSTRUCTIONS } from "#/domain/local-import";
+import { MACHINE_RECOVERING_NOTICE } from "#/domain/machine-health";
 import { withMemoryRecall } from "#/domain/memory-marker";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import {
@@ -253,6 +255,10 @@ import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { registerLiveTurn } from "../services/live-turn-abort";
 import { cancellableMachines } from "../services/machine-call-signal";
 import { type MachineGitStep, machineGitStep } from "../services/machine-git";
+import {
+	recoveringMachines,
+	waitForMachine,
+} from "../services/machine-recovery";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { mcpToolSurface } from "../services/mcp-tool-surface";
 import { connectMcpTools } from "../services/mcp-tools";
@@ -743,6 +749,48 @@ async function runApiTurnAttempt(
 	const pausingWhileThinking = pauseVmWhileThinkingEnabled();
 	const plainMachines = machines;
 	if (pausingWhileThinking) machines = resumingAfterThinkingPause(machines);
+	// A machine that is busy, restarting or silent never leaves the turn
+	// "working" in silence: its calls wait for it with the person told
+	// "Recovering…" (machine-recovery.ts), and a machine that stays down fails
+	// the step as a transient failure its executor resumes.
+	// Set once a call of this turn found its machine unhealthy: the commit then
+	// waits for the machine to answer before it starts.
+	let machineTrouble = false;
+	const onMachineRecovery = (
+		state: "recovering" | "recovered" | "failed",
+		vm: string,
+	) => {
+		if (state === "recovering") machineTrouble = true;
+		const noticeId = SessionItemId(`${turn.id}:machine-recovery`);
+		items = items.filter((item) => item.id !== noticeId);
+		if (state === "recovering")
+			items = [
+				...items,
+				{ kind: "notice", id: noticeId, message: MACHINE_RECOVERING_NOTICE },
+			];
+		progress.offer(items);
+		console.warn(
+			JSON.stringify({
+				event: "machine.recovery",
+				turnId: turn.id,
+				state,
+				vm: vm.slice(0, 12),
+			}),
+		);
+		if (state !== "recovering" && !ports.modelAccess)
+			void reportInterruption({
+				kind: "machine-recovery",
+				turnId: turn.id,
+				sessionId: turn.session_id,
+				cause: state === "recovered" ? "machine-unresponsive" : "machine-down",
+				recovered: state === "recovered",
+				userVisible: false,
+			}).catch(() => {});
+	};
+	machines = recoveringMachines(machines, {
+		signal: abort.signal,
+		onState: onMachineRecovery,
+	});
 	let thinkingPause: ThinkingPauseScheduler | undefined;
 	// Subagents address the parent's and forks' VMs directly, so they get the
 	// machines before this session's scoping; the report needs the session.
@@ -3487,6 +3535,18 @@ async function runApiTurnAttempt(
 		// A turn that commits nothing (a subagent) keeps its finished answer if the
 		// stop cannot be confirmed.
 		// Commands start only from this turn's tools.
+		// The commit needs a machine that answers: a busy one is waited for
+		// (production 2026-11-25: the handoff failed on an overloaded machine).
+		if (
+			commits &&
+			machineTrouble &&
+			execution?.vm &&
+			!(await waitForMachine(execution.machines, execution.vm, {
+				signal: abort.signal,
+				onState: onMachineRecovery,
+			}))
+		)
+			throw new MachineNotResponding("the machine did not answer at handoff");
 		if (execution && changedWorkspace) {
 			const stop = () =>
 				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id);

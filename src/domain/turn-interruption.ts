@@ -1,4 +1,4 @@
-import { TURN_NOT_STARTED } from "./api-turn-failure";
+import { MachineNotResponding, TURN_NOT_STARTED } from "./api-turn-failure";
 import { CoordinationFailure } from "./conversation-turn-control";
 
 /**
@@ -63,6 +63,8 @@ export function isMachineRefusalThatPasses(cause: unknown, depth = 0): boolean {
 /** True when retrying the step from its checkpoint is the right answer, whatever the person did not do. */
 export function isTransientInfrastructureFailure(cause: unknown): boolean {
 	if (cause instanceof CoordinationFailure) return cause.retryable;
+	// A chat machine that stayed down through a whole recovery: resumed, not failed.
+	if (cause instanceof MachineNotResponding) return true;
 	if (cause instanceof Error)
 		return (
 			cause.message === TURN_NOT_STARTED ||
