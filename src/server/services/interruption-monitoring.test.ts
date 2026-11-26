@@ -85,9 +85,11 @@ it("sends yesterday's digest keyed by day", async () => {
 it("runs the digest only in its hour and the canary only when configured", async () => {
 	const digest = vi.fn(async () => {});
 	const step = vi.fn(async () => "idle" as const);
+	const watch = vi.fn(async () => {});
 	await runInterruptionMonitoring(new Date("2026-11-24T12:00:00Z"), null, {
 		digest,
 		step,
+		watch,
 	});
 	expect(digest).not.toHaveBeenCalled();
 	expect(step).not.toHaveBeenCalled();
@@ -101,8 +103,9 @@ it("runs the digest only in its hour and the canary only when configured", async
 			})!,
 			send: async () => "s",
 		},
-		{ digest, step },
+		{ digest, step, watch },
 	);
+	expect(watch).toHaveBeenLastCalledWith(now, true);
 	expect(digest).toHaveBeenCalledTimes(1);
 	expect(step).toHaveBeenCalledTimes(1);
 	// A throwing step never fails the tick.
@@ -115,6 +118,7 @@ it("runs the digest only in its hour and the canary only when configured", async
 			},
 			{
 				digest,
+				watch,
 				step: async () => {
 					throw new Error("x");
 				},
@@ -255,4 +259,22 @@ it("alerts the owner when user-visible machine failures exceed 1 per 1,000 turns
 			key: "2026-11-23",
 		}),
 	);
+});
+
+it("emails the owner when the canary stopped running, once an hour", async () => {
+	const { watchCanary } = await import("./interruption-monitoring");
+	const alert = vi.fn(async () => "sent" as const);
+	await watchCanary(now, true, {
+		lastRunAt: async () => new Date(now.getTime() - 100 * 60_000),
+		alert,
+	});
+	expect(alert).toHaveBeenCalledWith(
+		expect.objectContaining({ kind: "canary-stale", key: "2026-11-24T07" }),
+	);
+	const quiet = vi.fn(async () => "sent" as const);
+	await watchCanary(now, true, {
+		lastRunAt: async () => new Date(now.getTime() - 10 * 60_000),
+		alert: quiet,
+	});
+	expect(quiet).not.toHaveBeenCalled();
 });

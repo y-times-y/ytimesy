@@ -161,6 +161,14 @@ export async function lastCanarySession() {
 	return result.rows[0]?.session_id ?? null;
 }
 
+/** When the canary last started a run (null: never). */
+export async function canaryLastRunAt() {
+	const result = await database().query<{ at: Date | null }>(
+		"select max(at) as at from canary_run",
+	);
+	return result.rows[0]?.at ? new Date(result.rows[0].at) : null;
+}
+
 /** The chat's items, for the canary to check (null when the chat is gone). */
 export async function canarySessionItems(userId: string, sessionId: string) {
 	const result = await database().query<{ items: unknown }>(

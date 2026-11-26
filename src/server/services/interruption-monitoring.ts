@@ -7,6 +7,7 @@ import {
 import {
 	dailyInterruptionReport,
 	type InterruptionEvent,
+	canaryWatchdogProblem,
 	interruptionDigestText,
 	MACHINE_FAILURE_TARGET_PER_1000,
 	MACHINE_START_FAILED_KIND,
@@ -17,6 +18,7 @@ import { alertHour } from "#/domain/owner-alerts";
 import type { SessionItem } from "#/domain/session-item";
 import {
 	canaryCountsSince,
+	canaryLastRunAt,
 	canarySessionItems,
 	finishCanaryRun,
 	interruptionRowsSince,
@@ -194,6 +196,33 @@ export async function runCanaryStep(
 	return "sent";
 }
 
+/** Emails the owner (once an hour) when the canary stopped or lost its configuration. Never throws. */
+export async function watchCanary(
+	now: Date,
+	configured: boolean,
+	deps: {
+		lastRunAt?: typeof canaryLastRunAt;
+		alert?: typeof alertOwner;
+	} = {},
+) {
+	try {
+		const problem = canaryWatchdogProblem({
+			configured,
+			lastRunAt: await (deps.lastRunAt ?? canaryLastRunAt)(),
+			now,
+		});
+		if (!problem) return;
+		await (deps.alert ?? alertOwner)({
+			kind: "canary-stale",
+			key: alertHour(now),
+			subject: "ytimesy: the synthetic canary stopped running",
+			text: `${problem} Check canary_config, the canary chat and the edge executor's maintenance job. Further alerts this hour are not emailed.`,
+		});
+	} catch {
+		console.warn("Canary watchdog failed.");
+	}
+}
+
 /**
  * Called from the existing every-5-minutes maintenance tick (no Worker cron
  * of its own): the digest once a day at DIGEST_HOUR_UTC, the canary when
@@ -205,6 +234,7 @@ export async function runInterruptionMonitoring(
 	deps: {
 		digest?: typeof sendInterruptionDigest;
 		step?: typeof runCanaryStep;
+		watch?: typeof watchCanary;
 	} = {},
 ) {
 	if (now.getUTCHours() === DIGEST_HOUR_UTC && now.getUTCMinutes() < 5)
@@ -213,6 +243,7 @@ export async function runInterruptionMonitoring(
 				message: error instanceof Error ? error.message.slice(0, 200) : "",
 			}),
 		);
+	await (deps.watch ?? watchCanary)(now, canary !== null);
 	if (canary)
 		await (deps.step ?? runCanaryStep)(now, canary).catch((error: unknown) =>
 			console.warn("Canary step failed.", {

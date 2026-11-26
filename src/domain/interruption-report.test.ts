@@ -123,3 +123,36 @@ describe("user-visible machine failure rate", () => {
 		expect(text).toContain("ABOVE target");
 	});
 });
+
+describe("canary watchdog", () => {
+	const now = new Date("2026-11-26T12:00:00Z");
+	const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
+	it("is quiet while the canary ran within 90 minutes", async () => {
+		const { canaryWatchdogProblem } = await import("./interruption-report");
+		expect(
+			canaryWatchdogProblem({ configured: true, lastRunAt: ago(35), now }),
+		).toBeNull();
+	});
+	it("names a canary that has not run for 90 minutes, and one that lost its configuration", async () => {
+		const { canaryWatchdogProblem } = await import("./interruption-report");
+		expect(
+			canaryWatchdogProblem({ configured: true, lastRunAt: ago(91), now }),
+		).toMatch(/90 minutes/);
+		expect(
+			canaryWatchdogProblem({ configured: false, lastRunAt: ago(40), now }),
+		).toMatch(/not configured/);
+	});
+	it("stays silent for a canary that was never set up", async () => {
+		const { canaryWatchdogProblem } = await import("./interruption-report");
+		expect(
+			canaryWatchdogProblem({ configured: false, lastRunAt: null, now }),
+		).toBeNull();
+		expect(
+			canaryWatchdogProblem({
+				configured: false,
+				lastRunAt: ago(24 * 60),
+				now,
+			}),
+		).toBeNull();
+	});
+});

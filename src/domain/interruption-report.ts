@@ -58,6 +58,30 @@ export function machineFailureRateExceeded(failures: number, turns: number) {
 	);
 }
 
+/** The canary runs every 30 minutes; silence this long means it stopped or was unconfigured. */
+export const CANARY_STALE_MS = 90 * 60_000;
+const CANARY_RECENT_MS = 24 * 3_600_000;
+
+/**
+ * Why the canary monitor itself is not working, or null. Silent for a canary
+ * that never ran (not set up yet) or stopped long ago (switched off on purpose).
+ */
+export function canaryWatchdogProblem(input: {
+	readonly configured: boolean;
+	readonly lastRunAt: Date | null;
+	readonly now: Date;
+}): string | null {
+	if (!input.lastRunAt) return null;
+	const silentMs = input.now.getTime() - input.lastRunAt.getTime();
+	if (!input.configured)
+		return silentMs < CANARY_RECENT_MS
+			? "The canary is not configured any more (its canary_config row or YTIMESY_CANARY_* variables are gone) but it ran within the last day: a reset, cleanup or migration may have removed it."
+			: null;
+	return silentMs > CANARY_STALE_MS
+		? `The canary has not run for 90 minutes (last run ${Math.round(silentMs / 60_000)} minutes ago).`
+		: null;
+}
+
 /** One row per event; at most one per kind and turn inside this window is kept. */
 export const INTERRUPTION_RATE_LIMIT_MS = 10 * 60_000;
 
