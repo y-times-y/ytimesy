@@ -84,6 +84,15 @@ export async function interruptionRowsSince(days: number) {
 	return result.rows;
 }
 
+/** Turns created on one UTC day (the denominator of the machine failure rate). */
+export async function turnsCreatedOnDay(day: string) {
+	const result = await database().query<{ n: string }>(
+		"select count(*) n from api_turn where created_at >= $1::date and created_at < $1::date + interval '1 day'",
+		[day],
+	);
+	return Number(result.rows[0]?.n ?? 0);
+}
+
 export async function pruneInterruptionHistory(keepDays = 35) {
 	await database().query(
 		"delete from interruption_event where at < now() - $1::int * interval '1 day'",

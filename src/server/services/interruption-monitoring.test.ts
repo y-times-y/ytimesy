@@ -69,6 +69,7 @@ it("sends yesterday's digest keyed by day", async () => {
 			},
 		],
 		canary: async () => ({ runs: 48, failures: 0 }),
+		turns: async () => 500,
 		alert,
 		prune: async () => {},
 	});
@@ -229,4 +230,29 @@ it("leaves a young run pending", async () => {
 			items: async () => [user(p.first)],
 		}),
 	).toBe("pending");
+});
+
+it("alerts the owner when user-visible machine failures exceed 1 per 1,000 turns", async () => {
+	const alert = vi.fn(async () => "sent" as const);
+	await sendInterruptionDigest(now, {
+		rows: async () => [
+			{
+				at: "2026-11-23T10:00:00Z",
+				kind: "machine-start-failed",
+				cause: "ladder-exhausted",
+				recovered: false,
+				user_visible: true,
+			},
+		],
+		canary: async () => ({ runs: 48, failures: 0 }),
+		turns: async () => 500,
+		alert,
+		prune: async () => {},
+	});
+	expect(alert).toHaveBeenCalledWith(
+		expect.objectContaining({
+			kind: "machine-failure-rate",
+			key: "2026-11-23",
+		}),
+	);
 });

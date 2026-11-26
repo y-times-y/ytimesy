@@ -58,3 +58,11 @@ done; the recovery above only keeps the turn from going silent. Owner: this work
   lease lapsed. Renewal now times out after 8 s and retries once (`TURN_BOX_RENEW_ATTEMPT_TIMEOUT_MS`).
 - Not done: scale-in protection for boxes with running turns (the CPU target-tracking policy can still terminate a box mid-turn; a termination
   lifecycle hook or `SetInstanceProtection` from the box is the fix), and park-and-retry after 15 minutes.
+
+## Machine start failures (2026-11-26)
+
+Production, last 7 days (~2,800 turns): "could not start" 7 turns, "could not be reached" 7, "did not answer yet" 1, "worker disconnected" 8 (most on 11-25/26). Per-VM start-to-ready times are only in logs (`turn-timing` spans `vm:waitRunning`, `vm:guestProbe`), not in the database; measure the p99 from them.
+
+Root cause of "started but did not answer yet": `waitUntilGuestAnswers` gave a started guest only ~16 s of probing, then failed the start, and that failure was not transient, so the step failed after 3 retries (red, manual Retry). Now: the probe window is ~70 s of backoff (`GUEST_PROBE_RETRY_DELAYS_MS`), "did not become running"/"started but is not answering" are `isMachineRefusalThatPasses` (step retried for 15 min, VM restarted/replaced by the existing start path), shown as "Starting your workspace…". Each retry is an `interruption_event` `machine-start-retry`; a failure after the window is `machine-start-failed` (user-visible), counted in the digest as a rate per 1,000 turns with an owner alert above 1 (`machine-failure-rate`).
+
+Not done: Durable Object fallback for turns that do not need the VM; park-and-retry after the 15-minute window (the final text is calm and says the work is saved, but the turn is still failed); a test-only knob for a slow VM.

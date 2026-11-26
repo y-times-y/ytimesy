@@ -381,6 +381,9 @@ export function failureCause(error: unknown): string | null {
 	return redactSecrets(lines.join(" <- "), 600) || null;
 }
 
+const STARTUP_NOT_FINISHED =
+	/started but is not answering|did not become running|stopped before it became running/i;
+
 export function machineFailureMessage(error: unknown): string | null {
 	if (repositoryFetchFailed(error)) return REPOSITORY_FETCH_FAILURE;
 	if (workspaceGitFailed(error)) return WORKSPACE_GIT_FAILURE;
@@ -400,6 +403,10 @@ export function machineFailureMessage(error: unknown): string | null {
 		found.name === "WorkspaceCommandError"
 			? "could not be reached"
 			: "could not start";
+	// A start that never finished was already retried for minutes (restart,
+	// replacement): say it calmly, no red-alert wording or manual Retry.
+	if (action === "could not start" && STARTUP_NOT_FINISHED.test(found.message))
+		return "Couldn't start your workspace right now. Your message and work are saved; ytimesy tries again when you send your next message.";
 	return `The chat's machine ${action}: ${reason}. Retry; your work is preserved.`;
 }
 

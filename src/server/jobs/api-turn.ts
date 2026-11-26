@@ -21,6 +21,7 @@ import {
 	isYSquaredNoWorkspace,
 	LifecycleHookRefusal,
 	MachineNotResponding,
+	machineFailureMessage,
 	SafeApiModelFailure,
 	TurnNotStarted,
 	Y_SQUARED_NO_WORKSPACE,
@@ -64,6 +65,7 @@ import {
 } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
+import { MACHINE_START_FAILED_KIND } from "#/domain/interruption-report";
 import { HANDOFF_HISTORY_INSTRUCTIONS } from "#/domain/local-import";
 import { MACHINE_RECOVERING_NOTICE } from "#/domain/machine-health";
 import { withMemoryRecall } from "#/domain/memory-marker";
@@ -3811,11 +3813,21 @@ async function runApiTurnAttempt(
 				}).catch(() => {});
 			// A machine that cannot start yet shows a calm status while the
 			// step is retried, never the refusal. Best effort.
-			if (isMachineRefusalThatPasses(platformRestart))
+			if (isMachineRefusalThatPasses(platformRestart)) {
+				if (!ports.modelAccess)
+					void reportInterruption({
+						kind: "machine-start-retry",
+						turnId: turn.id,
+						sessionId: turn.session_id,
+						cause: "start-not-finished",
+						recovered: true,
+						userVisible: false,
+					}).catch(() => {});
 				await checkpointApiTurn(turn, messages, [
 					...withoutStartingMachine(items),
 					startingMachineItem(turn.id),
 				]).catch(() => {});
+			}
 			throw platformRestart;
 		}
 		// The step's soft deadline passed while its model call was still running and
@@ -4239,6 +4251,16 @@ async function runApiTurnAttempt(
 			outputTokens: null,
 			reason: "error",
 		});
+		// The whole start ladder was spent: counted for the digest and its alert.
+		if (!userCancelled && !ports.modelAccess && machineFailureMessage(error))
+			void reportInterruption({
+				kind: MACHINE_START_FAILED_KIND,
+				turnId: turn.id,
+				sessionId: turn.session_id,
+				cause: "ladder-exhausted",
+				recovered: false,
+				userVisible: true,
+			}).catch(() => {});
 		// A turn out of time failed, not stopped: the user and a parent agent both hear why.
 		const timedOut = abort.signal.reason instanceof TurnTimeLimitReached;
 		const settledState =

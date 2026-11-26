@@ -8,6 +8,9 @@ import {
 	dailyInterruptionReport,
 	type InterruptionEvent,
 	interruptionDigestText,
+	MACHINE_FAILURE_TARGET_PER_1000,
+	MACHINE_START_FAILED_KIND,
+	machineFailureRateExceeded,
 	utcDay,
 } from "#/domain/interruption-report";
 import { alertHour } from "#/domain/owner-alerts";
@@ -22,6 +25,7 @@ import {
 	pruneInterruptionHistory,
 	recordInterruption,
 	startCanaryRun,
+	turnsCreatedOnDay,
 } from "../adapters/interruption-events";
 import { alertOwner } from "../adapters/owner-alerts";
 
@@ -66,6 +70,7 @@ export async function sendInterruptionDigest(
 		canary?: typeof canaryCountsSince;
 		alert?: typeof alertOwner;
 		prune?: typeof pruneInterruptionHistory;
+		turns?: (day: string) => Promise<number>;
 	} = {},
 ) {
 	const day = utcDay(new Date(now.getTime() - 24 * 3_600_000));
@@ -75,11 +80,26 @@ export async function sendInterruptionDigest(
 		() => undefined,
 	);
 	const found = days.find((entry) => entry.day === day);
+	const machineFailures = rows.filter(
+		(row) =>
+			row.kind === MACHINE_START_FAILED_KIND &&
+			row.user_visible &&
+			utcDay(row.at) === day,
+	).length;
+	const turns = await (deps.turns ?? turnsCreatedOnDay)(day).catch(() => 0);
+	const machine = { turns, machineFailures };
+	if (machineFailureRateExceeded(machineFailures, turns))
+		await (deps.alert ?? alertOwner)({
+			kind: "machine-failure-rate",
+			key: day,
+			subject: `ytimesy: machine start failures above target on ${day} (${machineFailures} of ${turns} turns)`,
+			text: `Users saw ${machineFailures} machine start failures in ${turns} turns on ${day}; the target is under ${MACHINE_FAILURE_TARGET_PER_1000} per 1,000. See interruption_event kind ${MACHINE_START_FAILED_KIND} and the machine-start-retry rows for the cause.`,
+		}).catch(() => undefined);
 	await (deps.alert ?? alertOwner)({
 		kind: "interruption-digest",
 		key: day,
 		subject: `ytimesy: ${found?.total ?? 0} interruptions on ${day} (${found?.userVisible ?? 0} user-visible)`,
-		text: interruptionDigestText(days, day, canary, rows),
+		text: interruptionDigestText(days, day, canary, rows, machine),
 	});
 	await (deps.prune ?? pruneInterruptionHistory)().catch(() => undefined);
 }

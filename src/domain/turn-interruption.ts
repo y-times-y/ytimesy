@@ -47,6 +47,15 @@ export function isEdgeOutage(error: unknown) {
 const MACHINE_REFUSAL_THAT_PASSES =
 	/limiting requests|LIMIT_EXCEEDED|too many new machines|resource limit exceeded/i;
 
+/**
+ * A start that did not finish: the VM never reached running, or reached it
+ * and its guest did not answer through the extended readiness window. The
+ * step is retried (and the VM restarted or replaced by the start path) rather
+ * than failed (production 2026-11-26: "it started but did not answer yet").
+ */
+const MACHINE_START_THAT_PASSES =
+	/started but is not answering|did not become running|stopped before it became running|earlier start of this machine was still finishing|another operation is updating this machine|did not finish resizing|sizing did not complete/i;
+
 export function isMachineRefusalThatPasses(cause: unknown, depth = 0): boolean {
 	if (depth > 4 || !(cause instanceof Error)) return false;
 	const tag = (cause as { _tag?: unknown })._tag;
@@ -55,7 +64,11 @@ export function isMachineRefusalThatPasses(cause: unknown, depth = 0): boolean {
 		tag === "WorkspaceProvisionError"
 	) {
 		const detail = String((cause as { detail?: unknown }).detail ?? "");
-		return MACHINE_REFUSAL_THAT_PASSES.test(`${cause.message} ${detail}`);
+		const text = `${cause.message} ${detail}`;
+		return (
+			MACHINE_REFUSAL_THAT_PASSES.test(text) ||
+			MACHINE_START_THAT_PASSES.test(text)
+		);
 	}
 	return isMachineRefusalThatPasses(cause.cause, depth + 1);
 }

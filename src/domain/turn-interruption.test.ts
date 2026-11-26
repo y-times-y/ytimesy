@@ -11,6 +11,30 @@ import {
 	TRANSIENT_RETRY_WINDOW_MS,
 } from "./turn-interruption";
 
+describe("machine start trouble is absorbed", () => {
+	const provision = (message: string) =>
+		Object.assign(new Error(message), {
+			name: "WorkspaceProvisionError",
+			detail: "",
+		});
+	it("resumes the step for a started VM that does not answer, or does not become running", () => {
+		for (const message of [
+			"Agent session VM started but is not answering yet. Try again in a minute.",
+			"Workspace VM did not become running",
+			"Workspace VM stopped before it became running",
+			"another operation is updating this machine",
+		])
+			expect(isTransientInfrastructureFailure(provision(message))).toBe(true);
+	});
+	it("still fails fast for refusals no retry can fix", () => {
+		for (const message of [
+			"the provider rejected the xl machine size",
+			"this deployment must be configured",
+		])
+			expect(isTransientInfrastructureFailure(provision(message))).toBe(false);
+	});
+});
+
 describe("turn interruption rules", () => {
 	it("treats coordinator, lease and start-wait trouble as transient", () => {
 		expect(

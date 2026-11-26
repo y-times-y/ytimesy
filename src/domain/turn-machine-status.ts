@@ -1,7 +1,7 @@
 import { SessionItemId } from "./ids";
 import type { NoticeSessionItem, SessionItem } from "./session-item";
 
-export const STARTING_MACHINE_TEXT = "Starting machine…";
+export const STARTING_MACHINE_TEXT = "Starting your workspace…";
 
 /**
  * Shown while a turn waits out a machine refusal that passes (the provider's

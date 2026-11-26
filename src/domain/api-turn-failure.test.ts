@@ -707,3 +707,19 @@ it("tells a turn blocked by an old lock that it is saved and will run by itself"
 		"could not confirm",
 	);
 });
+
+{
+	it("machine start failure after the whole ladder is calm: no red-alert wording, no manual Retry", async () => {
+		const { machineFailureMessage } = await import("./api-turn-failure");
+		const error = Object.assign(
+			new Error(
+				"Agent session VM started but is not answering yet. Try again in a minute.",
+			),
+			{ name: "WorkspaceProvisionError" },
+		);
+		const message = machineFailureMessage(error) ?? "";
+		expect(message).toMatch(/Couldn't start your workspace/);
+		expect(message).toMatch(/saved/);
+		expect(message).not.toMatch(/Retry;|did not answer yet/);
+	});
+}

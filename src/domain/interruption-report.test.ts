@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	dailyInterruptionReport,
 	interruptionDigestText,
@@ -94,13 +94,32 @@ it("lists the day's top causes with a hash of each chat and whether the cause is
 	);
 	expect(text).toContain("Top causes:");
 	expect(text).toMatch(
-		/2  turn-abandoned\/lease-expired .*chats a1b2c3d4 .*fixed/,
+		/2 {2}turn-abandoned\/lease-expired .*chats a1b2c3d4 .*fixed/,
 	);
 	expect(text).toMatch(
-		/1  lease-takeover\/box-heartbeat-lost .*chats ffff0000/,
+		/1 {2}lease-takeover\/box-heartbeat-lost .*chats ffff0000/,
 	);
 	expect(text).toMatch(
-		/1  lease-takeover\/mystery .*chats 11112222 .*not fixed/,
+		/1 {2}lease-takeover\/mystery .*chats 11112222 .*not fixed/,
 	);
 	expect(text).not.toContain("Top causes:\n  0");
+});
+
+describe("user-visible machine failure rate", () => {
+	it("is per 1,000 turns, alerts above the target and says so in the digest", async () => {
+		const r = await import("./interruption-report");
+		expect(r.MACHINE_FAILURE_TARGET_PER_1000).toBe(1);
+		expect(r.machineFailureRatePer1000(2, 1000)).toBe(2);
+		expect(r.machineFailureRatePer1000(0, 0)).toBe(0);
+		expect(r.machineFailureRateExceeded(1, 1000)).toBe(false);
+		expect(r.machineFailureRateExceeded(2, 1000)).toBe(true);
+		const text = r.interruptionDigestText([], "2026-11-25", undefined, [], {
+			turns: 500,
+			machineFailures: 2,
+		});
+		expect(text).toContain(
+			"Machine start failures seen by users: 2 of 500 turns",
+		);
+		expect(text).toContain("ABOVE target");
+	});
 });

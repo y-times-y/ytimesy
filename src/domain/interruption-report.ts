@@ -43,6 +43,21 @@ export type InterruptionDay = {
 	readonly byCause: Readonly<Record<string, number>>;
 };
 
+/** Target: user-visible machine start failures per 1,000 turns (2026-11-26). */
+export const MACHINE_FAILURE_TARGET_PER_1000 = 1;
+/** Kind of the interruption_event a user saw as a failed machine start. */
+export const MACHINE_START_FAILED_KIND = "machine-start-failed";
+
+export function machineFailureRatePer1000(failures: number, turns: number) {
+	return turns > 0 ? (failures / turns) * 1000 : 0;
+}
+
+export function machineFailureRateExceeded(failures: number, turns: number) {
+	return (
+		machineFailureRatePer1000(failures, turns) > MACHINE_FAILURE_TARGET_PER_1000
+	);
+}
+
 /** One row per event; at most one per kind and turn inside this window is kept. */
 export const INTERRUPTION_RATE_LIMIT_MS = 10 * 60_000;
 
@@ -94,6 +109,7 @@ export function interruptionDigestText(
 	canary?: { readonly runs: number; readonly failures: number },
 	/** The day's rows (with chat hashes) for the top-causes list. */
 	rows: readonly InterruptionRow[] = [],
+	machine?: { readonly turns: number; readonly machineFailures: number },
 ) {
 	const found = days.find((entry) => entry.day === day);
 	const lines = [
@@ -122,6 +138,11 @@ export function interruptionDigestText(
 		for (const entry of earlier)
 			lines.push(`  ${entry.day}  ${entry.total} / ${entry.userVisible}`);
 	}
+	if (machine)
+		lines.push(
+			"",
+			`Machine start failures seen by users: ${machine.machineFailures} of ${machine.turns} turns (${machineFailureRatePer1000(machine.machineFailures, machine.turns).toFixed(2)} per 1,000; target under ${MACHINE_FAILURE_TARGET_PER_1000})${machineFailureRateExceeded(machine.machineFailures, machine.turns) ? " ABOVE target" : ""}.`,
+		);
 	if (canary)
 		lines.push("", `Canary: ${canary.runs} runs, ${canary.failures} failed.`);
 	return lines.join("\n");

@@ -83,7 +83,7 @@ it("says the machine is not answering when a new copy's guest never does", async
 		"test",
 	).provisionSession("test-copy", "sh-template");
 	const assertion = expect(provisioning).rejects.toThrow(
-		"Agent session VM started but is not answering yet. Try again in a minute.",
+		"Agent session VM started but is not answering yet. Retrying automatically.",
 	);
 	await vi.runAllTimersAsync();
 	await assertion;

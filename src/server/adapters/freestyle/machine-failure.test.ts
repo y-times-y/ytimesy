@@ -209,7 +209,7 @@ it("counts only the VM's own failed starts as unstartable", () => {
 	expect(
 		machineStartUnstartable(
 			new Error(
-				"Workspace VM started but is not answering yet. Try again in a minute.",
+				"Workspace VM started but is not answering yet. Retrying automatically.",
 			),
 		),
 	).toBe(true);

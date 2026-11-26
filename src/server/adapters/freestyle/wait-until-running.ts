@@ -190,12 +190,16 @@ export async function waitUntilVmRunning(
 }
 
 /**
- * Backoff between probes of a guest that just started (about 16 s in all).
- * A resumed guest usually answers within a second, so the first retries come
- * quickly instead of after a full second.
+ * Backoff between probes of a guest that just started (about 70 s of sleeping
+ * in all, plus each probe's own budget). A resumed guest usually answers
+ * within a second, so the first retries come quickly; a slow one (a busy host,
+ * a cold snapshot) gets a long window before the start counts as failed. The
+ * old 16 s window produced "started but did not answer yet" for guests that
+ * would have answered. Past this, the turn step retries the whole start for
+ * 15 minutes and the VM is restarted and replaced (machine-failure.ts).
  */
 export const GUEST_PROBE_RETRY_DELAYS_MS = [
-	250, 500, 1_000, 2_000, 4_000, 8_000,
+	250, 500, 1_000, 2_000, 4_000, 8_000, 10_000, 15_000, 15_000, 15_000,
 ] as const;
 /**
  * How long each probe (`true`) may take before it counts as unanswered and
@@ -247,7 +251,7 @@ export async function waitUntilGuestAnswers(
 		if (!isTransientProviderFailure(cause)) throw cause;
 		throw new WorkspaceProvisionError({
 			operation: "create",
-			message: `${label} started but is not answering yet. Try again in a minute.`,
+			message: `${label} started but is not answering yet. Retrying automatically.`,
 			providerWorkspaceId: vm.id,
 		});
 	}

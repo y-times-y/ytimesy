@@ -181,7 +181,7 @@ it("says plainly that a guest never answered, and rethrows other failures at onc
 	await expect(
 		waitUntilGuestAnswers({ id: "vm-test", exec: failing }, "Test VM", [0, 0]),
 	).rejects.toThrow(
-		"Test VM started but is not answering yet. Try again in a minute.",
+		"Test VM started but is not answering yet. Retrying automatically.",
 	);
 	expect(failing).toHaveBeenCalledTimes(3);
 	const conflict = new FreestyleApiError(
@@ -194,4 +194,11 @@ it("says plainly that a guest never answered, and rethrows other failures at onc
 		waitUntilGuestAnswers({ id: "vm-test", exec: refused }, "Test", [0, 0]),
 	).rejects.toBe(conflict);
 	expect(refused).toHaveBeenCalledTimes(1);
+});
+
+it("gives a slow guest an extended readiness window, still probing quickly first", () => {
+	const sleeping = GUEST_PROBE_RETRY_DELAYS_MS.reduce((a, b) => a + b, 0);
+	expect(sleeping).toBeGreaterThanOrEqual(60_000);
+	expect(GUEST_PROBE_RETRY_DELAYS_MS[0]).toBeLessThanOrEqual(250);
+	expect(GUEST_PROBE_RETRY_DELAYS_MS.length).toBeGreaterThanOrEqual(9);
 });
