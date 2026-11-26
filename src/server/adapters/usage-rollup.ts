@@ -1,5 +1,6 @@
 import type { TurnUsageFact } from "#/domain/usage-report";
 import { type UsageDailyRow, usageProvider } from "#/domain/usage-report";
+import { NOT_CANARY_CHAT } from "./canary-chat";
 import { database } from "./database";
 
 type Queryable = Pick<ReturnType<typeof database>, "query">;
@@ -38,6 +39,8 @@ export async function recordTurnUsage(
 			        case when s.chat_role='y2' then 'y2' when t.executor='durable-object' then 'durable-object' else 'box' end,
 			        1,case when $4 then 0 else 1 end,$5,$6,$7
 			 from counted join api_turn t on t.id=$1 join agent_session s on s.id=t.session_id
+			 -- The canary's own turns are not the owner's usage (canary-chat.ts).
+			 where ${NOT_CANARY_CHAT}
 			 on conflict (user_id,day,provider,model_id,source,coalesce(project_id,${ZERO_PROJECT}))
 			 do update set turns=usage_daily.turns+1,
 			   unknown_turns=usage_daily.unknown_turns+excluded.unknown_turns,

@@ -23,8 +23,10 @@ export async function readChatCrewScope(
 ): Promise<ChatCrewScope | null> {
 	const result = await database().query<ChatCrewScope>(
 		`select s.project_id as "projectId",
-		   (coalesce(p.y_enabled,false) and s.parent_session_id is null) as "yEnabled",
-		   case when p.y_enabled and s.parent_session_id is null then (select y.id from agent_session y
+		   (coalesce(p.y_enabled,false) and s.parent_session_id is null
+		     and s.chat_role is distinct from 'canary') as "yEnabled",
+		   case when p.y_enabled and s.parent_session_id is null
+		     and s.chat_role is distinct from 'canary' then (select y.id from agent_session y
 		     where y.user_id=s.user_id and y.project_id=s.project_id
 		       and y.chat_role='y2' and y.archived_at is null limit 1) end as "ySquaredId",
 		   s.title

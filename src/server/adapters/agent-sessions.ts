@@ -33,6 +33,7 @@ import {
 } from "#/domain/transcript-page";
 import { hubTopic } from "#/domain/user-hub";
 import { captureServerAnalytics } from "./analytics";
+import { NOT_CANARY_CHAT } from "./canary-chat";
 import { database } from "./database";
 import { recordPageRead } from "./database-byte-accounting";
 import { heldForSetupSql } from "./queued-user-messages";
@@ -289,10 +290,10 @@ export async function listAgentSessions(
 ): Promise<Omit<AgentSessionRecord, "items">[]> {
 	const result = await database().query(
 		`/* listAgentSessions */ select ${SESSION_COLUMNS.replace(",items,", ",null as items,")}
-		 from agent_session
-		 where user_id=$1 and project_id=$2 and parent_session_id is null
-		   and archived_at is null
-		 order by updated_at desc`,
+		 from agent_session s
+		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
+		   and s.archived_at is null and ${NOT_CANARY_CHAT}
+		 order by s.updated_at desc`,
 		[userId, projectId],
 	);
 	return result.rows.map((row: AgentSessionRow) =>
@@ -358,7 +359,7 @@ export async function listSidebarAgentSessions(
 		     select c.id from agent_session c where c.parent_session_id=s.id)) as working_since
 		 from agent_session s
 		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
-		   and s.archived_at is null
+		   and s.archived_at is null and ${NOT_CANARY_CHAT}
 		 order by s.updated_at desc`,
 		[userId, projectId],
 	);

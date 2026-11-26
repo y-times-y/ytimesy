@@ -5,6 +5,8 @@ import type { SessionItem } from "./session-item";
 export const CANARY_EVERY_MINUTES = 30;
 /** Both answers must be in the chat this long after the send, else the run fails. */
 export const CANARY_LATENCY_BOUND_MS = 8 * 60_000;
+/** A missing piece must still be missing this long after the bound (one more tick) before it fails the run. */
+export const CANARY_RECHECK_MS = 5 * 60_000;
 
 export const canaryTokens = (nonce: string) => ({
 	first: `PONG-A-${nonce}`,
@@ -28,7 +30,7 @@ export type CanaryVerdict =
 /**
  * pass: both messages present, each answered, in order (A, answer A, B,
  * answer B), no error item. fail: an error item at once, anything else
- * once the latency bound has passed since the send. Otherwise pending.
+ * once the latency bound plus one re-check tick has passed since the send. Otherwise pending.
  */
 export function canaryVerdict(
 	items: readonly SessionItem[],
@@ -48,8 +50,11 @@ export function canaryVerdict(
 			status: "fail",
 			reason: `the chat shows an error item: ${error.message.slice(0, 200)}`,
 		};
+	// The nonce is unique to this run, so its messages are found anywhere in the
+	// chat: a baseline count shifted by compaction or hand-typed messages must
+	// not hide them. Only the error check below is limited to items added since.
 	const find = (kind: SessionItem["kind"], token: string, from = 0) => {
-		const index = added
+		const index = items
 			.slice(from)
 			.findIndex(
 				(item) =>
@@ -76,7 +81,7 @@ export function canaryVerdict(
 		return { status: "fail", reason: "the timeline is out of order" };
 	}
 	const bound = input.latencyBoundMs ?? CANARY_LATENCY_BOUND_MS;
-	return input.elapsedMs >= bound
+	return input.elapsedMs >= bound + CANARY_RECHECK_MS
 		? {
 				status: "fail",
 				reason: `${missing} ${Math.round(bound / 60_000)} minutes after the send`,

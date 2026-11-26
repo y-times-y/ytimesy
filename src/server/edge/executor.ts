@@ -293,8 +293,10 @@ async function resolveModelConversation(step: WorkflowStep) {
 		`select t.user_id as "userId",t.session_id as "sessionId",
 		   s.project_id as "projectId",
 		   -- Helper chats are not threads: they never join the crew.
-		   (p.y_enabled and s.parent_session_id is null) as "yEnabled",
-		   case when p.y_enabled and s.parent_session_id is null then (select y.id from agent_session y
+		   (p.y_enabled and s.parent_session_id is null
+		     and s.chat_role is distinct from 'canary') as "yEnabled",
+		   case when p.y_enabled and s.parent_session_id is null
+		     and s.chat_role is distinct from 'canary' then (select y.id from agent_session y
 		     where y.user_id=s.user_id and y.project_id=s.project_id
 		       and y.chat_role='y2' and y.archived_at is null limit 1) end as "ySquaredId"
 		 from api_turn t join agent_session s on s.id=t.session_id and s.user_id=t.user_id
