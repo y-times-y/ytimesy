@@ -79,7 +79,7 @@ import {
 	type UserMessageItem,
 } from "#/domain/session-item";
 import { thoughtLabel } from "#/domain/thought-label";
-import { parsePeerMessage } from "#/domain/thread-peer";
+import { parsePeerMessage, peerSenderLabel } from "#/domain/thread-peer";
 import {
 	commandsLabel,
 	explorationGroupIsLive,
@@ -1289,7 +1289,7 @@ function SessionItemView({
 				return (
 					<div className="session-message" data-role="user" data-peer="true">
 						<span className="session-message-sender">
-							From thread {peer.from}
+							From {peerSenderLabel(peer)}
 						</span>
 						<p>
 							<MentionText text={peer.body} />

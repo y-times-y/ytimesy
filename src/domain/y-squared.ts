@@ -342,7 +342,9 @@ const clip = (text: string, limit = SNIPPET) => {
 /** A peer message as Y² reads it: who sent it and what it said, not the wrapper's boilerplate. */
 function peerRequestText(text: string) {
 	const peer = parsePeerMessage(text);
-	return peer ? `From thread "${peer.from}": ${peer.body}` : text;
+	return peer
+		? `From ${peer.kind === "leader" ? "Super agent" : peer.kind} "${peer.from}": ${peer.body}`
+		: text;
 }
 
 /** The parts of a thread's history Y² reports: its last request, last reply and pull request. */

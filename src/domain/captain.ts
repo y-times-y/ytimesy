@@ -228,3 +228,100 @@ export function lastAgentText(
 	}
 	return "";
 }
+
+/* ---------- the Super agents talking to each other (step 2) ---------- */
+
+export const AGENTS_TOOL = "agents";
+export const MESSAGE_AGENT_TOOL = "message_agent";
+/** Longest message one Super agent sends another. */
+export const AGENT_MESSAGE_LIMIT = 8_000;
+
+export const AGENTS_DESCRIPTION =
+	"List this project's other Super agents: the leader and the captains, each with its status (idle, working or needs the person), the first line of its last answer and when. Read-only; use it before delegating or reporting.";
+export const MESSAGE_AGENT_DESCRIPTION =
+	"Send a message to another Super agent of this project: a captain by its name (as in the agents list) or the leader (to: \"leader\"). It arrives labelled with your name and as not from the person, in that agent's own chat; an idle agent starts a turn with it, a working one takes it after its turn (or at its next step with mode steer). Use it to delegate a piece of work, to report a finding to the leader, or to ask for a fact; keep it self-contained. A turn that was itself started by another agent's message cannot send one (no loops), and one turn sends at most 3.";
+export const messageAgentInput = z.object({
+	to: z
+		.string()
+		.trim()
+		.min(1)
+		.max(64)
+		.describe('A captain\'s name from the agents list, or "leader"'),
+	text: z.string().trim().min(1).max(AGENT_MESSAGE_LIMIT),
+	mode: z
+		.enum(["queue", "steer"])
+		.optional()
+		.describe(
+			"queue (default): after a running turn. steer: at its next step, no extra turn.",
+		),
+});
+export const agentsInput = z.object({});
+
+export type AgentRoster = {
+	readonly leader: {
+		readonly chatId: string;
+		readonly name: string;
+		readonly turnStatus: SessionTurnStatus;
+		readonly needsYou: boolean;
+	} | null;
+	readonly captains: readonly Captain[];
+};
+export type AgentTarget = {
+	readonly chatId: string;
+	readonly name: string;
+	readonly kind: "leader" | "captain";
+};
+
+/** The agent a name or "leader" points at, never the asker itself; null when none. */
+export function resolveAgentTarget(
+	ref: string,
+	roster: AgentRoster,
+	selfChatId: string,
+): AgentTarget | null {
+	const key = captainHandle(ref.replace(/^@/, ""));
+	const leader = roster.leader;
+	if (
+		leader &&
+		leader.chatId !== selfChatId &&
+		(["leader", "y2", "super-agent"].includes(key) ||
+			captainHandle(leader.name) === key)
+	)
+		return { chatId: leader.chatId, name: leader.name, kind: "leader" };
+	const captain = roster.captains.find(
+		(entry) => entry.chatId !== selfChatId && captainHandle(entry.name) === key,
+	);
+	return captain
+		? { chatId: captain.chatId, name: captain.name, kind: "captain" }
+		: null;
+}
+
+const STATUS_WORD: Record<CaptainStatus, string> = {
+	working: "working",
+	needs: "needs the person",
+	idle: "idle",
+};
+
+/** The agents list as text: one line each, the asker left out. */
+export function rosterText(
+	roster: AgentRoster,
+	selfChatId: string,
+	ago: (iso: string | null) => string,
+): string {
+	const lines: string[] = [];
+	if (roster.leader && roster.leader.chatId !== selfChatId)
+		lines.push(
+			`- ${roster.leader.name} (leader): ${STATUS_WORD[captainStatus({ turnStatus: roster.leader.turnStatus, needsYou: roster.leader.needsYou })]}`,
+		);
+	for (const captain of roster.captains) {
+		if (captain.chatId === selfChatId) continue;
+		const last = captain.lastLine
+			? `; last said ${ago(captain.lastAt)}: ${captain.lastLine}`
+			: "; has not said anything yet";
+		lines.push(
+			`- ${captain.name}${captain.label ? ` (${captain.label})` : ""}: ${STATUS_WORD[captainStatus(captain)]}${last}`,
+		);
+	}
+	return lines.length
+		? lines.join("\n")
+		: "No other Super agents in this project.";
+}

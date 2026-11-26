@@ -76,6 +76,7 @@ describe("parsePeerMessage", () => {
 		expect(parsePeerMessage(text)).toEqual({
 			from: "Fix login",
 			body: "Rebase\n\nplease",
+			kind: "thread",
 		});
 		expect(parsePeerMessage("hello")).toBeNull();
 	});

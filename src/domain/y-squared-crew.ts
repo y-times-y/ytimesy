@@ -273,11 +273,11 @@ export function crewWakeBody(input: {
 			case "failed":
 				return `- "${event.title}" failed${detail}.`;
 			case "started":
-				return event.detail?.startsWith('From thread "')
+				return isPeerRequest(event.detail)
 					? `- Another thread started "${event.title}" with a message, not the person${detail}.`
 					: `- The person started "${event.title}" themselves${detail}.`;
 			default:
-				return event.detail?.startsWith('From thread "')
+				return isPeerRequest(event.detail)
 					? `- You were not part of this: "${event.title}" got a message from another thread, not the person${detail}.`
 					: `- You were not part of this: "${event.title}" got a message from the person${detail}.`;
 		}
@@ -516,6 +516,14 @@ export function crewCanvasLine(items: readonly SessionItem[]): string | null {
  * began with (never a wake), from the transcript the chat object already
  * holds. Empty when the copy has no such message yet.
  */
+/** "thread", "captain" or "Super agent": the word before a peer sender's quoted name. */
+const peerKindWord = (peer: {
+	readonly kind: "thread" | "captain" | "leader";
+}) => (peer.kind === "leader" ? "Super agent" : peer.kind);
+/** A crew request that is another thread's, a captain's or the leader's message, not the person's. */
+const isPeerRequest = (detail: string | null | undefined) =>
+	/^From (thread|captain|Super agent) "/.test(detail ?? "");
+
 export function crewRequestFromStartItems(items: readonly SessionItem[]) {
 	const last = items.at(-1);
 	if (!last || last.kind !== "userMessage" || ("wake" in last && last.wake))
@@ -524,8 +532,10 @@ export function crewRequestFromStartItems(items: readonly SessionItem[]) {
 	const peer = parsePeerMessage(last.text);
 	if (peer)
 		return (
-			text(`From thread "${peer.from}": ${peer.body}`, CREW_REQUEST_LIMIT) ||
-			null
+			text(
+				`From ${peerKindWord(peer)} "${peer.from}": ${peer.body}`,
+				CREW_REQUEST_LIMIT,
+			) || null
 		);
 	return text(last.text, CREW_REQUEST_LIMIT) || null;
 }
