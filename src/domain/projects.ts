@@ -48,8 +48,6 @@ export interface Project {
 	readonly yEnabled?: boolean;
 	/** A Y project's Super agent chat, when it has one: the open chat is the Super agent's when its id is this, before any chat list says so. */
 	readonly ySquaredId?: string | null;
-	/** What the project's Super agent (Y²) is called; "Super agent" when absent (src/domain/captain.ts). */
-	readonly leaderName?: string | null;
 	id: string;
 	name?: string;
 	repositories?: ProjectRepository[];

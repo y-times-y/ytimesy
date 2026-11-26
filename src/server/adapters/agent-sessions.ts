@@ -360,8 +360,6 @@ export async function listSidebarAgentSessions(
 		 from agent_session s
 		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
 		   and s.archived_at is null and ${NOT_CANARY_CHAT}
-		   -- Captains have their own sidebar section; they are not threads.
-		   and s.chat_role is distinct from 'captain'
 		 order by s.updated_at desc`,
 		[userId, projectId],
 	);

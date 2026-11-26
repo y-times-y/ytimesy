@@ -9,7 +9,7 @@ import {
 	projectColor,
 	type SidebarChat,
 } from "#/domain/sidebar-chats";
-import { RenderAsHydrated as FirstPaintHydrated } from "../app/first-paint";
+import { RenderAsHydrated } from "../app/first-paint";
 import { ProjectSidebar } from "./project-sidebar";
 
 const project = (id: string, name: string): Project => ({
@@ -37,15 +37,6 @@ const projectChats = [
 		],
 	},
 ];
-
-/** The app always has a query client (the Captains section reads through it). */
-function RenderAsHydrated(props: ComponentProps<typeof FirstPaintHydrated>) {
-	return (
-		<QueryClientProvider client={new QueryClient()}>
-			<FirstPaintHydrated {...props} />
-		</QueryClientProvider>
-	);
-}
 
 function render(
 	hydrated = true,

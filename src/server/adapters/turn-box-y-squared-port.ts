@@ -61,8 +61,8 @@ export async function ySquaredPort(
 	if (!self?.projectId || self.parentSessionId)
 		throw new TurnBoxPortForbidden("y2:session");
 	const project = self.projectId;
-	const mode = await (deps.yMode ?? projectYMode)(user, project, self.id);
-	if (!mode?.enabled || (mode.ySquaredId !== self.id && !mode.captain))
+	const mode = await (deps.yMode ?? projectYMode)(user, project);
+	if (!mode?.enabled || mode.ySquaredId !== self.id)
 		throw new TurnBoxPortForbidden("y2:not-y2");
 	const ownUser = (value: unknown) => {
 		if (value !== user) throw new TurnBoxPortForbidden(`y2:${dep}:user`);
