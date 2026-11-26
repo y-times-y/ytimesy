@@ -181,7 +181,13 @@ export const CAPTAIN_PRESETS = [
 ] as const;
 
 export function captainWelcome(name: string, rolePrompt: string): string {
-	const role = rolePrompt.split("\n")[0]?.slice(0, 160);
+	const first = rolePrompt.trim().split("\n")[0] ?? "";
+	// The first sentence, cut at a word when it is long.
+	const sentence = /^.*?[.!?](?=\s|$)/.exec(first)?.[0] ?? first;
+	const role =
+		sentence.length > 140
+			? `${sentence.slice(0, 140).replace(/\s+\S*$/, "")}…`
+			: sentence;
 	return role
 		? `I'm ${name}, a captain on this project. ${role}`
 		: `I'm ${name}, a captain on this project. Tell me what you want me to look after.`;
