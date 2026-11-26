@@ -77,8 +77,8 @@ wake.
 |---|---|---|---|
 | Machines on the account | 200 *(provider, Hobby)* | Freestyle | A start gets 429 `LIMIT_EXCEEDED` ("Account resource limit exceeded"); we retry and the chat shows "Starting machine..." |
 | Running machines at once | 40 *(provider, Hobby)* | Freestyle | Same: the next start waits for a slot |
-| Storage | 3,125 GB *(provider, Hobby)* | Freestyle | Same |
-| Disk per VM | 32 GiB *(provider)*; new VMs start at 2 vCPU, 4 GiB, 16 GiB | `CHEAP_BASE_RESOURCES`, `product-vm.ts` | A resize past the ceiling is refused |
+| Storage | 3,125 GB *(provider, Hobby)*; binds before 200 machines at 32 GiB each (97) | Freestyle | Same |
+| Disk per VM | up to 64 GB on Hobby *(provider)*; our VMs use 32 GiB; new VMs start at 2 vCPU, 4 GiB, 16 GiB | `CHEAP_BASE_RESOURCES`, `product-vm.ts` | A resize past the ceiling is refused |
 | Runtime per VM | a native cap set from the user's funded time (observed 2,628 s on one VM on 2026-11-25) | `usage-admission.ts` | The VM stops at the cap; the next operation buys more, or is refused when the user's window is used up |
 | Snapshots | 1,000 *(provider)* | Freestyle | Not used for idle chats (recycling is stopped) |
 | New machines per user per hour | 60, fixed window | `USER_ACTION_LIMITS["vm-create"]`, `src/domain/user-action-rate.ts` | "This account started too many new machines in the last hour. Wait a few minutes, then retry; your work is preserved." A create the provider refuses is refunded, so retries do not spend the count |
@@ -90,6 +90,110 @@ wake.
 
 Observed on 2026-11-26 (read-only list): 49 machines, 4 running, 44 paused,
 1 stopped.
+
+### 2a. Freestyle account limits (API and public docs, read 2026-11-26)
+
+Sources: read-only `GET /v5/vms` and `GET /v5/snapshots` on the account, the
+public OpenAPI (`api.freestyle.sh/openapi.json`), and
+`freestyle.sh/pricing` and `/docs/vms/pricing-and-limits`. **The API has no
+endpoint that returns plan name or quotas** (no limits, usage or billing path
+in the OpenAPI); the plan is read from the dashboard, or inferred from the
+caps: 40 running, 200 saved, 1,000 snapshots and 3,125 GB are exactly the
+Hobby column. Usage comes from `GET /v5/vms` (`runningCount`, `totalCount`,
+per-VM `resources`) and `GET /v5/snapshots` (`totalCount`).
+
+| Limit | Free | Hobby (ours) | Pro | Enforced | Scope |
+|---|---|---|---|---|---|
+| Price | $0 | $50/month, includes $50 of usage | $500/month, includes $500 of usage | | |
+| Concurrent VMs (running, starting or pausing; paused ones do not count) | 10 | **40** | 400 | hard, 429 | account |
+| Saved VMs (all, running or not) | 10 | 200 | 4,000 | hard | account |
+| Snapshots (ones we create) | 10 | 1,000 | 12,000 | hard | account |
+| Total vCPU (running VMs) | 40 | 800 | 16,000 | hard | account |
+| Total memory (running VMs) | 80 GiB | 1.56 TiB | 31.25 TiB | hard | account |
+| Total disk (every saved VM, running or not) | 320 GB | **3,125 GB** | 62,500 GB | hard | account |
+| Max per VM: vCPU / memory / disk | 4 / 8 GiB / 32 GB | 8 / 16 GiB / 64 GB | 32 / 64 GiB / 256 GB | hard (400 on a create or resize) | VM |
+| Data transfer included | 50 GB | 500 GB | 500 GB | billing | account |
+
+Usage prices (all plans, per hour of allocated resource): vCPU $0.04032,
+memory $0.0129 per GiB, storage $0.000086 per GiB, transfer $0.02 per GB.
+Monthly included on every plan: 200 vCPU-hours, 400 GiB-hours of memory,
+60,000 GiB-hours of storage. On Hobby and Pro the plan fee is spent against
+usage dollar for dollar; above it usage is billed. On Free the allowances are
+hard stops. A paused VM holds no vCPU or memory, only storage. Enterprise:
+custom limits, contact sales (cal.com/freestyle/enterprise-onboarding).
+
+Observed in the account (2026-11-26, after the retention job ran):
+32 machines (3 running or starting, 29 paused), 1,024 GiB of machine disk
+(32 GiB each), 22 snapshots. Against Hobby that is 3 of 40 running, 32 of 200
+saved, about 33% of the 3,125 GB disk. On 2026-11-25 the account held 98
+machines at about 3,120 GiB.
+
+**Disk is the limit that bites first.** The saved-VM cap of 200 cannot be
+reached at 32 GiB per VM: 3,125 GB holds 97 such machines (Freestyle's own
+table: 97 on Hobby, 1,953 on Pro). The 429 `LIMIT_EXCEEDED` "Account resource
+limit exceeded" on 2026-11-25 18:33-18:41 UTC came with 98 machines and 4
+running, so neither 40 running nor 200 saved: it was the total-disk budget
+(99.8% used; the next 32 GiB machine did not fit). Our own guard now refuses
+above 95% (`docs/workspace-retention.md`).
+
+**Is 40 running a hard limit?** Yes. The OpenAPI documents `429
+LIMIT_EXCEEDED: your plan's limit for this resource is reached` on
+`POST /v5/vms`, and the docs say the request is rejected with an error naming
+the limit. The 41st machine to start or be created gets that 429; the chat
+shows "Starting machine..." while we retry for up to 15 minutes (honouring
+`Retry-After` when sent, capped at a minute). Nothing is billed extra and no
+other machine is touched. Paused machines do not count. We have not provoked
+the running-cap 429 on purpose (it would need 41 machines); the evidence is the
+API contract, the plan table and the storage-cap 429 above, which uses the same
+code. Capacity can also answer 409 ("no capacity is available") and 429
+("server is at capacity") with a different message.
+
+**Runtime cap on a VM ("2628/2628 s").** `maxRunTotalSeconds` is a lifetime
+running-seconds budget on one VM, `totalRunSeconds` is what it has used across
+every run. It is not a plan limit and it never resets by itself: spending it
+pauses the VM, and every later start is a 409 until the budget is raised with a
+VM update. We set it per VM from the user's funded time
+(`usage-admission.ts`); the next operation raises it or is refused when the
+user's window is used up. Separate per-VM fields: `maxRunSeconds` (one run;
+starting again gives a fresh budget; we use 3,600 s on some), `ttlSeconds`
+(delete after creation) and `autoDeleteSeconds` (delete after that long
+paused; some plans cap it, we set 30 days).
+
+**Not published or not readable.** Freestyle publishes no request-rate limits
+(per second or minute) for create, start or exec, no concurrent exec or
+connection limit, no build limit apart from the snapshot count, and no region
+limits; the API returns `Retry-After` on a 429 (the header is exposed) and we
+honour it. Ask Freestyle before planning on any of these. Snapshot disk is not
+returned by the list API.
+
+**How to raise.** Disk, running and saved caps: upgrade Hobby to Pro ($500 a
+month, 400 running, 4,000 saved, 12,000 snapshots, 62,500 GB), or an
+Enterprise plan for custom numbers. Shrinking what each user keeps (fewer
+saved machines, shorter retention, smaller disks) raises headroom without
+paying.
+
+#### Budget per power user
+
+Assumptions: a power user keeps 8 saved chat machines at 32 GiB (256 GiB),
+runs 2 at once for 4 hours a day for 30 days (240 VM-hours), on the 2 vCPU /
+4 GiB base size ($0.132 per VM-hour); storage billed 730 hours a month; peak
+running is 2 per user (everyone at once). Cost is usage at list rates minus
+the monthly included allowances ($18.38), never below the plan fee. Machines
+at 4 vCPU / 16 GiB cost $0.368 per hour, about 2.8 times the compute line.
+
+| Users | Running (peak) | Saved | Disk | Compute / month | Storage / month | Hobby ($50) | Pro ($500) |
+|---|---|---|---|---|---|---|---|
+| 1 | 2 | 8 | 256 GiB | $32 | $16 | fits, $50 | fits, $500 |
+| 10 | 20 | 80 | 2,560 GiB | $317 | $161 | fits (82% of disk), about $460 | fits, $500 |
+| 50 | 100 | 400 | 12,800 GiB | $1,587 | $804 | no: 40 running, 200 saved, 3,125 GB | fits, about $2,370 |
+| 100 | 200 | 800 | 25,600 GiB | $3,174 | $1,607 | no | fits (50% of running, 20% of saved, 41% of disk), about $4,760 |
+
+On Hobby, disk allows 12 such users (3,125 / 256), running allows 20, saved
+allows 25. For 100 users the cost is about $4,760 a month on Pro, roughly $48
+per user, of which two thirds is compute while awake. Storage alone for kept
+machines is about $16 per user per month, so 100 users hold 25,600 GiB.
+These are estimates, not a quote; real usage depends on the share of time
+machines are awake.
 
 ## 3. Model usage
 
