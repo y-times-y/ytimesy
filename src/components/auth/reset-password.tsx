@@ -1,4 +1,6 @@
-"use client";
+import { trackAuthFunnel } from "#/features/auth/funnel";
+
+("use client");
 
 import {
 	getAuthLinkURL,
@@ -50,6 +52,7 @@ export function ResetPassword({ className }: ResetPasswordProps) {
 		authClient,
 		{
 			onError: (error) => {
+				trackAuthFunnel("error", error);
 				// The haveIBeenPwned plugin rejects on the password itself, so it
 				// belongs against the field rather than in a toast.
 				if (isPasswordCompromisedError(error)) {
@@ -88,6 +91,7 @@ export function ResetPassword({ className }: ResetPasswordProps) {
 			}
 
 			try {
+				trackAuthFunnel("submit");
 				await resetPassword({ token, newPassword: value.password });
 			} catch {
 				// The mutation reports the error through its configured handler.

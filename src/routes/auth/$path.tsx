@@ -7,6 +7,7 @@ import { emailViewUnavailableMessage } from "#/domain/auth-email-views";
 import { isAuthEntryView } from "#/domain/auth-entry-views";
 import { safeReturnTo } from "#/domain/return-to";
 import { authClient } from "#/features/auth/client";
+import { trackAuthFunnel } from "#/features/auth/funnel";
 import { useIdentityOptions } from "#/features/auth/identity-options";
 import { OnboardingShell } from "#/features/auth/onboarding-shell";
 
@@ -37,6 +38,8 @@ function AuthPage() {
 	const { path } = Route.useParams();
 	const { error, redirectTo } = Route.useSearch();
 	const message = authCallbackErrorMessage(error);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: one view event per auth page
+	useEffect(() => trackAuthFunnel("view"), [path]);
 	const identity = useIdentityOptions();
 	const session = authClient.useSession();
 	const navigate = useNavigate();

@@ -39,6 +39,7 @@ import {
 	InputGroupInput,
 } from "#/components/ui/input-group.tsx";
 import { withReturnTo } from "#/domain/return-to";
+import { trackAuthFunnel } from "#/features/auth/funnel";
 import { useIdentityOptions } from "#/features/auth/identity-options";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { ReferralCodeField } from "#/features/auth/referral-code-field";
@@ -90,6 +91,7 @@ export function SignIn({
 	const { mutateAsync: signInEmail, isPending: signInEmailPending } =
 		useSignInEmail(authClient, {
 			onError: (error, { email }) => {
+				trackAuthFunnel("error", error);
 				form.resetField("password");
 
 				if (error.error?.code === "EMAIL_NOT_VERIFIED") {
@@ -121,8 +123,9 @@ export function SignIn({
 	const [isPasswordVisible, setIsPasswordVisible] = useState(false);
 	const form = useAuthForm({
 		defaultValues: { email: "", password: "", rememberMe: false },
-		onSubmit: async ({ value }) =>
-			await signInEmail({
+		onSubmit: async ({ value }) => {
+			trackAuthFunnel("submit");
+			return await signInEmail({
 				email: value.email,
 				password: value.password,
 				// An unverified account gets a verification link back to sign-in,
@@ -132,7 +135,8 @@ export function SignIn({
 					? { rememberMe: value.rememberMe }
 					: {}),
 				fetchOptions,
-			}),
+			});
+		},
 	});
 
 	const showSeparator =

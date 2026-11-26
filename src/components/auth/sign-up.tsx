@@ -31,6 +31,7 @@ import {
 } from "#/components/ui/field.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { safeReturnTo, withReturnTo } from "#/domain/return-to";
+import { trackAuthFunnel } from "#/features/auth/funnel";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { ReferralCodeField } from "#/features/auth/referral-code-field";
 import { TermsNotice } from "#/features/auth/terms-consent";
@@ -94,6 +95,7 @@ export function SignUp({
 
 	const { mutateAsync: signUpEmail } = useSignUpEmail(authClient, {
 		onError: (error) => {
+			trackAuthFunnel("error", error);
 			// The haveIBeenPwned plugin rejects on the password itself,
 			// so it belongs against the field rather than in a toast.
 			if (isPasswordCompromisedError(error)) {
@@ -105,6 +107,7 @@ export function SignUp({
 			resetFetchOptions();
 		},
 		onSuccess: (_data, { email }) => {
+			trackAuthFunnel("code_sent");
 			if (emailAndPassword?.requireEmailVerification) {
 				sessionStorage.setItem("better-auth-ui.verify-email", email);
 				navigate({
@@ -147,6 +150,7 @@ export function SignUp({
 			password: "",
 		},
 		onSubmit: async ({ value }) => {
+			trackAuthFunnel("submit");
 			try {
 				await signUpEmail({
 					name: emailAndPassword?.name === false ? "" : value.name,

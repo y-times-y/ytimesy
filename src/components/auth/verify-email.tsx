@@ -1,4 +1,6 @@
-"use client";
+import { trackAuthFunnel } from "#/features/auth/funnel";
+
+("use client");
 
 import { useAuth, useFetchOptions } from "@better-auth-ui/react";
 import { useEffect, useRef, useState } from "react";
@@ -85,6 +87,7 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 		setError(null);
 		const result = await client.emailOtp.verifyEmail({ email, otp: value });
 		if (result.error) {
+			trackAuthFunnel("error", { error: result.error });
 			setError(codeProblem(result.error));
 			setCode("");
 			setChecking(false);
@@ -92,6 +95,7 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 			requestAnimationFrame(() => otp.current?.focus());
 			return;
 		}
+		trackAuthFunnel("verified");
 		sessionStorage.removeItem("better-auth-ui.verify-email");
 		// A full load, so the page starts with the new session.
 		window.location.assign(safeReturnTo(redirectTo));
@@ -117,6 +121,7 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 			toast.error(codeProblem(result.error));
 			return;
 		}
+		trackAuthFunnel("code_sent");
 		toast.success("We sent you a new code.");
 		setCooldown(RESEND_COOLDOWN_SECONDS);
 		setCode("");

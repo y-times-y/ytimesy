@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { authFunnelEvent } from "./auth-funnel";
 import { githubConnectionFailureReasons } from "./github-connection-callback";
 import { harnessModelMetric, harnessToolMetric } from "./harness-performance";
 import { interactionTimingEvent, webVitalEvent } from "./web-vitals";
@@ -125,6 +126,8 @@ export const analyticsEvents = {
 	}),
 	/** A Core Web Vital measured in this visitor's browser (web-vitals.ts). */
 	web_vital: webVitalEvent,
+	/** One step of email sign-up or sign-in: view, submit, error kind, code sent, verified. */
+	auth_funnel: authFunnelEvent,
 	/** How long a key interaction took for this visitor (web-vitals.ts). */
 	interaction_timing: interactionTimingEvent,
 };

@@ -4,7 +4,6 @@ import {
 	useFetchOptions,
 	useRequestPasswordReset,
 } from "@better-auth-ui/react";
-
 import {
 	Card,
 	CardContent,
@@ -18,6 +17,7 @@ import {
 	FieldLabel,
 } from "#/components/ui/field.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { trackAuthFunnel } from "#/features/auth/funnel";
 import { cn } from "#/lib/utils.ts";
 import { isAuthFormFieldInvalid, useAuthForm } from "./auth-form";
 import { RESET_LINK_SENT_STORAGE_KEY } from "./reset-link-sent";
@@ -53,7 +53,8 @@ export function ForgotPassword({ className }: ForgotPasswordProps) {
 
 	const { mutateAsync: requestPasswordReset, isPending } =
 		useRequestPasswordReset(authClient, {
-			onError: () => {
+			onError: (error) => {
+				trackAuthFunnel("error", error);
 				resetFetchOptions();
 			},
 			onSuccess: (_data, { email }) => {
@@ -64,8 +65,9 @@ export function ForgotPassword({ className }: ForgotPasswordProps) {
 
 	const form = useAuthForm({
 		defaultValues: { email: "" },
-		onSubmit: async ({ value }) =>
-			await requestPasswordReset({
+		onSubmit: async ({ value }) => {
+			trackAuthFunnel("submit");
+			return await requestPasswordReset({
 				email: value.email,
 				redirectTo: getViewURL(
 					baseURL,
@@ -73,7 +75,8 @@ export function ForgotPassword({ className }: ForgotPasswordProps) {
 					viewPaths.auth.resetPassword,
 				),
 				fetchOptions,
-			}),
+			});
+		},
 	});
 
 	const Captcha = plugins.find(
