@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
 	productionDeploySteps,
+	rollbackDecision,
 	rollbackStep,
 	servingVersions,
 } from "../scripts/production-deploy-steps";
@@ -92,4 +93,30 @@ it("defers Durable Object code updates for the length of a chat step", async () 
 			max_delay: 900,
 		});
 	}
+});
+
+const v = (id: string, percentage = 100) => ({ versionId: id, percentage });
+
+it("rolls a Worker back only while it still serves the version this deploy made (2026-11-26: two threads deployed together, a failed smoke check tried to undo the other's newer deploy)", () => {
+	const ours = [v("aaaaaaaa-1")];
+	const before = [v("bbbbbbbb-0")];
+	expect(
+		rollbackDecision({ deployed: ours, previous: before, current: ours }),
+	).toBe("roll-back");
+	expect(
+		rollbackDecision({
+			deployed: ours,
+			previous: before,
+			current: [v("cccccccc-2")],
+		}),
+	).toBe("superseded");
+	expect(
+		rollbackDecision({ deployed: ours, previous: before, current: before }),
+	).toBe("already-previous");
+	expect(
+		rollbackDecision({ deployed: [], previous: before, current: ours }),
+	).toBe("superseded");
+	expect(
+		rollbackDecision({ deployed: ours, previous: [], current: ours }),
+	).toBe("no-previous");
 });

@@ -16,6 +16,7 @@ import { acquireDeployLock } from "./deploy-lock";
 import {
 	IN_FLIGHT_WORK_NOTE,
 	productionDeploySteps,
+	rollbackDecision,
 	rollbackStep,
 	type ServingVersions,
 	servingVersions,
@@ -532,6 +533,9 @@ const workers = {
 	web: { config: WEB_CONFIG, previous: currentVersions(WEB_CONFIG) },
 };
 const deployedWorkers: (keyof typeof workers)[] = [];
+/** What each Worker served right after this deploy; a rollback is only safe while that is still live. */
+const deployedVersions: Partial<Record<keyof typeof workers, ServingVersions>> =
+	{};
 
 // Code and secrets go up together as one version per Worker, so new code
 // never boots without a setting it needs and each Worker restarts once.
@@ -602,6 +606,8 @@ try {
 } finally {
 	await rm(secretsDirectory, { recursive: true, force: true });
 }
+for (const name of deployedWorkers)
+	deployedVersions[name] = currentVersions(workers[name].config);
 
 // Smoke check: each Worker answers with this build, retried for about a
 // minute while the new versions reach every location. Otherwise every Worker
@@ -643,8 +649,20 @@ if (smokeProblems.length) {
 	const notRolledBack: string[] = [];
 	for (const name of [...deployedWorkers].reverse()) {
 		const { config, previous } = workers[name];
-		if (!previous.length) {
+		const decision = rollbackDecision({
+			deployed: deployedVersions[name] ?? [],
+			previous,
+			current: currentVersions(config),
+		});
+		if (decision === "no-previous") {
 			notRolledBack.push(`${name}: no earlier version to roll back to`);
+			continue;
+		}
+		if (decision === "already-previous") continue;
+		if (decision === "superseded") {
+			notRolledBack.push(
+				`${name}: another deploy replaced this one; left as it is (check which build is wanted, then redeploy main)`,
+			);
 			continue;
 		}
 		const step = rollbackStep(config, previous);

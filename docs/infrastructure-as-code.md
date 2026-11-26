@@ -82,7 +82,10 @@ program after every successful smoke check.
 5. **Production needs proof.** A production deploy needs
    `--confirm-production` and a checkout that contains `origin/main`.
 6. **One deploy at a time.** A lock is held per stack and stage on the
-   machine.
+   machine (per machine: threads on other machines are not stopped by it).
+   Production's failed smoke check therefore rolls a Worker back only while it
+   still serves the version this deploy made (`rollbackDecision`); if another
+   deploy replaced it, it is left alone (2026-11-26).
 7. **Secrets set outside Alchemy are never deleted.** Alchemy deletes only
    secrets it uploaded earlier and no longer declares.
 8. **Durable Objects are never deleted.** Undeclared namespaces are kept: the
