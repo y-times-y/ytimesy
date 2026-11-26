@@ -159,12 +159,19 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
 				</span>
 			</figcaption>
 			{artifact.type === "html" ? (
-				<CanvasFrame
-					html={artifact.html}
-					title={heading}
-					className="artifact-frame"
-					lazy
-				/>
+				<div
+					className="artifact-frame-box"
+					style={{
+						height: artifact.height ?? ARTIFACT_LIMITS.htmlHeight.fallback,
+					}}
+				>
+					<CanvasFrame
+						html={artifact.html}
+						title={heading}
+						className="artifact-frame"
+						lazy
+					/>
+				</div>
 			) : artifact.type === "dashboard" ? (
 				<Dashboard artifact={artifact} />
 			) : (
@@ -302,7 +309,7 @@ function Stats({ stats }: { stats: readonly ArtifactStat[] }) {
 	);
 }
 
-const CHART = { width: 560, height: 176 } as const;
+const CHART = { width: 440, height: 172 } as const;
 
 function Chart({ chart }: { chart: ArtifactChart }) {
 	const layout = chartLayout(chart, CHART.width, CHART.height);
@@ -431,6 +438,12 @@ function Table({
 }: {
 	panel: Extract<ArtifactPanel, { type: "table" }>;
 }) {
+	// A column of numbers lines up on the right, header included.
+	const numeric = panel.columns.map(
+		(_, c) =>
+			panel.rows.length > 0 &&
+			panel.rows.every((row) => typeof row[c] === "number" || row[c] == null),
+	);
 	return (
 		<section
 			className="artifact-scroll artifact-body"
@@ -442,8 +455,12 @@ function Table({
 				<thead>
 					<tr>
 						{panel.columns.map((column, index) => (
-							// biome-ignore lint/suspicious/noArrayIndexKey: a fixed list for this render.
-							<th key={index} scope="col">
+							<th
+								// biome-ignore lint/suspicious/noArrayIndexKey: a fixed list for this render.
+								key={index}
+								scope="col"
+								data-number={numeric[index] || undefined}
+							>
 								{column}
 							</th>
 						))}

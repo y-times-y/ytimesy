@@ -5,6 +5,7 @@ import {
 	artifactDocument,
 	artifactInstructions,
 	artifactSvg,
+	chartLayout,
 	hasArtifactFence,
 	parseArtifact,
 } from "./artifact";
@@ -273,5 +274,48 @@ describe("artifactInstructions", () => {
 		])
 			expect(text).toContain(`"${type}"`);
 		expect(text).toContain("no network");
+	});
+});
+
+describe("chart axes", () => {
+	it("uses round tick values that cover the data", () => {
+		const artifact = ready(bar);
+		if (artifact.type !== "bar") throw new Error("bar");
+		expect(chartLayout(artifact, 440, 172).ticks.map((t) => t.label)).toEqual([
+			"0",
+			"250",
+			"500",
+			"750",
+		]);
+		const small = ready({
+			type: "line",
+			x: ["a", "b"],
+			series: [{ name: "s", y: [1, 10] }],
+		});
+		if (small.type !== "line") throw new Error("line");
+		expect(chartLayout(small, 440, 172).ticks.map((t) => t.label)).toEqual([
+			"0",
+			"5",
+			"10",
+		]);
+	});
+
+	it("handles negative and flat data", () => {
+		const neg = ready({
+			type: "bar",
+			x: ["a", "b"],
+			series: [{ name: "s", y: [-5, 12] }],
+		});
+		if (neg.type !== "bar") throw new Error("bar");
+		const layout = chartLayout(neg, 440, 172);
+		expect(layout.ticks.length).toBeGreaterThan(1);
+		expect(layout.bars.every((b) => b.height >= 1 && b.y >= 0)).toBe(true);
+		const flat = ready({
+			type: "bar",
+			x: ["a"],
+			series: [{ name: "s", y: [0] }],
+		});
+		if (flat.type !== "bar") throw new Error("bar");
+		expect(() => chartLayout(flat, 440, 172)).not.toThrow();
 	});
 });

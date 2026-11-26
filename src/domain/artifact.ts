@@ -269,6 +269,19 @@ const compact = (value: number) =>
 	});
 const round = (value: number) => Math.round(value * 10) / 10;
 
+/** Round axis values (0, 250, 500, 750) that cover the data, at most 5 gridlines. */
+function niceScale(low: number, high: number) {
+	const raw = (high - low) / 3 || 1;
+	const power = 10 ** Math.floor(Math.log10(raw));
+	const step = ([1, 2, 2.5, 5, 10].find((m) => m * power >= raw) ?? 10) * power;
+	const first = Math.floor(low / step) * step;
+	const last = Math.ceil(high / step) * step;
+	const ticks: number[] = [];
+	for (let v = first; v <= last + step / 2 && ticks.length < 6; v += step)
+		ticks.push(Math.round(v * 1e6) / 1e6);
+	return { low: first, high: ticks.at(-1) ?? last, ticks };
+}
+
 export function chartLayout(
 	chart: ArtifactChart,
 	width: number,
@@ -276,17 +289,16 @@ export function chartLayout(
 ): ChartLayout {
 	const plot = { left: 40, top: 8, width: width - 48, height: height - 32 };
 	const values = chart.series.flatMap((s) => s.y);
-	const high = Math.max(0, ...values);
-	const low = Math.min(0, ...values);
-	const range = high - low || 1;
+	const scale = niceScale(Math.min(0, ...values), Math.max(0, ...values));
+	const range = scale.high - scale.low || 1;
 	const yOf = (value: number) =>
-		round(plot.top + plot.height * (1 - (value - low) / range));
+		round(plot.top + plot.height * (1 - (value - scale.low) / range));
 	const count = chart.x.length;
 	const step = plot.width / count;
-	const ticks = [0, 1, 2, 3].map((i) => {
-		const value = low + (range * i) / 3;
-		return { y: yOf(value), label: compact(value) };
-	});
+	const ticks = scale.ticks.map((value) => ({
+		y: yOf(value),
+		label: compact(value),
+	}));
 	const every = Math.max(1, Math.ceil(count / 10));
 	const xLabels = chart.x.flatMap((label, i) =>
 		i % every === 0 ? [{ x: round(plot.left + step * (i + 0.5)), label }] : [],
