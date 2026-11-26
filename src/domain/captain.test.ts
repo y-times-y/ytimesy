@@ -236,3 +236,68 @@ describe("captainWelcome", () => {
 		expect(captainWelcome("seo", "")).toContain("Tell me what you want");
 	});
 });
+
+import { type AgentRoster, resolveAgentTarget, rosterText } from "./captain";
+
+const roster: AgentRoster = {
+	leader: { chatId: "y2", name: "otto", turnStatus: "idle", needsYou: false },
+	captains: [
+		captain({
+			id: "1",
+			chatId: "c-seo",
+			name: "seo",
+			label: "content",
+			lastLine: "6 pages lack meta",
+			lastAt: "2026-11-26T10:00:00Z",
+		}),
+		captain({
+			id: "2",
+			chatId: "c-rel",
+			name: "Release Manager",
+			turnStatus: "running",
+		}),
+	],
+};
+
+describe("resolveAgentTarget", () => {
+	it("finds a captain by name or handle, and the leader by 'leader' or its name", () => {
+		expect(resolveAgentTarget("SEO", roster, "c-rel")).toMatchObject({
+			chatId: "c-seo",
+			kind: "captain",
+		});
+		expect(
+			resolveAgentTarget("@release-manager", roster, "c-seo"),
+		).toMatchObject({ chatId: "c-rel" });
+		expect(resolveAgentTarget("leader", roster, "c-seo")).toMatchObject({
+			chatId: "y2",
+			kind: "leader",
+		});
+		expect(resolveAgentTarget("Otto", roster, "c-seo")).toMatchObject({
+			chatId: "y2",
+		});
+	});
+	it("never resolves to the asker, or to an unknown name", () => {
+		expect(resolveAgentTarget("seo", roster, "c-seo")).toBeNull();
+		expect(resolveAgentTarget("leader", roster, "y2")).toBeNull();
+		expect(resolveAgentTarget("nobody", roster, "y2")).toBeNull();
+	});
+});
+
+describe("rosterText", () => {
+	it("lists the others with status and last line, never the asker", () => {
+		const text = rosterText(roster, "c-seo", () => "2h ago");
+		expect(text).toContain("otto (leader): idle");
+		expect(text).toContain("Release Manager: working");
+		expect(text).not.toContain("- seo");
+		const forLeader = rosterText(roster, "y2", () => "2h ago");
+		expect(forLeader).toContain(
+			"seo (content): idle; last said 2h ago: 6 pages lack meta",
+		);
+		expect(forLeader).not.toContain("otto");
+	});
+	it("says so when there is nobody else", () => {
+		expect(rosterText({ leader: null, captains: [] }, "x", () => "")).toMatch(
+			/No other/,
+		);
+	});
+});

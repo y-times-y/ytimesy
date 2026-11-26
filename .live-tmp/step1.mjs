@@ -1,0 +1,20 @@
+import { open } from "./lib.mjs";
+const { browser, page } = await open(1440, 1000);
+const out = {};
+await page.getByRole("button", { name: "Reject all" }).click().catch(() => {});
+await page.locator('[aria-label="Open left sidebar"]').first().click().catch(() => {});
+await page.waitForTimeout(1200);
+await page.screenshot({ path: "/tmp/c1-empty.png" });
+out.sectionPresent = await page.locator('[data-section="captains"]').count();
+out.emptyState = await page.getByText("Give your Super agent a team").count();
+await page.locator('[aria-label="New captain"]').first().click();
+await page.waitForTimeout(800);
+await page.getByRole("button", { name: "seo", exact: true }).click(); // preset
+await page.screenshot({ path: "/tmp/c2-dialog.png" });
+await page.getByRole("button", { name: "Create captain" }).click();
+await page.waitForTimeout(5000);
+out.url = page.url();
+out.headerCaptain = await page.locator('[data-role="captain"]').count();
+await page.screenshot({ path: "/tmp/c3-created.png" });
+console.log(JSON.stringify(out, null, 1));
+await browser.close();
