@@ -610,3 +610,25 @@ it("(9) production 2026-11-24: turns queued for a box that no box takes (all dra
 	const claimed = await claimApiTurn(2, 10, "durable-object", chat);
 	expect(claimed?.id).toBe(stuck);
 });
+
+it("(10) production 2026-11-25 19:37: a box dies while its turn is asked to stop: the sweep settles the stop quietly, no 'worker disconnected' error, the queued message still runs", async () => {
+	await sendMessage("long job");
+	const first = await claimed();
+	await db.query("update api_turn set cancel_requested=true where id=$1", [
+		first.id,
+	]);
+	expect((await sendMessage("then this")).outcome).toBe("queued");
+	// The box is gone: no heartbeat for over a minute.
+	await staleHeartbeat(80);
+
+	expect(await expireApiTurnLeases()).toBe(0);
+
+	const [settled] = await turns();
+	expect(settled).toMatchObject({ state: "cancelled" });
+	const session = await sessionRow();
+	expect(session.turn_status).toBe("idle");
+	expect(JSON.stringify(session.items)).not.toMatch(/worker disconnected/);
+	expect((await deliverQueued()).map((s) => s.message)).toEqual(["then this"]);
+	await finish(await claimed(), "done");
+	await expectNothingLost(["long job", "then this"]);
+});

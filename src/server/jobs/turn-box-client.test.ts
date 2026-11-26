@@ -9,6 +9,7 @@ import { fakeEdge } from "../edge/turn-box-fake-edge";
 import { answerTurnBoxSocketMessage } from "../edge/turn-box-socket";
 import {
 	type BoxSocket,
+	TURN_BOX_RENEW_ATTEMPT_TIMEOUT_MS,
 	TURN_BOX_SOCKET_OPEN_TIMEOUT_MS,
 	TurnBoxEdgeClient,
 	TurnBoxIdentityRejected,
@@ -451,5 +452,38 @@ describe("turn box client against the edge", () => {
 		session?.publishProgress([{ id: "p" } as never]);
 		await vi.waitFor(() => expect(requests).toContain("/box/v1/progress"));
 		await vi.waitFor(() => expect(edge.row.items).toEqual([{ id: "p" }]));
+	});
+	it("a lease renewal that never answers is cut off and retried, so one hung request cannot let the 45 s lease lapse (production 2026-11-25: four takeovers after renewals moved to HTTP)", async () => {
+		const edge = await fakeEdge();
+		edge.queue.push({ ...edge.row });
+		let renewals = 0;
+		const hungFirst = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const path = new URL(String(input instanceof Request ? input.url : input))
+				.pathname;
+			if (path.endsWith("/renew") && ++renewals === 1)
+				return new Promise<Response>((_resolve, reject) =>
+					init?.signal?.addEventListener("abort", () =>
+						reject(init.signal?.reason),
+					),
+				);
+			return edge.fetchEdge(input, init);
+		}) as typeof fetch;
+		const client = new TurnBoxEdgeClient({
+			edgeUrl: "https://edge.test",
+			identity: edge.identity,
+			fetch: hungFirst,
+			now: () => edge.state.now,
+		});
+		const session = await client.claim();
+		if (!session) throw new Error("no turn");
+		vi.useFakeTimers();
+		try {
+			const renewal = session.renew();
+			await vi.advanceTimersByTimeAsync(TURN_BOX_RENEW_ATTEMPT_TIMEOUT_MS + 1);
+			await expect(renewal).resolves.toBe("renewed");
+			expect(renewals).toBe(2);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

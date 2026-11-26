@@ -60,3 +60,47 @@ it("rate limits inside the window only", () => {
 	expect(interruptionRateLimited(1000, 2000)).toBe(true);
 	expect(interruptionRateLimited(1000, 1000 + 11 * 60_000)).toBe(false);
 });
+
+it("lists the day's top causes with a hash of each chat and whether the cause is fixed", () => {
+	const events = [
+		{
+			...row("2026-11-25T19:37:00Z", "turn-abandoned", "lease-expired", true),
+			chat: "a1b2c3d4",
+		},
+		{
+			...row("2026-11-25T19:37:01Z", "turn-abandoned", "lease-expired", true),
+			chat: "a1b2c3d4",
+		},
+		{
+			...row(
+				"2026-11-25T23:30:00Z",
+				"lease-takeover",
+				"box-heartbeat-lost",
+				false,
+				true,
+			),
+			chat: "ffff0000",
+		},
+		{
+			...row("2026-11-25T23:31:00Z", "lease-takeover", "mystery", false, true),
+			chat: "11112222",
+		},
+	];
+	const text = interruptionDigestText(
+		dailyInterruptionReport(events),
+		"2026-11-25",
+		undefined,
+		events,
+	);
+	expect(text).toContain("Top causes:");
+	expect(text).toMatch(
+		/2  turn-abandoned\/lease-expired .*chats a1b2c3d4 .*fixed/,
+	);
+	expect(text).toMatch(
+		/1  lease-takeover\/box-heartbeat-lost .*chats ffff0000/,
+	);
+	expect(text).toMatch(
+		/1  lease-takeover\/mystery .*chats 11112222 .*not fixed/,
+	);
+	expect(text).not.toContain("Top causes:\n  0");
+});
