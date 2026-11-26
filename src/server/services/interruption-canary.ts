@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { DEFAULT_COMPOSER_HARNESS_ID } from "#/domain/agent-provider";
+import { markCanaryChat } from "../adapters/canary-chat";
 import { canaryConfigRow } from "../adapters/interruption-events";
 import type { CanaryDeps } from "./interruption-monitoring";
 import { canaryConfig } from "./interruption-monitoring";
@@ -31,6 +32,15 @@ export async function productionCanary(
 			);
 			if (!session.agentSessionId)
 				throw new Error("The canary send returned no chat.");
+			// Internal from here on: hidden from the owner's lists and stats, and only
+			// this sender can post into it (canary-chat.ts). A failed mark is retried by
+			// the next send into the same chat.
+			await markCanaryChat(config.userId, session.agentSessionId).catch(
+				(error: unknown) =>
+					console.warn("Marking the canary chat failed.", {
+						error: error instanceof Error ? error.message : String(error),
+					}),
+			);
 			return session.agentSessionId;
 		},
 	};

@@ -3,6 +3,7 @@ import {
 	type ArchivedItem,
 	type ArchivedKind,
 } from "#/domain/archive";
+import { NOT_CANARY_CHAT } from "./canary-chat";
 import { database } from "./database";
 
 /** Archives (or restores) a root chat; false when it is not this user's. */
@@ -14,7 +15,8 @@ export async function setChatArchived(
 	const result = await database().query(
 		`update agent_session set archived_at = case when $3 then now() else null end,
 		   machine_released_at = case when $3 then machine_released_at else null end
-		 where id=$2 and user_id=$1 and parent_session_id is null returning id`,
+		 where id=$2 and user_id=$1 and parent_session_id is null
+		   and chat_role is distinct from 'canary' returning id`,
 		[userId, sessionId, archived],
 	);
 	return Boolean(result.rows[0]);
@@ -61,7 +63,7 @@ export async function listArchived(userId: string): Promise<ArchivedItem[]> {
 		   coalesce(nullif(p.name,''), p.full_name), s.archived_at
 		 from agent_session s join project p on p.id=s.project_id
 		 where s.user_id=$1 and s.archived_at is not null and p.archived_at is null
-		   and s.parent_session_id is null
+		   and s.parent_session_id is null and ${NOT_CANARY_CHAT}
 		 order by archived_at desc limit 200`,
 		[userId],
 	);
@@ -88,6 +90,7 @@ export async function expiredArchives(limit = 20) {
 		 union all
 		 (select 'chat', s.id, s.project_id, s.user_id from agent_session s
 		  where s.archived_at < now() - make_interval(days => $1) and s.parent_session_id is null
+		  and ${NOT_CANARY_CHAT}
 		  order by s.archived_at limit $2)`,
 		[ARCHIVE_RETENTION_DAYS, limit],
 	);
@@ -116,6 +119,7 @@ export async function archivedChatsToRelease(limit = 10) {
 		 from agent_session s join session_checkpoint c on c.session_id=s.id
 		 where s.archived_at is not null and s.archived_at < now()-interval '5 minutes'
 		   and s.parent_session_id is null and s.machine_released_at is null
+		   and ${NOT_CANARY_CHAT}
 		   and s.provider_ref is not null and s.turn_status <> 'running'
 		   and c.created_at >= s.updated_at and c.executor_id = s.provider_ref
 		 order by s.archived_at limit $1`,

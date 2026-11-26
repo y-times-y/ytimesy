@@ -54,7 +54,9 @@ The account must have a working model connection (an API key it owns, with a low
 
 Flow (`runCanaryStep`, two phases so no cron invocation waits on a model):
 1. On minutes divisible by 30 (`CANARY_EVERY_MINUTES`), if no run is pending: send A ("Reply with exactly: PONG-A-<nonce>") into the canary's own chat, then B at once. B queues behind A's running turn (the queued-message path) and is delivered when A ends. The chat is reused between runs, so the send also wakes a chat that idled for 30 minutes (the paused VM / parked object path). A `canary_run` row is written with `ok = null`. A new chat is created when the old one passes 200 items.
-2. On each later tick the pending run is checked against the chat's items (`canaryVerdict`): both messages present, both answered with their token, order A, answer A, answer B (B's message after A), **no error item**. Pass sets `ok = true`. An error item, or a missing piece 8 minutes after the send (`CANARY_LATENCY_BOUND_MS`), sets `ok = false` and emails the owner (`canary-failed`, once per hour).
+2. On each later tick the pending run is checked against the chat's items (`canaryVerdict`): both messages present (found by their nonce anywhere in the chat, so hand-typed messages and a shifted item count cannot hide them), both answered with their token, order A, answer A, answer B (B's message after A), **no error item**. Pass sets `ok = true`. An error item, or a missing piece still missing 13 minutes after the send (`CANARY_LATENCY_BOUND_MS` plus one re-check, `CANARY_RECHECK_MS`; a deploy mid-run gets one more tick), sets `ok = false` and emails the owner (`canary-failed`, once per hour).
+
+**The canary chat is internal (2026-11-26).** The canary may be configured for a person's own account (`canary_config`), where its chat showed in their thread list and they typed into it, which broke the verdict. The chat carries `agent_session.chat_role = 'canary'` (migration `20261126120000_canary_chat_role.sql` widens the `chat_role` check and marks the chats of existing `canary_run` rows; the canary marks a new chat right after its first send, `markCanaryChat` in `src/server/adapters/canary-chat.ts`). Role `canary` is left out of: the thread list and sidebar (`listAgentSessions`, `listSidebarAgentSessions`), the archive list, archive cleanup and machine release, the workspace retention enrolment (its machine and snapshot are never captured or expired by that job), the usage rollup (`usage_daily`, so Usage and its heatmap), and the Y² crew scope and wake notes (`readChatCrewScope`, the executor's turn scope). It has no thread number. People cannot post into it: the composer send refuses it (`isCanaryChat`), and archiving it is refused; the canary sends through the service directly. Any new query over a user's chats should add `NOT_CANARY_CHAT`. Still counted: the `agent_created` analytics event of its first send, and Freestyle VM time.
 
 Limits of the design: latency is checked at 5-minute tick granularity (a pass is recorded at the first tick that sees both answers); a run needs the canary project's environment, so the first send boots its VM and later wakes pay a VM resume; it cannot be avoided because the turn tools run there. It does not exercise box turns unless the synthetic user is listed in `YTIMESY_BOX_TURN_USERS`; list it to cover the box path.
 
@@ -67,7 +69,7 @@ Limits of the design: latency is checked at 5-minute tick granularity (a pass is
 
 ## Tests
 
-`pnpm exec vitest run src/domain/interruption-report.test.ts src/domain/canary-timeline.test.ts src/server/adapters/interruption-events.test.ts src/server/services/interruption-monitoring.test.ts`
+`pnpm exec vitest run src/server/adapters/canary-chat.sql.test.ts src/domain/interruption-report.test.ts src/domain/canary-timeline.test.ts src/server/adapters/interruption-events.test.ts src/server/services/interruption-monitoring.test.ts`
 
 ## Why the canary is still off (2026-11-25)
 

@@ -32,6 +32,7 @@ import {
 	listSidebarAgentSessions,
 	sessionItemDetailForOwner,
 } from "#/server/adapters/agent-sessions";
+import { isCanaryChat } from "#/server/adapters/canary-chat";
 import { markFirstRunFinished } from "#/server/adapters/first-run";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listProjects } from "#/server/adapters/projects";
@@ -694,6 +695,12 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 						data.createNew,
 					),
 				);
+				// The canary's chat is read-only for people: it is the canary's alone.
+				if (
+					data.sessionId &&
+					(await isCanaryChat(scope.userId, data.sessionId))
+				)
+					throw new Error("This chat is internal and cannot be messaged.");
 				await timed("send:rate", () =>
 					consumeUserAction(scope.userId, "chat-send"),
 				);
