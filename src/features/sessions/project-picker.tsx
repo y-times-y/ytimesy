@@ -27,11 +27,7 @@ import {
 	projectPickerSections,
 	scratchRepositoryName,
 } from "#/domain/add-project";
-import {
-	type Project,
-	projectDisplayName,
-	type RepositoryChoice,
-} from "#/domain/projects";
+import type { Project, RepositoryChoice } from "#/domain/projects";
 import { AddProjectForm } from "../projects/add-project-form";
 import {
 	isUnreachableRead,
@@ -40,7 +36,6 @@ import {
 	transientReadRetryDelay,
 } from "../projects/api";
 import { useGithubConnectionNotice } from "../projects/github-connection-notice";
-import { ProjectMark } from "../projects/project-mark";
 import { refreshAfterProjectAdded } from "../workspace/live-freshness";
 
 export function ProjectPicker({
@@ -194,17 +189,7 @@ export function ProjectPicker({
 				data-empty={firstProject || undefined}
 				title={triggerLabel}
 			>
-				{selectedProject ? (
-					<ProjectMark
-						project={{
-							id: selectedProject.id,
-							name: projectDisplayName(selectedProject),
-						}}
-						size={16}
-					/>
-				) : (
-					<GitBranch size={14} />
-				)}
+				<GitBranch size={14} />
 				<span>{triggerLabel}</span>
 				<ChevronDown className="size-3" />
 			</PopoverTrigger>
@@ -412,7 +397,7 @@ function PickerRow({
 	adding = false,
 	onChoose,
 }: {
-	row: { fullName: string; selected: boolean; project?: Project };
+	row: { fullName: string; selected: boolean };
 	disabled: boolean;
 	/** The server is making this repository a project. */
 	adding?: boolean;
@@ -433,13 +418,7 @@ function PickerRow({
 			onClick={onChoose}
 			title={row.fullName}
 		>
-			<ProjectMark
-				project={{
-					id: row.project?.id ?? row.fullName,
-					name: row.project ? projectDisplayName(row.project) : name,
-				}}
-				size={18}
-			/>
+			<GitBranch size={16} aria-hidden="true" />
 			<span className="project-picker-name">
 				<strong>{name}</strong>
 				{owner ? <small>{owner}</small> : null}
