@@ -7,7 +7,9 @@ import { saveProject, saveProjectGroup } from "./projects";
 import { ySquaredBackfill } from "./y-backfill";
 import {
 	consumeUserWake,
+	enableDefaultYProjects,
 	ensureYSquaredChat,
+	projectsMissingYSquared,
 	readUserYDefault,
 	setProjectYMode,
 	setUserYDefault,
@@ -260,5 +262,53 @@ describe("the backfill", () => {
 		const report = await ySquaredBackfill(holder, { apply: true });
 		expect(report.enabledProjects).toBe(0);
 		expect((await flags(never)).y_enabled).toBe(false);
+	});
+});
+
+describe("a project added again after it was removed (the missing Super agent)", () => {
+	const archiveAndRestore = async (id: number) => {
+		const projectId = await addProject("u", id);
+		await db.query(
+			"update project set archived_at=timestamptz '2026-11-10 00:00+00' where id=$1",
+			[projectId],
+		);
+		await db.query(
+			"insert into workspace(id,user_id,project_id) values($1,'u',$2)",
+			[randomUUID(), projectId],
+		);
+		// Adding the repository again restores the archived project.
+		await saveProject("u", repo(id), "main");
+		return projectId;
+	};
+
+	it("keeps y_enabled=false from before the default, until the default is applied", async () => {
+		const projectId = await archiveAndRestore(1);
+		expect(await flags(projectId)).toEqual({
+			y_enabled: false,
+			y_choice: null,
+		});
+		expect(await enableDefaultYProjects("u")).toEqual([projectId]);
+		expect((await flags(projectId)).y_enabled).toBe(true);
+		expect(await enableDefaultYProjects("u")).toEqual([]);
+	});
+
+	it("is found as missing and gets its Super agent from ensureYSquaredChat, once", async () => {
+		const projectId = await archiveAndRestore(2);
+		await enableDefaultYProjects("u");
+		expect(await projectsMissingYSquared("u")).toEqual([projectId]);
+		const first = await ensureYSquaredChat("u", projectId, null);
+		expect(first).toBeTruthy();
+		expect(await ensureYSquaredChat("u", projectId, null)).toBe(first);
+		expect(await projectsMissingYSquared("u")).toEqual([]);
+	});
+
+	it("never turns on a project the person switched off or a user who turned Y² off", async () => {
+		const off = await archiveAndRestore(3);
+		await setProjectYMode("u", off, false);
+		expect(await enableDefaultYProjects("u")).toEqual([]);
+		const other = await archiveAndRestore(4);
+		await setUserYDefault("u", false);
+		expect(await enableDefaultYProjects("u")).toEqual([]);
+		expect((await flags(other)).y_enabled).toBe(false);
 	});
 });

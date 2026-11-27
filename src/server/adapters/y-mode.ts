@@ -3,6 +3,7 @@ import { claudeRunnerFor } from "#/domain/claude-runner";
 import { Y_SQUARED_WELCOME } from "#/domain/y-default";
 import { Y_SQUARED_TITLE } from "#/domain/y-squared";
 import { database } from "./database";
+import { enableNeverChosenProjects } from "./y-backfill";
 
 /**
  * A project's Y mode (project.y_enabled) and its Y² chat
@@ -218,4 +219,30 @@ export async function ensureYSquaredChat(
 		],
 	);
 	return result.rows[0]?.id ?? null;
+}
+
+/** Turns Y² on for this user's live projects that never chose (see enableNeverChosenProjects). */
+export async function enableDefaultYProjects(
+	userId: string,
+): Promise<string[]> {
+	return enableNeverChosenProjects(database(), userId);
+}
+
+/**
+ * The user's live Y projects that have a workspace but no live Y² chat: the
+ * state that draws a project with no Super agent. Ids only.
+ */
+export async function projectsMissingYSquared(
+	userId: string,
+): Promise<string[]> {
+	const result = await database().query<{ id: string }>(
+		`select p.id from project p
+		 where p.user_id=$1 and p.archived_at is null and p.y_enabled
+		   and exists(select 1 from workspace w where w.project_id=p.id and w.user_id=p.user_id)
+		   and not exists(select 1 from agent_session s
+		     where s.project_id=p.id and s.user_id=p.user_id and s.chat_role='y2' and s.archived_at is null)
+		 limit 50`,
+		[userId],
+	);
+	return result.rows.map((row) => row.id);
 }

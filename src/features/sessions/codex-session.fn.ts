@@ -77,6 +77,7 @@ import {
 } from "#/server/services/session-delta";
 import { timed, withStepTrace } from "#/server/services/step-timing";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
+import { repairMissingYSquared } from "#/server/services/y-on-add";
 
 /** A fallback route's key: the connection ("codex" or a connection id), then the model. */
 const failoverRouteKey = z
@@ -363,6 +364,8 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				renderedAtMs: Date.now(),
 			};
 		}
+		// A project without its Super agent gets it before the lists are read.
+		await repairMissingYSquared(user.id);
 		const listed = listProjects(user.id).catch(() => undefined);
 		// A linked chat without its project: the project it belongs to.
 		const linkedChatProject =
