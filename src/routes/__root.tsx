@@ -12,6 +12,7 @@ import { readPrivacyRegionFn } from "../features/app/privacy-region.fn";
 import { SPECULATION_RULES } from "../features/app/speculation-rules";
 import { AuthProviders } from "../features/auth/auth-providers";
 import { LegalUpdateNotice } from "../features/auth/legal-acceptance-prompt";
+import { ReconnectingNotice } from "../features/workspace/reconnecting-notice";
 import { followOtherTabSaves } from "../lib/optimistic-mutation";
 import appCss from "../styles.css?url";
 
@@ -124,6 +125,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 							<Analytics />
 							<LegalUpdateNotice />
 							<NewVersionNotice />
+							<ReconnectingNotice />
 							{children}
 						</AuthProviders>
 					</PrivacyRegionProvider>
