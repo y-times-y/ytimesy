@@ -17,6 +17,7 @@ import {
 	MAX_BOX_TURN_TAKEOVERS,
 	reassignStrandedBoxTurns,
 	renewApiTurn,
+	recoverStalledTurns,
 	requeueInterruptedBoxTurns,
 } from "./api-turns";
 import {
@@ -113,6 +114,7 @@ beforeEach(async () => {
 	 create table agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb);
 	 create table agent_peer_inbox(id text primary key,recipient_id uuid,message text,queued_send jsonb,accepted boolean not null default false,created_at timestamptz default clock_timestamp());
 	 create table api_turn(id uuid primary key,session_id uuid not null,user_id text not null,connection_id uuid,model_id text not null,connection_revision text not null,state text not null,messages jsonb not null default '[]',items jsonb not null default '[]',cancel_requested boolean not null default false,lease_id uuid,heartbeat_at timestamptz,created_at timestamptz not null default clock_timestamp(),updated_at timestamptz not null default now(),idempotency_key text,executor text not null default 'node',settings jsonb,failover jsonb,training_eligible boolean not null default false,base_turn_id uuid,base_version text,base_count int,run_attempts int not null default 0,box_tool_identity text);
+	 create table agent_session_item(session_id uuid not null,kind text not null,created_at timestamptz not null default clock_timestamp());
 	 create unique index api_turn_one_active on api_turn(session_id) where state in ('queued','running');`);
 	holder.query.mockImplementation(async (sql: string, values?: unknown[]) => {
 		const release = await acquire();
@@ -631,4 +633,76 @@ it("(10) production 2026-11-25 19:37: a box dies while its turn is asked to stop
 	expect((await deliverQueued()).map((s) => s.message)).toEqual(["then this"]);
 	await finish(await claimed(), "done");
 	await expectNothingLost(["long job", "then this"]);
+});
+
+/** A running turn whose heartbeat is fresh but whose last write was `idleSeconds` ago. */
+const idleFor = (idleSeconds: number, turnId: string) =>
+	db.query(
+		"update api_turn set heartbeat_at=now(), updated_at=now()-($1::int * interval '1 second') where id=$2",
+		[idleSeconds, turnId],
+	);
+
+it("(12) a runner that renews its heartbeat but produces nothing for 4 minutes is retried once on the chat's own object, and the queued message survives (canary 2026-11-27 17:00)", async () => {
+	await sendMessage("first");
+	const first = await claimed();
+	await idleFor(3 * 60, first.id);
+	expect(await recoverStalledTurns()).toEqual({ retried: 0, failed: 0 });
+
+	await idleFor(5 * 60, first.id);
+	expect((await sendMessage("second")).outcome).toBe("queued");
+	expect(await recoverStalledTurns()).toEqual({ retried: 1, failed: 0 });
+	const [row] = await turns();
+	expect(row).toMatchObject({ state: "queued", run_attempts: 1 });
+	expect(
+		(
+			await db.query("select executor,settings from api_turn where id=$1", [
+				first.id,
+			])
+		).rows[0],
+	).toMatchObject({
+		executor: "durable-object",
+		settings: { stallRetried: true },
+	});
+	// The stalled runner's lease is gone; its writes are refused.
+	expect(await renewApiTurn(first)).toBe(false);
+	// Nothing is lost: the retry runs, then the second message.
+	const retry = await claimApiTurn(2, 10, "durable-object");
+	expect(retry?.id).toBe(first.id);
+	await finalizeApiTurn(retry as ApiTurn, "completed", [answerItem("done")]);
+	expect((await deliverQueued()).map((s) => s.message)).toEqual(["second"]);
+});
+
+it("(12b) once output has started the silence allowed is 10 minutes, not 4", async () => {
+	await sendMessage("first");
+	const first = await claimed();
+	await db.query(
+		"insert into agent_session_item(session_id,kind) values($1,'agentMessage')",
+		[chat],
+	);
+	await idleFor(5 * 60, first.id);
+	expect(await recoverStalledTurns()).toEqual({ retried: 0, failed: 0 });
+	await idleFor(11 * 60, first.id);
+	expect(await recoverStalledTurns()).toEqual({ retried: 1, failed: 0 });
+});
+
+it("(12c) a retried turn that stalls again fails with a calm error item, never silently", async () => {
+	await sendMessage("first");
+	const first = await claimed();
+	await idleFor(5 * 60, first.id);
+	await recoverStalledTurns();
+	const retry = (await claimApiTurn(2, 10, "durable-object")) as ApiTurn;
+	await idleFor(5 * 60, retry.id);
+	expect(await recoverStalledTurns()).toEqual({ retried: 0, failed: 1 });
+	expect((await turns())[0]).toMatchObject({ state: "failed" });
+	const items = (
+		await db.query<{ items: { kind: string; message?: string }[] }>(
+			"select items from agent_session where id=$1",
+			[chat],
+		)
+	).rows[0]?.items;
+	expect(
+		items?.some(
+			(item) => item.kind === "error" && /saved/i.test(item.message ?? ""),
+		),
+	).toBe(true);
 });

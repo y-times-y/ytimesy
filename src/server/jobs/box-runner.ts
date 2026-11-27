@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
 import { MAX_WORKFLOW_MODEL_STEPS } from "#/domain/model-workflow";
 import { TURN_BOX_CLAIM_WAIT_MS } from "#/domain/turn-box-protocol";
+import { withFailureNotice } from "#/domain/turn-failure-notice";
 import { configuredTurnExecutor } from "#/domain/turn-executor";
 import {
 	isEdgeOutage,
@@ -202,7 +203,9 @@ export function edgeTurnDeps(
 		abandon: async () => {
 			try {
 				const history = await session.history();
-				return (await session.finalize("failed", history.items)) !== null;
+				// Never silent: the chat shows why the turn ended (canary 2026-11-27).
+				const items = withFailureNotice(history.items, session.turn.id);
+				return (await session.finalize("failed", items)) !== null;
 			} catch {
 				return false;
 			}
