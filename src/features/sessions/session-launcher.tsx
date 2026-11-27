@@ -107,6 +107,7 @@ import {
 import { turnSavingChanges } from "#/domain/turn-saving";
 import { hubTopic } from "#/domain/user-hub";
 import type { SettingsSection } from "#/domain/workspace-settings";
+import { welcomeOnlyText } from "#/domain/y-default";
 import {
 	withoutClaudeCodeModels,
 	Y_SQUARED_CLAUDE_CODE_NOTE,
@@ -270,7 +271,7 @@ export function SessionLauncher({
 	 * Drawn instead of the transcript while the chat has no messages; `send`
 	 * sends a message the way the message box does.
 	 */
-	emptyState?: (send: (text: string) => void) => ReactNode;
+	emptyState?: (send: (text: string) => void, welcome?: string) => ReactNode;
 	/** The project's setup runs in the background: the empty composer says so. */
 	setupPlaceholder?: string | null;
 	/** Opens Settings at a section: the fix a blocked send points to. */
@@ -1507,10 +1508,13 @@ export function SessionLauncher({
 				</>
 			) : emptyState &&
 				!setupHold &&
-				timelineItems.length === 0 &&
+				(timelineItems.length === 0 || welcomeOnlyText(timelineItems)) &&
 				turnStatus !== "running" ? (
 				<div className="session-empty-state">
-					{emptyState((text) => sendText(text))}
+					{emptyState(
+						(text) => sendText(text),
+						welcomeOnlyText(timelineItems) ?? undefined,
+					)}
 				</div>
 			) : (
 				<SessionTimeline

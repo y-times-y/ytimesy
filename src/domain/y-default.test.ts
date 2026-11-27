@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	PLAN_WAKE_STOP_PERCENT,
 	planBlocksWake,
+	welcomeOnlyText,
 	Y_SQUARED_WELCOME,
 	Y_WAKES_PER_USER_PER_DAY,
 } from "./y-default";
@@ -19,6 +20,21 @@ describe("a Y² wake and the person's plan", () => {
 		expect(planBlocksWake(usage("allowed", 10))).toBe(false);
 		expect(planBlocksWake(usage("allowed", PLAN_WAKE_STOP_PERCENT))).toBe(true);
 		expect(planBlocksWake(usage("rejected", 0))).toBe(true);
+	});
+	it("recognises a chat holding only the seeded welcome", () => {
+		const welcome = {
+			id: "welcome-1",
+			kind: "agentMessage",
+			text: Y_SQUARED_WELCOME,
+		};
+		expect(welcomeOnlyText([welcome])).toBe(Y_SQUARED_WELCOME);
+		expect(welcomeOnlyText([])).toBeNull();
+		expect(
+			welcomeOnlyText([welcome, { id: "u1", kind: "userMessage", text: "hi" }]),
+		).toBeNull();
+		expect(
+			welcomeOnlyText([{ id: "m1", kind: "agentMessage", text: "Done" }]),
+		).toBeNull();
 	});
 	it("has a short welcome and a per-user daily cap", () => {
 		expect(Y_SQUARED_WELCOME.length).toBeLessThan(260);

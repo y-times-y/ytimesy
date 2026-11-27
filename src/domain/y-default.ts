@@ -11,6 +11,25 @@ import type { ClaudePlanUsage } from "./claude-plan-usage";
 export const Y_SQUARED_WELCOME =
 	"I'm this project's Super agent. I keep track of its threads: what's working, what needs you and what finished with its pull request. Start a thread and I'll follow it. You can turn me off in Project settings > Y².";
 
+/**
+ * The welcome text when a Super agent chat holds nothing else (the seeded
+ * welcome is its only item), so the chat shows its empty-state block (the Y²
+ * mark, this text and the questions) instead of a lone message. Else null.
+ */
+export function welcomeOnlyText(
+	items: readonly {
+		readonly id: string;
+		readonly kind: string;
+		readonly text?: string;
+	}[],
+): string | null {
+	const [only] = items;
+	if (items.length !== 1 || !only) return null;
+	if (only.kind !== "agentMessage" || !only.id.startsWith("welcome-"))
+		return null;
+	return only.text ?? null;
+}
+
 /** Wakes per user per day across all their projects (each project also has its own 60/hour (120 with needs-you / failed) wake cap and 48/day proactive cap). */
 export const Y_WAKES_PER_USER_PER_DAY = 600;
 

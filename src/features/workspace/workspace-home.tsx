@@ -4243,12 +4243,17 @@ export function WorkspaceHome({
 												mentionThreads={mentionThreads}
 												emptyState={
 													ySquaredOpen
-														? (send) => <YSquaredEmptyState onSend={send} />
+														? (send, welcome) => (
+																<YSquaredEmptyState
+																	onSend={send}
+																	{...(welcome ? { welcome } : {})}
+																/>
+															)
 														: selectedProject
 															? (send) => (
 																	<ThreadEmptyState
 																		onSend={send}
-																			projectCount={projects.data?.length ?? 0}
+																		projectCount={projects.data?.length ?? 0}
 																		chatCount={
 																			allChatListsLoaded ? totalChatCount : null
 																		}

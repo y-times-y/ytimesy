@@ -26,6 +26,19 @@ it("says what Y² is for and offers three questions", () => {
 	]);
 });
 
+it("shows the Y mark above the stored welcome and the questions as one block", () => {
+	const html = renderToStaticMarkup(
+		<YSquaredEmptyState
+			onSend={() => {}}
+			welcome="I'm this project's Super agent."
+		/>,
+	);
+	expect(html).toContain("y2-mark");
+	expect(html).toContain("I&#x27;m this project&#x27;s Super agent.");
+	expect(html).not.toContain("keeps track of this project");
+	expect(html.match(/<button type="button"/g)).toHaveLength(3);
+});
+
 it("sends a suggestion when it is clicked", () => {
 	const sent: string[] = [];
 	const tree = YSquaredEmptyState({ onSend: (text) => sent.push(text) });
