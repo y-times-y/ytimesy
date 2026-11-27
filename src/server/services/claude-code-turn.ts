@@ -15,6 +15,7 @@ import { CODE_MODE_TOOL } from "#/domain/code-mode";
 import type { LeanToolShape } from "#/domain/harness-model-profile";
 import type { WorkspaceId } from "#/domain/ids";
 import { isReaderRole, type SubagentRole } from "#/domain/subagent";
+import { orchestratorInstructions } from "#/domain/subagent-instructions";
 import { directTranscriptStore } from "../adapters/checkpoints/direct-transcript";
 import {
 	downloadCheckpoint,
@@ -71,6 +72,26 @@ import {
 } from "./claude-step-pause";
 import { ensureLeanHelpers } from "./lean-helpers";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+/**
+ * The delegation rules for a Claude Code run, written into its system prompt
+ * (the one text Claude reads: the API loop's orchestration block never reaches
+ * this route). Present only when the run is offered the agent tool.
+ */
+export function claudeCodeDelegation(
+	toolNames: readonly string[],
+	agentRole: SubagentRole | null | undefined,
+): string | undefined {
+	if (!toolNames.includes("agent")) return undefined;
+	return [
+		"Your built-in Task/Agent tool is off; ytimesy's mcp__ytimesy__agent and mcp__ytimesy__agent_send are its replacement and do the same job. If they are listed by name only, load their schemas first (ToolSearch select:mcp__ytimesy__agent,mcp__ytimesy__agent_send); do not skip delegation because the schema is not loaded yet.",
+		orchestratorInstructions({
+			codeMode: true,
+			main: !agentRole,
+			readOnly: isReaderRole(agentRole),
+		}),
+	].join("\n");
+}
 
 /** Native web tools stay local; workspace work uses the tracked MCP tool lifecycle on either host. */
 export function claudeCodeBridgeToolSet(
@@ -394,6 +415,12 @@ export async function runClaudeCodeTurnStep(input: {
 						},
 					}
 				: {}),
+			...(() => {
+				const delegation = ySquared
+					? undefined
+					: claudeCodeDelegation(Object.keys(input.tools), input.agentRole);
+				return delegation ? { delegation } : {};
+			})(),
 			// The prompt names the tools really offered over MCP.
 			...(ySquared
 				? { ySquared: { ...ySquared, tools: Object.keys(input.tools) } }

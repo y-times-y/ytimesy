@@ -200,6 +200,8 @@ export type ClaudeCodeStepInput = {
 	 */
 	/** The compact secret-names line (secretsContextLine); the system prompt carries it every step. */
 	readonly secretsLine?: string;
+	/** The delegation rules (orchestration block) for the system prompt; absent without the agent tool. */
+	readonly delegation?: string;
 	readonly ySquared?: {
 		readonly instructions: string;
 		/** The names of the tools the run is offered (the real set, not a hand list). */
@@ -465,6 +467,7 @@ export function systemPrompt(
 	ySquared?: ClaudeCodeStepInput["ySquared"],
 	pullRequest?: string,
 	secretsLine?: string,
+	delegation?: string,
 ) {
 	if (ySquared)
 		return [
@@ -490,6 +493,7 @@ export function systemPrompt(
 		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking). Tools these instructions name without the prefix are offered the same way.`,
 		reader ? "" : PULL_REQUEST_INSTRUCTIONS,
 		reader ? "" : (pullRequest ?? ""),
+		delegation ?? "",
 		reader
 			? ""
 			: canvasInstructions(`mcp__${CLAUDE_CODE_MCP_SERVER}__${CANVAS_TOOL}`),
@@ -1243,6 +1247,7 @@ async function launchRun(
 				input.ySquared,
 				input.pullRequestNote,
 				input.secretsLine,
+				input.delegation,
 			),
 		},
 		{ path: `${runDirectory}/prompt`, contents: prompt },
