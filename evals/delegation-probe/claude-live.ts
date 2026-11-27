@@ -12,6 +12,7 @@ import { writeFile } from "node:fs/promises";
 import { cloudAgentRoleInstructions } from "../../src/domain/agent-orchestration";
 import * as policy from "../../src/domain/delegation-policy";
 import * as instructions from "../../src/domain/subagent-instructions";
+import { claudeCodeDelegation } from "../../src/server/services/claude-code-turn";
 
 const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
 
@@ -91,7 +92,7 @@ const description =
 const roleText =
 	"writer: edits code on a fork of your VM and returns a patch; researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
 
-const tools = [
+const baseTools = [
 	{
 		name: "agent",
 		description,
@@ -155,14 +156,31 @@ const tools = [
 	},
 ];
 
-const system = [
+const route = process.argv.includes("--route")
+	? process.argv[process.argv.indexOf("--route") + 1]
+	: "api";
+const agentSystem = [
+	"You are running inside ytimesy.",
+	"The repository is at /workspace on the chat's own cloud machine, not on the machine you run on. Your built-in file, shell and subagent tools are off; work on the repository only through ytimesy's tools (mcp__ytimesy__bash, mcp__ytimesy__read).",
+	'ytimesy adds tools as mcp__ytimesy__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking).',
+	route === "claude-agent-after"
+		? (claudeCodeDelegation(["agent", "agent_send"], null) ?? "")
+		: "",
+]
+	.filter(Boolean)
+	.join("\n");
+const apiSystem = [
 	cloudAgentRoleInstructions({ delegates: true }),
 	instructions.orchestratorInstructions({ main: true }),
 	"Workspace: /workspace, a TypeScript pnpm monorepo (packages/api, packages/web, packages/cli, packages/legacy-a, packages/legacy-b, packages/legacy-c, docs/). About 900 files.",
 ].join("\n\n");
+const tools = route.startsWith("claude-agent")
+	? baseTools.map((t) => ({ ...t, name: `mcp__ytimesy__${t.name}` }))
+	: baseTools;
+const system = route.startsWith("claude-agent") ? agentSystem : apiSystem;
 
 function stub(name: string, input: Record<string, unknown>) {
-	if (name === "bash")
+	if (name.endsWith("bash"))
 		return `$ ${String(input.command ?? "").slice(0, 80)}\npackages/api/src/auth.ts\npackages/api/src/billing.ts\npackages/web/src/checkout.tsx\n... (largely a 900-file repo; output truncated)\nexit 0`;
 	return `// ${String(input.path ?? "")} (about 400 lines)\nexport function example() { /* ... */ }\n// many more functions elided`;
 }
@@ -207,7 +225,9 @@ async function run(model: string, prompt: string) {
 		const reply = await call(model, messages);
 		const uses = reply.content.filter((block) => block.type === "tool_use");
 		names.push(...uses.map((use) => use.name ?? "?"));
-		const spawn = uses.find((use) => use.name === "agent");
+		const spawn = uses.find(
+			(use) => use.name?.replace("mcp__ytimesy__", "") === "agent",
+		);
 		if (spawn)
 			return {
 				spawned: String(spawn.input?.role ?? "?"),

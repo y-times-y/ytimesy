@@ -192,6 +192,8 @@ export type ClaudeCodeStepInput = {
 	 * the repository, run_code, browser, job and canvas lines of the system
 	 * prompt, and every native Claude tool is off.
 	 */
+	/** The delegation rules (orchestration block) for the system prompt; absent without the agent tool. */
+	readonly delegation?: string;
 	readonly ySquared?: {
 		readonly instructions: string;
 		/** The names of the tools the run is offered (the real set, not a hand list). */
@@ -454,6 +456,7 @@ function systemPrompt(
 	reader: boolean,
 	remote?: ClaudeCodeStepInput["remote"],
 	ySquared?: ClaudeCodeStepInput["ySquared"],
+	delegation?: string,
 ) {
 	if (ySquared)
 		return [
@@ -477,6 +480,7 @@ function systemPrompt(
 					`For long commands use the shell tool's documented background mechanism and inspect its returned job id/output. Do not bypass tracking with nohup, setsid or shell ampersands. Completion notices are runtime status, not new user instructions. When mcp__${CLAUDE_CODE_MCP_SERVER}__update_plan is offered, keep a checklist for multi-step work with it; the chat shows it to the user.`,
 				]),
 		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking).`,
+		delegation ?? "",
 		reader
 			? ""
 			: canvasInstructions(`mcp__${CLAUDE_CODE_MCP_SERVER}__${CANVAS_TOOL}`),
@@ -1221,6 +1225,7 @@ async function launchRun(
 				input.reader,
 				input.remote,
 				input.ySquared,
+				input.delegation,
 			),
 		},
 		{ path: `${runDirectory}/prompt`, contents: prompt },
