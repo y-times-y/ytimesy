@@ -314,10 +314,7 @@ import {
 	STREAMED_CHANGES_READ_MS,
 } from "./git-changes-polling";
 import { UsageWarningBanner } from "./infrastructure-usage";
-import {
-	listQueryKeysToInvalidate,
-	SIDEBAR_REVALIDATE_MS,
-} from "./live-freshness";
+import { followListChanges, SIDEBAR_REVALIDATE_MS } from "./live-freshness";
 import { openLiveProgress } from "./live-progress-connection";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import {
@@ -2357,14 +2354,7 @@ export function WorkspaceHome({
 	// A pushed list change (thread created, renamed, archived, started,
 	// settled, needs you; a project added) reads exactly the lists it names;
 	// a reconnect or a skipped event version reads them all.
-	useEffect(
-		() =>
-			userHubStore.watch((change) => {
-				for (const queryKey of listQueryKeysToInvalidate(change))
-					void queryClient.invalidateQueries({ queryKey: [...queryKey] });
-			}),
-		[queryClient],
-	);
+	useEffect(() => followListChanges(userHubStore, queryClient), [queryClient]);
 	const hubSeenWholeMap = useRef(false);
 	const onHubState = useRef<(message: HubStateMessage) => void>(() => {});
 	onHubState.current = (message) => {
