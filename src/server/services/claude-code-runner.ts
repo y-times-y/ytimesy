@@ -50,6 +50,7 @@ import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import type { LeanToolShape } from "#/domain/harness-model-profile";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecretValues } from "#/domain/project-secret";
+import { PULL_REQUEST_INSTRUCTIONS } from "#/domain/pull-request-tools";
 import {
 	READER_LINUX_USER,
 	readerNetworkedCommand,
@@ -476,7 +477,8 @@ function systemPrompt(
 					`Use mcp__${CLAUDE_CODE_MCP_SERVER}__run_code to batch independent tool calls such as several file reads or checks; use a direct tool call for a single operation or when the next step depends on its result.`,
 					`For long commands use the shell tool's documented background mechanism and inspect its returned job id/output. Do not bypass tracking with nohup, setsid or shell ampersands. Completion notices are runtime status, not new user instructions. When mcp__${CLAUDE_CODE_MCP_SERVER}__update_plan is offered, keep a checklist for multi-step work with it; the chat shows it to the user.`,
 				]),
-		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking).`,
+		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking). Tools these instructions name without the prefix are offered the same way.`,
+		reader ? "" : PULL_REQUEST_INSTRUCTIONS,
 		reader
 			? ""
 			: canvasInstructions(`mcp__${CLAUDE_CODE_MCP_SERVER}__${CANVAS_TOOL}`),

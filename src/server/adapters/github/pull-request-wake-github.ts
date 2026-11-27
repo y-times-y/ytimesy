@@ -181,6 +181,36 @@ export async function pullRequestWakeGitHub(link: {
 				}),
 			);
 		},
+		/**
+		 * Closes the pull request (never merges, never deletes the branch) when
+		 * its head is already contained in the base branch: the work landed
+		 * some other way (a push to the default branch, a merge elsewhere), so
+		 * the pull request is stale. Returns whether it closed it.
+		 */
+		async closeIfLanded(
+			pr: Pick<PullRequestState, "baseRef" | "headSha">,
+			note: string,
+		): Promise<boolean> {
+			const comparison = (
+				await github.rest.repos.compareCommitsWithBasehead({
+					owner,
+					repo,
+					basehead: `${pr.baseRef}...${pr.headSha}`,
+				})
+			).data;
+			if (comparison.status !== "behind" && comparison.status !== "identical")
+				return false;
+			await github.rest.issues
+				.createComment({ owner, repo, issue_number: pull_number, body: note })
+				.catch(() => undefined);
+			await github.rest.pulls.update({
+				owner,
+				repo,
+				pull_number,
+				state: "closed",
+			});
+			return true;
+		},
 		/** Best effort: a short reply saying where the chat is. */
 		async reply(body: string) {
 			await github.rest.issues.createComment({
