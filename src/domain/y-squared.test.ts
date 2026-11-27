@@ -542,3 +542,11 @@ describe("threadHistoryFacts and a peer message", () => {
 		);
 	});
 });
+
+describe("Y² message mode rule", () => {
+	it("tells Y² to pass the mode and report the result as returned", () => {
+		const text = ySquaredInstructions();
+		expect(text).toContain("Always pass `mode` explicitly");
+		expect(text).toContain("never say you steered when it says queued");
+	});
+});
