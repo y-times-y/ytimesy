@@ -2416,6 +2416,9 @@ export function WorkspaceHome({
 	const projectSetup = useQuery({
 		...workspaceStatusQuery(selectedProject?.id ?? ""),
 		enabled: Boolean(selectedProject?.id),
+		// Catch-all: a setup change nobody signalled shows within a minute.
+		refetchInterval: SIDEBAR_REVALIDATE_MS,
+		refetchOnWindowFocus: true,
 	});
 	const projectSetupStatus = projectSetup.data?.status;
 	// A new project's setup runs in its own chat, started by the server
