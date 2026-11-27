@@ -260,6 +260,9 @@ import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import { chatCacheFor, clearChatCache } from "../sessions/chat-cache";
 import { chatListRetry } from "../sessions/chat-list-retry";
+
+/** A visible tab re-reads the project and chat lists this often (no hub signal covers them all); hidden tabs do not poll. */
+const SIDEBAR_REVALIDATE_MS = 60_000;
 import { ChatRefreshingContext } from "../sessions/chat-refreshing";
 import { chatSideKeys } from "../sessions/chat-side-queries";
 import {
