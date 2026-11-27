@@ -180,6 +180,42 @@ export async function ySquaredPort(
 			await run.archive(user, (await thread(args[1])).id);
 			return null;
 		}
+		case "threadExtras": {
+			ownUser(args[0]);
+			ownProject(args[1]);
+			const ids = args[2];
+			if (
+				!Array.isArray(ids) ||
+				ids.length > 100 ||
+				!ids.every((id) => typeof id === "string" && id.length <= 64)
+			)
+				throw new TurnBoxPortForbidden("y2:threadExtras:ids");
+			return run.threadExtras(user, project, ids);
+		}
+		case "logDecisions": {
+			ownUser(args[0]);
+			ownProject(args[1]);
+			const rows = args[2];
+			if (!Array.isArray(rows) || rows.length > 100)
+				throw new TurnBoxPortForbidden("y2:logDecisions");
+			// Only threads of this project, read here: never taken from the box.
+			const checked = [];
+			for (const row of rows) {
+				const entry = record(row, "y2:logDecisions:row");
+				const target = await thread(entry.sessionId);
+				if (!["archived", "kept", "refused"].includes(String(entry.decision)))
+					throw new TurnBoxPortForbidden("y2:logDecisions:decision");
+				checked.push({
+					sessionId: target.id,
+					decision: entry.decision as "archived" | "kept" | "refused",
+					code: text(entry.code, "y2:logDecisions:code", 64),
+					reason: text(entry.reason, "y2:logDecisions:reason", 300),
+					facts: record(entry.facts ?? {}, "y2:logDecisions:facts"),
+				});
+			}
+			await run.logDecisions(user, project, checked);
+			return null;
+		}
 		case "prOpen":
 			ownUser(args[0]);
 			return run.prOpen(user, ownProject(args[1]), text(args[2], dep, 400));

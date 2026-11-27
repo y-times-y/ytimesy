@@ -307,6 +307,8 @@ export const Y_SQUARED_PORT_DEPS = [
 	"crewSchedule",
 	"models",
 	"setModel",
+	"threadExtras",
+	"logDecisions",
 ] as const;
 export type YSquaredPortDep = (typeof Y_SQUARED_PORT_DEPS)[number];
 

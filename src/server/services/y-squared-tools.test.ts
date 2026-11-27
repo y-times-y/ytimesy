@@ -515,6 +515,8 @@ describe("ySquaredTools write tools", () => {
 			open: { waitingOn: null, prUrl: "https://github.com/o/r/pull/1" },
 			merged: { waitingOn: null, prUrl: "https://github.com/o/r/pull/2" },
 			unknown: { waitingOn: null, prUrl: "https://github.com/o/r/pull/3" },
+			unpushed: { waitingOn: null, prUrl: null },
+			pushing: { waitingOn: null, prUrl: null },
 		};
 		const chats: Record<string, unknown> = {
 			w: chat({ id: "w", turnStatus: "running" }),
@@ -540,6 +542,12 @@ describe("ySquaredTools write tools", () => {
 				})) as never,
 				archive,
 				prOpen,
+				threadExtras: (async (_u: string, _p: string, ids: string[]) =>
+					ids.map((id) => ({
+						id,
+						unpushed: id === "unpushed",
+						pendingPush: id === "pushing",
+					}))) as never,
 			},
 		});
 		const go = (id: string) => run(tools, "archive_thread", { id });
@@ -548,6 +556,8 @@ describe("ySquaredTools write tools", () => {
 		expect(archive.mock.calls.map((c) => c[1])).toEqual(["t1", "merged"]);
 		expect(await go("open")).toContain("open pull request");
 		expect(await go("unknown")).toContain("could not be checked");
+		expect(await go("unpushed")).toContain("was not pushed");
+		expect(await go("pushing")).toContain("approval");
 		expect(await go("t2")).toContain("waiting on the person");
 		expect(await go("w")).toContain("is working");
 		// A helper chat is explained, never reported as missing.
