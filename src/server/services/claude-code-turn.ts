@@ -153,6 +153,8 @@ export async function runClaudeCodeTurnStep(input: {
 	 * its own on the box.
 	 */
 	readonly ySquared?: { readonly instructions: string };
+	/** The compact secret-names line for the CLI's system prompt (never values). */
+	readonly secretsLine?: string;
 	readonly messages: readonly ModelMessage[];
 	readonly tools: ToolSet;
 	readonly deadline: number;
@@ -391,6 +393,7 @@ export async function runClaudeCodeTurnStep(input: {
 			...(ySquared
 				? { ySquared: { ...ySquared, tools: Object.keys(input.tools) } }
 				: {}),
+			...(input.secretsLine ? { secretsLine: input.secretsLine } : {}),
 			...(boxTools && ready && machines
 				? {
 						boxTools: {

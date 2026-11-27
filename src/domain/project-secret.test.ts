@@ -13,7 +13,9 @@ import {
 	REDACTED,
 	redactSecretValues,
 	SECRET_COMMIT_GUARD,
+	SECRETS_CHECK_RULE,
 	secretForms,
+	secretsContextLine,
 	sessionReceivesProjectSecrets,
 } from "./project-secret";
 
@@ -189,5 +191,39 @@ describe("who receives project secrets", () => {
 		expect(sessionReceivesProjectSecrets({ agentRole: "writer" })).toBe(true);
 		for (const agentRole of ["researcher", "reviewer", "checker"] as const)
 			expect(sessionReceivesProjectSecrets({ agentRole })).toBe(false);
+	});
+});
+
+describe("the secrets context line", () => {
+	const names = [
+		{ name: "GITHUB_APP_ID", kind: "runtime" as const },
+		{ name: "PRODUCTION_ENV_FILE", kind: "runtime" as const },
+		{ name: "NPM_TOKEN", kind: "build" as const },
+	];
+
+	it("lists names only (build secrets are not set), then the check rule, in about 100 tokens", () => {
+		const line = secretsContextLine(names);
+		expect(line).toContain("GITHUB_APP_ID, PRODUCTION_ENV_FILE");
+		expect(line).not.toContain("NPM_TOKEN");
+		expect(line).toContain("values are never shown");
+		expect(line).toContain(SECRETS_CHECK_RULE);
+		expect(line.length / 4).toBeLessThan(150);
+	});
+
+	it("is dropped with no secrets, and caps a long list", () => {
+		expect(secretsContextLine(undefined)).toBe("");
+		expect(secretsContextLine([])).toBe("");
+		expect(secretsContextLine([{ name: "ONLY_BUILD", kind: "build" }])).toBe(
+			"",
+		);
+		const many = Array.from({ length: 60 }, (_, i) => ({
+			name: `S${i}`,
+			kind: "runtime" as const,
+		}));
+		expect(secretsContextLine(many)).toContain("and 20 more");
+	});
+
+	it("the full instructions carry the same check rule", () => {
+		expect(projectSecretsInstructions(names)).toContain(SECRETS_CHECK_RULE);
 	});
 });
