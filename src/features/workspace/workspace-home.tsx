@@ -713,6 +713,9 @@ export function WorkspaceHome({
 			staleTime: 60_000,
 			// The sidebar's waiting-on-you counts: a visible tab refreshes them
 			// every 5 min (and on focus); an idle tab costs 2 requests per 5 min.
+			// Nothing pushes GitHub changes, so a return to the tab reads them
+			// (once older than staleTime) even while the user hub pushes.
+			refetchOnWindowFocus: true,
 			refetchInterval: 300_000,
 		})),
 	});
@@ -723,6 +726,9 @@ export function WorkspaceHome({
 			staleTime: 60_000,
 			// The sidebar's waiting-on-you counts: a visible tab refreshes them
 			// every 5 min (and on focus); an idle tab costs 2 requests per 5 min.
+			// Nothing pushes GitHub changes, so a return to the tab reads them
+			// (once older than staleTime) even while the user hub pushes.
+			refetchOnWindowFocus: true,
 			refetchInterval: 300_000,
 		})),
 	});
