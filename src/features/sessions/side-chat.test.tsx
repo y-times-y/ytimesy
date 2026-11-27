@@ -61,3 +61,15 @@ it("lists /side in the slash menu and opens a side chat", () => {
 	// The side chat holds the same chat view as Main, not a separate form.
 	expect(pane).toContain("Main chat composer");
 });
+
+it("gives the side chat the same composer tokens as Main", async () => {
+	const { readFileSync } = await import("node:fs");
+	const side = readFileSync("src/features/sessions/side-chat.css", "utf8");
+	const main = readFileSync("src/styles.css", "utf8");
+	for (const css of [side, main]) {
+		expect(css).toContain("var(--composer-gutter");
+		expect(css).toContain("var(--composer-bottom");
+	}
+	expect(side).toContain("var(--composer-agents-reserve");
+	expect(side).not.toMatch(/padding-inline:\s*14px/);
+});

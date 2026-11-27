@@ -1,3 +1,12 @@
+/* One set of composer layout tokens for Main and the side chat, so their
+   composers share gutters, bottom offset and baseline. The reserve is the
+   folded agent list (6px margin + 28px row + 2px) Main shows under its
+   composer; the side chat leaves the same room so the baselines line up. */
+:root {
+	--composer-gutter: 12px;
+	--composer-bottom: 8px;
+	--composer-agents-reserve: 36px;
+}
 .session-launcher {
 	position: relative;
 	width: 100%;
