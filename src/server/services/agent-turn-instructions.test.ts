@@ -553,3 +553,32 @@ describe("canvas instructions", () => {
 		}
 	});
 });
+
+describe("secret names in every builder route's instructions", () => {
+	const secretNames = [{ name: "GITHUB_APP_ID", kind: "runtime" as const }];
+	const root = { session: {}, tools: { stub }, ...base };
+	it("the lean builder, the classic builder and Y carry the names and the check rule; a reader and Y² do not", () => {
+		const rule = "Before saying a credential, key or token is unavailable";
+		for (const input of [
+			{ ...root, secretNames },
+			{ ...root, leanShape: undefined, secretNames },
+			{ ...root, y: true, secretNames },
+		]) {
+			const text = agentTurnInstructions(input as never);
+			expect(text).toContain("GITHUB_APP_ID");
+			expect(text).toContain(rule);
+		}
+		expect(
+			agentTurnInstructions({ ...root, ySquared: true, secretNames } as never),
+		).not.toContain("GITHUB_APP_ID");
+		expect(
+			agentTurnInstructions({ ...root, secretNames: [] } as never),
+		).not.toContain("Before saying a credential");
+	});
+
+	it("is a pure function of the names: a resumed or compacted session gets the same text", () => {
+		const first = agentTurnInstructions({ ...root, secretNames } as never);
+		const later = agentTurnInstructions({ ...root, secretNames } as never);
+		expect(later).toBe(first);
+	});
+});

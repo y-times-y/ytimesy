@@ -198,6 +198,8 @@ export type ClaudeCodeStepInput = {
 	 * the repository, run_code, browser, job and canvas lines of the system
 	 * prompt, and every native Claude tool is off.
 	 */
+	/** The compact secret-names line (secretsContextLine); the system prompt carries it every step. */
+	readonly secretsLine?: string;
 	readonly ySquared?: {
 		readonly instructions: string;
 		/** The names of the tools the run is offered (the real set, not a hand list). */
@@ -455,12 +457,14 @@ export function ySquaredToolList(names?: readonly string[]): string {
 		: (list[0] ?? "");
 }
 
+/** The CLI's system prompt; written afresh on every step, so a resumed session and a compacted one carry it. */
 export function systemPrompt(
 	cwd: string,
 	reader: boolean,
 	remote?: ClaudeCodeStepInput["remote"],
 	ySquared?: ClaudeCodeStepInput["ySquared"],
 	pullRequest?: string,
+	secretsLine?: string,
 ) {
 	if (ySquared)
 		return [
@@ -494,6 +498,7 @@ export function systemPrompt(
 		reader
 			? "You are a read-only helper: do not change files; report what you find."
 			: "",
+		reader ? "" : (secretsLine ?? ""),
 	]
 		.filter(Boolean)
 		.join("\n");
@@ -1237,6 +1242,7 @@ async function launchRun(
 				input.remote,
 				input.ySquared,
 				input.pullRequestNote,
+				input.secretsLine,
 			),
 		},
 		{ path: `${runDirectory}/prompt`, contents: prompt },

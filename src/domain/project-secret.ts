@@ -173,6 +173,33 @@ export type AgentSecretName = {
 export const DESCRIBE_SECRET_TOOL = "describe_secret";
 export const SECRET_DESCRIPTION_LIMIT = 500;
 
+/** Said wherever the agent is told its secrets, so it checks before it claims one is missing. */
+export const SECRETS_CHECK_RULE =
+	"Before saying a credential, key or token is unavailable, check the environment variable names (`printenv NAME >/dev/null`, or `env | cut -d= -f1`); never print values.";
+
+/** Most names the compact line lists; the rest are counted. */
+const SECRETS_LINE_LIMIT = 40;
+
+/**
+ * The compact line for surfaces that do not carry the full instructions (the
+ * Claude Code prompt): names only, then the check rule. Empty with no secrets.
+ */
+export function secretsContextLine(
+	secrets: readonly AgentSecretName[] | undefined,
+) {
+	if (!secrets?.length) return "";
+	const names = secrets
+		.filter((secret) => secret.kind !== "build")
+		.map((secret) => secret.name);
+	if (!names.length) return "";
+	const shown = names.slice(0, SECRETS_LINE_LIMIT);
+	const more =
+		names.length > shown.length
+			? ` and ${names.length - shown.length} more`
+			: "";
+	return `Secrets available in this environment (names only, values are never shown): ${shown.join(", ")}${more}. ${SECRETS_CHECK_RULE}`;
+}
+
 /**
  * Tells the agent which project secrets exist and how each reaches it, by name
  * only, so it uses the variable instead of guessing or printing the environment.
@@ -201,7 +228,7 @@ export function projectSecretsInstructions(
 		listed("build") &&
 			`Build secrets (environment setup only, not set for you): ${listed("build")}.`,
 	].filter(Boolean);
-	return `Project secrets are set in every command's environment. ${lines.join(" ")} Reference them by name (for example "$NAME"); never print, echo or write their values to files, and never display them on screen: screenshots are not redacted.${options.describeTool && unverified.length ? ` Not yet identified: ${unverified.join(", ")}. Before you rely on one of these, or ask the user for a credential, identify it (its name, the first four characters and the length of its value, how this repository uses it), test it from the shell with that service's read-only whoami or list call (look it up in the service's documentation), then save what you learned with ${DESCRIBE_SECRET_TOOL}: the service, whose identity it is, what it can do, how you tested it. Never put a value in the description.` : ""}`;
+	return `Project secrets are set in every command's environment. ${lines.join(" ")} Reference them by name (for example "$NAME"); never print, echo or write their values to files, and never display them on screen: screenshots are not redacted. ${SECRETS_CHECK_RULE}${options.describeTool && unverified.length ? ` Not yet identified: ${unverified.join(", ")}. Before you rely on one of these, or ask the user for a credential, identify it (its name, the first four characters and the length of its value, how this repository uses it), test it from the shell with that service's read-only whoami or list call (look it up in the service's documentation), then save what you learned with ${DESCRIBE_SECRET_TOOL}: the service, whose identity it is, what it can do, how you tested it. Never put a value in the description.` : ""}`;
 }
 
 /**

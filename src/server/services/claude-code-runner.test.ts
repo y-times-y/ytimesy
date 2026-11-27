@@ -2525,3 +2525,42 @@ describe("Y² on a runner box (no machine)", () => {
 		).toBe(CLAUDE_SESSION);
 	});
 });
+
+describe("the Claude Code system prompt carries the secret names", () => {
+	it("on a VM, a runner box and a resumed step alike, never for Y² or a reader", async () => {
+		const { systemPrompt } = await import("./claude-code-runner");
+		const { secretsContextLine } = await import("#/domain/project-secret");
+		const line = secretsContextLine([
+			{ name: "GITHUB_APP_ID", kind: "runtime" },
+		]);
+		expect(systemPrompt("/repo", false, undefined, undefined, line)).toContain(
+			"GITHUB_APP_ID",
+		);
+		expect(
+			systemPrompt(
+				"/repo",
+				false,
+				{ repository: "/repo", workspaceTools: [] },
+				undefined,
+				line,
+			),
+		).toContain("Before saying a credential");
+		// the prompt is rebuilt every step: same text on a later (resumed) step
+		expect(systemPrompt("/repo", false, undefined, undefined, line)).toBe(
+			systemPrompt("/repo", false, undefined, undefined, line),
+		);
+		expect(
+			systemPrompt("/repo", true, undefined, undefined, line),
+		).not.toContain("GITHUB_APP_ID");
+		expect(
+			systemPrompt(
+				"/repo",
+				false,
+				{ repository: "/repo", workspaceTools: [] },
+				{ instructions: "Y2" },
+				line,
+			),
+		).not.toContain("GITHUB_APP_ID");
+		expect(systemPrompt("/repo", false)).not.toContain("Secrets available");
+	});
+});

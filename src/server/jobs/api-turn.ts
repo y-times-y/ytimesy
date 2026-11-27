@@ -101,6 +101,7 @@ import { posixShellCommand, posixShellQuoted } from "#/domain/posix-command";
 import {
 	agentSecretsEnvFile,
 	SOURCE_AGENT_SECRETS,
+	secretsContextLine,
 	sessionReceivesProjectSecrets,
 } from "#/domain/project-secret";
 import { publicFailureMessage } from "#/domain/project-workspace";
@@ -3225,6 +3226,10 @@ async function runApiTurnAttempt(
 									workspace: checkout,
 									machines: unscopedMachines,
 								}),
+						// The Claude Code prompt has no builder instructions: it gets the names line.
+						...(receivesSecrets && !ySquared
+							? { secretsLine: secretsContextLine(projectSecrets?.names) }
+							: {}),
 						userId: owner.userId,
 						sessionId: owner.id,
 						turnId: turn.id,
