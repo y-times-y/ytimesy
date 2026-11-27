@@ -1,4 +1,9 @@
-import { ensureYSquaredChat, projectYMode } from "../adapters/y-mode";
+import {
+	enableDefaultYProjects,
+	ensureYSquaredChat,
+	projectsMissingYSquared,
+	projectYMode,
+} from "../adapters/y-mode";
 import { resolveLinkedChatRoute } from "./linked-chat-route";
 
 /**
@@ -14,6 +19,9 @@ export async function createProjectYSquared(
 	projectId: string,
 ): Promise<string | null> {
 	try {
+		// A project added again after it was removed comes back with the Y
+		// mode it had before Y² was the default; it follows the default now.
+		await enableDefaultYProjects(userId);
 		const mode = await projectYMode(userId, projectId);
 		if (!mode?.enabled) return null;
 		if (mode.ySquaredId) return mode.ySquaredId;
@@ -22,9 +30,38 @@ export async function createProjectYSquared(
 			harnessId: "codex",
 			modelId: "",
 		}).catch(() => null);
-		return await ensureYSquaredChat(userId, projectId, route);
+		const id = await ensureYSquaredChat(userId, projectId, route);
+		if (id) console.info("y_squared.ensured", { projectId, chatId: id });
+		return id;
 	} catch (error) {
 		console.error("y_squared.create_on_add_failed", error);
 		return null;
+	}
+}
+
+/**
+ * Self-healing, run on every page load: any live project of a user with Y²
+ * on that has no Y² chat gets one (idempotent: the partial unique index
+ * decides a race), and a project that never chose follows the default. Logs
+ * `y_squared.missing` (project count) whenever it finds one lacking, and
+ * `y_squared.repair_failed` if the repair itself fails. Never throws.
+ */
+export async function repairMissingYSquared(userId: string): Promise<number> {
+	try {
+		const enabled = await enableDefaultYProjects(userId);
+		const missing = await projectsMissingYSquared(userId);
+		if (!missing.length) return 0;
+		console.warn("y_squared.missing", {
+			projects: missing.length,
+			enabledByDefault: enabled.length,
+		});
+		let created = 0;
+		for (const projectId of missing)
+			if (await createProjectYSquared(userId, projectId)) created += 1;
+		console.warn("y_squared.repaired", { created, of: missing.length });
+		return created;
+	} catch (error) {
+		console.error("y_squared.repair_failed", error);
+		return 0;
 	}
 }

@@ -54,7 +54,17 @@ export function yModeChange(
 	};
 }
 
-/** Project settings: Y for this project's chats, with a Y² chat above them (src/domain/y-agent.ts). */
+/** The Y² switch's wording: every chat is Y, so the setting names only Y². */
+export const Y_SQUARED_SWITCH_COPY = {
+	section: "Y²",
+	sectionMeta: "The Super agent above this project's chats.",
+	title: "Use Y²",
+	description:
+		"On by default. Y² stays quiet until you connect a model, and it runs only on your own plan or key. Off: each chat does the work itself.",
+	hint: "Y², the Super agent, is pinned above the chats and tells you what is going on across them. Each chat is Y: it hands the work to builders and keeps you posted, and builders' changes go to the chat's pull request.",
+} as const;
+
+/** Project settings: Y² (the Super agent) for this project, pinned above its chats (src/domain/y-agent.ts). */
 export function YModeSettings({ projectId }: { projectId: string }) {
 	const read = useServerFn(readYModeFn);
 	const save = useServerFn(saveYModeFn);
@@ -69,23 +79,21 @@ export function YModeSettings({ projectId }: { projectId: string }) {
 		<section className="settings-section">
 			<header className="settings-section-head">
 				<div>
-					<h3>Y</h3>
-					<p>How this project's chats work.</p>
+					<h3>{Y_SQUARED_SWITCH_COPY.section}</h3>
+					<p>{Y_SQUARED_SWITCH_COPY.sectionMeta}</p>
 				</div>
 			</header>
 			<div className="settings-group">
 				<div className="settings-row">
 					<div className="settings-row-text">
 						<label htmlFor="project-y-mode" className="settings-row-title">
-							Use Y and Y²
+							{Y_SQUARED_SWITCH_COPY.title}
 						</label>
 						<span
 							className="settings-row-meta"
-							title="Each chat is Y: it hands the work to builders and keeps you posted, and builders' changes go to the chat's pull request. Y², pinned above the chats, tells you what is going on across them."
+							title={Y_SQUARED_SWITCH_COPY.hint}
 						>
-							On by default. It stays quiet until you connect a model, and it
-							runs only on your own plan or key. Off: each chat does the work
-							itself.
+							{Y_SQUARED_SWITCH_COPY.description}
 						</span>
 					</div>
 					<div className="settings-row-actions">
@@ -108,7 +116,7 @@ export function YModeSettings({ projectId }: { projectId: string }) {
 
 /**
  * The user-level off switch: Y² for all of this person's projects, now and
- * the ones they add later (Settings and Project settings > Y show the same).
+ * the ones they add later (Settings and Project settings > Y² show the same).
  */
 function YUserDefaultSwitch() {
 	const read = useServerFn(readUserYDefaultFn);

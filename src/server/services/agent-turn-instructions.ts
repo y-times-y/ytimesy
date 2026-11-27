@@ -27,6 +27,7 @@ import {
 	DESCRIBE_SECRET_TOOL,
 	projectSecretsInstructions,
 } from "#/domain/project-secret";
+import { PULL_REQUEST_INSTRUCTIONS } from "#/domain/pull-request-tools";
 import {
 	RIGOR_BUILDER_INSTRUCTIONS,
 	RIGOR_LEAD_REQUIREMENTS,
@@ -106,7 +107,7 @@ export function agentTurnInstructions(input: {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
 	const { session, tools, plugins, projectKnowledge, secretNames } = input;
-	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely. ${BUILDER_ENVIRONMENT_INSTRUCTIONS} ${roleInstructions(session, AGENT_TOOL in tools)}${"browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}${CANVAS_TOOL in tools ? `\n${canvasInstructions()}` : ""}\n${artifactInstructions()}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames, { describeTool: DESCRIBE_SECRET_TOOL in tools })}` : ""}${rigorApplies(input) ? `\n${rigorBlock(input)}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
+	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely. ${BUILDER_ENVIRONMENT_INSTRUCTIONS} ${roleInstructions(session, AGENT_TOOL in tools)}${"browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}${session.agentRole ? "" : `\n${PULL_REQUEST_INSTRUCTIONS}`}${CANVAS_TOOL in tools ? `\n${canvasInstructions()}` : ""}\n${artifactInstructions()}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames, { describeTool: DESCRIBE_SECRET_TOOL in tools })}` : ""}${rigorApplies(input) ? `\n${rigorBlock(input)}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
 }
 
 /** Y's system prompt: its role and the project's secret names, never the builder's tool guidance. */

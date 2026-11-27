@@ -19,6 +19,12 @@ import {
  * blocks WebSockets).
  */
 export const HUB_FAILURES_BEFORE_POLLING = 3;
+/**
+ * After those failures the page keeps polling, and tries the socket again
+ * this often (and at once when the person comes back): a deploy restarting
+ * the hub or a full hub must not leave a tab without pushes for hours.
+ */
+export const HUB_RETRY_AFTER_GIVE_UP_MS = 5 * 60_000;
 
 /**
  * A tab that was away this long may have slept through pushes: its socket can
@@ -85,7 +91,12 @@ export function hubReadsToMake(input: {
 		if (isTurnRunning(turnStatus)) {
 			if (!isTurnRunning(input.sidebarStatuses.get(id) ?? "idle"))
 				refreshList = true;
-		} else if (input.backgroundChatIds.includes(id)) reads.add(id);
+		} else {
+			// Settled: the sidebar's status (finished, needs you) changed too.
+			if (isTurnRunning(input.sidebarStatuses.get(id) ?? "idle"))
+				refreshList = true;
+			if (input.backgroundChatIds.includes(id)) reads.add(id);
+		}
 	}
 	if (message.full)
 		for (const id of input.backgroundChatIds)
@@ -124,8 +135,9 @@ export function userHubUrl(location: { protocol: string; host: string }) {
 /**
  * The signed-in user's hub socket. Reconnects with backoff, and every
  * (re)connect starts with the whole map, so a missed push is caught up.
- * Gives up for the page after HUB_FAILURES_BEFORE_POLLING sockets in a row
- * that never delivered, or when the server does not offer it. Returns the
+ * After HUB_FAILURES_BEFORE_POLLING sockets in a row that never delivered it
+ * polls and retries slowly (HUB_RETRY_AFTER_GIVE_UP_MS); it stops only when
+ * the server does not offer it. Returns the
  * function that closes it for good.
  */
 export function openUserHub(options: UserHubOptions): () => void {
@@ -164,9 +176,11 @@ export function openUserHub(options: UserHubOptions): () => void {
 			if (closed) return;
 			if (delivering) options.onDrop();
 			if (code === LIVE_SOCKET_CLOSE.notOffered) return;
-			if (!delivering && ++failedSockets >= HUB_FAILURES_BEFORE_POLLING) return;
-			const delay =
-				code === LIVE_SOCKET_CLOSE.reauthorize
+			const gaveUp =
+				!delivering && ++failedSockets >= HUB_FAILURES_BEFORE_POLLING;
+			const delay = gaveUp
+				? HUB_RETRY_AFTER_GIVE_UP_MS
+				: code === LIVE_SOCKET_CLOSE.reauthorize
 					? 0
 					: progressReopenDelayMs(attempt++);
 			retry = setTimeout(() => {

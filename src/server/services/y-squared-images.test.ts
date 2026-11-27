@@ -235,3 +235,85 @@ describe("Y² attachment note and history", () => {
 		);
 	});
 });
+
+describe("Y²'s model input drops old reasoning, so a changed prompt never meets a stale thinking block", () => {
+	const reasoning = (text: string) => ({
+		type: "reasoning" as const,
+		text,
+		providerOptions: { anthropic: { signature: "sig" } },
+	});
+	const history = [
+		{ role: "user" as const, content: "What is going on?" },
+		{
+			role: "assistant" as const,
+			content: [
+				reasoning("old thinking"),
+				{ type: "text" as const, text: "Two threads working." },
+			],
+		},
+		{ role: "user" as const, content: "And now?" },
+		{
+			role: "assistant" as const,
+			content: [
+				reasoning("this turn's thinking"),
+				{
+					type: "tool-call" as const,
+					toolCallId: "t1",
+					toolName: "threads",
+					input: {},
+				},
+			],
+		},
+		{
+			role: "tool" as const,
+			content: [
+				{
+					type: "tool-result" as const,
+					toolCallId: "t1",
+					toolName: "threads",
+					output: { type: "text" as const, value: "ok" },
+				},
+			],
+		},
+	];
+	const parts = (
+		messages: ReturnType<typeof ySquaredModelMessages>,
+		index: number,
+	) => {
+		const content = messages[index].content;
+		return Array.isArray(content) ? content.map((p) => p.type) : [];
+	};
+
+	it("removes reasoning from assistant messages before the latest user message", () => {
+		const out = ySquaredModelMessages(history);
+		expect(parts(out, 1)).toEqual(["text"]);
+	});
+
+	it("keeps the current turn's reasoning: a tool loop needs it", () => {
+		const out = ySquaredModelMessages(history);
+		expect(parts(out, 3)).toEqual(["reasoning", "tool-call"]);
+	});
+
+	it("is idempotent and leaves user and tool messages alone", () => {
+		const once = ySquaredModelMessages(history);
+		expect(ySquaredModelMessages(once)).toEqual(once);
+		expect(once[0]).toEqual(history[0]);
+		expect(once[4]).toEqual(history[4]);
+	});
+
+	it("an assistant message that was only reasoning is dropped, not left empty", () => {
+		const out = ySquaredModelMessages([
+			{ role: "user", content: "a" },
+			{ role: "assistant", content: [reasoning("only")] },
+			{ role: "user", content: "b" },
+		]);
+		expect(out.map((m) => m.role)).toEqual(["user", "user"]);
+	});
+
+	it("changing Y²'s prompt does not matter to old history: the same input whatever the instructions", () => {
+		// The stored history is what is resent; nothing in it carries the instructions.
+		expect(JSON.stringify(ySquaredModelMessages(history))).not.toContain(
+			"old thinking",
+		);
+	});
+});

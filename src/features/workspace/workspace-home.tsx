@@ -260,6 +260,7 @@ import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import { chatCacheFor, clearChatCache } from "../sessions/chat-cache";
 import { chatListRetry } from "../sessions/chat-list-retry";
+
 import { ChatRefreshingContext } from "../sessions/chat-refreshing";
 import { chatSideKeys } from "../sessions/chat-side-queries";
 import {
@@ -313,6 +314,7 @@ import {
 	STREAMED_CHANGES_READ_MS,
 } from "./git-changes-polling";
 import { UsageWarningBanner } from "./infrastructure-usage";
+import { followListChanges, SIDEBAR_REVALIDATE_MS } from "./live-freshness";
 import { openLiveProgress } from "./live-progress-connection";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import {
@@ -593,6 +595,10 @@ export function WorkspaceHome({
 		queryKey: ["projects"],
 		queryFn: () => requestJson<Project[]>("/api/projects"),
 		initialData: initialProjects,
+		// Catch-all: a project added elsewhere has no hub signal, so a visible
+		// tab re-reads the list now and then (and on focus).
+		refetchInterval: SIDEBAR_REVALIDATE_MS,
+		refetchOnWindowFocus: true,
 		retry: retryTransientRead,
 		retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 2000),
 	});
@@ -665,6 +671,8 @@ export function WorkspaceHome({
 		// The sidebar reads every project's list (below); switching to a
 		// project does not read its list again within that window.
 		staleTime: 30_000,
+		refetchInterval: SIDEBAR_REVALIDATE_MS,
+		refetchOnWindowFocus: true,
 		...chatListRetry,
 	});
 	// Every project's chats, for the sidebar's Recent list and project order;
@@ -675,6 +683,8 @@ export function WorkspaceHome({
 			queryFn: () =>
 				listProjectAgentSessions({ data: { projectId: project.id } }),
 			staleTime: 30_000,
+			refetchInterval: SIDEBAR_REVALIDATE_MS,
+			refetchOnWindowFocus: true,
 			...chatListRetry,
 		})),
 	});
@@ -682,6 +692,14 @@ export function WorkspaceHome({
 		project,
 		chats: projectChatLists[index]?.data ?? [],
 	}));
+	// How many chats the user has in all: starter prompts are for a new user only.
+	const allChatListsLoaded =
+		projects.data !== undefined &&
+		projectChatLists.every((list) => list.data !== undefined);
+	const totalChatCount = projectChats.reduce(
+		(sum, group) => sum + group.chats.length,
+		0,
+	);
 	// Every repository connected to a project: the Pull requests and Issues pages
 	// list these, and the sidebar badge counts what waits on the user in them.
 	const workRepositories = useMemo(
@@ -695,6 +713,9 @@ export function WorkspaceHome({
 			staleTime: 60_000,
 			// The sidebar's waiting-on-you counts: a visible tab refreshes them
 			// every 5 min (and on focus); an idle tab costs 2 requests per 5 min.
+			// Nothing pushes GitHub changes, so a return to the tab reads them
+			// (once older than staleTime) even while the user hub pushes.
+			refetchOnWindowFocus: true,
 			refetchInterval: 300_000,
 		})),
 	});
@@ -705,6 +726,9 @@ export function WorkspaceHome({
 			staleTime: 60_000,
 			// The sidebar's waiting-on-you counts: a visible tab refreshes them
 			// every 5 min (and on focus); an idle tab costs 2 requests per 5 min.
+			// Nothing pushes GitHub changes, so a return to the tab reads them
+			// (once older than staleTime) even while the user hub pushes.
+			refetchOnWindowFocus: true,
 			refetchInterval: 300_000,
 		})),
 	});
@@ -2333,6 +2357,10 @@ export function WorkspaceHome({
 			refetchIntervalInBackground: false,
 		})),
 	});
+	// A pushed list change (thread created, renamed, archived, started,
+	// settled, needs you; a project added) reads exactly the lists it names;
+	// a reconnect or a skipped event version reads them all.
+	useEffect(() => followListChanges(userHubStore, queryClient), [queryClient]);
 	const hubSeenWholeMap = useRef(false);
 	const onHubState = useRef<(message: HubStateMessage) => void>(() => {});
 	onHubState.current = (message) => {
@@ -2407,6 +2435,9 @@ export function WorkspaceHome({
 	const projectSetup = useQuery({
 		...workspaceStatusQuery(selectedProject?.id ?? ""),
 		enabled: Boolean(selectedProject?.id),
+		// Catch-all: a setup change nobody signalled shows within a minute.
+		refetchInterval: SIDEBAR_REVALIDATE_MS,
+		refetchOnWindowFocus: true,
 	});
 	const projectSetupStatus = projectSetup.data?.status;
 	// A new project's setup runs in its own chat, started by the server
@@ -4223,9 +4254,22 @@ export function WorkspaceHome({
 												mentionThreads={mentionThreads}
 												emptyState={
 													ySquaredOpen
-														? (send) => <YSquaredEmptyState onSend={send} />
+														? (send, welcome) => (
+																<YSquaredEmptyState
+																	onSend={send}
+																	{...(welcome ? { welcome } : {})}
+																/>
+															)
 														: selectedProject
-															? (send) => <ThreadEmptyState onSend={send} />
+															? (send) => (
+																	<ThreadEmptyState
+																		onSend={send}
+																		projectCount={projects.data?.length ?? 0}
+																		chatCount={
+																			allChatListsLoaded ? totalChatCount : null
+																		}
+																	/>
+																)
 															: undefined
 												}
 												setupHold={

@@ -8,6 +8,7 @@ import {
 	HUB_FAILURES_BEFORE_POLLING,
 	HUB_PROBE_AFTER_AWAY_MS,
 	HUB_PROBE_REPLY_MS,
+	HUB_RETRY_AFTER_GIVE_UP_MS,
 	hubReadsToMake,
 	openUserHub,
 } from "./user-hub-connection";
@@ -37,7 +38,16 @@ describe("hubReadsToMake", () => {
 				...base,
 				message: { type: "state", chats: { bg: { turnStatus: "completed" } } },
 			}),
-		).toEqual({ reads: ["bg"], refreshList: false });
+		).toEqual({ reads: ["bg"], refreshList: true });
+	});
+	it("reads the chat list when a chat the sidebar shows running settles (finished, needs you)", () => {
+		expect(
+			hubReadsToMake({
+				...base,
+				backgroundChatIds: [],
+				message: { type: "state", chats: { bg2: { turnStatus: "completed" } } },
+			}),
+		).toEqual({ reads: [], refreshList: true });
 	});
 	it("reads the chat list when an idle chat starts running", () => {
 		expect(
@@ -151,13 +161,46 @@ describe("openUserHub", () => {
 		expect(events.slice(3)).toEqual(["open", "state:full"]);
 	});
 
-	it("gives up for the page after sockets in a row that never delivered", () => {
+	it("after sockets in a row that never delivered it retries slowly instead of giving up for the page", () => {
 		const { sockets } = harness();
 		for (let index = 0; index < HUB_FAILURES_BEFORE_POLLING; index++) {
 			sockets[index].onclose?.({ code: 1006 });
 			vi.advanceTimersByTime(20_000);
 		}
+		// Quiet while polling covers the gap (a deploy restart, a refused socket)...
 		expect(sockets).toHaveLength(HUB_FAILURES_BEFORE_POLLING);
+		// ...then one more try, and on, for as long as the page is open.
+		vi.advanceTimersByTime(HUB_RETRY_AFTER_GIVE_UP_MS);
+		expect(sockets).toHaveLength(HUB_FAILURES_BEFORE_POLLING + 1);
+		sockets[HUB_FAILURES_BEFORE_POLLING].onmessage?.({
+			data: hubStateMessage({}, true),
+		});
+	});
+
+	it("a slow retry waiting is done at once when the person comes back", () => {
+		const sockets: FakeSocket[] = [];
+		let wake: (awayMs: number) => void = () => {};
+		openUserHub({
+			location,
+			createSocket: () => {
+				const socket = new FakeSocket();
+				sockets.push(socket);
+				return socket;
+			},
+			onState: () => {},
+			onOpen: () => {},
+			onDrop: () => {},
+			watchReturn: (next) => {
+				wake = next;
+				return () => {};
+			},
+		});
+		for (let index = 0; index < HUB_FAILURES_BEFORE_POLLING; index++) {
+			sockets[index].onclose?.({ code: 1006 });
+			vi.advanceTimersByTime(20_000);
+		}
+		wake(Number.POSITIVE_INFINITY);
+		expect(sockets).toHaveLength(HUB_FAILURES_BEFORE_POLLING + 1);
 	});
 
 	it("stops when the server does not offer it", () => {

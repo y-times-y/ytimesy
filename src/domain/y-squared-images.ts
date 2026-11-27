@@ -92,24 +92,49 @@ export function ySquaredAttachmentNote(text: string) {
 	return notes.length ? text.slice(0, at) + "\n\n" + notes.join("\n") : text;
 }
 
-/** Y²'s model input: user messages carry the Y² note. Idempotent. */
+/**
+ * Y²'s model input: user messages carry the Y² note, and the reasoning of
+ * earlier turns is left out. Claude binds each thinking block to the system
+ * prompt it was made under, and Y²'s prompt changes with every deploy and
+ * crew change, so a resumed Y² chat whose history held old thinking blocks
+ * failed with a 400 ("Your model provider turned this request down"). Y² has
+ * no use for its old reasoning; the current turn's stays (a tool loop needs
+ * it). Idempotent.
+ */
 export function ySquaredModelMessages(
 	messages: readonly ModelMessage[],
 ): ModelMessage[] {
-	return messages.map((message): ModelMessage => {
-		if (message.role !== "user") return message;
+	let lastUser = -1;
+	messages.forEach((message, index) => {
+		if (message.role === "user") lastUser = index;
+	});
+	return messages.flatMap((message, index): ModelMessage[] => {
+		if (
+			message.role === "assistant" &&
+			index < lastUser &&
+			Array.isArray(message.content) &&
+			message.content.some((part) => part.type === "reasoning")
+		) {
+			const content = message.content.filter(
+				(part) => part.type !== "reasoning",
+			);
+			return content.length ? [{ ...message, content }] : [];
+		}
+		if (message.role !== "user") return [message];
 		if (typeof message.content === "string") {
 			const content = ySquaredAttachmentNote(message.content);
-			return content === message.content ? message : { ...message, content };
+			return [content === message.content ? message : { ...message, content }];
 		}
-		return {
-			...message,
-			content: message.content.map((part) =>
-				part.type === "text"
-					? { ...part, text: ySquaredAttachmentNote(part.text) }
-					: part,
-			),
-		};
+		return [
+			{
+				...message,
+				content: message.content.map((part) =>
+					part.type === "text"
+						? { ...part, text: ySquaredAttachmentNote(part.text) }
+						: part,
+				),
+			},
+		];
 	});
 }
 

@@ -12,6 +12,7 @@ import {
 	hubChangeFromMessage,
 	hubDelivery,
 	hubReadDelayMs,
+	focusRefetchWanted,
 	pollUnlessPushed,
 	tabWasAway,
 } from "./user-hub-store";
@@ -166,5 +167,64 @@ describe("coming back to a tab that was away", () => {
 		expect(tabWasAway(1_000, 1_000 + AWAY_REREAD_MS)).toBe(true);
 		expect(tabWasAway(1_000, 1_000 + AWAY_REREAD_MS - 1)).toBe(false);
 		expect(tabWasAway(null, 99_999)).toBe(false);
+	});
+});
+
+describe("event versions detect a gap", () => {
+	const start = hubChangeFromMessage(EMPTY_HUB_MEMORY, {
+		type: "state",
+		full: true,
+		chats: {},
+		signals: {},
+		seq: 10,
+	});
+	it("takes the next version as a normal change", () => {
+		const next = hubChangeFromMessage(start.memory, {
+			type: "state",
+			chats: {},
+			signals: { projects: 1 },
+			seq: 11,
+		});
+		expect(next.change).toEqual({
+			kind: "topics",
+			topics: new Set(["projects"]),
+		});
+		expect(next.memory.seq).toBe(11);
+	});
+	it("asks a resync when a version was skipped, even if the message moved nothing", () => {
+		const gap = hubChangeFromMessage(start.memory, {
+			type: "state",
+			chats: {},
+			signals: { projects: 1 },
+			seq: 14,
+		});
+		expect(gap.change).toEqual({ kind: "resync" });
+		expect(gap.memory.seq).toBe(14);
+	});
+	it("ignores versions from a hub that sends none", () => {
+		const plain = hubChangeFromMessage(EMPTY_HUB_MEMORY, {
+			type: "state",
+			chats: {},
+			signals: { projects: 1 },
+		});
+		expect(plain.change).toEqual({
+			kind: "topics",
+			topics: new Set(["projects"]),
+		});
+	});
+});
+
+describe("focusRefetchWanted", () => {
+	const pushing = { open: true, signals: true };
+	const polling = { open: false, signals: false };
+	it("a query the hub pushes (it has a push-or-poll interval) skips a quick return while pushed", () => {
+		expect(focusRefetchWanted(pushing, true, false, 1_000)).toBe(false);
+	});
+	it("a query nothing pushes (no interval, no hub topic) reads on every return", () => {
+		expect(focusRefetchWanted(pushing, false, false, 1_000)).toBe(true);
+	});
+	it("everything reads on return when the hub is down or the tab was away", () => {
+		expect(focusRefetchWanted(polling, true, false, 1_000)).toBe(true);
+		expect(focusRefetchWanted(pushing, true, true, 1_000)).toBe(true);
 	});
 });

@@ -29,9 +29,9 @@ export function saveProjectSecretTools(input: {
 	return {
 		[SAVE_PROJECT_SECRET_TOOL]: tool({
 			description:
-				"Save a credential you now hold as a project secret, so every other chat in this project has it as an environment variable without the user doing the sign-in again. Use it after the user approved access and you signed in with a CLI or obtained a token. Give a command whose output is exactly the value, for example `gh auth token`; it runs in the workspace and the output is saved without you seeing it. Never pass the value itself. Saving replaces a secret of the same name. Always ask the user first with ask_user, and only call this once they say yes: offer 'this project only', 'all my projects' and 'do not save'. Use scope \"project\" or \"account\" to match their answer; an account secret reaches every project they own.",
+				"Save a credential you now hold as a project secret, so every other chat in this project has it as an environment variable without the user doing the sign-in again. Use it after the user approved access and you signed in with a CLI or obtained a token. Give a command whose output is exactly the value, for example `fly auth token`; it runs in the workspace and the output is saved without you seeing it. Never use it for GitHub: GitHub is already connected through ytimesy. Never pass the value itself. Saving replaces a secret of the same name. Always ask the user first with ask_user, and only call this once they say yes: offer 'this project only', 'all my projects' and 'do not save'. Use scope \"project\" or \"account\" to match their answer; an account secret reaches every project they own.",
 			inputSchema: z.object({
-				name: z.string().describe("Environment variable name, e.g. GH_TOKEN."),
+				name: z.string().describe("Environment variable name, e.g. FLY_API_TOKEN."),
 				valueCommand: z
 					.string()
 					.min(1)

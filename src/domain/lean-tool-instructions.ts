@@ -1,4 +1,5 @@
 import { LEAN_SHAPE_TOOLS, type LeanToolShape } from "./harness-model-profile";
+import { PULL_REQUEST_INSTRUCTIONS } from "./pull-request-tools";
 
 /** "a, b and c". */
 function listed(names: readonly string[]) {
@@ -94,8 +95,7 @@ export function leanToolInstructions(
  * default branch unless the project allows it, and the user's approval
  * (request_push_approval's card) pushes it server-side while the agent works on.
  */
-const GIT_REMOTE_LINE =
-	"- git to GitHub works normally here. Push work to your own branch; a push to the default branch needs the user's approval (request_push_approval, then keep working) unless the project allows it.";
+const GIT_REMOTE_LINE = `- git to GitHub works normally here. Push work to your own branch. ${PULL_REQUEST_INSTRUCTIONS}`;
 
 /** Small edits over rewrites: a whole file re-sent through a heredoc costs its full length in output. */
 function editLine(shape: LeanToolShape) {

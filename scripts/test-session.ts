@@ -94,7 +94,9 @@ export async function requestTestSession(input: {
 		| "seed-github-unlinked"
 		| "seed-setup-building"
 		| "seed-setup-failed"
-		| "seed-setup-ready";
+		| "seed-setup-ready"
+		| "seed-thread-start"
+		| "seed-thread-settle";
 	/** Only `seed`: the model key to connect, sealed server-side; never printed. */
 	apiKey?: string;
 	/** Only `vm-map`: machine slugs to classify. */

@@ -454,6 +454,39 @@ describe("turn box edge: claim and identity", () => {
 		forgetLatestBoxVersionForTests();
 	});
 
+	it("approves a restart for one old box at a time, and says nothing when it cannot tell", async () => {
+		forgetLatestBoxVersionForTests();
+		const edge = await fakeEdge({
+			bundle: async () => ({
+				url: "https://r2.test/turn-box/b.mjs.gz?sig",
+				sha256: "b".repeat(64),
+				version: "b-version",
+			}),
+		});
+		const register = async (version: string) =>
+			(await (
+				await post(edge, TURN_BOX_PATHS.register, edge.identity, {
+					capacity: 1,
+					running: 0,
+					version,
+				})
+			).json()) as Record<string, unknown>;
+		edge.state.restartApproved = false;
+		expect(await register("a-version")).toMatchObject({
+			restartApproved: false,
+		});
+		edge.state.restartApproved = true;
+		expect(await register("a-version")).toMatchObject({
+			restartApproved: true,
+		});
+		// A box already on the published program is not asked to restart.
+		expect(await register("b-version")).not.toHaveProperty("restartApproved");
+		// No answer: the field is left out and the box restarts as before.
+		edge.state.restartApproved = undefined;
+		expect(await register("a-version")).not.toHaveProperty("restartApproved");
+		forgetLatestBoxVersionForTests();
+	});
+
 	it("serves the box program to a live identity only", async () => {
 		const bundle = {
 			url: "https://r2.test/turn-box/a.mjs.gz?sig",

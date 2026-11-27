@@ -35,8 +35,31 @@ export const USER_HUB_SILENCE_MS = 2 * USER_HUB_PING_MS + 30_000;
 export const USER_HUB_AUTHORIZATION_MS = 10 * 60_000;
 /** Most chats one hub remembers; the oldest updates are dropped first. */
 export const MAX_HUB_CHATS = 500;
-/** Most sockets (tabs) one user's hub holds. */
-export const MAX_HUB_SOCKETS = 16;
+/**
+ * Most sockets (tabs) one user's hub holds. A hibernating socket costs
+ * nothing while idle, and a person works with many tabs for hours; a slept
+ * laptop's socket may linger until it is closed, so at the limit the oldest
+ * is replaced (hubSocketsToEvict) rather than the new tab refused.
+ */
+export const MAX_HUB_SOCKETS = 64;
+
+/**
+ * Which sockets (by index) to close so one more fits under `max`: the
+ * oldest first, one with no known age before any.
+ */
+export function hubSocketsToEvict(
+	openedAts: readonly (number | null)[],
+	max: number,
+): number[] {
+	const excess = openedAts.length + 1 - max;
+	if (excess <= 0) return [];
+	return openedAts
+		.map((openedAt, index) => ({ openedAt: openedAt ?? -1, index }))
+		.sort((a, b) => a.openedAt - b.openedAt)
+		.slice(0, excess)
+		.map((entry) => entry.index)
+		.sort((a, b) => a - b);
+}
 
 /**
  * Who gets the hub: `YTIMESY_USER_HUB_USERS` lists user ids (comma
@@ -141,6 +164,12 @@ export const hubTopic = {
 	fork: (sessionId: string) => `fork:${sessionId}`,
 	/** A push card of this user was answered or settled (another may now be outdated). */
 	push: "push",
+	/** One project's chat list changed: a thread created, renamed, archived, started, settled, needs you. */
+	sessions: (projectId: string) => `sessions:${projectId}`,
+	/** A chat changed and its project is not at hand: every chat list reads again. */
+	sessionsAny: "sessions",
+	/** The project list changed: added, archived, removed, its Super agent row. */
+	projects: "projects",
 	/**
 	 * A chat's turn status changed. Made by the tab from `chats`, never sent
 	 * as a signal, so turn changes and signals are watched alike.
@@ -201,12 +230,17 @@ export type HubStateMessage = {
 	readonly signals?: HubSignals;
 	/** The deploy the hub runs (the web Worker's too: one build id per deploy). */
 	readonly build?: string;
+	/**
+	 * The hub's event version: grows by one with every pushed message and is
+	 * the current one on a whole map, so a tab that skipped one resyncs.
+	 */
+	readonly seq?: number;
 };
 
 export function hubStateMessage(
 	chats: HubStatusEntries,
 	full = false,
-	extra: { signals?: HubSignals; build?: string } = {},
+	extra: { signals?: HubSignals; build?: string; seq?: number } = {},
 ) {
 	return JSON.stringify({
 		type: "state",
@@ -214,6 +248,7 @@ export function hubStateMessage(
 		chats,
 		...(extra.signals ? { signals: extra.signals } : {}),
 		...(extra.build ? { build: extra.build } : {}),
+		...(extra.seq !== undefined ? { seq: extra.seq } : {}),
 	} satisfies HubStateMessage);
 }
 
@@ -262,5 +297,8 @@ export function parseHubStateMessage(data: unknown): HubStateMessage | null {
 		chats,
 		...(signals ? { signals } : {}),
 		...(build ? { build } : {}),
+		...(typeof message.seq === "number" && Number.isSafeInteger(message.seq)
+			? { seq: message.seq }
+			: {}),
 	};
 }

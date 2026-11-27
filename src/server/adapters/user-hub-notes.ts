@@ -1,4 +1,4 @@
-import { userHubEnabledFor } from "#/domain/user-hub";
+import { MAX_HUB_NOTE_TOPICS, userHubEnabledFor } from "#/domain/user-hub";
 import { startAfterResponse } from "./after-response";
 import { postUserHubNote } from "./realtime-delivery";
 
@@ -12,6 +12,10 @@ let direct: DirectNote | null = null;
 export function deliverUserHubNotesDirectly(note: DirectNote) {
 	direct = note;
 }
+
+/** A burst of notes for one user is sent as one (a thread start touches several topics). */
+export const HUB_NOTE_COALESCE_MS = 250;
+const pending = new Map<string, Set<string>>();
 
 /**
  * Tells the user's hub (their open tabs) that these topics changed
@@ -30,17 +34,36 @@ export function noteUserHub(
 		!userHubEnabledFor(process.env.YTIMESY_USER_HUB_USERS, userId)
 	)
 		return;
-	const work = async () => {
+	const send = async (sent: readonly string[]) => {
 		try {
-			if (direct) await direct(userId, topics);
-			else await postUserHubNote({ userId, topics: [...topics] });
+			if (direct) await direct(userId, sent);
+			else await postUserHubNote({ userId, topics: [...sent] });
 		} catch (error) {
 			console.warn("User hub was not told what changed.", {
-				topics: topics.map((topic) => topic.split(":")[0]),
+				topics: sent.map((topic) => topic.split(":")[0]),
 				message:
 					error instanceof Error ? error.message.slice(0, 200) : "unknown",
 			});
 		}
 	};
-	if (!startAfterResponse(work)) void work();
+	// Inside the edge executor (direct) the note goes at once: it is already
+	// at a state change, and no timer may be added to an object. In a web
+	// request, the first note waits one short window for the rest of its burst.
+	if (direct) {
+		void send(topics);
+		return;
+	}
+	const waiting = pending.get(userId);
+	if (waiting) {
+		for (const topic of topics) waiting.add(topic);
+		return;
+	}
+	pending.set(userId, new Set(topics));
+	const flush = async () => {
+		await new Promise((resolve) => setTimeout(resolve, HUB_NOTE_COALESCE_MS));
+		const merged = pending.get(userId);
+		pending.delete(userId);
+		if (merged?.size) await send([...merged].slice(0, MAX_HUB_NOTE_TOPICS));
+	};
+	if (!startAfterResponse(flush)) void flush();
 }

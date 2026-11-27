@@ -3,6 +3,7 @@ import {
 	applyHubSignals,
 	applyHubTurnChange,
 	type HubChats,
+	hubSocketsToEvict,
 	hubStateMessage,
 	hubStatusEntries,
 	hubTopic,
@@ -229,5 +230,40 @@ describe("parseHubNote", () => {
 		expect(parseHubNote({ userId: "", topics: ["push"] })).toBeNull();
 		expect(parseHubNote({ topics: ["push"] })).toBeNull();
 		expect(parseHubNote(null)).toBeNull();
+	});
+});
+
+describe("list topics and the event version", () => {
+	it("names list changes as valid hub topics", () => {
+		for (const topic of [
+			hubTopic.sessions("p-1"),
+			hubTopic.sessionsAny,
+			hubTopic.projects,
+		])
+			expect(isHubTopic(topic)).toBe(true);
+		expect(hubTopic.sessions("p-1")).toBe("sessions:p-1");
+	});
+	it("carries a version in every state message and parses it back", () => {
+		const message = parseHubStateMessage(
+			hubStateMessage({}, false, { signals: { projects: 3 }, seq: 7 }),
+		);
+		expect(message?.seq).toBe(7);
+		expect(
+			parseHubStateMessage(hubStateMessage({}, true))?.seq,
+		).toBeUndefined();
+	});
+});
+
+describe("hubSocketsToEvict", () => {
+	it("keeps room for one more: the oldest sockets go first", () => {
+		expect(hubSocketsToEvict([30, 10, 20], 3)).toEqual([1]);
+		expect(hubSocketsToEvict([30, 10, 20, 40], 3)).toEqual([1, 2]);
+	});
+	it("evicts nothing while there is room", () => {
+		expect(hubSocketsToEvict([30, 10], 3)).toEqual([]);
+		expect(hubSocketsToEvict([], 3)).toEqual([]);
+	});
+	it("a socket with no known age counts as oldest (a slept tab's leftover)", () => {
+		expect(hubSocketsToEvict([30, null, 20], 3)).toEqual([1]);
 	});
 });

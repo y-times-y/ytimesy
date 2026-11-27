@@ -364,8 +364,9 @@ it("reports a machine that failed to start as a machine failure, not a model fai
 		apiTurnFailureMessage("model", wrapped),
 		apiTurnFailureMessage("workspace", error),
 	]) {
-		expect(message).toContain("The chat's machine could not start");
-		expect(message).toContain("Retry; your work is preserved");
+		// Only reached after the retry ladder: calm, no Retry button wording.
+		expect(message).toContain("Couldn't start your workspace");
+		expect(message).toContain("Your message and work are saved");
 		expect(message).not.toMatch(/model request failed|provider reason/i);
 		expect(message).not.toContain("vm-b216");
 		expect(message).not.toContain("maxRunTotalSeconds");
@@ -382,7 +383,7 @@ it("names a provider internal error on a machine as temporary without echoing it
 		),
 	);
 	expect(message).toBe(
-		"The chat's machine could not start: the machine provider returned a temporary error. Retry; your work is preserved.",
+		"Couldn't start your workspace right now. Your message and work are saved; ytimesy tries again when you send your next message.",
 	);
 });
 
@@ -441,7 +442,7 @@ it("keeps unknown machine error text out of the user message", () => {
 		),
 	);
 	expect(message).toBe(
-		"The chat's machine could not be reached: the machine provider reported an error. Retry; your work is preserved.",
+		"Couldn't reach your workspace right now. Your message and work are saved; ytimesy tries again when you send your next message.",
 	);
 });
 
@@ -723,3 +724,30 @@ it("tells a turn blocked by an old lock that it is saved and will run by itself"
 		expect(message).not.toMatch(/Retry;|did not answer yet/);
 	});
 }
+
+it("any machine start failure after the ladder reads calm, whatever the provider said", async () => {
+	const { machineFailureMessage } = await import("./api-turn-failure");
+	for (const detail of [
+		"FreestyleApiError 404 NOT_FOUND",
+		"FreestyleApiError 400",
+		"odd",
+	]) {
+		const error = Object.assign(new Error("Workspace provider error"), {
+			name: "WorkspaceProvisionError",
+			detail,
+		});
+		const message = machineFailureMessage(error) ?? "";
+		expect(message).toMatch(/Couldn't start your workspace/);
+		expect(message).not.toMatch(/Retry;|provider reported an error/);
+	}
+});
+
+it("names the class of a machine failure for the digest", async () => {
+	const { machineFailureClass } = await import("./api-turn-failure");
+	const gone = Object.assign(new Error("x"), {
+		name: "WorkspaceProvisionError",
+		detail: "FreestyleApiError 404 NOT_FOUND /v5/vms/vm-x",
+	});
+	expect(machineFailureClass(gone)).toBe("http-404");
+	expect(machineFailureClass(new Error("plain"))).toBeNull();
+});

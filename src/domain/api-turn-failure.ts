@@ -381,8 +381,44 @@ export function failureCause(error: unknown): string | null {
 	return redactSecrets(lines.join(" <- "), 600) || null;
 }
 
-const STARTUP_NOT_FINISHED =
-	/started but is not answering|did not become running|stopped before it became running/i;
+/** Reasons no retry can fix: the person or the deployment must act. */
+const TERMINAL_MACHINE_REASONS =
+	/machine size|missing a machine setting|usage limit|plan is at its limit/;
+
+/**
+ * A provider-reported machine failure (create, start, fork, resume, exec: any
+ * 4xx/5xx or error body) that the turn's executor waits out and retries for
+ * 15 minutes, restarting then replacing the VM on the way. False for the
+ * terminal ones (usage allowance, a rejected machine size, a missing deploy
+ * setting) and for failures that are not machine failures at all.
+ */
+export function machineFailureRetryable(error: unknown): boolean {
+	// GitHub access (revoked, repository deleted) is terminal; a local Git step on the machine is not.
+	if (repositoryFetchFailed(error)) return false;
+	if (workspaceGitFailed(error)) return true;
+	if (usageCapFailure(error)) return false;
+	const found = machineError(error);
+	if (!found || found.message === PROJECT_SECRETS_PREPARATION_FAILED)
+		return false;
+	if (found instanceof ProjectSecretsPreparationFailure) return false;
+	const reason = machineFailureReason(found.message);
+	return reason !== null && !TERMINAL_MACHINE_REASONS.test(reason);
+}
+
+/** A short class of a machine failure for the digest: http-<status> or a word. Null for a non-machine error. */
+export function machineFailureClass(error: unknown): string | null {
+	const found = machineError(error);
+	if (!found) return null;
+	const detail = String((found as { detail?: unknown }).detail ?? "");
+	const status = /(?:FreestyleApiError|HTTP|status)\s*(\d{3})/i.exec(
+		`${detail} ${found.message}`,
+	);
+	if (status) return `http-${status[1]}`;
+	if (/not answering/i.test(found.message)) return "guest-not-answering";
+	if (/did not become running|stopped before/i.test(found.message))
+		return "not-running";
+	return "other";
+}
 
 export function machineFailureMessage(error: unknown): string | null {
 	if (repositoryFetchFailed(error)) return REPOSITORY_FETCH_FAILURE;
@@ -403,10 +439,12 @@ export function machineFailureMessage(error: unknown): string | null {
 		found.name === "WorkspaceCommandError"
 			? "could not be reached"
 			: "could not start";
-	// A start that never finished was already retried for minutes (restart,
-	// replacement): say it calmly, no red-alert wording or manual Retry.
-	if (action === "could not start" && STARTUP_NOT_FINISHED.test(found.message))
-		return "Couldn't start your workspace right now. Your message and work are saved; ytimesy tries again when you send your next message.";
+	// Only reached after the whole retry ladder (15 minutes of retries, a
+	// restart, a replacement) failed: calm wording, no red-alert text.
+	if (machineFailureRetryable(error))
+		return action === "could not start"
+			? "Couldn't start your workspace right now. Your message and work are saved; ytimesy tries again when you send your next message."
+			: "Couldn't reach your workspace right now. Your message and work are saved; ytimesy tries again when you send your next message.";
 	return `The chat's machine ${action}: ${reason}. Retry; your work is preserved.`;
 }
 

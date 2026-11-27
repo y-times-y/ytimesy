@@ -56,6 +56,8 @@ export async function fakeEdge(
 	const state = {
 		revoked: options.revoked ?? false,
 		reserveOk: true,
+		/** Answer of the one-box-at-a-time restart approval; undefined leaves the field out. */
+		restartApproved: undefined as boolean | undefined,
 		now: 1_000_000,
 		/** In-memory handlers of the turn ports (an op with none answers 501). */
 		ports: {} as Partial<
@@ -76,6 +78,10 @@ export async function fakeEdge(
 	const ops: TurnBoxEdgeOps = {
 		boxActive: async () => !state.revoked,
 		register: async () => !state.revoked,
+		restartApproved: async () => {
+			if (state.restartApproved === undefined) throw new Error("no answer");
+			return state.restartApproved;
+		},
 		claim: async () => {
 			calls.push("claim");
 			return queue.shift() ?? null;

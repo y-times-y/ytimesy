@@ -1,5 +1,8 @@
 import type { LanguageModel, ModelMessage } from "ai";
-import { ANTHROPIC_THINKING_BINDING } from "#/domain/anthropic-thinking-binding";
+import {
+	ANTHROPIC_THINKING_BINDING,
+	thinkingBindingApplies,
+} from "#/domain/anthropic-thinking-binding";
 import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { defaultMaxOutputTokens } from "#/domain/api-output-limit";
 import { ApiModelPreparationFailure } from "#/domain/api-turn-failure";
@@ -315,8 +318,7 @@ export async function apiModelRuntime(
 			: {
 					...cacheSettings,
 					system: instructions,
-					...(context.nativeCompaction === "anthropic" &&
-					origin === "https://api.anthropic.com"
+					...(thinkingBindingApplies({ provider: input.provider, origin })
 						? {
 								providerOptions: {
 									...cacheSettings.providerOptions,

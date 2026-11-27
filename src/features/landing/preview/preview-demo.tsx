@@ -8,6 +8,7 @@ import { threadDirectory } from "#/domain/thread-label";
 import { RenderAsHydrated } from "#/features/app/first-paint";
 import { ReferenceContext } from "#/features/sessions/agent-reference-chips";
 import { SessionLauncher } from "#/features/sessions/session-launcher";
+import { SideChatFrame } from "#/features/sessions/side-chat-panel";
 import { ChatHeaderTitle } from "#/features/workspace/chat-header-title";
 import { ProjectSidebar } from "#/features/workspace/project-sidebar";
 import { WorkItemsPage } from "#/features/workspace/work-items-page";
@@ -473,4 +474,64 @@ export function renderPreview(): PreviewMarkup {
 		"pull-requests": scene("pull-requests"),
 		issues: scene("issues"),
 	};
+}
+
+/**
+ * Main's chat and the side chat as the real components draw them, in a plain
+ * flex split, for the composer alignment check (scripts/measure-composers.ts).
+ * Not part of the pictures.
+ */
+export function renderSplitChat(stacked: boolean) {
+	const side = (
+		<SideChatFrame parentTurnStatus="completed">
+			<SessionLauncher
+				variant="side"
+				session={SESSION}
+				busy={false}
+				harnessId="codex"
+				onHarnessIdChange={noop}
+				onSend={noop}
+				onConnect={noop}
+				onStop={noop}
+				onOpenInspector={noop}
+				projects={[PROJECT]}
+				selectedProject={PROJECT}
+				onSelectProject={noop}
+				branchless
+			/>
+		</SideChatFrame>
+	);
+	return withoutScripts(
+		renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<ReferenceContext.Provider value={{ threads: THREADS }}>
+					<div
+						style={{
+							display: "flex",
+							flexDirection: stacked ? "column" : "row",
+							height: "100vh",
+						}}
+					>
+						<section
+							className="welcome-panel"
+							data-layout="chat"
+							data-measure="main"
+							style={{ flex: stacked ? "1 1 50%" : "1 1 60%", minWidth: 0 }}
+						>
+							<div className="welcome-content" data-layout="chat">
+								<Chat />
+							</div>
+						</section>
+						<aside
+							className="workspace-inspector"
+							data-measure="side"
+							style={{ flex: stacked ? "1 1 50%" : "0 0 40%", minHeight: 0 }}
+						>
+							{side}
+						</aside>
+					</div>
+				</ReferenceContext.Provider>
+			</QueryClientProvider>,
+		),
+	);
 }

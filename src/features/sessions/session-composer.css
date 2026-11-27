@@ -1,3 +1,11 @@
+/* One set of composer layout tokens for Main and the side chat, so their
+   composers share gutters and bottom offset, and sit on one baseline. (Main's
+   agent list hangs under its composer only while helpers run; the side chat
+   has none.) */
+:root {
+	--composer-gutter: 12px;
+	--composer-bottom: 8px;
+}
 .session-launcher {
 	position: relative;
 	width: 100%;

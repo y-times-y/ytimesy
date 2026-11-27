@@ -142,7 +142,9 @@ export function machineStartUnstartable(error: unknown): boolean {
 		// 2026-11-16: a chat stuck on "isn't responding" for hours, its VM's
 		// host full, because neither failure counted and it was never replaced.
 		HOST_CANNOT_RUN_VM.test(text) ||
-		/FreestyleApiError 5\d\d|PROVIDER_TIMEOUT/.test(detail)
+		// Any other provider-reported failure of the VM's own start (a 400/409/
+		// 410/422 body or a 5xx): a new VM may succeed. Auth and quota never.
+		/FreestyleApiError (?:4(?:00|09|10|22)|5\d\d)|PROVIDER_TIMEOUT/.test(detail)
 	);
 }
 
@@ -280,7 +282,67 @@ export type MachineRateLimitHit = {
 	readonly attempt: number;
 	readonly status?: number;
 	readonly retryAfterMs?: number;
+	/** Which provider limit answered, read from the error text (see rateLimitClass). */
+	readonly limit?: RateLimitClass;
 };
+
+export type RateLimitClass =
+	| "running-vm-cap"
+	| "storage"
+	| "compute-allowance"
+	| "unspecified";
+
+/**
+ * Which Freestyle account limit a 429 LIMIT_EXCEEDED was (docs/limits.md 2a):
+ * the cap on VMs running at once (40 on Hobby), the storage cap, or the
+ * vCPU/memory time allowance. Before 2026-11-27 only the log line held it.
+ */
+export function rateLimitClass(detail: string): RateLimitClass {
+	if (/limit of \d+ VMs|at its VM limit|concurrent|running VMs?/i.test(detail))
+		return "running-vm-cap";
+	if (/storage/i.test(detail)) return "storage";
+	if (/allowance|vcpu_time|memory_time/i.test(detail)) return "compute-allowance";
+	return "unspecified";
+}
+
+/**
+ * At most this many machine starts run at once in one isolate; a burst (a
+ * fork, writer subagents, a build) queues behind it instead of tripping the
+ * provider's account limit together. A start waits at most
+ * MACHINE_START_SLOT_WAIT_MS for a slot, then goes anyway (never a deadlock).
+ */
+export const MAX_CONCURRENT_MACHINE_STARTS = 4;
+const MACHINE_START_SLOT_WAIT_MS = 60_000;
+const startWaiters: Array<() => void> = [];
+let startsRunning = 0;
+
+export async function withMachineStartSlot<T>(
+	run: () => Promise<T>,
+	max = MAX_CONCURRENT_MACHINE_STARTS,
+	waitMs = MACHINE_START_SLOT_WAIT_MS,
+): Promise<T> {
+	if (startsRunning >= max) {
+		await new Promise<void>((resolve) => {
+			const timer = setTimeout(() => {
+				const at = startWaiters.indexOf(release);
+				if (at >= 0) startWaiters.splice(at, 1);
+				resolve();
+			}, waitMs);
+			const release = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			startWaiters.push(release);
+		});
+	}
+	startsRunning++;
+	try {
+		return await run();
+	} finally {
+		startsRunning--;
+		startWaiters.shift()?.();
+	}
+}
 
 function rateLimitedRetryAfter(error: unknown): number | undefined {
 	for (const link of chain(error))
@@ -321,7 +383,7 @@ export async function resumableMachineStart<T>(
 	let stuckRepeats = 0;
 	for (let attempt = 0; ; attempt++) {
 		try {
-			return await operation();
+			return await withMachineStartSlot(operation);
 		} catch (error) {
 			const kind = machineFailureKind(error);
 			// A machine that stayed stuck gets one more start, not the full
@@ -337,6 +399,7 @@ export async function resumableMachineStart<T>(
 			let delay = delaysMs[attempt] ?? 0;
 			if (kind === "rate-limited") {
 				const retryAfter = rateLimitedRetryAfter(error);
+				const limit = rateLimitClass(machineFailureDetail(error));
 				// One email-free line and one monitoring row per hit, whether or
 				// not the user ever sees anything.
 				console.warn("machine.rate_limited", {
@@ -344,6 +407,7 @@ export async function resumableMachineStart<T>(
 					slug: context.slug,
 					attempt: attempt + 1,
 					retryAfterMs: retryAfter,
+					limit,
 					willRetry,
 					detail: machineFailureDetail(error),
 				});
@@ -353,6 +417,7 @@ export async function resumableMachineStart<T>(
 						slug: context.slug,
 						attempt: attempt + 1,
 						retryAfterMs: retryAfter,
+						limit,
 					});
 				} catch {
 					// Bookkeeping never blocks the start.

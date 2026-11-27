@@ -8,11 +8,14 @@ export const STARTING_MACHINE_TEXT = "Starting your workspace…";
  * account limit, our hourly count): the turn is retried by its executor, so
  * the person sees a calm status, never the refusal.
  */
-export function startingMachineItem(turnId: string): NoticeSessionItem {
+export function startingMachineItem(
+	turnId: string,
+	message: string = STARTING_MACHINE_TEXT,
+): NoticeSessionItem {
 	return {
 		kind: "notice",
 		id: SessionItemId(`${turnId}:starting-machine`),
-		message: STARTING_MACHINE_TEXT,
+		message,
 		startingMachine: true,
 	};
 }

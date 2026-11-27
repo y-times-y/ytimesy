@@ -246,7 +246,7 @@ it("surfaces a permanent unknown error at once, with its raw cause logged and ke
 	expect(JSON.stringify(logged)).not.toContain("abc123secret");
 	// The user still reads fixed wording; the owner reads the cause.
 	expect(machineFailureMessage(failure)).toBe(
-		"The chat's machine could not start: the machine provider reported an error. Retry; your work is preserved.",
+		"Couldn't start your workspace right now. Your message and work are saved; ytimesy tries again when you send your next message.",
 	);
 	const cause = machineFailureCause(failure);
 	expect(cause).toContain("weird provider state for slug ytimesy-ag-chat");

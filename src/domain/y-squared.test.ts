@@ -111,14 +111,17 @@ describe("threadsOverview", () => {
 describe("Y² surface", () => {
 	it("keeps only its read tools and the person's questions", () => {
 		expect([...Y_SQUARED_TOOLS].sort()).toEqual([
+			"archive_settled",
 			"archive_thread",
 			"ask_user",
 			"list_models",
 			"message_thread",
 			"read_canvas",
 			"retry_thread",
+			"reuse_candidates",
 			"schedule",
 			"set_thread_model",
+			"settled_threads",
 			"show_canvas",
 			"start_thread",
 			"stop_thread",
@@ -324,11 +327,28 @@ describe("Y² reports briefly and quietly (instructions)", () => {
 		expect(text).not.toContain("100 words");
 	});
 
-	it("forbids tables and long bullet lists unless asked", () => {
-		expect(text).toContain("no tables, no headings and at most 3 bullets");
+	it("forbids markdown tables and long bullet lists, and sends table-like content to an inline artifact", () => {
 		expect(text).toContain(
-			"unless the person asks for a table or a full report",
+			"no markdown tables, no headings and at most 3 bullets",
 		);
+		expect(text).toContain("as ONE inline artifact instead");
+		expect(text).not.toContain("no tables, no headings");
+		expect(text).not.toContain("unless the person asks for a table");
+	});
+	it("makes the inline artifact the default for numeric comparisons, big digests, timelines and charts, and keeps short answers plain", () => {
+		expect(text).toMatch(/Visuals: the inline artifact is your default/);
+		expect(text).toContain("more than about 4 threads");
+		expect(text).toContain("cost, usage or limits comparison");
+		expect(text).toContain("timeline of what shipped");
+		expect(text).toContain("Short answers");
+		expect(text).toContain("stay plain text");
+		expect(text).toContain("an artifact card is not counted");
+		expect(text).not.toContain("never add one to a status report");
+		expect(text).not.toContain("only when the person asks for one");
+	});
+	it("carries the artifact types and limits the card needs", () => {
+		expect(text).toContain("```artifact");
+		expect(text).toContain('"timeline"');
 	});
 
 	it("puts one decision per message and counts the rest", () => {
@@ -366,7 +386,8 @@ describe("Y² reports briefly and quietly (instructions)", () => {
 		});
 		expect(wake).toContain("at most 60 words");
 		expect(wake).toContain("Skip anything you already reported");
-		expect(wake).toContain("use no tables");
+		expect(wake).toContain("use no markdown tables");
+		expect(wake).toContain("one artifact card instead");
 		expect(wake).not.toContain("Never just say it finished");
 	});
 });

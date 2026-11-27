@@ -256,6 +256,10 @@ export const ALREADY_DELIVERED =
 export const PERSON_MESSAGE_RULE =
 	"Messages the person sent a thread themselves are already delivered: never forward, paraphrase or repeat them there. Message that thread only for a NEW fact it lacks (that fact alone, one line, addsNewInformation=true). In your reply never restate what the person said: lead with the result.";
 
+/** Said in a wake that carries a finished thread: the event-driven trigger for the settled-thread tidy (no timer). */
+export const SETTLED_TIDY_LINE =
+	"Tidy: if you have not called `settled_threads` in the last 6 hours, call it once now and archive what its verdicts allow with one `archive_settled` call (say one line, counts only); skip it otherwise. Before starting a new thread, call `reuse_candidates`.";
+
 const minutesText = (ms: number) =>
 	`${Math.max(1, Math.round(ms / 60_000))} min`;
 
@@ -308,6 +312,9 @@ export function crewWakeBody(input: {
 		)
 			? [PERSON_MESSAGE_RULE]
 			: []),
+		...(input.events.some((event) => event.kind === "finished")
+			? [SETTLED_TIDY_LINE]
+			: []),
 		...(input.events.some((event) => event.detail?.includes("showed canvas"))
 			? [
 					"A thread showed a canvas: if it is a new revision of one you displayed here, call `show_canvas` again with the same title so the person sees it in this chat, and say what changed in one or two lines.",
@@ -318,7 +325,7 @@ export function crewWakeBody(input: {
 					"A waiting thread's question and options are in its line above: put that question to the person yourself (one decision per message, with your recommendation); you need not read the thread to do it. Never ask for a secret's value in this chat: say which secret the thread needs and that the person enters it from the Needs you list beside this chat (or in the thread).",
 				]
 			: []),
-		"Each line above carries what the thread said (its result, question and options, pull request, canvases, failure reason). Answer from those lines; call `thread` only for a thread whose line is cut off or not enough to act on, and `threads` only when you need the whole list. Give the person a short delta in at most 60 words: lead with what needs them (one decision, with your recommendation), then one line per thread that changed with its substance. Skip anything you already reported, do not re-list open decisions or still-working threads that did not change, and use no tables.",
+		"Each line above carries what the thread said (its result, question and options, pull request, canvases, failure reason). Answer from those lines; call `thread` only for a thread whose line is cut off or not enough to act on, and `threads` only when you need the whole list. Give the person a short delta in at most 60 words: lead with what needs them (one decision, with your recommendation), then one line per thread that changed with its substance. Skip anything you already reported, do not re-list open decisions or still-working threads that did not change, and use no markdown tables (more than about 4 changed threads: one artifact card instead).",
 		`If nothing here needs the person and nothing needs an action from you, reply with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else: it shows no message.`,
 	].join("\n");
 }

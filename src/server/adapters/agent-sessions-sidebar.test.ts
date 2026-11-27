@@ -12,7 +12,8 @@ const project = randomUUID();
 beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create role anon; create role authenticated;
-	 create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_summary text,task_review_state text,task_branch text,selected_branch text,base_branch text,working_branch text,agent_role text,agent_budget jsonb,agent_fork jsonb,agent_steps int not null default 0,thread_number int,environment_setup boolean not null default false,archived_at timestamptz,created_at timestamptz default now(),updated_at timestamptz default now());
+	 create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_summary text,task_review_state text,task_branch text,selected_branch text,base_branch text,working_branch text,agent_role text,agent_budget jsonb,agent_fork jsonb,agent_steps int not null default 0,thread_number int,environment_setup boolean not null default false,chat_role text,archived_at timestamptz,created_at timestamptz default now(),updated_at timestamptz default now());
+	 create table project(id uuid primary key,y_enabled boolean not null default true);
 	 create table api_turn(id uuid primary key,session_id uuid,state text,created_at timestamptz default now());
 	 create table agent_peer_inbox(id text primary key,recipient_id uuid,message text,queued_send jsonb,accepted boolean not null default false,created_at timestamptz default now());`);
 	for (const file of [
@@ -37,6 +38,29 @@ async function chat(title: string, parent: string | null = null) {
 	);
 	return id;
 }
+
+async function y2Chat(enabled: boolean) {
+	await db.query(
+		"insert into project(id,y_enabled) values($1,$2) on conflict(id) do update set y_enabled=$2",
+		[project, enabled],
+	);
+	const id = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,project_id,harness,title,chat_role) values($1,'alice',$2,'api','Y²','y2')",
+		[id, project],
+	);
+	return id;
+}
+
+it("lists the Y² chat only while the project has Y² on: it is never a plain thread titled Y²", async () => {
+	const y2 = await y2Chat(true);
+	const thread = await chat("A thread");
+	const on = await listSidebarAgentSessions("alice", project);
+	expect(on.map((row) => row.id).sort()).toEqual([y2, thread].sort());
+	await db.query("update project set y_enabled=false where id=$1", [project]);
+	const off = await listSidebarAgentSessions("alice", project);
+	expect(off.map((row) => row.id)).toEqual([thread]);
+});
 
 async function turn(sessionId: string, state: string, createdAt: string) {
 	await db.query(

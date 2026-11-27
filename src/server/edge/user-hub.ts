@@ -17,6 +17,7 @@ import {
 	type HubSignals,
 	type HubStatusEntries,
 	type HubTurnChange,
+	hubSocketsToEvict,
 	hubStateMessage,
 	hubStatusEntries,
 	MAX_HUB_SOCKETS,
@@ -62,12 +63,32 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 			session_id text primary key, turn_status text not null, updated_at integer not null)`);
 		ctx.storage.sql.exec(`create table if not exists hub_signal(
 			topic text primary key, at integer not null)`);
+		ctx.storage.sql.exec(`create table if not exists hub_meta(
+			key text primary key, value integer not null)`);
 		ctx.storage.sql.exec(`create table if not exists usage_month(
 			period text primary key, wall_ms integer not null default 0, requests integer not null default 0,
 			ws_msgs integer not null default 0, alarms integer not null default 0)`);
 		ctx.setWebSocketAutoResponse(
 			pingAutoResponse() as WebSocketRequestResponsePair,
 		);
+	}
+
+	/** The event version: grows by one with every pushed message (in SQLite, so it survives eviction). */
+	private seq(): number {
+		return (
+			this.ctx.storage.sql
+				.exec<{ value: number }>("select value from hub_meta where key='seq'")
+				.toArray()[0]?.value ?? 0
+		);
+	}
+
+	private nextSeq(): number {
+		const next = this.seq() + 1;
+		this.ctx.storage.sql.exec(
+			"insert into hub_meta(key,value) values('seq',?) on conflict(key) do update set value=excluded.value",
+			next,
+		);
+		return next;
 	}
 
 	private chats(): HubChats {
@@ -191,8 +212,17 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 			return new Response(null, { status: 404 });
 		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
 			return new Response(null, { status: 426 });
-		if (this.sockets().length >= MAX_HUB_SOCKETS)
-			return new Response(null, { status: 429 });
+		// At the limit the oldest tab's socket is replaced (its tab reconnects
+		// and reads the whole map): a refused tab would be left without pushes.
+		const open = this.sockets();
+		for (const index of hubSocketsToEvict(
+			open.map((socket) => hubSocketAttachment(socket)?.openedAt ?? null),
+			MAX_HUB_SOCKETS,
+		)) {
+			try {
+				open[index]?.close(LIVE_SOCKET_CLOSE.reauthorize, "replaced");
+			} catch {}
+		}
 		const { client, server } = socketPair();
 		this.ctx.acceptWebSocket(server as unknown as WebSocket, [HUB_SOCKET_TAG]);
 		const openedAt = Date.now();
@@ -204,6 +234,7 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 			hubStateMessage(hubStatusEntries(this.chats()), true, {
 				signals: this.signals(),
 				build: BUILD_ID,
+				seq: this.seq(),
 			}),
 		);
 		return upgradeResponse(client);
@@ -218,9 +249,16 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 	 * expired is closed instead, and its reconnect gets the whole map.
 	 */
 	private push(entries: HubStatusEntries, signals?: HubSignals) {
-		const message = hubStateMessage(entries, false, { signals });
 		const now = Date.now();
-		for (const socket of this.sockets()) {
+		// Nobody connected: nothing to send, and the next whole map carries the
+		// current version, so no number is spent and nothing wakes for it.
+		const sockets = this.sockets();
+		if (!sockets.length) return;
+		const message = hubStateMessage(entries, false, {
+			signals,
+			seq: this.nextSeq(),
+		});
+		for (const socket of sockets) {
 			const attachment = hubSocketAttachment(socket);
 			try {
 				if (attachment && attachment.authorizedUntil > now)

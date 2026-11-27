@@ -66,3 +66,39 @@ Production, last 7 days (~2,800 turns): "could not start" 7 turns, "could not be
 Root cause of "started but did not answer yet": `waitUntilGuestAnswers` gave a started guest only ~16 s of probing, then failed the start, and that failure was not transient, so the step failed after 3 retries (red, manual Retry). Now: the probe window is ~70 s of backoff (`GUEST_PROBE_RETRY_DELAYS_MS`), "did not become running"/"started but is not answering" are `isMachineRefusalThatPasses` (step retried for 15 min, VM restarted/replaced by the existing start path), shown as "Starting your workspace…". Each retry is an `interruption_event` `machine-start-retry`; a failure after the window is `machine-start-failed` (user-visible), counted in the digest as a rate per 1,000 turns with an owner alert above 1 (`machine-failure-rate`).
 
 Not done: Durable Object fallback for turns that do not need the VM; park-and-retry after the 15-minute window (the final text is calm and says the work is saved, but the turn is still failed); a test-only knob for a slow VM.
+
+## Every provider-reported machine error is retried (2026-11-27)
+
+Trigger: chat 21ddc421 saw "The chat's machine could not start: the machine provider reported an error" after 6 s. Cause: `FreestyleApiError 404 NOT_FOUND /v5/vms/<vm>` (the provider had deleted the chat's VM; 8 more VMs hit the same 404 in the 12 hours before). The retained-session branch of `bindAgentSessionMachine` called `ensureRunning` outside the replacement logic, so the 404 was thrown raw; the fallback text was the catch-all of `machineFailureReason`. Fixed: that branch falls through to replacement from the snapshot; a gone VM with no checkpoint (or no snapshot) continues on a fresh copy instead of failing.
+
+`machineFailureRetryable` (api-turn-failure.ts) is the rule: any machine failure is waited out by the step (15 minutes, "Starting your workspace…", `machine-start-retry/<class>` rows) except terminal ones (usage allowance, rejected machine size, missing deploy setting, GitHub fetch refusal). A VM's own 400/409/410/422/5xx start failure counts toward replacement (`machineStartUnstartable`). A turn that fails after that is `machine-start-failed/ladder-exhausted/<class>` (user-visible, in the digest rate and its alert) with calm wording.
+
+Remaining user-visible machine strings and verdicts:
+
+| Text | Verdict |
+|---|---|
+| "Couldn't start / reach your workspace right now… saved" | after the ladder; calm; no Retry wording |
+| "The chat's machine could not start: this deployment is missing a machine setting" / size rejected / usage limit | terminal on purpose, red |
+| "Couldn't get this chat's code from GitHub. Retry in a moment…" | NOT covered (GitHub access may be revoked or the repo deleted) |
+| "Couldn't set up this chat's code on its machine. Retry in a moment…" | step retried 15 min first; text still says Retry |
+| "The worker disconnected…" | covered up to 10 takeovers, then red (park-and-retry open) |
+| "automatic Git handoff failed" | NOT covered by this ladder (it waits for the machine first) |
+| "Recovering the workspace machine…" | calm status, covered |
+| "…could not start, provider at capacity, retry in a few minutes" (environment build) | NOT covered (builds, not turns) |
+
+## Who deleted the VMs behind the 404s (2026-11-27)
+
+Of 10 VMs with a `not found` wake failure on 11-26/27, 9 belong to chats archived in bulk (archived 11-25 23:34 to 11-26 03:07; their machines were released on purpose, the checkpoint backstop found them gone about 24 h later: noise, no live chat). The 10th (chat 21ddc421) was a brand-new chat that got its 404 8 s after creation: provider read-after-create lag, not a deletion. The retention sweep deletes only after 7 idle days, so it cannot have deleted any VM idle for hours. Non-archived chats with a `not found` since 11-16: one (b06918e6, failure 11-25 21:41 in a burst with 11 archived machines, so most likely the manual cleanup); its next message replaces the VM from the snapshot. Not knowable from the database: whether unpushed work was lost (the VM is gone; no audit files exist on the chat machine). Fixed: `readVmData` waits out about 6 s of 404 before a VM counts as gone, and the running-wait tolerates a 30 s 404 on a fresh VM.
+
+## Digest 2026-11-26/27 findings (2026-11-27)
+
+- **12 `delayed-start/no-box-took-turn` on 11-26 (24 over 11-24..27, waits 46-104 s):** they cluster at deploys (11-24 23:12-23:29, 11-26
+  00:14-00:40, 11-27 03:49). A published box program made every box stop claiming at once (`upgrading`) and restart when idle (about 20 s to enroll,
+  download and register), so a two-box fleet had no claimer. Now the edge approves one restart at a time (`restartApproved` in the registration answer,
+  `turnRunnerBoxMayRestart`: the lowest id among live boxes not on the published program); the others keep claiming. The stranded sweep waits 20 s
+  (was 45; the sweep ticks each minute, so the wait is that plus up to a minute). A first-claim wait is logged as `turn.box_claim_wait` (waitMs):
+  queue wait was not stored before, so the p95 target (5 s) is read from those lines. The rollout of this change itself still restarts the old boxes
+  together (they do not know the field).
+- **`machine.rate_limited`:** the row's cause now carries the limit class, `ensureRunning attempt 1 (running-vm-cap|storage|compute-allowance|unspecified)`;
+  starts run through a per-isolate slot gate (4 at once, 60 s wait at most). Not cross-isolate.
+- **Canary 11-26 failures (05:30, 11:00):** "The model request failed and the provider didn't say why" on the canary's own chat, not a user.

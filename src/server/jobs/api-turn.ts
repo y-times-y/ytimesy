@@ -21,6 +21,7 @@ import {
 	isYSquaredNoWorkspace,
 	LifecycleHookRefusal,
 	MachineNotResponding,
+	machineFailureClass,
 	machineFailureMessage,
 	SafeApiModelFailure,
 	TurnNotStarted,
@@ -132,6 +133,7 @@ import {
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { isTemplateRebuilding } from "#/domain/template-rebuild";
 import { startedByPeerMessage } from "#/domain/thread-peer";
 import { withStoppedNotice } from "#/domain/turn-end";
 import {
@@ -307,6 +309,7 @@ import {
 	type SubagentToolContext,
 	subagentTools,
 } from "../services/subagent-tools";
+import { preparingWorkspaceStatus } from "../services/template-rebuild";
 import { thinLeadTools } from "../services/thin-lead-tools";
 import {
 	pauseVmWhileThinkingEnabled,
@@ -3819,13 +3822,18 @@ async function runApiTurnAttempt(
 						kind: "machine-start-retry",
 						turnId: turn.id,
 						sessionId: turn.session_id,
-						cause: "start-not-finished",
+						cause: machineFailureClass(platformRestart) ?? "start-not-finished",
 						recovered: true,
 						userVisible: false,
 					}).catch(() => {});
 				await checkpointApiTurn(turn, messages, [
 					...withoutStartingMachine(items),
-					startingMachineItem(turn.id),
+					startingMachineItem(
+						turn.id,
+						isTemplateRebuilding(platformRestart)
+							? await preparingWorkspaceStatus(turn.session_id)
+							: undefined,
+					),
 				]).catch(() => {});
 			}
 			throw platformRestart;
@@ -4257,7 +4265,7 @@ async function runApiTurnAttempt(
 				kind: MACHINE_START_FAILED_KIND,
 				turnId: turn.id,
 				sessionId: turn.session_id,
-				cause: "ladder-exhausted",
+				cause: `ladder-exhausted/${machineFailureClass(error) ?? "other"}`,
 				recovered: false,
 				userVisible: true,
 			}).catch(() => {});

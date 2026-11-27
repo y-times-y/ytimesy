@@ -66,6 +66,12 @@ export interface TurnBoxEdgeOps {
 		boxId: string,
 		input: { capacity: number; running: number; version?: string },
 	): Promise<boolean>;
+	/**
+	 * Whether a box on a program other than `latest` may restart now: true for
+	 * only one such box at a time (the lowest id of those seen lately), so
+	 * the others keep claiming while it is away.
+	 */
+	restartApproved?(boxId: string, latest: string): Promise<boolean>;
 	claim(perUserLimit?: number): Promise<ApiTurn | null>;
 	releaseClaim(turnId: string, leaseId: string): Promise<void>;
 	/**
@@ -291,7 +297,15 @@ export async function routeTurnBoxEdge(
 				if (!(await deps.ops.register(identity.boxId, heartbeat)))
 					return refuse("forbidden", 403);
 				const latest = await latestBoxVersion(deps, now());
-				const extra = latest ? { latestVersion: latest } : {};
+				const extra: { latestVersion?: string; restartApproved?: boolean } =
+					latest ? { latestVersion: latest } : {};
+				if (latest && heartbeat.version && heartbeat.version !== latest) {
+					// Bookkeeping never blocks: without an answer the box restarts as before.
+					const approved = await deps.ops
+						.restartApproved?.(identity.boxId, latest)
+						.catch(() => undefined);
+					if (approved !== undefined) extra.restartApproved = approved;
+				}
 				if (!refreshIdentity) return json({ ok: true, ...extra });
 				const signingTime = now();
 				const remaining = identity.expiresAt - signingTime;

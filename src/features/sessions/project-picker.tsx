@@ -36,6 +36,7 @@ import {
 	transientReadRetryDelay,
 } from "../projects/api";
 import { useGithubConnectionNotice } from "../projects/github-connection-notice";
+import { refreshAfterProjectAdded } from "../workspace/live-freshness";
 
 export function ProjectPicker({
 	projects,
@@ -116,7 +117,7 @@ export function ProjectPicker({
 				branch: addedProjectBranch(repository),
 			}),
 		onSuccess: async (project) => {
-			await queryClient.invalidateQueries({ queryKey: ["projects"] });
+			await refreshAfterProjectAdded(queryClient);
 			onSelectProject(project.id);
 			setPickerOpen(false);
 			setQuery("");
@@ -126,7 +127,7 @@ export function ProjectPicker({
 		mutationFn: (name: string) =>
 			requestJson<Project>("/api/github/repositories", { name }),
 		onSuccess: async (project) => {
-			await queryClient.invalidateQueries({ queryKey: ["projects"] });
+			await refreshAfterProjectAdded(queryClient);
 			await queryClient.invalidateQueries({
 				queryKey: ["github", "repositories"],
 			});
@@ -206,7 +207,7 @@ export function ProjectPicker({
 						variant="sidebar"
 						onCancel={() => setAddingProject(false)}
 						onAdded={async (project) => {
-							await queryClient.invalidateQueries({ queryKey: ["projects"] });
+							await refreshAfterProjectAdded(queryClient);
 							onSelectProject(project.id);
 							setAddingProject(false);
 							setPickerOpen(false);

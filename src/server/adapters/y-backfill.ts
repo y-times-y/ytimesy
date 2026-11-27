@@ -88,3 +88,24 @@ export async function ySquaredBackfill(
 		keptOff: off.rows,
 	};
 }
+
+/**
+ * The same rule as the backfill, for one user's live projects, run when the
+ * user loads the app or adds a project. A project the backfill skipped
+ * because it was archived (and so is live again once its repository is added
+ * again) keeps y_enabled=false from before Y² was on by default; with no
+ * recorded choice it must follow the default. Idempotent; returns the ids
+ * it turned on.
+ */
+export async function enableNeverChosenProjects(
+	db: Queryable,
+	userId: string,
+): Promise<string[]> {
+	const { rows } = await db.query(
+		`update project p set y_enabled=true
+		 where p.user_id=$1 and ${NEVER_SET} and not ${CHOSE_OFF} and not ${USER_TURNED_OFF}
+		 returning p.id`,
+		[userId],
+	);
+	return rows.map((row) => String(row.id));
+}

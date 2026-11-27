@@ -74,6 +74,39 @@ const PAUSING_WAIT_SECONDS = 180;
 const STARTING_REISSUE_SECONDS = 20;
 const MAX_START_REISSUES = 2;
 const STARTING_WAIT_SECONDS = 60;
+const NOT_FOUND_GRACE_SECONDS = 30;
+
+function isNotFound(error: unknown): boolean {
+	const e = error as { status?: unknown; cause?: unknown; error?: unknown };
+	return (
+		e?.status === 404 ||
+		(!!e?.cause && isNotFound(e.cause)) ||
+		(!!e?.error && isNotFound(e.error))
+	);
+}
+
+/** Pauses between reads of a VM that answers 404 (about 6 s in all). */
+export const NOT_FOUND_READ_PAUSES_MS = [1_000, 2_000, 3_000] as const;
+
+/**
+ * Reads a VM, tolerating a few seconds of 404 (a VM made moments ago is not
+ * always readable yet). A VM that stays missing still fails with its 404, so
+ * a deleted VM is replaced after about 6 s.
+ */
+export async function readVmData<T>(
+	read: () => Promise<T>,
+	pauses: readonly number[] = NOT_FOUND_READ_PAUSES_MS,
+): Promise<T> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await read();
+		} catch (error) {
+			if (attempt >= pauses.length || !isNotFound(error)) throw error;
+			await new Promise((resolve) => setTimeout(resolve, pauses[attempt]));
+		}
+	}
+}
+
 /** A machine that reads stopped is started again this many times before giving up. */
 const MAX_STOPPED_RESTARTS = 1;
 /**
@@ -101,6 +134,15 @@ export async function waitUntilVmRunning(
 	let sawPausing = false;
 	const trace = new VmWaitTrace(vm.id);
 	const read = Effect.tryPromise(() => vm.data()).pipe(
+		// A VM read right after its creation can be a 404 for a few seconds
+		// (production 2026-11-27: a new chat failed 8 s after its create). Wait
+		// it out for NOT_FOUND_GRACE_SECONDS; after that it is really gone.
+		Effect.catch((error) =>
+			Date.now() - waitStarted < NOT_FOUND_GRACE_SECONDS * 1000 &&
+			isNotFound(error)
+				? Effect.fail(new VmStillStarting())
+				: Effect.fail(error),
+		),
 		Effect.tap((data) => Effect.sync(() => trace.observe(data))),
 		Effect.flatMap((data) => {
 			if (data.state === "starting") {

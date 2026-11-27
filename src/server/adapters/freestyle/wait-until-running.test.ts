@@ -202,3 +202,52 @@ it("gives a slow guest an extended readiness window, still probing quickly first
 	expect(GUEST_PROBE_RETRY_DELAYS_MS[0]).toBeLessThanOrEqual(250);
 	expect(GUEST_PROBE_RETRY_DELAYS_MS.length).toBeGreaterThanOrEqual(9);
 });
+
+const notFound = () =>
+	new FreestyleApiError(
+		404,
+		{ code: "NOT_FOUND", message: "not found: vm vm-test" },
+		"/v5/vms/vm-test",
+	);
+it("waits out a 404 on a VM that was only just created (provider lag), then sees it running", async () => {
+	vi.useFakeTimers();
+	const data = vi
+		.fn()
+		.mockRejectedValueOnce(notFound())
+		.mockRejectedValueOnce(notFound())
+		.mockResolvedValue({ state: "running" });
+	const waiting = waitUntilVmRunning(
+		{ id: "vm-test", data } as unknown as Vm,
+		"Test",
+	);
+	await vi.runAllTimersAsync();
+	await expect(waiting).resolves.toMatchObject({ state: "running" });
+	expect(data).toHaveBeenCalledTimes(3);
+});
+it("still reports a VM that stays missing after the grace", async () => {
+	vi.useFakeTimers();
+	const data = vi.fn().mockRejectedValue(notFound());
+	const waiting = waitUntilVmRunning(
+		{ id: "vm-test", data } as unknown as Vm,
+		"Test",
+	);
+	const assertion = expect(waiting).rejects.toBeDefined();
+	await vi.runAllTimersAsync();
+	await assertion;
+	expect(data.mock.calls.length).toBeGreaterThan(3);
+});
+
+it("readVmData retries a 404 a few times and gives a still-missing VM back as its 404", async () => {
+	const { readVmData } = await import("./wait-until-running");
+	const flaky = vi
+		.fn()
+		.mockRejectedValueOnce(notFound())
+		.mockResolvedValue({ state: "paused" });
+	await expect(readVmData(flaky, [0, 0])).resolves.toEqual({ state: "paused" });
+	const gone = vi.fn().mockRejectedValue(notFound());
+	await expect(readVmData(gone, [0, 0])).rejects.toMatchObject({ status: 404 });
+	expect(gone).toHaveBeenCalledTimes(3);
+	const other = vi.fn().mockRejectedValue(new Error("boom"));
+	await expect(readVmData(other, [0, 0])).rejects.toThrow("boom");
+	expect(other).toHaveBeenCalledTimes(1);
+});

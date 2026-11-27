@@ -1026,14 +1026,17 @@ describe("Y² on the Claude Code route", () => {
 		expect((step.runner as Record<string, unknown>).boxTools).toBeUndefined();
 		expect(Object.keys(step.tools as object).sort()).toEqual(
 			[
+				"archive_settled",
 				"archive_thread",
 				"ask_user",
 				"list_models",
 				"message_thread",
 				"read_canvas",
 				"retry_thread",
+				"reuse_candidates",
 				"schedule",
 				"set_thread_model",
+				"settled_threads",
 				"show_canvas",
 				"start_thread",
 				"stop_thread",

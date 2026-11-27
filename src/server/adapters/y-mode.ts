@@ -3,6 +3,8 @@ import { claudeRunnerFor } from "#/domain/claude-runner";
 import { Y_SQUARED_WELCOME } from "#/domain/y-default";
 import { Y_SQUARED_TITLE } from "#/domain/y-squared";
 import { database } from "./database";
+import { noteProjectsChanged, noteSessionsChanged } from "./list-change-notes";
+import { enableNeverChosenProjects } from "./y-backfill";
 
 /**
  * A project's Y mode (project.y_enabled) and its Y² chat
@@ -13,6 +15,16 @@ export type ProjectYMode = {
 	readonly enabled: boolean;
 	readonly ySquaredId: string | null;
 };
+
+/**
+ * Keeps a project's Y² chat out of its thread lists unless the project has Y²
+ * on (`s` is the agent_session alias). The Y² chat is only ever drawn as the
+ * Super agent row, which pins it by id for a Y project; with Y² off nothing
+ * pins it, and without this it showed in Threads as a plain thread titled
+ * "Y²" (2026-11-27).
+ */
+export const NOT_UNPINNED_Y_SQUARED_CHAT = `(s.chat_role is distinct from 'y2'
+	or exists(select 1 from project yp where yp.id=s.project_id and yp.y_enabled))`;
 
 /** Null when the project is not this user's. */
 export async function projectYMode(
@@ -116,6 +128,7 @@ export async function setProjectYMode(
 		[projectId, userId, enabled],
 	);
 	if (!result.rowCount) throw new Error("Project is not available.");
+	noteProjectsChanged(userId);
 }
 
 /** The user-level switch (default on): false means Y² is off for their projects and new ones. */
@@ -139,6 +152,7 @@ export async function setUserYDefault(userId: string, enabled: boolean) {
 		 where user_id=$1 and archived_at is null`,
 		[userId, enabled],
 	);
+	noteProjectsChanged(userId);
 }
 
 /**
@@ -217,5 +231,33 @@ export async function ensureYSquaredChat(
 			JSON.stringify(welcome),
 		],
 	);
+	// The Super agent row of a new project appears in every open tab.
+	if (result.rows[0]) noteSessionsChanged(userId, projectId);
 	return result.rows[0]?.id ?? null;
+}
+
+/** Turns Y² on for this user's live projects that never chose (see enableNeverChosenProjects). */
+export async function enableDefaultYProjects(
+	userId: string,
+): Promise<string[]> {
+	return enableNeverChosenProjects(database(), userId);
+}
+
+/**
+ * The user's live Y projects that have a workspace but no live Y² chat: the
+ * state that draws a project with no Super agent. Ids only.
+ */
+export async function projectsMissingYSquared(
+	userId: string,
+): Promise<string[]> {
+	const result = await database().query<{ id: string }>(
+		`select p.id from project p
+		 where p.user_id=$1 and p.archived_at is null and p.y_enabled
+		   and exists(select 1 from workspace w where w.project_id=p.id and w.user_id=p.user_id)
+		   and not exists(select 1 from agent_session s
+		     where s.project_id=p.id and s.user_id=p.user_id and s.chat_role='y2' and s.archived_at is null)
+		 limit 50`,
+		[userId],
+	);
+	return result.rows.map((row) => row.id);
 }

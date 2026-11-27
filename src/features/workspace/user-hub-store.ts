@@ -38,6 +38,8 @@ export type HubMemory = {
 	readonly signals: Readonly<Record<string, number>>;
 	readonly turns: Readonly<Record<string, SessionTurnStatus>>;
 	readonly wholeMaps: number;
+	/** The hub's last event version (HubStateMessage.seq); none from an older hub. */
+	readonly seq?: number;
 };
 export const EMPTY_HUB_MEMORY: HubMemory = {
 	signals: {},
@@ -66,10 +68,20 @@ export function hubChangeFromMessage(
 	if (message.full) {
 		const wholeMaps = memory.wholeMaps + 1;
 		return {
-			memory: { signals: { ...(message.signals ?? {}) }, turns, wholeMaps },
+			memory: {
+				signals: { ...(message.signals ?? {}) },
+				turns,
+				wholeMaps,
+				seq: message.seq,
+			},
 			change: wholeMaps > 1 ? { kind: "resync" } : null,
 		};
 	}
+	// A version skipped: a push was lost, so anything may have changed.
+	const gap =
+		message.seq !== undefined &&
+		memory.seq !== undefined &&
+		message.seq !== memory.seq + 1;
 	const topics = new Set<string>();
 	for (const [topic, at] of Object.entries(message.signals ?? {}))
 		if (memory.signals[topic] !== at) topics.add(topic);
@@ -80,8 +92,13 @@ export function hubChangeFromMessage(
 			...memory,
 			signals: { ...memory.signals, ...(message.signals ?? {}) },
 			turns,
+			seq: message.seq ?? memory.seq,
 		},
-		change: topics.size ? { kind: "topics", topics } : null,
+		change: gap
+			? { kind: "resync" }
+			: topics.size
+				? { kind: "topics", topics }
+				: null,
 	};
 }
 
@@ -186,14 +203,33 @@ export function useHubConnection(): HubConnection {
 }
 
 /**
- * Whether a tab coming back into focus should re-read its queries: not while
- * the hub pushes (it reports every change, and resyncs on reconnect), so a
- * focus is not a burst of reads. Queries that set their own focus rule keep it.
+ * Whether a tab coming back into focus re-reads a query. Only a query the hub
+ * covers (it has a push-or-poll interval: pollUnlessPushed) skips a quick
+ * return while the hub pushes. A query nothing pushes (no interval, no hub
+ * topic) always reads when stale: before, every query skipped it, so a
+ * settings list or a project row changed elsewhere stayed old until a reload.
  */
-export function refetchOnFocusUnlessPushed() {
-	return (
-		hubDelivery(userHubStore.connection()) !== "push" ||
-		tabWasAway(tabHiddenSince, Date.now())
+export function focusRefetchWanted(
+	connection: HubConnection,
+	coveredByHub: boolean,
+	tabAway: boolean,
+	_now: number,
+) {
+	return !coveredByHub || hubDelivery(connection) !== "push" || tabAway;
+}
+
+export function refetchOnFocusUnlessPushed(query: {
+	// refetchInterval is an observer option: a query is covered when one of
+	// the components watching it sets a push-or-poll interval.
+	observers: readonly { options: { refetchInterval?: unknown } }[];
+}) {
+	return focusRefetchWanted(
+		userHubStore.connection(),
+		query.observers.some(
+			(observer) => observer.options.refetchInterval !== undefined,
+		),
+		tabWasAway(tabHiddenSince, Date.now()),
+		Date.now(),
 	);
 }
 

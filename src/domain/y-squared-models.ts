@@ -47,7 +47,7 @@ export type ThreadModelChoices = {
 };
 
 export const Y_SQUARED_MODEL_CHOICE_OFF =
-	'Choosing models is switched off for this project (Project settings > Y > "Let Y² choose a thread\'s model"). Threads use the default model. Tell the person once if they asked for a model, and that the switch is there.';
+	'Choosing models is switched off for this project (Project settings > Y² > "Let Y² choose a thread\'s model"). Threads use the default model. Tell the person once if they asked for a model, and that the switch is there.';
 
 const TIER_NOTE: Record<ThreadModelTier, string> = {
 	frontier: "strongest; slower and costlier",
