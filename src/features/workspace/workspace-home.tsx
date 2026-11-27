@@ -4248,8 +4248,7 @@ export function WorkspaceHome({
 															? (send) => (
 																	<ThreadEmptyState
 																		onSend={send}
-																		{...(userId ? { userId } : {})}
-																		projectCount={projects.data?.length ?? 0}
+																			projectCount={projects.data?.length ?? 0}
 																		chatCount={
 																			allChatListsLoaded ? totalChatCount : null
 																		}

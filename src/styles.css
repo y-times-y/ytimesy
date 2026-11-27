@@ -5964,23 +5964,6 @@ details.environment-build[open] > summary .session-activity-chevron {
 	background: #ffffff0f;
 	color: var(--list-text-strong);
 }
-.thread-suggestions-link {
-	padding: 0;
-	border: 0;
-	background: none;
-	color: var(--list-text-muted);
-	font-size: 11px;
-	text-decoration: underline;
-	text-underline-offset: 2px;
-	cursor: pointer;
-}
-.thread-suggestions-link:hover {
-	color: var(--list-text-secondary);
-}
-.thread-empty {
-	/* Room for the suggestions and the link: nothing shifts when they appear or hide. */
-	min-height: 112px;
-}
 .y-squared-suggestion:focus-visible {
 	outline: 2px solid #aaa;
 	outline-offset: 1px;

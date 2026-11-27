@@ -1,49 +1,41 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { THREAD_SUGGESTIONS } from "#/domain/y-squared";
-import { ThreadEmptyState, ThreadEmptyView } from "./thread-empty-state";
+import { ThreadEmptyState } from "./thread-empty-state";
 
 const noop = () => undefined;
-const view = (state: "shown" | "offer" | "none" | "loading") =>
+const render = (chatCount: number | null, projectCount = 1) =>
 	renderToStaticMarkup(
-		<ThreadEmptyView
-			state={state}
-			onSend={noop}
-			onDismiss={noop}
-			onShowAgain={noop}
-		/>,
-	);
-
-it("offers first things to ask, with a way to dismiss them", () => {
-	const html = view("shown");
-	for (const text of THREAD_SUGGESTIONS) expect(html).toContain(text);
-	expect(html).toContain("Ready when you are");
-	expect(html).toContain("Don&#x27;t show again");
-});
-
-it("shows only a quiet link to a returning user", () => {
-	const html = view("offer");
-	for (const text of THREAD_SUGGESTIONS) expect(html).not.toContain(text);
-	expect(html).toContain("Show suggestions");
-});
-
-it("renders neither while the choice or the chat lists are loading", () => {
-	const html = view("loading");
-	for (const text of THREAD_SUGGESTIONS) expect(html).not.toContain(text);
-	expect(html).not.toContain("Show suggestions");
-	expect(html).toContain("Ready when you are");
-});
-
-it("server-renders without suggestions (the first paint matches hydration)", () => {
-	vi.stubGlobal("localStorage", undefined);
-	const html = renderToStaticMarkup(
 		<ThreadEmptyState
 			onSend={noop}
-			userId="u"
-			projectCount={1}
-			chatCount={0}
+			projectCount={projectCount}
+			chatCount={chatCount}
 		/>,
 	);
-	for (const text of THREAD_SUGGESTIONS) expect(html).not.toContain(text);
-	vi.unstubAllGlobals();
+
+it("offers first things to ask to a brand-new user", () => {
+	const html = render(0);
+	for (const text of THREAD_SUGGESTIONS) expect(html).toContain(text);
+});
+
+it("draws nothing for a returning user: no copy, no links", () => {
+	expect(render(10)).toBe("");
+	expect(render(0, 3)).toBe("");
+});
+
+it("draws nothing while the chat lists load", () => {
+	expect(render(null)).toBe("");
+});
+
+it("draws nothing in the Super agent chat", () => {
+	expect(
+		renderToStaticMarkup(
+			<ThreadEmptyState
+				onSend={noop}
+				projectCount={1}
+				chatCount={0}
+				superAgent
+			/>,
+		),
+	).toBe("");
 });
