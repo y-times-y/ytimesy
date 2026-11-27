@@ -133,6 +133,7 @@ import {
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { isTemplateRebuilding } from "#/domain/template-rebuild";
 import { startedByPeerMessage } from "#/domain/thread-peer";
 import { withStoppedNotice } from "#/domain/turn-end";
 import {
@@ -308,6 +309,7 @@ import {
 	type SubagentToolContext,
 	subagentTools,
 } from "../services/subagent-tools";
+import { preparingWorkspaceStatus } from "../services/template-rebuild";
 import { thinLeadTools } from "../services/thin-lead-tools";
 import {
 	pauseVmWhileThinkingEnabled,
@@ -3826,7 +3828,12 @@ async function runApiTurnAttempt(
 					}).catch(() => {});
 				await checkpointApiTurn(turn, messages, [
 					...withoutStartingMachine(items),
-					startingMachineItem(turn.id),
+					startingMachineItem(
+						turn.id,
+						isTemplateRebuilding(platformRestart)
+							? await preparingWorkspaceStatus(turn.session_id)
+							: undefined,
+					),
 				]).catch(() => {});
 			}
 			throw platformRestart;

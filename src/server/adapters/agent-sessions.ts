@@ -1249,7 +1249,13 @@ export async function providerRefsHeldOutside(
 ) {
 	const result = await database().query<{ provider_ref: string }>(
 		`/* providerRefsHeldOutside */ select distinct provider_ref from agent_session
-		where user_id=$1 and provider_ref is not null and not (id::text = any($2::text[]))`,
+		where user_id=$1 and provider_ref is not null and not (id::text = any($2::text[]))
+		union
+		/* a project's template VM is never a chat's to delete (2026-11-27: an old project's template was gone) */
+		select provider_ref from workspace where user_id=$1 and provider_ref is not null
+		union
+		select b.provider_ref from environment_build b join workspace w on w.id=b.workspace_id
+		where w.user_id=$1 and b.provider_ref is not null and b.provider_released_at is null and b.status<>'failed'`,
 		[userId, sessionIds],
 	);
 	return new Set(result.rows.map((row) => row.provider_ref));

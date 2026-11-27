@@ -9,7 +9,10 @@ export type OwnerAlertKind =
 	| "interruption-digest"
 	| "canary-failed"
 	| "provider-account-limit"
-	| "storage-quota";
+	| "storage-quota"
+	| "template-missing"
+	| "machine-failure-rate"
+	| "canary-stale";
 
 export type OwnerAlert = {
 	readonly kind: OwnerAlertKind;

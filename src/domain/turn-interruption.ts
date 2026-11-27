@@ -58,7 +58,7 @@ const MACHINE_REFUSAL_THAT_PASSES =
  * than failed (production 2026-11-26: "it started but did not answer yet").
  */
 const MACHINE_START_THAT_PASSES =
-	/started but is not answering|did not become running|stopped before it became running|earlier start of this machine was still finishing|another operation is updating this machine|did not finish resizing|sizing did not complete/i;
+	/started but is not answering|did not become running|stopped before it became running|earlier start of this machine was still finishing|another operation is updating this machine|did not finish resizing|sizing did not complete|workspace environment is being rebuilt/i;
 
 export function isMachineRefusalThatPasses(cause: unknown, depth = 0): boolean {
 	if (depth === 0 && machineFailureRetryable(cause)) return true;

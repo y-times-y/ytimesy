@@ -19,6 +19,10 @@ import type { MachineSizeId } from "#/domain/machine-size";
 import { sessionTitleFromText } from "#/domain/session-item";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
+	TEMPLATE_REBUILDING_DETAIL,
+	TEMPLATE_REBUILDING_MESSAGE,
+} from "#/domain/template-rebuild";
+import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
 	childAgentSession,
@@ -59,9 +63,11 @@ import { replaceHelperFork } from "../adapters/subagents";
 import { workspaceBootSnapshotId } from "../records/tools-snapshot-store";
 import { cancelServerTurn } from "./cancel-server-turn";
 import { startEnvironmentServices } from "./environment-services";
+import { WorkspaceProvisionError } from "./errors";
 import { detachedFromTurn } from "./machine-call-signal";
 import { restoreSessionWorkspace } from "./session-checkpoint";
 import { forkWriterWorkspace } from "./subagent-writer";
+import { requestTemplateRebuild } from "./template-rebuild";
 import { turnSpan } from "./turn-timing";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -422,6 +428,14 @@ export async function bindAgentSessionMachine(
 		},
 		workspaceId: workspace.id,
 		templateSnapshotId,
+		// A fork source is not the project's template: nothing to rebuild for it.
+		rebuildMissingTemplate: input.sourceSnapshotId
+			? undefined
+			: () =>
+					requestTemplateRebuild({
+						workspaceId: workspace.id,
+						sessionId: session.id,
+					}).then(() => undefined),
 		machineSize: selectedSession.providerRef
 			? undefined
 			: await projectMachineSize(input.userId, input.projectId),
@@ -703,6 +717,8 @@ export async function executeSessionMachinePlan(input: {
 		cause: unknown,
 	) => Promise<boolean>;
 	readonly restoreMissingWorkspace?: (newId: string) => Promise<void>;
+	/** Rebuilds the project's environment (once) when its template is gone; the start then waits and retries. */
+	readonly rebuildMissingTemplate?: () => Promise<void>;
 	readonly workspaceId: string;
 	readonly templateSnapshotId: string | null;
 	readonly machineSize?: MachineSizeId;
@@ -897,6 +913,8 @@ async function copyAgentSessionFromTemplate(
 		readonly workspaceId: string;
 		readonly templateProviderRef: string | null;
 		readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
+		readonly templateSnapshotId?: string | null;
+		readonly rebuildMissingTemplate?: () => Promise<void>;
 		readonly wait?: (ms: number) => Promise<void>;
 		readonly machineSize?: MachineSizeId;
 	},
@@ -912,18 +930,31 @@ async function copyAgentSessionFromTemplate(
 		);
 	} catch (cause) {
 		const message = failureMessage(cause);
+		// Only the project's own template can be rebuilt: not a fork source or the fresh-boot image.
+		const rebuildable =
+			!!input.rebuildMissingTemplate &&
+			snapshotId === input.templateSnapshotId &&
+			workspaceLooksGone(message);
 		if (
 			shouldResealProjectSnapshotAfterCopyFailure(message) &&
 			input.templateProviderRef
 		) {
-			await input.machines.ensureRunning(
-				WorkspaceId(input.templateProviderRef),
-			);
-			const nextSnapshotId = await input.machines.snapshotEnvironment(
-				WorkspaceId(input.templateProviderRef),
-				projectEnvironmentSnapshotSlug(input.workspaceId),
-				input.machineSize,
-			);
+			let nextSnapshotId: string;
+			try {
+				await input.machines.ensureRunning(
+					WorkspaceId(input.templateProviderRef),
+				);
+				nextSnapshotId = await input.machines.snapshotEnvironment(
+					WorkspaceId(input.templateProviderRef),
+					projectEnvironmentSnapshotSlug(input.workspaceId),
+					input.machineSize,
+				);
+			} catch (resealCause) {
+				// The snapshot and the VM it was built from are both gone.
+				if (rebuildable && workspaceLooksGone(failureMessage(resealCause)))
+					return await rebuildTemplateAndWait(input, snapshotId);
+				throw resealCause;
+			}
 			await input.saveTemplateSnapshot(nextSnapshotId);
 			return await input.machines.provisionSession(
 				slug,
@@ -931,12 +962,32 @@ async function copyAgentSessionFromTemplate(
 				input.machineSize,
 			);
 		}
+		// The snapshot is gone and nothing remains to reseal it from.
+		if (rebuildable && !input.templateProviderRef)
+			return await rebuildTemplateAndWait(input, snapshotId);
 		return await retryCopyAfterCapacityLag(input.machines, slug, snapshotId, {
 			cause,
 			wait: input.wait,
 			machineSize: input.machineSize,
 		});
 	}
+}
+
+/**
+ * Requests the project's environment rebuild (deduplicated by the caller) and
+ * fails this start with the retryable "being rebuilt" error: the turn waits
+ * with a calm status and its next attempt copies the new template.
+ */
+async function rebuildTemplateAndWait(
+	input: { readonly rebuildMissingTemplate?: () => Promise<void> },
+	snapshotId: string,
+): Promise<never> {
+	await input.rebuildMissingTemplate?.().catch(() => undefined);
+	throw new WorkspaceProvisionError({
+		operation: "create",
+		message: TEMPLATE_REBUILDING_MESSAGE,
+		detail: `${TEMPLATE_REBUILDING_DETAIL}: ${snapshotId}`,
+	});
 }
 
 async function retryCopyAfterCapacityLag(
