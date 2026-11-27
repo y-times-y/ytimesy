@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	displayWelcome,
 	PLAN_WAKE_STOP_PERCENT,
 	planBlocksWake,
 	welcomeOnlyText,
@@ -35,6 +36,24 @@ describe("a Y² wake and the person's plan", () => {
 		expect(
 			welcomeOnlyText([{ id: "m1", kind: "agentMessage", text: "Done" }]),
 		).toBeNull();
+	});
+	it("does not tell the person they can turn the Super agent off", () => {
+		expect(Y_SQUARED_WELCOME).not.toMatch(/turn me off/);
+		expect(Y_SQUARED_WELCOME).toMatch(/Start a thread and I'll follow it\.$/);
+	});
+	it("strips that sentence from an exactly matching stored welcome only", () => {
+		const base = Y_SQUARED_WELCOME;
+		for (const tail of ["Y.", "Y²."]) {
+			expect(
+				displayWelcome(
+					base + " You can turn me off in Project settings > " + tail,
+				),
+			).toBe(base);
+		}
+		expect(displayWelcome(base)).toBe(base);
+		const other =
+			"Something else. You can turn me off in Project settings > Y².";
+		expect(displayWelcome(other)).toBe(other);
 	});
 	it("has a short welcome and a per-user daily cap", () => {
 		expect(Y_SQUARED_WELCOME.length).toBeLessThan(260);

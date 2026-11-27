@@ -107,7 +107,7 @@ import {
 import { turnSavingChanges } from "#/domain/turn-saving";
 import { hubTopic } from "#/domain/user-hub";
 import type { SettingsSection } from "#/domain/workspace-settings";
-import { welcomeOnlyText } from "#/domain/y-default";
+import { displayWelcome, welcomeOnlyText } from "#/domain/y-default";
 import {
 	withoutClaudeCodeModels,
 	Y_SQUARED_CLAUDE_CODE_NOTE,
@@ -786,15 +786,21 @@ export function SessionLauncher({
 	// The message held for setup shows in the setup block (with its own
 	// Edit and Remove), not again as a queued message.
 	const heldMessageId = setupHold?.messageId;
-	const timelineItems = useMemo(
-		() =>
-			heldMessageId
-				? items.filter(
-						(item) => !(item.id === heldMessageId && isQueuedUserMessage(item)),
-					)
-				: items,
-		[items, heldMessageId],
-	);
+	const timelineItems = useMemo(() => {
+		const shown = heldMessageId
+			? items.filter(
+					(item) => !(item.id === heldMessageId && isQueuedUserMessage(item)),
+				)
+			: items;
+		// An old stored welcome is drawn without the "turn me off" sentence.
+		return shown.map((item) =>
+			item.kind === "agentMessage" &&
+			String(item.id).startsWith("welcome-") &&
+			displayWelcome(item.text) !== item.text
+				? { ...item, text: displayWelcome(item.text) }
+				: item,
+		);
+	}, [items, heldMessageId]);
 	const turnStatus = session.turnStatus;
 	// Goal mode (the model started it): the composer says so while it runs.
 	const goal = activeGoal(items, turnStatus);

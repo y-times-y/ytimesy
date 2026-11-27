@@ -9,7 +9,18 @@ import type { ClaudePlanUsage } from "./claude-plan-usage";
 
 /** The first line of a Super agent chat, written when the chat is created. */
 export const Y_SQUARED_WELCOME =
-	"I'm this project's Super agent. I keep track of its threads: what's working, what needs you and what finished with its pull request. Start a thread and I'll follow it. You can turn me off in Project settings > Y².";
+	"I'm this project's Super agent. I keep track of its threads: what's working, what needs you and what finished with its pull request. Start a thread and I'll follow it.";
+
+/** Welcomes stored in chats created before the "turn me off" sentence was dropped; shown without it. */
+const LEGACY_WELCOMES = [
+	"I'm this project's Super agent. I keep track of its threads: what's working, what needs you and what finished with its pull request. Start a thread and I'll follow it. You can turn me off in Project settings > Y.",
+	"I'm this project's Super agent. I keep track of its threads: what's working, what needs you and what finished with its pull request. Start a thread and I'll follow it. You can turn me off in Project settings > Y².",
+];
+
+/** What to draw for a stored welcome: an exact old text loses its sentence; nothing else changes. No data migration. */
+export function displayWelcome(text: string): string {
+	return LEGACY_WELCOMES.includes(text) ? Y_SQUARED_WELCOME : text;
+}
 
 /**
  * The welcome text when a Super agent chat holds nothing else (the seeded
@@ -27,7 +38,7 @@ export function welcomeOnlyText(
 	if (items.length !== 1 || !only) return null;
 	if (only.kind !== "agentMessage" || !only.id.startsWith("welcome-"))
 		return null;
-	return only.text ?? null;
+	return only.text === undefined ? null : displayWelcome(only.text);
 }
 
 /** Wakes per user per day across all their projects (each project also has its own 60/hour (120 with needs-you / failed) wake cap and 48/day proactive cap). */
