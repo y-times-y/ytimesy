@@ -37,7 +37,16 @@ describe("hubReadsToMake", () => {
 				...base,
 				message: { type: "state", chats: { bg: { turnStatus: "completed" } } },
 			}),
-		).toEqual({ reads: ["bg"], refreshList: false });
+		).toEqual({ reads: ["bg"], refreshList: true });
+	});
+	it("reads the chat list when a chat the sidebar shows running settles (finished, needs you)", () => {
+		expect(
+			hubReadsToMake({
+				...base,
+				backgroundChatIds: [],
+				message: { type: "state", chats: { bg2: { turnStatus: "completed" } } },
+			}),
+		).toEqual({ reads: [], refreshList: true });
 	});
 	it("reads the chat list when an idle chat starts running", () => {
 		expect(
