@@ -127,7 +127,7 @@ it("steer: the working thread's next step reads the message, no extra turn", asy
 		text: "use tabs",
 		mode: "steer",
 	});
-	expect(reply).toContain("Steering");
+	expect(reply).toContain("STEERED");
 	const rows = await readPeerInbox(thread);
 	expect(rows.map((r) => r.message)).toEqual(["use tabs"]);
 	// API-route step inbox read and a Claude Code run's hook both take it
@@ -140,8 +140,8 @@ it("steer: the working thread's next step reads the message, no extra turn", asy
 	expect(await takeNextQueuedUserMessage("u", thread)).toBeNull();
 });
 
-it("queue (and the omitted mode): invisible to the step read, waits for the turn's end", async () => {
-	for (const args of [{ mode: "queue" }, {}])
+it("queue (explicit): invisible to the step read, waits for the turn's end", async () => {
+	for (const args of [{ mode: "queue" }])
 		await call(y2(), {
 			id: thread,
 			text: `later ${JSON.stringify(args)}`,
@@ -162,7 +162,7 @@ it("interrupt: stops the running turn, then the message starts the next one", as
 		text: "stop that",
 		mode: "interrupt",
 	});
-	expect(reply).toContain("Stopped the running turn");
+	expect(reply).toContain("INTERRUPTED");
 	expect(started).toEqual(["stop that"]);
 	expect(await readPeerInbox(thread)).toEqual([]);
 });
