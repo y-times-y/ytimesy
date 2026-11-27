@@ -794,7 +794,7 @@ const CLAIM_IDENTITY_COLUMNS =
  * request (loadOwned) and only when the turn is small enough to run there.
  */
 const BOX_CLAIM_COLUMNS =
-	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,settings,failover,run_attempts,updated_at,'[]'::jsonb as messages,'[]'::jsonb as items,(octet_length(messages::text)+octet_length(items::text)) as history_bytes";
+	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,settings,failover,run_attempts,updated_at,'[]'::jsonb as messages,'[]'::jsonb as items,(octet_length(messages::text)+octet_length(items::text)) as history_bytes,(extract(epoch from now()-created_at)*1000)::int as queue_wait_ms";
 
 export async function claimApiTurn(
 	perUserLimit = 2,
@@ -1559,7 +1559,7 @@ export const MAX_BOX_TURN_TAKEOVERS = 10;
  * full, or gone. Production, 2026-11-24 19:18 UTC: three turns waited 16
  * minutes ("thinking", no tokens) behind one box's 32-minute turn.
  */
-export const STRANDED_BOX_TURN_SECONDS = 45;
+export const STRANDED_BOX_TURN_SECONDS = 20;
 
 export async function reassignStrandedBoxTurns() {
 	const result = await database().query<{ id: string; session_id: string }>(

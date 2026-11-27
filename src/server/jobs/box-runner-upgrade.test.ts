@@ -91,6 +91,31 @@ describe("a box upgrading itself", () => {
 		expect(ready).toHaveBeenCalledOnce();
 	});
 
+	it("keeps claiming until the edge lets it restart, so one box leaves at a time", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(console, "info").mockImplementation(() => undefined);
+		const { client, state } = fakeClient("new-version");
+		const edgeSays = client as unknown as { restartApproved: boolean | null };
+		edgeSays.restartApproved = false;
+		const ready = vi.fn();
+		await runTurnRunnerBox({
+			env: ENV,
+			client,
+			signalHandlers: false,
+			onUpgradeReady: ready,
+		});
+		const claimsBefore = state.claims;
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(state.claims).toBeGreaterThan(claimsBefore);
+		expect(ready).not.toHaveBeenCalled();
+		edgeSays.restartApproved = true;
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(ready).toHaveBeenCalledOnce();
+		const claimsAway = state.claims;
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(state.claims).toBe(claimsAway);
+	});
+
 	it("stays when it already runs the published program", async () => {
 		vi.useFakeTimers();
 		vi.spyOn(console, "info").mockImplementation(() => undefined);

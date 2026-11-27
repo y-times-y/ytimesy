@@ -1,5 +1,5 @@
 import { FreestyleApiError } from "freestyle";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	machineBudgetSpent,
 	machineFailureDetail,
@@ -299,4 +299,41 @@ it("names a stopped VM whose runtime cap is used up, so it is replaced at once i
 		}),
 	).toBeUndefined();
 	expect(spentBudgetEvidence({ state: "stopped" })).toBeUndefined();
+});
+
+describe("provider limit class and start slots (2026-11-27)", () => {
+	it("names which account limit answered", async () => {
+		const { rateLimitClass } = await import("./machine-failure");
+		expect(rateLimitClass("429 LIMIT_EXCEEDED: at its VM limit")).toBe(
+			"running-vm-cap",
+		);
+		expect(rateLimitClass("workspace storage is nearly full")).toBe("storage");
+		expect(rateLimitClass("allowance for vcpu_time used")).toBe(
+			"compute-allowance",
+		);
+		expect(rateLimitClass("429 LIMIT_EXCEEDED")).toBe("unspecified");
+	});
+
+	it("lets only a few starts run at once and runs the rest as slots free", async () => {
+		const { withMachineStartSlot } = await import("./machine-failure");
+		let running = 0;
+		let peak = 0;
+		const gates: Array<() => void> = [];
+		const start = () =>
+			withMachineStartSlot(async () => {
+				running++;
+				peak = Math.max(peak, running);
+				await new Promise<void>((resolve) => gates.push(resolve));
+				running--;
+			}, 2);
+		const all = Promise.all([start(), start(), start(), start(), start()]);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(running).toBe(2);
+		while (gates.length) {
+			gates.shift()?.();
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		}
+		await all;
+		expect(peak).toBe(2);
+	});
 });

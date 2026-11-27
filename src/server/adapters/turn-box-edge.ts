@@ -36,6 +36,7 @@ import { afterBoxTurnSettled } from "./turn-box-edge-work";
 import { turnBoxPort } from "./turn-box-port-handlers";
 import {
 	registerTurnRunnerBox,
+	turnRunnerBoxMayRestart,
 	turnRunnerBoxActive,
 } from "./turn-runner-boxes";
 
@@ -97,6 +98,8 @@ export function createTurnBoxEdgeOps(
 		boxActive: (boxId) => scope(() => turnRunnerBoxActive(boxId)),
 		register: (boxId, input) =>
 			scope(() => registerTurnRunnerBox({ id: boxId, ...input })),
+		restartApproved: (boxId, latest) =>
+			scope(() => turnRunnerBoxMayRestart(boxId, latest)),
 		claim: (perUserLimit) =>
 			scope(() => {
 				const limits = modelConcurrencyLimits();
@@ -107,7 +110,18 @@ export function createTurnBoxEdgeOps(
 					undefined,
 					[],
 					"box",
-				);
+				).then((turn) => {
+					// Pickup latency, for the p95 target (5 s): only a first claim
+					// measures the queue (a takeover's created_at is old).
+					const waited = (turn as { queue_wait_ms?: number } | null)
+						?.queue_wait_ms;
+					if (turn && !turn.run_attempts && typeof waited === "number")
+						console.info("turn.box_claim_wait", {
+							turnId: turn.id,
+							waitMs: waited,
+						});
+					return turn;
+				});
 			}),
 		handToObject: (turn) =>
 			scope(async () => {

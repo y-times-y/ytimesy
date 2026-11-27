@@ -21,7 +21,7 @@ export function reportMachineRateLimit(
 			await (deps.record ?? recordInterruption)({
 				kind: "machine.rate_limited",
 				sessionId: hit.slug,
-				cause: `${hit.operation} attempt ${hit.attempt}`,
+				cause: `${hit.operation} attempt ${hit.attempt}${hit.limit ? ` (${hit.limit})` : ""}`,
 				recovered: true,
 				userVisible: false,
 			});

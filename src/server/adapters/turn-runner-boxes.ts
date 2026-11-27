@@ -86,3 +86,24 @@ export async function boxRoutingFacts(userId: string, sessionId: string) {
 		freshMachine: row?.fresh_machine ?? false,
 	};
 }
+
+/**
+ * One box at a time may leave for a new program: the lowest id among the live
+ * boxes not on `latest`. Boxes that already restarted are on `latest` and no
+ * longer count; the box that is away stays counted until its row goes stale
+ * (45 s), so the next one waits for its return, and the fleet always has a
+ * claimer. A single old box is approved at once.
+ */
+export async function turnRunnerBoxMayRestart(
+	id: string,
+	latest: string,
+): Promise<boolean> {
+	const result = await database().query<{ id: string }>(
+		`select id from turn_runner_box
+		 where revoked_at is null and version is distinct from $1
+		 and last_seen_at > now() - make_interval(secs => $2)
+		 order by id limit 1`,
+		[latest, TURN_RUNNER_BOX_FRESH_SECONDS],
+	);
+	return (result.rows[0]?.id ?? id) === id;
+}

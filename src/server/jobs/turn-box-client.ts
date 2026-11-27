@@ -207,6 +207,9 @@ export class TurnBoxEdgeClient {
 	/** The program version the edge says is published (from the last registration). */
 	latestVersion: string | null = null;
 
+	/** The edge's answer to "may this box restart on the published program now"; null when it did not say. */
+	restartApproved: boolean | null = null;
+
 	constructor(private readonly options: ClientOptions) {
 		this.identity = options.identity;
 	}
@@ -251,6 +254,7 @@ export class TurnBoxEdgeClient {
 			this.identity = result.data.identity;
 		if (result.data.latestVersion)
 			this.latestVersion = result.data.latestVersion;
+		this.restartApproved = result.data.restartApproved ?? null;
 		return true;
 	}
 

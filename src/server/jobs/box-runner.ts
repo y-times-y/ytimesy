@@ -410,11 +410,15 @@ export async function runTurnRunnerBox(options: TurnRunnerBoxOptions = {}) {
 				console.error("This turn runner box was revoked; no new turns.");
 			}
 			const latest = client.latestVersion;
+			// Until the edge approves, an old-program box keeps claiming: the
+			// edge lets one box at a time leave, so a deploy never takes every
+			// claimer away together. It stays approved once it started draining.
 			if (
 				!upgrading &&
 				latest &&
 				env.YTIMESY_BUILD_ID &&
-				latest !== env.YTIMESY_BUILD_ID
+				latest !== env.YTIMESY_BUILD_ID &&
+				client.restartApproved !== false
 			) {
 				upgrading = true;
 				console.info(

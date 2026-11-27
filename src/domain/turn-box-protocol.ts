@@ -84,6 +84,13 @@ export const registerResponse = z.object({
 	 * turns, takes no new ones and restarts on it (box-runner.ts).
 	 */
 	latestVersion: z.string().max(128).optional(),
+	/**
+	 * Only with `latestVersion` on a box running another program: whether this
+	 * box may stop claiming and restart now. The edge approves one box at a
+	 * time, so a deploy never takes every claimer away together (2026-11-27:
+	 * 12 turns waited 45 s or more at deploys). Absent: restart as before.
+	 */
+	restartApproved: z.boolean().optional(),
 	identity: z
 		.string()
 		.max(1024)
