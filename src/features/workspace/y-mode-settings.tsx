@@ -116,7 +116,7 @@ export function YModeSettings({ projectId }: { projectId: string }) {
 
 /**
  * The user-level off switch: Y² for all of this person's projects, now and
- * the ones they add later (Settings and Project settings > Y show the same).
+ * the ones they add later (Settings and Project settings > Y² show the same).
  */
 function YUserDefaultSwitch() {
 	const read = useServerFn(readUserYDefaultFn);

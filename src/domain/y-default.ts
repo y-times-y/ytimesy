@@ -9,7 +9,7 @@ import type { ClaudePlanUsage } from "./claude-plan-usage";
 
 /** The first line of a Super agent chat, written when the chat is created. */
 export const Y_SQUARED_WELCOME =
-	"I'm this project's Super agent. I keep track of its threads: what's working, what needs you and what finished with its pull request. Start a thread and I'll follow it. You can turn me off in Project settings > Y.";
+	"I'm this project's Super agent. I keep track of its threads: what's working, what needs you and what finished with its pull request. Start a thread and I'll follow it. You can turn me off in Project settings > Y².";
 
 /** Wakes per user per day across all their projects (each project also has its own 60/hour (120 with needs-you / failed) wake cap and 48/day proactive cap). */
 export const Y_WAKES_PER_USER_PER_DAY = 600;
