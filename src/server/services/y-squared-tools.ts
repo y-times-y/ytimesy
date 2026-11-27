@@ -993,7 +993,7 @@ export function ySquaredTools(input: {
 			execute: async ({
 				id,
 				text,
-				mode = "queue",
+				mode: requestedMode,
 				attachments,
 				addsNewInformation,
 				reason,
@@ -1019,6 +1019,10 @@ export function ySquaredTools(input: {
 				if (forward.error) return `Not sent: ${forward.error}`;
 				await markSent(chat.id);
 				const route = routeOf(chat);
+				// No mode given: a working thread is steered (a correction must not
+				// wait for its turn to end); queue stays an explicit choice.
+				const mode =
+					requestedMode ?? (chat.turnStatus === "running" ? "steer" : "queue");
 				const interrupted =
 					mode === "interrupt" && chat.turnStatus === "running";
 				const steered = mode === "steer" && chat.turnStatus === "running";
@@ -1058,15 +1062,15 @@ export function ySquaredTools(input: {
 				);
 				if (sent.failed) return `Not sent: ${sent.failed}`;
 				if (interrupted)
-					return `Stopped the running turn of "${chat.title}" and sent the message; ${
+					return `INTERRUPTED "${chat.title}": its running turn was stopped and the message sent; ${
 						sent.turnStatus === "running"
 							? "its new turn started."
 							: "it is queued and starts by itself."
 					}`;
 				if (steered)
-					return `Steering "${chat.title}": the message goes in at its next step (a Claude Code thread takes it after its next tool call, a runner box up to 10 s late); if its turn ends first it starts its next turn with it.`;
+					return `STEERED "${chat.title}"${requestedMode ? "" : " (no mode given, so steer)"}: the message goes in at its next step (a Claude Code thread takes it after its next tool call, a runner box up to 10 s late); if its turn ends first it starts its next turn with it.`;
 				return chat.turnStatus === "running"
-					? `Queued the message in "${chat.title}"; it goes in when its current turn ends.`
+					? `QUEUED (not steered) in "${chat.title}": it is read only when its current turn ends, as the next turn.`
 					: sent.turnStatus === "running"
 						? `Sent to "${chat.title}": its turn started.`
 						: `Queued the message for "${chat.title}" behind the budget/concurrency limit; it starts by itself when there is room.`;

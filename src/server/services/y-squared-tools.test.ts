@@ -369,8 +369,12 @@ describe("ySquaredTools write tools", () => {
 	it("message_thread queues into a running thread and starts a turn in an idle one", async () => {
 		const running = writeFixture({ t1: chat({ turnStatus: "running" }) });
 		expect(
-			await run(running.tools, "message_thread", { id: "t1", text: "also" }),
-		).toContain("Queued the message");
+			await run(running.tools, "message_thread", {
+				id: "t1",
+				text: "also",
+				mode: "queue",
+			}),
+		).toContain("QUEUED (not steered)");
 		const idle = writeFixture({ t1: chat() }, "running");
 		expect(
 			await run(idle.tools, "message_thread", { id: "t1", text: "go" }),
@@ -445,15 +449,16 @@ describe("ySquaredTools write tools", () => {
 				addsNewInformation: true,
 				reason: "entry point",
 			}),
-		).toContain("Queued the message");
+		).toContain("STEERED");
 		expect(send).toHaveBeenCalledTimes(1);
 		// Y² has spoken: the person's earlier message no longer blocks.
 		expect(
 			await run(tools, "message_thread", {
 				id: "t1",
 				text: "Also run the linter",
+				mode: "queue",
 			}),
-		).toContain("Queued the message");
+		).toContain("QUEUED (not steered)");
 	});
 
 	it("rejects an oversized message in the schema", () => {
@@ -606,11 +611,15 @@ describe("ySquaredTools write tools", () => {
 	});
 
 	it("message_thread modes: queue (default) waits for the turn's end, steer is released for the next step, interrupt stops first", async () => {
-		for (const mode of [undefined, "queue"]) {
+		for (const mode of ["queue"]) {
 			const f = writeFixture({ t1: chat({ turnStatus: "running" }) });
-			expect(
-				await run(f.tools, "message_thread", { id: "t1", text: "x", mode }),
-			).toContain("Queued the message");
+			const result = await run(f.tools, "message_thread", {
+				id: "t1",
+				text: "x",
+				mode,
+			});
+			expect(result).toContain("QUEUED (not steered)");
+			expect(result).toContain("only when its current turn ends");
 			expect(f.stop).not.toHaveBeenCalled();
 			expect(f.send).toHaveBeenCalledTimes(1);
 			// not released: it waits for the turn's end (or Send)
@@ -624,7 +633,7 @@ describe("ySquaredTools write tools", () => {
 			text: "use port 4001",
 			mode: "steer",
 		});
-		expect(steered).toContain("Steering");
+		expect(steered).toContain("STEERED");
 		expect(steered).toContain("next step");
 		expect(steer.stop).not.toHaveBeenCalled();
 		expect(steer.send).toHaveBeenCalledTimes(1);
@@ -663,7 +672,7 @@ describe("ySquaredTools write tools", () => {
 			mode: "interrupt",
 		});
 		expect(order).toEqual(["stop", "send"]);
-		expect(text).toContain("Stopped the running turn");
+		expect(text).toContain("INTERRUPTED");
 		expect(text).toContain("its new turn started");
 		// an idle thread has nothing to interrupt
 		const idle = writeFixture({ t1: chat() }, "running");
@@ -673,6 +682,27 @@ describe("ySquaredTools write tools", () => {
 			mode: "interrupt",
 		});
 		expect(idle.stop).not.toHaveBeenCalled();
+	});
+
+	it("with no mode, a running thread is steered (released, no wait) and the result says so; an idle one is just sent", async () => {
+		const f = writeFixture({ t1: chat({ turnStatus: "running" }) });
+		const text = await run(f.tools, "message_thread", {
+			id: "t1",
+			text: "use port 4001",
+		});
+		expect(text).toContain("STEERED");
+		expect(text).toContain("no mode given, so steer");
+		expect(text).not.toContain("QUEUED");
+		expect((f.send.mock.calls[0] as unknown[] | undefined)?.[2]).toMatchObject({
+			released: true,
+		});
+		const idle = writeFixture({ t1: chat() }, "running");
+		expect(
+			await run(idle.tools, "message_thread", { id: "t1", text: "go" }),
+		).toContain("its turn started");
+		expect(
+			(idle.send.mock.calls[0] as unknown[] | undefined)?.[2],
+		).not.toHaveProperty("released");
 	});
 
 	it("the message_thread schema leaves the mode optional (queue is applied in execute) and rejects an unknown one; the description no longer says steer is queue", () => {
