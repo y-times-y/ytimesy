@@ -1,6 +1,10 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { hubTopic } from "#/domain/user-hub";
-import type { HubChange, HubConnection } from "./user-hub-store";
+import type {
+	createUserHubStore,
+	HubChange,
+	HubConnection,
+} from "./user-hub-store";
 
 /**
  * A visible tab re-reads the project and chat lists this often. No hub signal
@@ -54,4 +58,15 @@ export function reconnectingNotice(input: {
 	return input.droppedForMs >= RECONNECT_NOTICE_AFTER_MS
 		? "Reconnecting…"
 		: null;
+}
+
+/** Makes the lists a pushed change names stale: the one place the page applies hub list events. */
+export function followListChanges(
+	store: Pick<ReturnType<typeof createUserHubStore>, "watch">,
+	client: QueryClient,
+) {
+	return store.watch((change) => {
+		for (const queryKey of listQueryKeysToInvalidate(change))
+			void client.invalidateQueries({ queryKey: [...queryKey] });
+	});
 }
