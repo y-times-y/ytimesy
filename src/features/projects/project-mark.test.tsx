@@ -21,3 +21,11 @@ it("renders the same markup for the same project everywhere", () => {
 		renderToStaticMarkup(<ProjectMark project={{ id: "p1", name: "x" }} />),
 	).toBe(a);
 });
+
+it("keeps one letter on small tiles so text stays readable (11px or more)", () => {
+	const html = renderToStaticMarkup(
+		<ProjectMark project={{ id: "p1", name: "my-app" }} size={14} />,
+	);
+	expect(html).toContain(">M<");
+	expect(html).toContain("font-size:11px");
+});
