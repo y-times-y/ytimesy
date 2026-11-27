@@ -90,6 +90,9 @@ export const Y_SQUARED_MESSAGE_THREAD_TOOL = "message_thread";
 export const Y_SQUARED_STOP_THREAD_TOOL = "stop_thread";
 export const Y_SQUARED_RETRY_THREAD_TOOL = "retry_thread";
 export const Y_SQUARED_ARCHIVE_THREAD_TOOL = "archive_thread";
+export const Y_SQUARED_SETTLED_THREADS_TOOL = "settled_threads";
+export const Y_SQUARED_ARCHIVE_SETTLED_TOOL = "archive_settled";
+export const Y_SQUARED_REUSE_CANDIDATES_TOOL = "reuse_candidates";
 export {
 	Y_SQUARED_LIST_MODELS_TOOL,
 	Y_SQUARED_SET_THREAD_MODEL_TOOL,
@@ -158,7 +161,14 @@ export const Y_SQUARED_STOP_THREAD_DESCRIPTION =
 export const Y_SQUARED_RETRY_THREAD_DESCRIPTION =
 	"Retry a thread whose last turn failed: it starts a new turn that continues where it stopped. Only for a failed thread; retry a thread at most once for the same failure (a second failure for the same reason is a blocker for the person). Pass the id from the threads list.";
 export const Y_SQUARED_ARCHIVE_THREAD_DESCRIPTION =
-	"Archive a finished, failed or idle thread so it leaves the person's list (Settings > Archived restores it). Refused for a working thread, a thread waiting on the person, a helper chat (builders are archived with their thread) or one with an OPEN pull request (merged or closed ones are fine). Use it to clean up old failed or obsolete threads, and say in one line what you archived. Pass the id from the threads list.";
+	"Archive a finished, failed or idle thread so it leaves the person's list (Settings > Archived restores it). Refused for a working thread, a thread waiting on the person, a helper chat (builders are archived with their thread), one with an OPEN pull request (merged or closed ones are fine) or one with unpushed work. Use it to clean up old failed or obsolete threads, and say in one line what you archived. Pass the id from the threads list.";
+
+export const Y_SQUARED_SETTLED_THREADS_DESCRIPTION =
+	"Judge this project's finished threads from facts, in one call: for each (up to 40, oldest idle first) its state, hours idle, hours since the person last wrote, pull request state, whether its work is pushed, pending questions, and the rule's verdict (archive or keep) with a short reason. Call it when a thread finished (a wake) or about once a day; never to poll. You may still keep a thread the verdict would archive when a follow-up on it is likely or its context is worth keeping; you can never archive one the rules keep. Each kept and archivable verdict is logged.";
+export const Y_SQUARED_ARCHIVE_SETTLED_DESCRIPTION =
+	"Archive several settled threads at once (at most 20), only those you judged done after `settled_threads`. The server re-checks every thread: it refuses one with unpushed or unmerged work, a pending question, an open or unreadable pull request, or recent activity, and logs each archive and refusal with its reason. Pass `discard` ids you judged duplicate or obsolete (they may go after 6 h idle instead of 24 h, with the same refusals). Returns one summary line: tell the person that line and never list the threads unless asked.";
+export const Y_SQUARED_REUSE_CANDIDATES_DESCRIPTION =
+	"Before `start_thread`, call this with the new task in a sentence: it lists up to 3 idle, finished threads of this project that fit it (same feature, files or pull request, finished recently, machine still warm, context not bloated), each with a short hint. When one fits, prefer `message_thread` to it (it keeps its context and its machine). It lists none for a task needing a clean checkout or another model. Start a new thread when none is listed, the task is independent or runs in parallel with a thread that is still working, or the old thread's context is large or stale.";
 
 export const startThreadInput = z.object({
 	title: z
@@ -206,6 +216,35 @@ export const stopThreadInput = z.object({
 });
 export const retryThreadInput = stopThreadInput;
 export const archiveThreadInput = stopThreadInput;
+export const archiveSettledInput = z.object({
+	ids: z
+		.array(z.string().min(1).max(64))
+		.min(1)
+		.max(20)
+		.describe("Settled threads to archive, from settled_threads"),
+	discard: z
+		.array(z.string().min(1).max(64))
+		.max(20)
+		.optional()
+		.describe("Ids among them you judged duplicate or obsolete"),
+});
+export const reuseCandidatesInput = z.object({
+	task: z
+		.string()
+		.trim()
+		.min(1)
+		.max(600)
+		.describe("The new task in a sentence or two"),
+	cleanCheckout: z
+		.boolean()
+		.optional()
+		.describe("true when the task needs a clean checkout"),
+	modelId: z
+		.string()
+		.max(256)
+		.optional()
+		.describe("The model the task needs, when not the default"),
+});
 
 /** Tools Y² keeps by name: its read tools, its thread tools and the person's questions. */
 export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
@@ -216,6 +255,9 @@ export const Y_SQUARED_TOOLS: ReadonlySet<string> = new Set([
 	Y_SQUARED_STOP_THREAD_TOOL,
 	Y_SQUARED_RETRY_THREAD_TOOL,
 	Y_SQUARED_ARCHIVE_THREAD_TOOL,
+	Y_SQUARED_SETTLED_THREADS_TOOL,
+	Y_SQUARED_ARCHIVE_SETTLED_TOOL,
+	Y_SQUARED_REUSE_CANDIDATES_TOOL,
 	Y_SQUARED_LIST_MODELS_TOOL,
 	Y_SQUARED_SET_THREAD_MODEL_TOOL,
 	Y_SQUARED_READ_CANVAS_TOOL,
@@ -286,6 +328,8 @@ export function ySquaredInstructions() {
 		'- Escalate only a real blocker (a missing secret, a decision only the person can make, a failure you cannot fix) or an irreversible or costly decision: merge, deploy, delete, spend money, force-push. Ask ONE line with the choice and your recommendation ("Merge pr:acme/web#8? It is green; I recommend yes."), via `ask_user` when the answer is a choice. Never merge, deploy, delete or spend on your own.',
 		"- Follow-up signals in a wake (a thread working far longer than usual, waiting on the person for a long time) are sent once: act on them (steer the stuck thread with a concrete question or correction, or stop it if it is wrong; for a waiting thread you may answer it yourself only if the answer is routine and already known from the person's earlier words) and say so in one line. A thread's pull request failing CI or sitting unmerged is not tracked by you: only report it if a thread's own reply says so.",
 		`- Cleanup: retry a failed thread once with \`${Y_SQUARED_RETRY_THREAD_TOOL}\` when the cause looks transient (a timeout, an unreachable service, a provider error), and say so in one line; a second failure for the same reason is a blocker for the person. Archive old failed or obsolete threads with \`${Y_SQUARED_ARCHIVE_THREAD_TOOL}\` (not working, not waiting on the person, no open pull request; a merged one is fine) and say it in ONE line ("Archived 5 old failed threads."), never listing them unless asked.`,
+		`- Settled threads (smart auto-archive): finished threads each hold a paused machine, so tidy them yourself, quietly. When a thread finished (a wake), or about once a day, call \`${Y_SQUARED_SETTLED_THREADS_TOOL}\`: it gives each finished thread's facts and a verdict. KEEP a thread when the person is conversing in it or wrote to it recently, it has a question or needs the person, it has unpushed or unmerged work or an open pull request awaiting a decision, a follow-up on the same task is likely (same feature, a check pending, a deploy awaiting approval), or its context is worth keeping for the next task. ARCHIVE when its work has landed (on main, or its pull request merged or closed) or it produced no changes, nothing is pending and it has been idle about 24 hours, or it is a duplicate, obsolete or failed thread. Judge from the facts and the verdict, never from memory, and decide each in a few words. Then archive the ones to go in ONE \`${Y_SQUARED_ARCHIVE_SETTLED_TOOL}\` call and tell the person one line from its result ("Archived 4 settled threads."), never listing them unless asked. Never archive a thread with unpushed work or a pending question: the tool refuses; if a thread holds unpushed work, ask its Y to push it or tell the person. Say nothing when nothing was archived.`,
+		`- Reuse before starting: before \`${Y_SQUARED_START_THREAD_TOOL}\`, call \`${Y_SQUARED_REUSE_CANDIDATES_TOOL}\` with the task. When it lists a thread that fits (same feature, files or pull request, finished recently, warm machine), prefer \`${Y_SQUARED_MESSAGE_THREAD_TOOL}\` to it: it keeps its context and machine. Start a new thread when none fits, the task is independent or parallel to work still running, the old thread's context is large or stale, its workspace is gone, or the task needs a clean checkout or a different model. Batch tiny fixes into one thread instead of one thread each.`,
 		"- Never repeat a reminder or a question you already asked; if the person has not answered, say nothing new until something changes.",
 		`- Scheduled check-ins: only when the person asks ("every weekday 9am give me a digest", "in 2 hours check on the audit thread"), with \`${Y_SQUARED_SCHEDULE_TOOL}\` (create, list, cancel; at most ${Y_SQUARED_SCHEDULE_LIMIT} active). Say the time zone you used. When a scheduled check-in wakes you, do what its saved prompt says, then report in a few lines.`,
 		`- Quiet wakes: end every proactive wake with either a concrete ask or a one-line result of what you did, or, when nothing changed that the person needs to know and nothing needs action, with exactly ${Y_SQUARED_QUIET_REPLY} and nothing else (it shows no message; do not call tools first when the wake text already shows nothing needs you). Never post "all quiet", "still working" or "nothing new" as a message.`,

@@ -109,3 +109,24 @@ describe("a peer message in the crew wake", () => {
 		expect(body).not.toContain("The person started");
 	});
 });
+
+describe("settled tidy trigger", () => {
+	it("rides only on a wake with a finished thread, adding no timer", async () => {
+		const { crewWakeBody, SETTLED_TIDY_LINE } = await import(
+			"./y-squared-crew"
+		);
+		const base = { working: [], now: 0 };
+		expect(
+			crewWakeBody({
+				...base,
+				events: [{ kind: "finished", title: "A", detail: null } as never],
+			}),
+		).toContain(SETTLED_TIDY_LINE);
+		expect(
+			crewWakeBody({
+				...base,
+				events: [{ kind: "waiting", title: "A", detail: null } as never],
+			}),
+		).not.toContain(SETTLED_TIDY_LINE);
+	});
+});

@@ -955,6 +955,11 @@ export function boxYSquaredToolDeps(
 			await dep("archive", userId, sessionId);
 		},
 		prOpen: (userId, projectId, url) => dep("prOpen", userId, projectId, url),
+		threadExtras: (userId, projectId, ids) =>
+			dep("threadExtras", userId, projectId, [...ids]),
+		logDecisions: async (userId, projectId, rows) => {
+			await dep("logDecisions", userId, projectId, [...rows]);
+		},
 		models: (userId, projectId) => dep("models", userId, projectId),
 		setModel: (change) => dep("setModel", change),
 		// A crew answers through the edge; one that is missing there answers null.

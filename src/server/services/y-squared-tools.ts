@@ -28,15 +28,33 @@ import { wakeMessageId } from "#/domain/pull-request-wake";
 import type { SessionItem } from "#/domain/session-item";
 import { threadOutcomeLines } from "#/domain/thread-outcome";
 import {
+	archiveSummaryLine,
+	decideSettledThread,
+	HOUR_MS,
+	REUSE_CANDIDATE_LIMIT,
+	type ReuseThread,
+	reuseCandidates,
+	SETTLED_ARCHIVE_BATCH_LIMIT,
+	SETTLED_LIST_LIMIT,
+	type SettledDecision,
+	type SettledFacts,
+	settledFactsFor,
+	settledPolicy,
+} from "#/domain/y-settled-threads";
+import {
+	archiveSettledInput,
 	archiveThreadInput,
 	messageThreadInput,
 	readCanvasInput,
 	retryThreadInput,
+	reuseCandidatesInput,
 	showCanvasInput,
 	startThreadInput,
 	stopThreadInput,
 	threadsOverview,
 	threadTimesText,
+	Y_SQUARED_ARCHIVE_SETTLED_DESCRIPTION,
+	Y_SQUARED_ARCHIVE_SETTLED_TOOL,
 	Y_SQUARED_ARCHIVE_THREAD_DESCRIPTION,
 	Y_SQUARED_ARCHIVE_THREAD_TOOL,
 	Y_SQUARED_MAX_STARTS_PER_TURN,
@@ -46,6 +64,10 @@ import {
 	Y_SQUARED_READ_CANVAS_TOOL,
 	Y_SQUARED_RETRY_THREAD_DESCRIPTION,
 	Y_SQUARED_RETRY_THREAD_TOOL,
+	Y_SQUARED_REUSE_CANDIDATES_DESCRIPTION,
+	Y_SQUARED_REUSE_CANDIDATES_TOOL,
+	Y_SQUARED_SETTLED_THREADS_DESCRIPTION,
+	Y_SQUARED_SETTLED_THREADS_TOOL,
 	Y_SQUARED_SHOW_CANVAS_DESCRIPTION,
 	Y_SQUARED_START_THREAD_DESCRIPTION,
 	Y_SQUARED_START_THREAD_TOOL,
@@ -106,6 +128,10 @@ import {
 import { downloadMessageAttachment } from "../adapters/checkpoints/storage";
 import type { ThreadModelChange } from "../adapters/thread-model";
 import { threadOutcomeForOwner } from "../adapters/thread-outcome";
+import type {
+	SettledDecisionLog,
+	ThreadExtra,
+} from "../adapters/y-settled-facts";
 import {
 	type YSquaredCrewClient,
 	ySquaredCrewFor,
@@ -153,6 +179,20 @@ type Deps = {
 	) => Promise<boolean | null>;
 	/** Archives a root chat (stops its turn, keeps everything; Settings > Archived restores it). */
 	readonly archive: (userId: string, sessionId: string) => Promise<void>;
+	/** Facts beyond the sidebar row for the given threads (one read): last message, unpushed work, pull request, workspace. */
+	readonly threadExtras: (
+		userId: string,
+		projectId: string,
+		ids: readonly string[],
+	) => Promise<readonly ThreadExtra[]>;
+	/** Records keep/archive decisions (bookkeeping: a failure never blocks the archive). */
+	readonly logDecisions: (
+		userId: string,
+		projectId: string,
+		rows: readonly SettledDecisionLog[],
+	) => Promise<void>;
+	/** Hours a settled thread must be idle before landed work is archived (default 24). */
+	readonly settledIdleHours?: () => number | null;
 	/** The models this person can run now, and whether Y² may choose (one read per call). */
 	readonly models: (
 		userId: string,
@@ -208,6 +248,22 @@ const defaultDeps: Deps = {
 		),
 	setModel: async (change) =>
 		(await import("../adapters/thread-model")).setThreadModel(change),
+	threadExtras: async (userId, projectId, ids) =>
+		(await import("../adapters/y-settled-facts")).threadExtras(
+			userId,
+			projectId,
+			ids,
+		),
+	logDecisions: async (userId, projectId, rows) =>
+		(await import("../adapters/y-settled-facts")).logSettledDecisions(
+			userId,
+			projectId,
+			rows,
+		),
+	settledIdleHours: () => {
+		const hours = Number(process.env.YTIMESY_Y2_ARCHIVE_IDLE_HOURS);
+		return Number.isFinite(hours) && hours > 0 ? hours : null;
+	},
 	archive: async (userId, sessionId) => {
 		// Lazy: the archive service pulls in the machine and project services.
 		const { archiveOwned } = await import("./archive");
@@ -439,7 +495,240 @@ export function ySquaredTools(input: {
 		return seeded;
 	};
 
+	type Judged = {
+		readonly chat: Sidebar;
+		readonly facts: SettledFacts;
+		readonly decision: SettledDecision;
+		readonly extra: ThreadExtra;
+	};
+	/**
+	 * Facts and the rule's verdict for finished threads (settled_threads and
+	 * archive_settled). One database read for all of them; GitHub is asked about
+	 * a pull request only when nothing else keeps the thread.
+	 */
+	const judge = async (
+		chats: readonly Sidebar[],
+		discard: ReadonlySet<string> = new Set(),
+	): Promise<Judged[]> => {
+		if (!chats.length) return [];
+		const extras = new Map(
+			(
+				await deps.threadExtras(
+					input.userId,
+					input.projectId,
+					chats.map((chat) => chat.id),
+				)
+			).map((extra) => [extra.id, extra]),
+		);
+		const policy = settledPolicy(deps.settledIdleHours?.());
+		const now = deps.now();
+		const judged: Judged[] = [];
+		for (const chat of chats) {
+			const extra = extras.get(chat.id);
+			if (!extra) continue;
+			const make = (prOpen?: boolean | null) =>
+				settledFactsFor({
+					chat,
+					extra,
+					updatedAt: Date.parse(chat.updatedAt ?? "") || extra.updatedAt,
+					now,
+					...(prOpen === undefined ? {} : { prOpen }),
+					...(discard.has(chat.id) ? { discard: "obsolete" as const } : {}),
+				});
+			let facts = make();
+			let decision = decideSettledThread(facts, policy);
+			if (extra.prUrl && decision.code === "pull-request-unknown") {
+				// Would anything but the pull request keep it? Then its state is moot.
+				const assumed = decideSettledThread(make(false), policy);
+				if (assumed.action === "archive") {
+					const open = await deps
+						.prOpen(input.userId, input.projectId, extra.prUrl)
+						.catch(() => null);
+					facts = make(open);
+					decision = decideSettledThread(facts, policy);
+				} else decision = assumed;
+			}
+			judged.push({ chat, facts, decision, extra });
+		}
+		return judged;
+	};
+	const logFacts = (judged: Judged) => ({
+		state: judged.facts.state,
+		idleHours: Math.floor(judged.facts.settledAgeMs / HOUR_MS),
+		userHours:
+			judged.facts.lastUserMessageAgeMs === null
+				? null
+				: Math.floor(judged.facts.lastUserMessageAgeMs / HOUR_MS),
+		pullRequest: judged.facts.pullRequest,
+		work: judged.facts.work,
+	});
+	/** Never blocks the action it records. */
+	const logDecisions = (rows: readonly SettledDecisionLog[]) =>
+		rows.length
+			? deps.logDecisions(input.userId, input.projectId, rows).catch(() => {
+					console.warn("Y² decision log write failed.");
+				})
+			: Promise.resolve();
+	const finishedChats = async () =>
+		(await sidebar()).filter(
+			(chat) =>
+				chat.id !== input.selfId &&
+				!chat.unused &&
+				!chat.workingSince &&
+				(!chat.waitingOn || chat.waitingOn === "failed"),
+		);
+
 	return {
+		[Y_SQUARED_SETTLED_THREADS_TOOL]: tool({
+			description: Y_SQUARED_SETTLED_THREADS_DESCRIPTION,
+			inputSchema: z.object({}),
+			execute: async () => {
+				const all = await finishedChats();
+				// Oldest idle first: the likeliest to go.
+				const oldest = [...all]
+					.sort(
+						(a, b) =>
+							(Date.parse(a.updatedAt ?? "") || 0) -
+							(Date.parse(b.updatedAt ?? "") || 0),
+					)
+					.slice(0, SETTLED_LIST_LIMIT);
+				const judged = await judge(oldest);
+				await logDecisions(
+					judged
+						.filter((entry) => entry.decision.action === "keep")
+						.map((entry) => ({
+							sessionId: entry.chat.id,
+							decision: "kept" as const,
+							code: entry.decision.code,
+							reason: entry.decision.reason,
+							facts: logFacts(entry),
+						})),
+				);
+				if (!judged.length) return "No finished threads in this project.";
+				const lines = judged.map(({ chat, facts, decision }) => {
+					const idle = Math.floor(facts.settledAgeMs / HOUR_MS);
+					const user =
+						facts.lastUserMessageAgeMs === null
+							? "never"
+							: `${Math.floor(facts.lastUserMessageAgeMs / HOUR_MS)} h`;
+					return `- ${chat.id} "${crewTitle(chat.title).slice(0, 60)}": ${facts.state}, idle ${idle} h, person wrote ${user} ago, pr ${facts.pullRequest}, work ${facts.work} → ${decision.action}: ${decision.reason}`;
+				});
+				const toGo = judged.filter(
+					(entry) => entry.decision.action === "archive",
+				).length;
+				return [
+					`${all.length} finished threads (${judged.length} listed, oldest idle first); the rules would archive ${toGo}.`,
+					...lines,
+				].join("\n");
+			},
+		}),
+		[Y_SQUARED_ARCHIVE_SETTLED_TOOL]: tool({
+			description: Y_SQUARED_ARCHIVE_SETTLED_DESCRIPTION,
+			inputSchema: archiveSettledInput,
+			execute: async ({ ids, discard }) => {
+				const wanted = new Set(ids.slice(0, SETTLED_ARCHIVE_BATCH_LIMIT));
+				const chats = (await finishedChats()).filter((chat) =>
+					wanted.has(chat.id),
+				);
+				const judged = await judge(
+					chats,
+					new Set((discard ?? []).filter((id) => wanted.has(id))),
+				);
+				const archived: Judged[] = [];
+				const refused: string[] = [];
+				const log: SettledDecisionLog[] = [];
+				for (const entry of judged) {
+					const row = (
+						decision: SettledDecisionLog["decision"],
+						reason: string,
+					) =>
+						log.push({
+							sessionId: entry.chat.id,
+							decision,
+							code: entry.decision.code,
+							reason,
+							facts: logFacts(entry),
+						});
+					if (entry.decision.action !== "archive") {
+						refused.push(`${entry.chat.id}: ${entry.decision.reason}`);
+						row("refused", entry.decision.reason);
+						continue;
+					}
+					try {
+						await deps.archive(input.userId, entry.chat.id);
+						archived.push(entry);
+						row("archived", entry.decision.reason);
+					} catch {
+						refused.push(`${entry.chat.id}: the archive failed`);
+						row("refused", "the archive failed");
+					}
+				}
+				for (const id of wanted)
+					if (!chats.some((chat) => chat.id === id))
+						refused.push(`${id}: not a finished thread of this project`);
+				await logDecisions(log);
+				const summary =
+					archiveSummaryLine(archived.length, refused.length) ||
+					"Nothing archived.";
+				return refused.length
+					? `${summary}\nNot archived (do not list these to the person):\n${refused.map((line) => `- ${line}`).join("\n")}`
+					: summary;
+			},
+		}),
+		[Y_SQUARED_REUSE_CANDIDATES_TOOL]: tool({
+			description: Y_SQUARED_REUSE_CANDIDATES_DESCRIPTION,
+			inputSchema: reuseCandidatesInput,
+			execute: async ({ task, cleanCheckout, modelId }) => {
+				const now = deps.now();
+				const rows = (await crewRows())
+					.filter((row) => row.state === "finished")
+					.sort((a, b) => b.updatedAt - a.updatedAt)
+					.slice(0, SETTLED_LIST_LIMIT);
+				const extras = new Map(
+					(
+						await deps.threadExtras(
+							input.userId,
+							input.projectId,
+							rows.map((row) => row.sessionId),
+						)
+					).map((extra) => [extra.id, extra]),
+				);
+				const threads: ReuseThread[] = [];
+				for (const row of rows) {
+					const extra = extras.get(row.sessionId);
+					if (!extra) continue;
+					threads.push({
+						id: row.sessionId,
+						title: row.title,
+						lastRequest: row.lastRequest,
+						areas: extra.areas,
+						pullRequest: row.prUrl ?? extra.prUrl,
+						state: "finished",
+						idleMs: Math.max(0, now - (row.updatedAt || extra.updatedAt)),
+						workspaceAlive: extra.workspaceAlive,
+						itemCount: extra.itemCount,
+						modelId: extra.modelId,
+					});
+				}
+				const found = reuseCandidates(
+					{
+						text: task,
+						cleanCheckout: cleanCheckout ?? false,
+						modelId: modelId ?? null,
+					},
+					threads,
+				);
+				if (!found.length) return "No idle thread fits: start a new one.";
+				const byId = new Map(threads.map((thread) => [thread.id, thread]));
+				return [
+					`Up to ${REUSE_CANDIDATE_LIMIT} candidates; prefer message_thread to one that fits the task.`,
+					...found.map((candidate) => {
+						const thread = byId.get(candidate.id);
+						return `- ${candidate.id} "${(thread?.title ?? "").slice(0, 60)}"${thread?.lastRequest ? ` (last: ${thread.lastRequest.slice(0, 80)})` : ""}: ${candidate.hint}`;
+					}),
+				].join("\n");
+			},
+		}),
 		[Y_SQUARED_THREADS_TOOL]: tool({
 			description:
 				"Every thread in this project: what it needs from the person, whether it is working, when it was last active and created, its last request, last reply and pull request. Threads that need the person come first, then the most recently active.",
@@ -962,6 +1251,19 @@ export function ySquaredTools(input: {
 							? `"${chat.title}" has an open pull request (${row.prUrl}); not archived.`
 							: `"${chat.title}" has a pull request (${row.prUrl}) whose state could not be checked; not archived.`;
 				}
+				// Unpushed work is lost with the machine: never archive it, and when
+				// that cannot be told, do not guess.
+				const extra = (
+					await deps
+						.threadExtras(input.userId, input.projectId, [chat.id])
+						.catch(() => null)
+				)?.[0];
+				if (!extra)
+					return `"${chat.title}" could not be checked for unpushed work; not archived.`;
+				if (extra.unpushed)
+					return `"${chat.title}" has work that was not pushed; not archived. Ask its thread to push it, or tell the person.`;
+				if (extra.pendingPush)
+					return `"${chat.title}" has a push waiting for the person's approval; not archived.`;
 				await deps.archive(input.userId, chat.id);
 				return `Archived "${chat.title}". Settings > Archived restores it.`;
 			},

@@ -256,6 +256,10 @@ export const ALREADY_DELIVERED =
 export const PERSON_MESSAGE_RULE =
 	"Messages the person sent a thread themselves are already delivered: never forward, paraphrase or repeat them there. Message that thread only for a NEW fact it lacks (that fact alone, one line, addsNewInformation=true). In your reply never restate what the person said: lead with the result.";
 
+/** Said in a wake that carries a finished thread: the event-driven trigger for the settled-thread tidy (no timer). */
+export const SETTLED_TIDY_LINE =
+	"Tidy: if you have not called `settled_threads` in the last 6 hours, call it once now and archive what its verdicts allow with one `archive_settled` call (say one line, counts only); skip it otherwise. Before starting a new thread, call `reuse_candidates`.";
+
 const minutesText = (ms: number) =>
 	`${Math.max(1, Math.round(ms / 60_000))} min`;
 
@@ -307,6 +311,9 @@ export function crewWakeBody(input: {
 				!event.detail?.startsWith('From thread "'),
 		)
 			? [PERSON_MESSAGE_RULE]
+			: []),
+		...(input.events.some((event) => event.kind === "finished")
+			? [SETTLED_TIDY_LINE]
 			: []),
 		...(input.events.some((event) => event.detail?.includes("showed canvas"))
 			? [
