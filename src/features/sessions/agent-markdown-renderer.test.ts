@@ -264,6 +264,24 @@ describe("pull request, issue and thread mentions", () => {
 		});
 	});
 
+	it("draws every form of a pull request as a chip that the app opens (data-reference), whatever the project", () => {
+		const html = renderIn(
+			"pr:acme/web#45, https://github.com/acme/web/pull/45, [the PR](https://github.com/acme/web/pull/45/files), pr:other/lib#2 and https://github.com/other/lib/pull/2",
+		);
+		expect(html.match(/data-reference="pull-request"/g)).toHaveLength(5);
+		expect(html).toContain('data-ref="acme/web#45"');
+		// A repository the project does not have connected keeps its GitHub address;
+		// whether a click opens the app is the workspace's decision (it opens GitHub).
+		expect(html).toContain('href="https://github.com/other/lib/pull/2"');
+		expect(html).toContain("the PR");
+	});
+
+	it("draws a bare number the project cannot place as a neutral chip the app still handles", () => {
+		const html = renderIn("Pushed to draft PR #45.");
+		expect(html).toContain('data-reference="number"');
+		expect(html).toContain('data-ref="acme/web#45"');
+	});
+
 	it("draws GitHub issue URLs as issue chips and other repositories' numbers with their name", () => {
 		const html = renderIn(
 			"[bug](https://github.com/acme/web/issues/5) and org/lib#3",

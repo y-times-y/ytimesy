@@ -37,17 +37,15 @@ function storeKind(key: string, kind: ReferenceKind) {
  * one cached GitHub read per number (never polled, never retried: a refused
  * or rate-limited read leaves the chip neutral). Undefined until known.
  */
-export function useReferenceKind(
-	key: string,
+/** The one query the chip and a click on it share, so a number is read once. */
+export function referenceKindQuery(
 	repository: ReferenceRepository,
 	number: number,
-	enabled = true,
-): ReferenceKind | undefined {
+) {
 	const lookup = `${repository.repositoryId}#${number}`;
-	const stored = storedKind(lookup);
-	const { data } = useQuery({
+	return {
 		queryKey: ["github", "reference-kind", repository.repositoryId, number],
-		queryFn: async () => {
+		queryFn: async (): Promise<ReferenceKind> => {
 			const { kind } = await requestJson<{ kind: ReferenceKind }>(
 				`/api/github/issue?${new URLSearchParams({
 					installationId: String(repository.installationId),
@@ -59,11 +57,22 @@ export function useReferenceKind(
 			storeKind(lookup, kind);
 			return kind;
 		},
-		enabled,
-		initialData: stored,
+		initialData: storedKind(lookup),
 		staleTime: REFERENCE_KIND_FRESH_MS,
 		gcTime: REFERENCE_KIND_FRESH_MS,
 		retry: false,
+	};
+}
+
+export function useReferenceKind(
+	key: string,
+	repository: ReferenceRepository,
+	number: number,
+	enabled = true,
+): ReferenceKind | undefined {
+	const { data } = useQuery({
+		...referenceKindQuery(repository, number),
+		enabled,
 		refetchOnWindowFocus: false,
 		refetchOnReconnect: false,
 		meta: { reference: key },

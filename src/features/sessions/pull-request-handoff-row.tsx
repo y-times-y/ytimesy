@@ -5,6 +5,18 @@ import {
 	visiblePullRequestHandoff,
 } from "#/domain/pull-request-handoff-item";
 import type { NoticeSessionItem } from "#/domain/session-item";
+import { pullRequestReference } from "./agent-references";
+
+/** The attributes that make a link open the in-app pull request page on a plain click. */
+export function pullRequestChipAttributes(url: string) {
+	const reference = pullRequestReference(url);
+	return reference
+		? {
+				"data-reference": "pull-request",
+				"data-ref": `${reference.owner}/${reference.repo}#${reference.number}`,
+			}
+		: {};
+}
 
 /**
  * A done turn's pull request handoff under its answer: "Opening pull
@@ -40,6 +52,8 @@ export function PullRequestHandoffRow({
 				{state.state === "opened" ? (
 					<a
 						className="session-activity-title"
+						// Opens the in-app pull request page when the project has the repository (agent-reference-chips.tsx).
+						{...pullRequestChipAttributes(state.url)}
 						href={state.url}
 						target="_blank"
 						rel="noreferrer"
