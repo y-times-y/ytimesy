@@ -2581,3 +2581,26 @@ describe("the Claude Code system prompt carries the secret names", () => {
 		expect(systemPrompt("/repo", false)).not.toContain("Secrets available");
 	});
 });
+
+describe("the Claude Code system prompt keeps the secrets line and the delegation rules together", () => {
+	it("both appear, small, on the VM and runner routes", async () => {
+		const { systemPrompt } = await import("./claude-code-runner");
+		const { secretsContextLine } = await import("#/domain/project-secret");
+		const line = secretsContextLine([
+			{ name: "GITHUB_APP_ID", kind: "runtime" },
+		]);
+		const rules = "DELEGATION-RULES-MARK";
+		for (const remote of [
+			undefined,
+			{ repository: "/repo", workspaceTools: [] },
+		]) {
+			const text = systemPrompt("/repo", false, remote, undefined, line, rules);
+			expect(text).toContain("GITHUB_APP_ID");
+			expect(text).toContain(rules);
+		}
+		expect(
+			systemPrompt("/repo", false, undefined, undefined, line, rules).length -
+				systemPrompt("/repo", false).length,
+		).toBeLessThan(line.length + rules.length + 4);
+	});
+});
