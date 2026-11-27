@@ -15,6 +15,8 @@
 }
 /* The same chat view as Main fills the tab. */
 .side-chat-body {
+	--chat-gutter: var(--composer-gutter, 12px);
+	padding: 0 var(--chat-gutter) var(--composer-bottom, 8px);
 	display: flex;
 	flex: 1;
 	flex-direction: column;
@@ -24,5 +26,6 @@
 	flex: 1;
 	min-height: 0;
 	height: 100%;
-	padding-inline: 14px;
+	/* Same gutters as Main's chat; the transcript scrolls to the panel edge. */
+	padding-bottom: var(--composer-agents-reserve, 36px);
 }
