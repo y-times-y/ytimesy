@@ -199,6 +199,7 @@ import {
 } from "./machine-git-grant";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { stepFailureCause } from "./step-failure-cause";
+import { rearmLostTurnAlarm } from "./turn-alarm-repair";
 import { isTurnBoxEdgePath } from "./turn-box-routes";
 import { turnBoxRequestScope } from "./turn-box-scope";
 import {
@@ -2315,6 +2316,24 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			ctx.storage.sql
 				.exec<{ n: number }>("select count(*) as n from conversation_tombstone")
 				.toArray()[0]?.n > 0;
+		// An outage of this object's storage can outlast the platform's alarm
+		// retries and drop the alarm that resumes a running turn: set it again.
+		if (!this.purged)
+			ctx.blockConcurrencyWhile(async () => {
+				try {
+					await rearmLostTurnAlarm({
+						sql: ctx.storage.sql,
+						now: Date.now(),
+						getAlarm: () => ctx.storage.getAlarm(),
+						setAlarm: (at) => ctx.storage.setAlarm(at),
+						log: (line) => console.info(line),
+					});
+				} catch (error) {
+					console.warn("Lost turn alarm was not re-armed.", {
+						cause: stepFailureCause(error),
+					});
+				}
+			});
 	}
 }
 
