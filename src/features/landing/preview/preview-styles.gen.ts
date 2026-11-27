@@ -8,6 +8,7 @@ import "../../sessions/model-picker.css";
 import "../../projects/add-project-form.css";
 import "../../canvas/canvas.css";
 import "../../local-import/handoff-card.css";
+import "../../artifacts/artifact.css";
 import "../../sessions/seti-file-icons.css";
 import "../../sessions/side-chat.css";
 import "../../workspace/pull-request-inspector.css";

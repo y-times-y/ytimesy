@@ -3,10 +3,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
+import { projectMark } from "#/domain/project-mark";
 import type { Project } from "#/domain/projects";
 import {
 	CHAT_SEEN_SINCE_STORAGE_KEY,
-	projectColor,
 	type SidebarChat,
 } from "#/domain/sidebar-chats";
 import { RenderAsHydrated } from "../app/first-paint";
@@ -20,7 +20,6 @@ const project = (id: string, name: string): Project => ({
 	fullName: `acme/${id}`,
 	branch: "main",
 });
-const projectColorOf = projectColor;
 const alpha = project("alpha", "Alpha");
 const beta = project("beta", "Beta");
 const projectChats = [
@@ -158,9 +157,10 @@ describe("left sidebar", () => {
 			return html.slice(start, html.indexOf("</li>", start));
 		};
 		for (const [id, name, color] of [
-			["b1", "Beta", projectColorOf("beta")],
-			["a1", "Alpha", projectColorOf("alpha")],
+			["b1", "Beta", projectMark({ id: "beta", name: "Beta" }).background],
+			["a1", "Alpha", projectMark({ id: "alpha", name: "Alpha" }).background],
 		] as const) {
+			expect(row(id)).toContain('class="project-mark"');
 			expect(row(id)).toContain('class="thread-id" data-in="sidebar"');
 			expect(row(id)).toContain("sidebar-chat-meta-project");
 			expect(row(id)).toContain(`background:${color}`);
@@ -629,7 +629,7 @@ describe("Y projects: the Y² and Threads sections", () => {
 				'<span class="sidebar-chat-title">Shipped</span>',
 			);
 			expect(shipped).toContain(
-				'class="sidebar-chat-meta-project"><span class="sidebar-project-dot"',
+				'class="sidebar-chat-meta-project"><span class="project-mark"',
 			);
 			expect(shipped).toContain("<span>Alpha</span>");
 			expect(shipped).toContain('data-meta="model"');

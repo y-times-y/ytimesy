@@ -691,6 +691,14 @@ export function WorkspaceHome({
 		project,
 		chats: projectChatLists[index]?.data ?? [],
 	}));
+	// How many chats the user has in all: starter prompts are for a new user only.
+	const allChatListsLoaded =
+		projects.data !== undefined &&
+		projectChatLists.every((list) => list.data !== undefined);
+	const totalChatCount = projectChats.reduce(
+		(sum, group) => sum + group.chats.length,
+		0,
+	);
 	// Every repository connected to a project: the Pull requests and Issues pages
 	// list these, and the sidebar badge counts what waits on the user in them.
 	const workRepositories = useMemo(
@@ -4237,7 +4245,16 @@ export function WorkspaceHome({
 													ySquaredOpen
 														? (send) => <YSquaredEmptyState onSend={send} />
 														: selectedProject
-															? (send) => <ThreadEmptyState onSend={send} />
+															? (send) => (
+																	<ThreadEmptyState
+																		onSend={send}
+																		{...(userId ? { userId } : {})}
+																		projectCount={projects.data?.length ?? 0}
+																		chatCount={
+																			allChatListsLoaded ? totalChatCount : null
+																		}
+																	/>
+																)
 															: undefined
 												}
 												setupHold={

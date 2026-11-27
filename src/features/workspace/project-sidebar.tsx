@@ -84,6 +84,7 @@ import {
 } from "../app/first-paint";
 import { useShortcutHint } from "../app/keyboard-shortcuts";
 import { requestJson } from "../projects/api";
+import { ProjectMark } from "../projects/project-mark";
 import { ThreadHoverCard } from "./thread-hover-card";
 import { ThreadMark } from "./thread-mark";
 import { YSquaredMark } from "./y-squared-mark";
@@ -795,10 +796,9 @@ export function ProjectSidebar({
 								<span className="sidebar-chat-meta">
 									{project ? (
 										<span className="sidebar-chat-meta-project">
-											<span
-												className="sidebar-project-dot"
-												style={{ background: projectColor(project.id) }}
-												aria-hidden="true"
+											<ProjectMark
+												project={{ id: project.id, name: projectName ?? "" }}
+												size={14}
 											/>
 											{/* A numbered name ("ytimesy-12") already says the project. */}
 											{chat.threadNumber == null ? (
@@ -839,9 +839,9 @@ export function ProjectSidebar({
 							    with the project's name. */}
 							<span className="sidebar-chat-lead" aria-hidden="true">
 								{project ? (
-									<span
-										className="sidebar-project-dot"
-										style={{ background: projectColor(project.id) }}
+									<ProjectMark
+										project={{ id: project.id, name: projectName ?? "" }}
+										size={16}
 									/>
 								) : null}
 							</span>

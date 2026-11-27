@@ -55,6 +55,7 @@ import { ContinueSessionCard } from "../local-import/continue-session-card";
 import { PastImports } from "../local-import/past-imports";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
+import { ProjectMark } from "../projects/project-mark";
 import { clearChatCache } from "../sessions/chat-cache";
 import { ChatgptSignIn, DeviceCodeHint } from "../sessions/chatgpt-sign-in";
 import { getClaudeSubscription } from "../sessions/claude-subscription.fn";
@@ -411,7 +412,13 @@ function ProjectPage({
 					<div className="settings-row">
 						<div className="settings-row-main">
 							<span className="settings-row-icon">
-								<GithubMark size={16} />
+								<ProjectMark
+									project={{
+										id: project.id,
+										name: projectDisplayName(project),
+									}}
+									size={20}
+								/>
 							</span>
 							<div className="settings-row-text">
 								<span className="settings-row-title">
@@ -872,7 +879,13 @@ function GithubSection({
 							<li key={project.id} className="settings-row">
 								<div className="settings-row-main">
 									<span className="settings-row-icon">
-										<Folder size={16} strokeWidth={1.5} />
+										<ProjectMark
+											project={{
+												id: project.id,
+												name: projectDisplayName(project),
+											}}
+											size={20}
+										/>
 									</span>
 									<div className="settings-row-text">
 										<span className="settings-row-title">
