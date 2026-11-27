@@ -86,6 +86,7 @@ import {
 } from "./usage-admission";
 import { applyVmNetworkPolicy } from "./vm-network";
 import {
+	readVmData,
 	waitUntilGuestAnswers,
 	waitUntilGuestReady,
 	waitUntilVmRunning,
@@ -353,7 +354,7 @@ export function createFreestyleWorkspaceMachines(
 				await turnSpan("vm:ensureRunning", () =>
 					resumableMachineStart(
 						async () => {
-							const data = await vm.data();
+							const data = await readVmData(() => vm.data());
 							if (!admittedAndRunning(data, 60))
 								await resumeProductVm(vm, "Workspace VM", 60, data);
 						},

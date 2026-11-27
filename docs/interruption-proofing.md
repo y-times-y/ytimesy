@@ -85,3 +85,7 @@ Remaining user-visible machine strings and verdicts:
 | "automatic Git handoff failed" | NOT covered by this ladder (it waits for the machine first) |
 | "Recovering the workspace machine…" | calm status, covered |
 | "…could not start, provider at capacity, retry in a few minutes" (environment build) | NOT covered (builds, not turns) |
+
+## Who deleted the VMs behind the 404s (2026-11-27)
+
+Of 10 VMs with a `not found` wake failure on 11-26/27, 9 belong to chats archived in bulk (archived 11-25 23:34 to 11-26 03:07; their machines were released on purpose, the checkpoint backstop found them gone about 24 h later: noise, no live chat). The 10th (chat 21ddc421) was a brand-new chat that got its 404 8 s after creation: provider read-after-create lag, not a deletion. The retention sweep deletes only after 7 idle days, so it cannot have deleted any VM idle for hours. Non-archived chats with a `not found` since 11-16: one (b06918e6, failure 11-25 21:41 in a burst with 11 archived machines, so most likely the manual cleanup); its next message replaces the VM from the snapshot. Not knowable from the database: whether unpushed work was lost (the VM is gone; no audit files exist on the chat machine). Fixed: `readVmData` waits out about 6 s of 404 before a VM counts as gone, and the running-wait tolerates a 30 s 404 on a fresh VM.
