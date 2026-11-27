@@ -54,7 +54,7 @@ tag `v5` (`new_sqlite_classes: ["YSquaredCrew"]`).
 
 ## 4. Y² on one development project
 
-- [ ] Turn on Project settings → Y → "Use Y and Y²" for one dev project only.
+- [ ] Turn on Project settings → Y² → "Use Y²" for one dev project only.
 - [ ] Check: the Y² chat is created once, `threads` reads the crew object (watch
       Postgres egress for the project: should be ~0 transcript reads), a thread
       finishing wakes Y² once per 45 s batch (cap 12/hour), Y²'s own turns never

@@ -61,3 +61,12 @@ it("says UTC is used until a time zone is saved, and shows an empty list", () =>
 	expect(text(html)).toContain("No schedules.");
 	expect(html).not.toContain("Cancel");
 });
+
+it("words the project switch as Y² only, never 'Y and Y²'", async () => {
+	const { Y_SQUARED_SWITCH_COPY: copy } = await import("./y-mode-settings");
+	expect(copy.title).toBe("Use Y²");
+	expect(copy.description).toBe(
+		"On by default. Y² stays quiet until you connect a model, and it runs only on your own plan or key. Off: each chat does the work itself.",
+	);
+	expect(JSON.stringify(copy)).not.toMatch(/Y and Y²/);
+});

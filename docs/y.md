@@ -1,10 +1,10 @@
 # Y and Y²
 
-Status 2026-11-12: built behind a per-project switch (Project settings → Y → "Use Y and Y²", `project.y_enabled`) and the harness variant `y=on` for eval users. Not yet run end to end on real VMs. **Since 2026-11-24 it is on by default for everyone** (see "On by default").
+Status 2026-11-12: built behind a per-project switch (Project settings → Y² → "Use Y²", `project.y_enabled`) and the harness variant `y=on` for eval users. Not yet run end to end on real VMs. **Since 2026-11-24 it is on by default for everyone** (see "On by default").
 
 ## On by default (2026-11-24)
 
-Y² is on for every user and project; the person can turn it off per project (Project settings → Y → "Use Y and Y²") or for everything (the same section, "Y² for all my projects", `user_y_setting`).
+Y² is on for every user and project; the person can turn it off per project (Project settings → Y² → "Use Y²") or for everything (the same section, "Y² for all my projects", `user_y_setting`).
 
 - **Data** (`20261124150000_y_default_on.sql`, additive and idempotent): `project.y_enabled` defaults to true; `project.y_choice` (`null` never chose, `on`, `off`) records a deliberate switch (`setProjectYMode`, `setUserYDefault`). Before it, `y_enabled` alone could not tell "never set" from "turned off".
 - **Backfill** (`scripts/backfill-y-default-on.ts`, `src/server/adapters/y-backfill.ts`): chosen over a lazy enable because a lazy flip would make the sidebar, the crew scope and the turn gates disagree for a project until someone opened it, and it needs no extra read on any hot path. Dry run by default (counts only); `--apply` runs in batches of 500 with `for update skip locked`, idempotent. It keeps off (and records `off`) any project that has a Y² chat (even archived) or was created after new projects started on (15532cb9, 2026-11-23 07:48 UTC), skips archived projects and users who switched Y² off for everything, and enables the rest. Run it only after the code is live. Production on 2026-11-24: 6 projects, 1 user, the one live project already on, 5 archived: it enables 0.
@@ -131,7 +131,7 @@ Y² decides: steer or stop the stuck thread, answer a routine waiting one itself
 
 **3. Escalation policy and quiet wakes** (`ySquaredInstructions`): handle routine things itself (re-send a transient failure, steer a stuck thread, start a follow-up the person approved) and say what it did in one line; escalate only blockers or irreversible/costly decisions (merge, deploy, delete, spend) with a one-line ask and a recommendation; never repeat a reminder; end each proactive wake with a concrete ask, a one-line result, or silence. *Silence*: a turn must end with text (an empty reply throws `missing-final-result` in `api-turn.ts` and retries/fails the turn), so a wake with nothing to say replies exactly `NOTHING_TO_REPORT`. `childTaskPublicItems` drops that agent message, so the Y² chat shows no bubble (the wake turn itself already shows only a silent notice); it still costs the model turn (cheap: the wake text says when no tool call is needed). The heartbeat's old "one brief still-working line" is replaced by this.
 
-**4. Settings UI** (Project settings → Y, only with Y on; `YProactiveView`): a switch for stall nudges, "proactive wakes today: n of 48", the time zone in use, and the active schedules with Cancel (server fns `readYProactiveFn`, `saveYProactiveFn`, `cancelYScheduleFn` → crew `proactive`, `saveSettings`, `cancelSchedule`; one crew request each, loaded only when the section is open, never on a timer).
+**4. Settings UI** (Project settings → Y², only with Y² on; `YProactiveView`): a switch for stall nudges, "proactive wakes today: n of 48", the time zone in use, and the active schedules with Cancel (server fns `readYProactiveFn`, `saveYProactiveFn`, `cancelYScheduleFn` → crew `proactive`, `saveSettings`, `cancelSchedule`; one crew request each, loaded only when the section is open, never on a timer).
 
 Cost: no new alarms or timers. A schedule adds 0 requests until due; a due one adds the usual wake (1 alarm invocation, 1 `threads` read, one Y² turn). The proactive daily cap bounds the extra Y² turns to 48/day/project on top of the ≤24/h event wakes; turn `schedule` calls add 1 crew request each.
 
