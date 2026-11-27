@@ -1,3 +1,9 @@
+import {
+	STALLED_TURN_MESSAGE,
+	TURN_NO_OUTPUT_KIND,
+	type TurnStallLimits,
+	turnStallLimits,
+} from "#/domain/turn-stall";
 import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
 import { Effect, Schedule } from "effect";
@@ -1583,8 +1589,56 @@ export async function reassignStrandedBoxTurns() {
 	return result.rowCount ?? 0;
 }
 
+/**
+ * No-output watchdog. A running turn whose heartbeat is fresh but that has
+ * written nothing (stream delta, tool event, checkpoint: each moves updated_at)
+ * for the limit is stalled. The first time it moves to the chat's own object
+ * (a different runner) from its checkpoint, once (settings.stallRetried), with
+ * its queued messages untouched; stalling again fails it with a calm error
+ * item. A turn whose heartbeat stopped is the takeover's, not this one's.
+ */
+export async function recoverStalledTurns(
+	limits: TurnStallLimits = turnStallLimits(process.env),
+) {
+	// Output exists once the chat holds an item other than the person's message since the turn began.
+	const stalled = `t.state='running' and not t.cancel_requested and t.heartbeat_at >= now()-interval '45 seconds'
+		 and t.updated_at < now()-make_interval(secs => case when exists(select 1 from agent_session_item i where i.session_id=t.session_id and i.kind<>'userMessage' and i.created_at>=t.created_at) then $2::int else $1::int end)`;
+	const params = [limits.firstOutputSeconds, limits.betweenOutputSeconds];
+	const retried = await database().query<{ id: string; session_id: string }>(
+		`update api_turn t set state='queued',executor='durable-object',run_attempts=run_attempts+1,
+		 settings=coalesce(t.settings,'{}'::jsonb)||'{"stallRetried":true}'::jsonb,updated_at=now()
+		 where ${stalled} and t.executor='node' and coalesce(t.settings->>'stallRetried','')<>'true' returning t.id,t.session_id`,
+		params,
+	);
+	const failed = await database().query<SettledTurnRow>(
+		`with saved as (update api_turn t set state='failed',updated_at=now()
+		 where ${stalled} and t.settings->>'stallRetried'='true' returning t.session_id,t.id,t.state,t.created_at)
+		 update agent_session s set turn_status='failed',
+		 items=s.items || jsonb_build_array(jsonb_build_object('kind','error','id',saved.id::text || ':stalled','message',$3::text)),
+		 task_state=case when parent_session_id is null then task_state else 'failed' end,updated_at=now()
+		 from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
+		[...params, STALLED_TURN_MESSAGE],
+	);
+	captureSettledTurns(failed.rows ?? []);
+	await Promise.all([
+		...retried.rows.map((row) =>
+			reportInterruption({
+				kind: TURN_NO_OUTPUT_KIND,
+				turnId: row.id,
+				sessionId: row.session_id,
+				cause: "retried-on-object",
+				recovered: true,
+				userVisible: false,
+			}),
+		),
+		reportSettledInterruptions(failed.rows ?? [], "stalled-twice"),
+	]);
+	return { retried: retried.rows.length, failed: failed.rows?.length ?? 0 };
+}
+
 export async function requeueInterruptedBoxTurns() {
 	await reassignStrandedBoxTurns().catch(() => 0);
+	await recoverStalledTurns().catch(() => undefined);
 	const result = await database().query(
 		`update api_turn set state='queued',run_attempts=run_attempts+1,updated_at=now()
 		 where state='running' and executor='node' and not cancel_requested

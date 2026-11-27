@@ -102,3 +102,11 @@ Of 10 VMs with a `not found` wake failure on 11-26/27, 9 belong to chats archive
 - **`machine.rate_limited`:** the row's cause now carries the limit class, `ensureRunning attempt 1 (running-vm-cap|storage|compute-allowance|unspecified)`;
   starts run through a per-isolate slot gate (4 at once, 60 s wait at most). Not cross-isolate.
 - **Canary 11-26 failures (05:30, 11:00):** "The model request failed and the provider didn't say why" on the canary's own chat, not a user.
+
+## Silent failed turns and the no-output watchdog (2026-11-27, canary runs 131/132)
+
+Evidence: the canary's Claude Code box turns c581f3bf and 79cfe396 (chat cd9c71c5) ran about 21 minutes, heartbeat renewing, then ended `failed` with no error item; the queued second message waited behind them (stored, not lost) and the canary reported it missing.
+
+- The box's `abandon` (box-runner.ts `edgeTurnDeps`) finalized `failed` with the saved items only. It now appends a calm error item (`turn-failure-notice.ts`, id `<turn>:lost`, says the message is saved).
+- `recoverStalledTurns` (api-turns.ts, run by the lease sweep): a running turn with a fresh heartbeat and no write for 4 minutes before its first output item, or 10 minutes between later writes, is stalled. Box (`node`) turns are moved once to the chat's object (marker `settings.stallRetried`, interruption_event kind `turn-no-output`), queued messages untouched; stalling again fails it with an error item. Tune with `YTIMESY_TURN_FIRST_OUTPUT_STALL_SECONDS` and `YTIMESY_TURN_OUTPUT_STALL_SECONDS` (60 to 21600). A tool call silent longer than the limit counts as a stall: raise the limit if long commands are retried.
+- Not done: the "Recovering…" notice for a stall retry; the canary counts the stalled run as a failure (it is slow either way).

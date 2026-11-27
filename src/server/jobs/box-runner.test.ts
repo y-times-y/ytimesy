@@ -178,3 +178,53 @@ describe("runBoxTurn", () => {
 		).resolves.toBe("unavailable");
 	});
 });
+
+describe("a box turn that is abandoned never leaves the transcript silent (canary 2026-11-27 17:00)", () => {
+	it("finalizes failed with a calm error item the chat can show", async () => {
+		const { edgeTurnDeps } = await import("./box-runner");
+		const finalize = vi.fn(async () => "failed" as const);
+		const session = {
+			turn: { id: "t1", session_id: "s1", user_id: "u1", lease_id: "lease-1" },
+			history: async () => ({
+				messages: [],
+				items: [{ kind: "userMessage", id: "m1", text: "hi" }],
+			}),
+			savedHistory: () => null,
+			finalize,
+		};
+		const deps = edgeTurnDeps(session as never, {} as never, vi.fn() as never);
+		await expect(deps.abandon()).resolves.toBe(true);
+		const [state, items] = finalize.mock.calls[0] as unknown as [
+			string,
+			{ kind: string; id: string; message?: string }[],
+		];
+		expect(state).toBe("failed");
+		const error = items.find((item) => item.kind === "error");
+		expect(error?.id).toBe("t1:lost");
+		expect(error?.message).toMatch(/saved/i);
+		expect(items[0]?.kind).toBe("userMessage");
+	});
+
+	it("does not add a second notice when the history already ends in an error", async () => {
+		const { edgeTurnDeps } = await import("./box-runner");
+		const finalize = vi.fn(async () => "failed" as const);
+		const session = {
+			turn: { id: "t1", session_id: "s1", user_id: "u1", lease_id: "lease-1" },
+			history: async () => ({
+				messages: [],
+				items: [
+					{ kind: "userMessage", id: "m1", text: "hi" },
+					{ kind: "error", id: "t1:error", message: "x" },
+				],
+			}),
+			savedHistory: () => null,
+			finalize,
+		};
+		const deps = edgeTurnDeps(session as never, {} as never, vi.fn() as never);
+		await deps.abandon();
+		const items = (finalize.mock.calls[0] as unknown as [string, unknown[]])[1];
+		expect(
+			items.filter((i) => (i as { kind: string }).kind === "error"),
+		).toHaveLength(1);
+	});
+});
