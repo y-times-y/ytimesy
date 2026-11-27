@@ -203,14 +203,33 @@ export function useHubConnection(): HubConnection {
 }
 
 /**
- * Whether a tab coming back into focus should re-read its queries: not while
- * the hub pushes (it reports every change, and resyncs on reconnect), so a
- * focus is not a burst of reads. Queries that set their own focus rule keep it.
+ * Whether a tab coming back into focus re-reads a query. Only a query the hub
+ * covers (it has a push-or-poll interval: pollUnlessPushed) skips a quick
+ * return while the hub pushes. A query nothing pushes (no interval, no hub
+ * topic) always reads when stale: before, every query skipped it, so a
+ * settings list or a project row changed elsewhere stayed old until a reload.
  */
-export function refetchOnFocusUnlessPushed() {
-	return (
-		hubDelivery(userHubStore.connection()) !== "push" ||
-		tabWasAway(tabHiddenSince, Date.now())
+export function focusRefetchWanted(
+	connection: HubConnection,
+	coveredByHub: boolean,
+	tabAway: boolean,
+	_now: number,
+) {
+	return !coveredByHub || hubDelivery(connection) !== "push" || tabAway;
+}
+
+export function refetchOnFocusUnlessPushed(query: {
+	// refetchInterval is an observer option: a query is covered when one of
+	// the components watching it sets a push-or-poll interval.
+	observers: readonly { options: { refetchInterval?: unknown } }[];
+}) {
+	return focusRefetchWanted(
+		userHubStore.connection(),
+		query.observers.some(
+			(observer) => observer.options.refetchInterval !== undefined,
+		),
+		tabWasAway(tabHiddenSince, Date.now()),
+		Date.now(),
 	);
 }
 

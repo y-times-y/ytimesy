@@ -17,6 +17,7 @@ import {
 	type HubSignals,
 	type HubStatusEntries,
 	type HubTurnChange,
+	hubSocketsToEvict,
 	hubStateMessage,
 	hubStatusEntries,
 	MAX_HUB_SOCKETS,
@@ -211,8 +212,17 @@ export class UserHub extends DurableObject<EdgeExecutorEnvironment> {
 			return new Response(null, { status: 404 });
 		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
 			return new Response(null, { status: 426 });
-		if (this.sockets().length >= MAX_HUB_SOCKETS)
-			return new Response(null, { status: 429 });
+		// At the limit the oldest tab's socket is replaced (its tab reconnects
+		// and reads the whole map): a refused tab would be left without pushes.
+		const open = this.sockets();
+		for (const index of hubSocketsToEvict(
+			open.map((socket) => hubSocketAttachment(socket)?.openedAt ?? null),
+			MAX_HUB_SOCKETS,
+		)) {
+			try {
+				open[index]?.close(LIVE_SOCKET_CLOSE.reauthorize, "replaced");
+			} catch {}
+		}
 		const { client, server } = socketPair();
 		this.ctx.acceptWebSocket(server as unknown as WebSocket, [HUB_SOCKET_TAG]);
 		const openedAt = Date.now();

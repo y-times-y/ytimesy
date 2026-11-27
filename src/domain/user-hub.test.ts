@@ -3,6 +3,7 @@ import {
 	applyHubSignals,
 	applyHubTurnChange,
 	type HubChats,
+	hubSocketsToEvict,
 	hubStateMessage,
 	hubStatusEntries,
 	hubTopic,
@@ -250,5 +251,19 @@ describe("list topics and the event version", () => {
 		expect(
 			parseHubStateMessage(hubStateMessage({}, true))?.seq,
 		).toBeUndefined();
+	});
+});
+
+describe("hubSocketsToEvict", () => {
+	it("keeps room for one more: the oldest sockets go first", () => {
+		expect(hubSocketsToEvict([30, 10, 20], 3)).toEqual([1]);
+		expect(hubSocketsToEvict([30, 10, 20, 40], 3)).toEqual([1, 2]);
+	});
+	it("evicts nothing while there is room", () => {
+		expect(hubSocketsToEvict([30, 10], 3)).toEqual([]);
+		expect(hubSocketsToEvict([], 3)).toEqual([]);
+	});
+	it("a socket with no known age counts as oldest (a slept tab's leftover)", () => {
+		expect(hubSocketsToEvict([30, null, 20], 3)).toEqual([1]);
 	});
 });

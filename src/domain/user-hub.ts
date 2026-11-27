@@ -35,8 +35,31 @@ export const USER_HUB_SILENCE_MS = 2 * USER_HUB_PING_MS + 30_000;
 export const USER_HUB_AUTHORIZATION_MS = 10 * 60_000;
 /** Most chats one hub remembers; the oldest updates are dropped first. */
 export const MAX_HUB_CHATS = 500;
-/** Most sockets (tabs) one user's hub holds. */
-export const MAX_HUB_SOCKETS = 16;
+/**
+ * Most sockets (tabs) one user's hub holds. A hibernating socket costs
+ * nothing while idle, and a person works with many tabs for hours; a slept
+ * laptop's socket may linger until it is closed, so at the limit the oldest
+ * is replaced (hubSocketsToEvict) rather than the new tab refused.
+ */
+export const MAX_HUB_SOCKETS = 64;
+
+/**
+ * Which sockets (by index) to close so one more fits under `max`: the
+ * oldest first, one with no known age before any.
+ */
+export function hubSocketsToEvict(
+	openedAts: readonly (number | null)[],
+	max: number,
+): number[] {
+	const excess = openedAts.length + 1 - max;
+	if (excess <= 0) return [];
+	return openedAts
+		.map((openedAt, index) => ({ openedAt: openedAt ?? -1, index }))
+		.sort((a, b) => a.openedAt - b.openedAt)
+		.slice(0, excess)
+		.map((entry) => entry.index)
+		.sort((a, b) => a - b);
+}
 
 /**
  * Who gets the hub: `YTIMESY_USER_HUB_USERS` lists user ids (comma

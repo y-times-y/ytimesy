@@ -12,6 +12,7 @@ import {
 	hubChangeFromMessage,
 	hubDelivery,
 	hubReadDelayMs,
+	focusRefetchWanted,
 	pollUnlessPushed,
 	tabWasAway,
 } from "./user-hub-store";
@@ -210,5 +211,20 @@ describe("event versions detect a gap", () => {
 			kind: "topics",
 			topics: new Set(["projects"]),
 		});
+	});
+});
+
+describe("focusRefetchWanted", () => {
+	const pushing = { open: true, signals: true };
+	const polling = { open: false, signals: false };
+	it("a query the hub pushes (it has a push-or-poll interval) skips a quick return while pushed", () => {
+		expect(focusRefetchWanted(pushing, true, false, 1_000)).toBe(false);
+	});
+	it("a query nothing pushes (no interval, no hub topic) reads on every return", () => {
+		expect(focusRefetchWanted(pushing, false, false, 1_000)).toBe(true);
+	});
+	it("everything reads on return when the hub is down or the tab was away", () => {
+		expect(focusRefetchWanted(polling, true, false, 1_000)).toBe(true);
+		expect(focusRefetchWanted(pushing, true, true, 1_000)).toBe(true);
 	});
 });
