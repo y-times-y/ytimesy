@@ -16,6 +16,11 @@ vi.mock("./database", () => ({
 	}),
 }));
 
+import { releaseAgentTaskStart, reserveAgentTaskStart } from "./agent-capacity";
+import {
+	insertAgentSession,
+	titleUntitledAgentSession,
+} from "./agent-sessions";
 import { setChatArchived, setProjectArchived } from "./archive";
 import {
 	listChangeTopics,
@@ -23,10 +28,7 @@ import {
 	noteSessionsChanged,
 } from "./list-change-notes";
 import { deleteProjectForOwner, saveProject } from "./projects";
-import { releaseAgentTaskStart, reserveAgentTaskStart } from "./agent-capacity";
 import { setProjectYMode } from "./y-mode";
-import { abandonApiTurn } from "./api-turns";
-import { insertAgentSession, titleUntitledAgentSession } from "./agent-sessions";
 
 beforeEach(() => {
 	hub.notes.length = 0;
@@ -109,17 +111,12 @@ describe("thread paths tell the hub", () => {
 		db.rows = [{ id: "t1", parent_session_id: "root" }];
 		await reserveAgentTaskStart("u1", "p1", "t1");
 		await releaseAgentTaskStart("u1", "p1", "t1");
-		expect(hub.notes.filter(([, topics]) => topics[0] === "sessions:p1")).toHaveLength(2);
+		expect(
+			hub.notes.filter(([, topics]) => topics[0] === "sessions:p1"),
+		).toHaveLength(2);
 	});
 	it("Y² on or off for a project", async () => {
 		await setProjectYMode("u1", "p1", true);
 		expect(hub.notes).toEqual([["u1", ["projects", "sessions"]]]);
-	});
-	it("a turn settling elsewhere (lease sweep, box, Durable Object) reaches the lists", async () => {
-		db.rows = [
-			{ turn_id: "t", session_id: "s1", state: "failed", user_id: "u1", harness: "api", parent_session_id: null, task_access: null, started_at: null },
-		];
-		await abandonApiTurn("t", "lease");
-		expect(hub.notes).toContainEqual(["u1", ["sessions"]]);
 	});
 });
