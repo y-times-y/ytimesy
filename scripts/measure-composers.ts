@@ -5,9 +5,9 @@
  *
  *   node --import tsx scripts/measure-composers.ts <label> [--base https://...]
  *
- * Without --base it renders locally. With --base it signs in as the synthetic
- * test account (scripts/test-session.ts mint) and measures that deployment's
- * built CSS on the same markup. Screenshots (with guide lines) go to
+ * Without --base it uses the checkout's compiled CSS. With --base it signs in
+ * as the synthetic test account (scripts/test-session.ts mint) and measures
+ * that deployment's own stylesheets on the same real components' markup. Screenshots (with guide lines) go to
  * ~/.ytimesy/captures/composers-<label>-<width>.png.
  */
 import { spawnSync } from "node:child_process";
@@ -43,7 +43,37 @@ if (render.status !== 0) throw new Error("render failed");
 const sheets = stylesheetsImportedBy(
 	join(ROOT, "src/features/landing/preview/preview-demo.tsx"),
 );
-const css = buildPreviewCss(join(work, "css"), sheets);
+const base = process.argv.includes("--base")
+	? (process.argv[process.argv.indexOf("--base") + 1] ?? "https://ytimesy.com")
+	: null;
+
+/** The deployed build's own stylesheets, fetched as the synthetic test account. */
+async function liveCss(origin: string) {
+	const mint = spawnSync(
+		"node",
+		["--import", "tsx", "scripts/test-session.ts", "mint"],
+		{
+			cwd: ROOT,
+			encoding: "utf8",
+		},
+	);
+	const { cookie } = JSON.parse(mint.stdout.trim().split("\n").pop() ?? "{}");
+	const html = await (
+		await fetch(`${origin}/projects`, {
+			headers: { cookie: `${cookie.name}=${cookie.value}` },
+		})
+	).text();
+	const hrefs = [...html.matchAll(/href="([^"]+\.css)"/g)].map(
+		(m) => m[1] as string,
+	);
+	const sheets = await Promise.all(
+		hrefs.map(async (href) => (await fetch(new URL(href, origin))).text()),
+	);
+	return sheets.join("\n");
+}
+const css = base
+	? await liveCss(base)
+	: buildPreviewCss(join(work, "css"), sheets);
 
 const page = (body: string) =>
 	`<!doctype html><html lang="en" class="dark"><head><meta charset="utf-8"><style>${css}</style></head><body style="margin:0;background:#0a0a0a">${body}</body></html>`;
