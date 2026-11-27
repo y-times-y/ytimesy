@@ -15,6 +15,16 @@ export type ProjectYMode = {
 	readonly ySquaredId: string | null;
 };
 
+/**
+ * Keeps a project's Y² chat out of its thread lists unless the project has Y²
+ * on (`s` is the agent_session alias). The Y² chat is only ever drawn as the
+ * Super agent row, which pins it by id for a Y project; with Y² off nothing
+ * pins it, and without this it showed in Threads as a plain thread titled
+ * "Y²" (2026-11-27).
+ */
+export const NOT_UNPINNED_Y_SQUARED_CHAT = `(s.chat_role is distinct from 'y2'
+	or exists(select 1 from project yp where yp.id=s.project_id and yp.y_enabled))`;
+
 /** Null when the project is not this user's. */
 export async function projectYMode(
 	userId: string,

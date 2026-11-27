@@ -43,6 +43,7 @@ import {
 	pageItemSql,
 } from "./transcript-page-sql";
 import { noteUserHub } from "./user-hub-notes";
+import { NOT_UNPINNED_Y_SQUARED_CHAT } from "./y-mode";
 
 const SESSION_COLUMNS =
 	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
@@ -293,6 +294,7 @@ export async function listAgentSessions(
 		 from agent_session s
 		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
 		   and s.archived_at is null and ${NOT_CANARY_CHAT}
+		   and ${NOT_UNPINNED_Y_SQUARED_CHAT}
 		 order by s.updated_at desc`,
 		[userId, projectId],
 	);
@@ -360,6 +362,7 @@ export async function listSidebarAgentSessions(
 		 from agent_session s
 		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
 		   and s.archived_at is null and ${NOT_CANARY_CHAT}
+		   and ${NOT_UNPINNED_Y_SQUARED_CHAT}
 		 order by s.updated_at desc`,
 		[userId, projectId],
 	);

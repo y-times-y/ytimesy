@@ -30,7 +30,9 @@ export async function createProjectYSquared(
 			harnessId: "codex",
 			modelId: "",
 		}).catch(() => null);
-		return await ensureYSquaredChat(userId, projectId, route);
+		const id = await ensureYSquaredChat(userId, projectId, route);
+		if (id) console.info("y_squared.ensured", { projectId, chatId: id });
+		return id;
 	} catch (error) {
 		console.error("y_squared.create_on_add_failed", error);
 		return null;
