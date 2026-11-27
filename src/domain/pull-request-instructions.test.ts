@@ -1,8 +1,13 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { systemPrompt } from "../server/services/claude-code-runner";
 import { leanToolInstructions } from "./lean-tool-instructions";
-import { PULL_REQUEST_INSTRUCTIONS } from "./pull-request-tools";
+import { pullRequestNote } from "./pull-request-handoff-item";
+import {
+	PULL_REQUEST_INSTRUCTIONS,
+	PULL_REQUEST_REMINDER,
+} from "./pull-request-tools";
 
 /** What taught agents to ask for a token or to open the pull request themselves. */
 const BANNED = [
@@ -65,7 +70,7 @@ describe("pull request instructions", () => {
 		// Allowed: detection of pasted secrets, the shell-title mapper and the
 		// local-import CLI hand-off (the user's own machine, not the agent's).
 		const allowed =
-			/pasted-secrets\.ts|command-activity-title\.ts|local-import/;
+			/pasted-secrets\.ts|command-activity-title\.ts|github-credential-request\.ts|local-import/;
 		expect(offenders.filter((line) => !allowed.test(line))).toEqual([]);
 	});
 });
@@ -74,5 +79,37 @@ describe("no pull request tool", () => {
 	it("is added: the handoff does it server-side", () => {
 		const tools = readFileSync("src/domain/pull-request-tools.ts", "utf8");
 		expect(tools).not.toMatch(/open_pull_request|pull_request_status/);
+	});
+});
+
+describe("pullRequestNote", () => {
+	const opened = (id: string, number: number, draft = true) =>
+		({
+			kind: "notice",
+			id,
+			message: "Opened",
+			pullRequest: {
+				state: "opened",
+				number,
+				url: `https://github.com/acme/app/pull/${number}`,
+				draft,
+				created: true,
+			},
+		}) as never;
+
+	it("quotes the newest handoff's number and link, null before any", () => {
+		expect(pullRequestNote([])).toBeNull();
+		const note = pullRequestNote([opened("a", 7), opened("b", 128)]);
+		expect(note).toContain("draft PR #128");
+		expect(note).toContain("https://github.com/acme/app/pull/128");
+	});
+
+	it("reaches the Claude Code system prompt and a resumed session's request", () => {
+		const prompt = systemPrompt("/w", false, undefined, undefined, "NOTE-LINE");
+		expect(prompt).toContain(PULL_REQUEST_INSTRUCTIONS);
+		expect(prompt).toContain("NOTE-LINE");
+		expect(PULL_REQUEST_REMINDER("NOTE-LINE")).toMatch(
+			/no gh or token.*NOTE-LINE/,
+		);
 	});
 });

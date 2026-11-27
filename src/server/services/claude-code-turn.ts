@@ -138,6 +138,8 @@ export async function runClaudeCodeTurnStep(input: {
 	/** The reasoning effort the user chose; the model's own default when absent. */
 	readonly effort?: string;
 	readonly agentRole: SubagentRole | null | undefined;
+	/** The pull request the platform opened for this chat (pullRequestNote). */
+	readonly pullRequestNote?: string;
 	/** Set when the step runs on a turn runner box. */
 	readonly host?: ClaudeCodeTurnHost;
 	/**
@@ -323,6 +325,9 @@ export async function runClaudeCodeTurnStep(input: {
 	try {
 		const result = await runClaudeCodeStep({
 			...(feed ? { feed } : {}),
+			...(input.pullRequestNote
+				? { pullRequestNote: input.pullRequestNote }
+				: {}),
 			mayPause: () => claudeTurnMayPause(input.turnId),
 			mayPauseOnFeed: () => claudeFeedStepMayPause(input.turnId),
 			requestPause: (ms) => requestClaudeStepPause(input.turnId, ms),

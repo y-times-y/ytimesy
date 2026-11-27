@@ -1,5 +1,9 @@
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import {
+	GITHUB_CREDENTIAL_REFUSAL,
+	isGithubCredentialName,
+} from "#/domain/github-credential-request";
 import { parseProjectSecretName } from "#/domain/project-secret";
 import {
 	REQUEST_PROJECT_SECRET_TOOL,
@@ -85,7 +89,12 @@ export function secretRequestTools(existing: readonly string[]): ToolSet {
 					}
 				>();
 				const alreadySet: string[] = [];
+				let refusedGithub = false;
 				for (const { name, kind, reason, replace } of asked) {
+					if (isGithubCredentialName(name)) {
+						refusedGithub = true;
+						continue;
+					}
 					const parsed = parseProjectSecretName(name);
 					const has = existing.includes(parsed);
 					if (has && !replace) alreadySet.push(parsed);
@@ -98,6 +107,8 @@ export function secretRequestTools(existing: readonly string[]): ToolSet {
 							...(has ? { replace: true as const } : {}),
 						});
 				}
+				if (!secrets.size && refusedGithub && !alreadySet.length)
+					return { requested: false, error: GITHUB_CREDENTIAL_REFUSAL };
 				if (!secrets.size)
 					return {
 						requested: false,
@@ -107,6 +118,7 @@ export function secretRequestTools(existing: readonly string[]): ToolSet {
 					requested: true,
 					secrets: [...secrets.values()],
 					...(alreadySet.length ? { alreadySet } : {}),
+					...(refusedGithub ? { note: GITHUB_CREDENTIAL_REFUSAL } : {}),
 				};
 			},
 		}),

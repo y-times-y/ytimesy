@@ -97,3 +97,19 @@ export function visiblePullRequestHandoff(
 		return null;
 	return state;
 }
+
+/**
+ * One line telling the agent which pull request the platform opened for this
+ * chat, from the newest handoff in the transcript (the model's history carries
+ * no notices), so its answer quotes the same link as the chip. Null before any.
+ */
+export function pullRequestNote(items: readonly SessionItem[]): string | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item.kind !== "notice" || item.pullRequest?.state !== "opened")
+			continue;
+		const { number, url, draft } = item.pullRequest;
+		return `ytimesy opened ${draft ? "draft " : ""}PR #${number} for this chat's branch (${url}); each push updates it.`;
+	}
+	return null;
+}

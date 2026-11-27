@@ -108,6 +108,7 @@ import {
 	openedPullRequestItem,
 	openingPullRequestItem,
 	pullRequestHandoffItemId,
+	pullRequestNote,
 } from "#/domain/pull-request-handoff-item";
 import { REQUEST_PUSH_APPROVAL_TOOL } from "#/domain/push-approval";
 import type { RoleModels } from "#/domain/role-models";
@@ -2756,6 +2757,7 @@ async function runApiTurnAttempt(
 				},
 				memory,
 				handoffSessions.length > 0,
+				pullRequestNote(items),
 			),
 			tools: earlyPromptCheck
 				? withPromptCheckGate(tools, earlyPromptCheck)
@@ -3226,6 +3228,7 @@ async function runApiTurnAttempt(
 						userId: owner.userId,
 						sessionId: owner.id,
 						turnId: turn.id,
+						pullRequestNote: pullRequestNote(items) ?? undefined,
 						modelId: route.modelId,
 						// The effort chosen in the picker (Claude Code's `effort`).
 						effort: apiReasoningEffort(turnReasoning) ?? undefined,
@@ -4591,8 +4594,10 @@ function turnInstructions(
 	memory: { instructions: string } | null,
 	/** The project has imported local sessions on this machine. */
 	handoffHistory = false,
+	/** The pull request the platform opened for this chat (pullRequestNote). */
+	pullRequest: string | null = null,
 ) {
-	return `${agentTurnInstructions(agent)}${memory ? `\n${memory.instructions}` : ""}${handoffHistory ? `\n${HANDOFF_HISTORY_INSTRUCTIONS}` : ""}`;
+	return `${agentTurnInstructions(agent)}${pullRequest ? `\n${pullRequest}` : ""}${memory ? `\n${memory.instructions}` : ""}${handoffHistory ? `\n${HANDOFF_HISTORY_INSTRUCTIONS}` : ""}`;
 }
 
 function modelSwitchItem(

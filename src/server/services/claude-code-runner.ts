@@ -50,7 +50,10 @@ import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import type { LeanToolShape } from "#/domain/harness-model-profile";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecretValues } from "#/domain/project-secret";
-import { PULL_REQUEST_INSTRUCTIONS } from "#/domain/pull-request-tools";
+import {
+	PULL_REQUEST_INSTRUCTIONS,
+	PULL_REQUEST_REMINDER,
+} from "#/domain/pull-request-tools";
 import {
 	READER_LINUX_USER,
 	readerNetworkedCommand,
@@ -158,6 +161,8 @@ export type ClaudeCodeStepInput = {
 	readonly readFile: (path: string) => Promise<string | null>;
 	readonly cwd: string;
 	readonly userId: string;
+	/** The pull request the platform opened for this chat, told each run. */
+	readonly pullRequestNote?: string;
 	readonly sessionId: string;
 	readonly turnId: string;
 	/** Claude Code's --model. */
@@ -450,11 +455,12 @@ export function ySquaredToolList(names?: readonly string[]): string {
 		: (list[0] ?? "");
 }
 
-function systemPrompt(
+export function systemPrompt(
 	cwd: string,
 	reader: boolean,
 	remote?: ClaudeCodeStepInput["remote"],
 	ySquared?: ClaudeCodeStepInput["ySquared"],
+	pullRequest?: string,
 ) {
 	if (ySquared)
 		return [
@@ -479,6 +485,7 @@ function systemPrompt(
 				]),
 		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking). Tools these instructions name without the prefix are offered the same way.`,
 		reader ? "" : PULL_REQUEST_INSTRUCTIONS,
+		reader ? "" : (pullRequest ?? ""),
 		reader
 			? ""
 			: canvasInstructions(`mcp__${CLAUDE_CODE_MCP_SERVER}__${CANVAS_TOOL}`),
@@ -1171,8 +1178,14 @@ async function launchRun(
 				}),
 	]);
 	if (sdk === "pending") return { pending: true };
-	const prompt = claudeCodePrompt(input.messages, Boolean(resumeId));
-	if (!prompt.trim()) return null;
+	const request = claudeCodePrompt(input.messages, Boolean(resumeId));
+	if (!request.trim()) return null;
+	// A resumed session carries its earlier answers, which may still say "gh is
+	// not logged in"; the newest message is what the model weighs most.
+	const prompt =
+		resumeId && !input.reader && !input.ySquared
+			? `${PULL_REQUEST_REMINDER(input.pullRequestNote)}\n\n${request}`
+			: request;
 	input.addRedaction?.(grant);
 	const boxTools =
 		input.remote && input.boxTools && !input.reader
@@ -1223,6 +1236,7 @@ async function launchRun(
 				input.reader,
 				input.remote,
 				input.ySquared,
+				input.pullRequestNote,
 			),
 		},
 		{ path: `${runDirectory}/prompt`, contents: prompt },

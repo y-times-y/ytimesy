@@ -14,6 +14,7 @@ import { isDevEvalUser } from "../adapters/dev-eval-users";
 import { isEnvironmentSetupChat } from "../adapters/environment-setup-chats";
 import {
 	authorizedRepository,
+	compareBranchAhead,
 	findOpenPullRequest,
 	isNothingAheadToOpen,
 } from "../adapters/github";
@@ -98,6 +99,11 @@ export async function publishCompletedSessionTurn(
 	onPullRequest?: (
 		pull: NonNullable<TurnPublication["pullRequest"]>,
 	) => unknown,
+	/**
+	 * A turn that added nothing still opens the pull request of a branch that
+	 * was pushed (by an earlier turn or by the agent) and has none open.
+	 */
+	openMissingPullRequest = false,
 ): Promise<TurnPublication | undefined> {
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn handoff identity.");
@@ -170,7 +176,23 @@ export async function publishCompletedSessionTurn(
 		);
 		if (changed.exitCode !== 0)
 			throw new Error(`Could not check committed changes in ${repo.fullName}.`);
-		if (changed.stdout.trim() === "0") continue;
+		if (
+			changed.stdout.trim() === "0" &&
+			!(
+				openMissingPullRequest &&
+				repo.fullName === project.fullName &&
+				(await branchLacksOpenPullRequest({
+					runtime,
+					providerRef,
+					directory,
+					branch: head,
+					base: chatBase || repo.branch,
+					fullName: repo.fullName,
+					token: userTokenFor,
+				}))
+			)
+		)
+			continue;
 		const repository = await (early ?? authorization());
 		const token = await userTokenFor();
 		if (!head) {
@@ -437,6 +459,51 @@ async function changedFilesOnBranch(
 /** The chat's first request names its branch, like a new chat's first send. */
 function chatBranchTitle(session: AgentSessionRecord) {
 	return session.title === "New session" ? "" : session.title;
+}
+
+/**
+ * Whether a branch this chat already pushed has commits beyond its base and no
+ * open pull request: the one case a turn with nothing new still opens one.
+ * Bookkeeping: any failure answers no and the turn goes on.
+ */
+async function branchLacksOpenPullRequest(input: {
+	runtime: TurnGitRuntime;
+	providerRef: string;
+	directory: string;
+	branch: string | null;
+	base: string;
+	fullName: string;
+	token: () => Promise<string>;
+}) {
+	if (!input.branch || !input.base || input.branch === input.base) return false;
+	try {
+		const git = `git -C ${posixShellQuoted(input.directory)}`;
+		const pushed = await input.runtime.exec(
+			input.providerRef,
+			[
+				"bash",
+				"-lc",
+				`${git} rev-parse -q --verify ${PUBLISHED_REF} >/dev/null && echo yes || echo no`,
+			],
+			{},
+			15_000,
+		);
+		if (pushed.stdout.trim() !== "yes") return false;
+		const token = await input.token();
+		const head = input.branch;
+		if (
+			await findOpenPullRequest(token, input.fullName, {
+				head,
+				base: input.base,
+			})
+		)
+			return false;
+		return (
+			(await compareBranchAhead(token, input.fullName, input.base, head)) > 0
+		);
+	} catch {
+		return false;
+	}
 }
 
 /** Commits since the chat's base, or 0 when this exact revision was already pushed. */

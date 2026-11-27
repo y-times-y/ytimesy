@@ -138,6 +138,7 @@ it("commits a root chat's turn without the verification gate and returns where i
 		expect.objectContaining({ description: null, files: [] }),
 		new Set(["owner/primary"]),
 		undefined,
+		false,
 	);
 	expect(outcome).toEqual({
 		publication: {
@@ -449,5 +450,74 @@ describe("commitSessionTurn", () => {
 			new MemoryWorkspaceRuntime(),
 		);
 		expect(committed).toEqual({});
+	});
+});
+
+describe("a turn with nothing new to push", () => {
+	const nothingNew = () =>
+		publication.pending.mockResolvedValueOnce(new Set<string>());
+	const opened: SessionItem = {
+		kind: "notice",
+		id: SessionItemId("n1"),
+		message: "Opened draft PR #128",
+		pullRequest: {
+			state: "opened",
+			number: 128,
+			url: "https://github.com/owner/primary/pull/128",
+			draft: true,
+			created: true,
+		},
+	} as SessionItem;
+
+	const commitSessionTurn = async (...args: unknown[]) =>
+		(await import("./turn-commit")).commitSessionTurn(
+			...(args as Parameters<typeof import("./turn-commit").commitSessionTurn>),
+		);
+
+	it("still hands off a pushed branch that has no pull request recorded", async () => {
+		lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+		publication.publish.mockClear();
+		publication.publish.mockResolvedValue(undefined);
+		nothingNew();
+		const outcome = await commitSessionTurn(
+			chat,
+			items,
+			new MemoryWorkspaceRuntime(),
+		);
+		await (
+			outcome as { publish?: (cb: () => void) => Promise<unknown> }
+		).publish?.(() => undefined);
+		expect(outcome.publish).toBeTypeOf("function");
+		expect(publication.publish).toHaveBeenCalledWith(
+			chat,
+			expect.anything(),
+			expect.any(String),
+			expect.anything(),
+			new Set(["owner/primary"]),
+			expect.anything(),
+			true,
+		);
+	});
+
+	it("leaves a chat that already shows its pull request alone: no GitHub read", async () => {
+		lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+		nothingNew();
+		const outcome = await commitSessionTurn(
+			chat,
+			[...items, opened],
+			new MemoryWorkspaceRuntime(),
+		);
+		expect(outcome.publish).toBeUndefined();
+	});
+
+	it("does nothing for a chat with no branch yet", async () => {
+		lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+		nothingNew();
+		const outcome = await commitSessionTurn(
+			{ ...chat, workingBranch: null } as AgentSessionRecord,
+			items,
+			new MemoryWorkspaceRuntime(),
+		);
+		expect(outcome.publish).toBeUndefined();
 	});
 });

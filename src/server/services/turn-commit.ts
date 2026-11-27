@@ -188,7 +188,16 @@ async function commitChatTurn(
 			turn,
 		),
 	);
-	if (!pending.size) return {};
+	// Nothing new to push: a chat that pushed its branch but never got a
+	// pull request recorded (its first attempt failed, or the agent pushed the
+	// branch itself) still gets one, so the agent never has to ask for one.
+	// A chat that already shows a pull request is left alone: no GitHub read.
+	const openMissing = !pending.size;
+	if (
+		openMissing &&
+		(!current.workingBranch || items.some(hasOpenedPullRequest))
+	)
+		return {};
 	const facts = handoffFactsFromItems(items);
 	return {
 		publish: async (onPullRequest) => {
@@ -199,8 +208,9 @@ async function commitChatTurn(
 						host,
 						turn,
 						facts,
-						pending,
+						openMissing ? new Set([project.fullName]) : pending,
 						onPullRequest,
+						openMissing,
 					),
 				);
 				return publication ? { publication } : {};
@@ -238,6 +248,10 @@ async function followAgentBranch(
 		branch,
 	).catch(() => null);
 	return saved ? { ...saved, providerRef: session.providerRef } : session;
+}
+
+function hasOpenedPullRequest(item: SessionItem) {
+	return item.kind === "notice" && item.pullRequest?.state === "opened";
 }
 
 /** Why a chat's committed changes were not pushed, in words the person can act on. */

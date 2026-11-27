@@ -724,7 +724,9 @@ describe("Claude Code runner", () => {
 		expect(
 			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").resume,
 		).toBe(CLAUDE_SESSION);
-		expect(vm.files.get(`${RUNS}/1/prompt`)).toBe("Second.");
+		expect(vm.files.get(`${RUNS}/1/prompt`)).toMatch(
+			/^\[ytimesy: GitHub is connected; no gh or token[^\]]*\]\n\nSecond\.$/,
+		);
 	});
 
 	it("starts fresh with the conversation when no session can be restored", async () => {
