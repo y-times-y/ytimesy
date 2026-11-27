@@ -46,7 +46,8 @@ export const ReferenceContext = createContext<ReferenceContextValue | null>(
 /** Fired by a pull request or issue chip; a listener that opens it in the app sets `handled`. */
 export const OPEN_REFERENCE_EVENT = "ytimesy:open-reference";
 export type OpenReferenceDetail = {
-	readonly kind: "pull-request" | "issue";
+	/** "number": a bare `#12` whose type the workspace looks up. */
+	readonly kind: "pull-request" | "issue" | "number";
 	readonly owner: string;
 	readonly repo: string;
 	readonly number: number;
@@ -66,7 +67,7 @@ function openReferenceInApp(event: MouseEvent) {
 	)
 		return;
 	const chip = event.target.closest(
-		'a[data-reference="pull-request"], a[data-reference="issue"]',
+		'a[data-reference="pull-request"], a[data-reference="issue"], a[data-reference="number"]',
 	);
 	const match = /^([^/\s]+)\/([^#\s]+)#(\d+)$/.exec(
 		chip?.getAttribute("data-ref") ?? "",
@@ -76,7 +77,9 @@ function openReferenceInApp(event: MouseEvent) {
 		kind:
 			chip.getAttribute("data-reference") === "issue"
 				? "issue"
-				: "pull-request",
+				: chip.getAttribute("data-reference") === "number"
+					? "number"
+					: "pull-request",
 		owner: match[1] ?? "",
 		repo: match[2] ?? "",
 		number: Number(match[3]),
@@ -335,7 +338,7 @@ function LookedUpChip({
 	return <NeutralNumberChip number={number} label={label} />;
 }
 
-/** A number not yet known to be an issue or a pull request: no icon, opens GitHub (which redirects to the right page). */
+/** A number not yet known to be an issue or a pull request: no icon; a click opens it in the app once its type is read, else GitHub. */
 function NeutralNumberChip({
 	number,
 	label,

@@ -286,6 +286,7 @@ import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
+import { referenceKindQuery } from "../sessions/reference-kind";
 import { createSessionDeltaReader } from "../sessions/session-delta-reader";
 import {
 	COMPOSER_INPUT_ID,
@@ -3579,13 +3580,48 @@ export function WorkspaceHome({
 	 */
 	function openReferenceInApp(detail: OpenReferenceDetail) {
 		const repository = `${detail.owner}/${detail.repo}`.toLowerCase();
-		if (
-			!projectRepositories.some(
-				(candidate) => candidate.fullName.toLowerCase() === repository,
-			)
-		)
-			return;
+		const connected = projectRepositories.find(
+			(candidate) => candidate.fullName.toLowerCase() === repository,
+		);
+		if (!connected) return;
 		const key = referenceKey(detail);
+		if (detail.kind === "number") {
+			// A bare #12: a listed pull request is known; any other number is
+			// read once (cached, the chip's own query), and GitHub opens only
+			// when that read fails.
+			if (
+				listedPullRequests.some((pr) => {
+					const ref = pullRequestReference(pr.url);
+					return ref ? referenceKey(ref) === key : false;
+				})
+			) {
+				openReferenceInApp({ ...detail, kind: "pull-request" });
+				detail.handled = true;
+				return;
+			}
+			if (!connected.installationId || !connected.repositoryId) return;
+			detail.handled = true;
+			void queryClient
+				.fetchQuery(
+					referenceKindQuery(
+						{
+							installationId: connected.installationId,
+							repositoryId: connected.repositoryId,
+						},
+						detail.number,
+					),
+				)
+				.then(
+					(kind) => openReferenceInApp({ ...detail, kind, handled: false }),
+					() =>
+						window.open(
+							`https://github.com/${detail.owner}/${detail.repo}/issues/${detail.number}`,
+							"_blank",
+							"noopener,noreferrer",
+						),
+				);
+			return;
+		}
 		const pullRequest = listedPullRequests.find((pr) => {
 			const ref = pullRequestReference(pr.url);
 			return ref ? referenceKey(ref) === key : false;

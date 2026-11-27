@@ -9,7 +9,7 @@ import type { WorkItemsFocus, WorkItemsKind } from "./work-items-page";
  */
 export function workItemsTarget(
 	reference: {
-		readonly kind: "pull-request" | "issue";
+		readonly kind: "pull-request" | "issue" | "number";
 		readonly owner: string;
 		readonly repo: string;
 		readonly number: number;
@@ -33,7 +33,7 @@ export function workItemsTarget(
 	return {
 		page: reference.kind === "issue" ? "issues" : "pull-requests",
 		focus: {
-			kind: reference.kind,
+			kind: reference.kind === "issue" ? "issue" : "pull-request",
 			repositoryId: repository.repositoryId,
 			number: reference.number,
 			at,

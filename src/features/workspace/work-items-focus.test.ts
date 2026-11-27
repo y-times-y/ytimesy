@@ -21,6 +21,15 @@ describe("workItemsTarget", () => {
 			focus: { kind: "pull-request", repositoryId: 7, number: 14, at: 5 },
 		});
 	});
+	it("treats a bare number whose type is read later as a pull request page request only after it is resolved", () => {
+		expect(
+			workItemsTarget(
+				{ kind: "number", owner: "y-times-y", repo: "ytimesy", number: 45 },
+				connected,
+				1,
+			)?.focus.kind,
+		).toBe("pull-request");
+	});
 	it("opens an issue on the Issues page", () => {
 		expect(
 			workItemsTarget(
