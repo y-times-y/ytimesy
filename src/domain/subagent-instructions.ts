@@ -1,10 +1,12 @@
 import {
 	BRIEF_POLICY,
 	KEEP_WORKING_POLICY,
-	READER_DELEGATION_POLICY,
+	PRODUCT_DELEGATION_EXAMPLES,
+	PRODUCT_READER_EXAMPLE,
+	PRODUCT_READER_POLICY,
+	PRODUCT_WRITER_POLICY,
 	REFUSED_START,
 	REPORT_IS_A_CLAIM,
-	WRITER_DELEGATION_POLICY,
 } from "./delegation-policy";
 import type { FusionPairProfile } from "./fusion-pairs";
 import { SIDEKICK_MAX_RESTARTS } from "./sidekick";
@@ -52,8 +54,9 @@ export function orchestratorInstructions(
 		readOnly
 			? "Roles: researcher and reviewer read your VM and cannot change it; checker gets only the user's task and the current work and returns pass or fail."
 			: "Roles: writer edits on a fork of your VM (your uncommitted work included) and returns a patch and git ref; researcher and reviewer read your VM and cannot change it; checker gets only the user's task and your current work and returns pass or fail.",
-		...(readOnly ? [] : [WRITER_DELEGATION_POLICY]),
-		READER_DELEGATION_POLICY,
+		...(readOnly ? [] : [PRODUCT_WRITER_POLICY]),
+		PRODUCT_READER_POLICY,
+		readOnly ? PRODUCT_READER_EXAMPLE : PRODUCT_DELEGATION_EXAMPLES,
 		`Start helpers that run side by side together, ${howParallel}.`,
 		`${BRIEF_POLICY} Also name what not to touch (shared ports, the dev server).${readOnly ? "" : " Writers report what changed, how it was verified and what is unverified."}`,
 		`${KEEP_WORKING_POLICY} Their reports arrive on their own and wake you; message a running helper only to change its course or stop it, never to ask for progress or to hurry it.`,

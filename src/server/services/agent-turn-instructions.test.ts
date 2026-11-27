@@ -4,6 +4,9 @@ import { z } from "zod";
 import {
 	BRIEF_POLICY,
 	KEEP_WORKING_POLICY,
+	PRODUCT_DELEGATION_EXAMPLES,
+	PRODUCT_READER_POLICY,
+	PRODUCT_WRITER_POLICY,
 	READER_DELEGATION_POLICY,
 	REFUSED_START,
 	REPORT_IS_A_CLAIM,
@@ -178,9 +181,16 @@ describe("subagent instructions", () => {
 			"Subagents: `agent` starts a helper (a background agent) with only your brief and returns its id at once;",
 		);
 		expect(withAgent).not.toMatch(/find_tools|searchTools|More tools/);
-		// The shared delegation policy, as the Harbor bridge measures it.
-		expect(withAgent).toContain(WRITER_DELEGATION_POLICY);
-		expect(withAgent).toContain(READER_DELEGATION_POLICY);
+		// The product's own policy (the Harbor bridge keeps the measured strict one).
+		expect(withAgent).toContain(PRODUCT_WRITER_POLICY);
+		expect(withAgent).toContain(PRODUCT_READER_POLICY);
+		expect(withAgent).toContain(PRODUCT_DELEGATION_EXAMPLES);
+		expect(withAgent).not.toContain(WRITER_DELEGATION_POLICY);
+		expect(withAgent).not.toContain(READER_DELEGATION_POLICY);
+		// Neutral on writers: no quota, no "sparingly", no decide-once rule.
+		expect(withAgent).not.toMatch(
+			/sparingly|one at a time|never later|over 10 minutes/i,
+		);
 		expect(withAgent).toContain(BRIEF_POLICY);
 		expect(withAgent).toContain(KEEP_WORKING_POLICY);
 		expect(withAgent).toContain(REPORT_IS_A_CLAIM);
@@ -318,8 +328,8 @@ describe("subagent instructions", () => {
 		expect(researcher).toContain('tools.agent({ role: "researcher"');
 		expect(researcher).not.toMatch(/writer|git apply/);
 		// Readers start readers under the same cost bar, never the writer rule.
-		expect(researcher).toContain(READER_DELEGATION_POLICY);
-		expect(researcher).not.toContain(WRITER_DELEGATION_POLICY);
+		expect(researcher).toContain(PRODUCT_READER_POLICY);
+		expect(researcher).not.toContain(PRODUCT_WRITER_POLICY);
 	});
 });
 
@@ -387,12 +397,12 @@ describe("lead mode fusion instructions", () => {
 		);
 		expect(fusion).toContain("across the user's messages");
 		// Not the default block's delegation policy.
-		expect(fusion).not.toContain(WRITER_DELEGATION_POLICY);
+		expect(fusion).not.toContain(PRODUCT_WRITER_POLICY);
 		expect(fusion).toContain(
 			"answer the user yourself, delegating only as below.",
 		);
 		const off = lead("core", { bash: stub, edit: stub, agent: stub }, "off");
-		expect(off).toContain(WRITER_DELEGATION_POLICY);
+		expect(off).toContain(PRODUCT_WRITER_POLICY);
 		expect(off).not.toContain("you are Main");
 	});
 

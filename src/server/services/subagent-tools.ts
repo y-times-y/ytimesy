@@ -17,6 +17,7 @@ import {
 	MAX_STRONG_CHECKER_WORKERS,
 } from "#/domain/checker-pair";
 import { latestUserRequestText } from "#/domain/child-task-activity";
+import { AGENT_TOOL_DESCRIPTION } from "#/domain/delegation-policy";
 import { fusionPairProfile } from "#/domain/fusion-pairs";
 import type { CheckerMode, LeadMode } from "#/domain/harness-variant";
 import { WorkspaceId } from "#/domain/ids";
@@ -431,7 +432,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 			? Y_AGENT_TOOL_DESCRIPTION
 			: isLead
 				? "Start a subagent. It sees only your brief (never this conversation), works within its own budget and reports back as a message. Your writer persists for this chat and works directly in your checkout: while it works your edits and commands are refused, its report wakes you, and you review its changes in place with git diff. Readers share your VM read-only and run in the background. Returns its id and budget."
-				: "Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
+				: AGENT_TOOL_DESCRIPTION,
 		inputSchema: isLead
 			? agentInput.extend({
 					role: z.enum(SUBAGENT_ROLES).describe(LEAD_ROLE_TEXT),
