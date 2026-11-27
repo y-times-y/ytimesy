@@ -179,6 +179,8 @@ export async function runTestAccountAction(
 			| "seed-setup-building"
 			| "seed-setup-failed"
 			| "seed-setup-ready"
+			| "seed-thread-start"
+			| "seed-thread-settle"
 			| "y-counts"
 			| "repo-ids"
 			| "vm-map"
@@ -201,6 +203,21 @@ export async function runTestAccountAction(
 			input.slugs ?? [],
 		);
 	if (input.action === "y-counts") return yDefaultCounts(db);
+	if (
+		input.action === "seed-thread-start" ||
+		input.action === "seed-thread-settle"
+	) {
+		const userId = await flaggedTestUser(db);
+		console.log(
+			JSON.stringify({ event: `test_session.${input.action}`, caller }),
+		);
+		const { seedTestThread } = await import("./test-account-thread");
+		return seedTestThread(
+			db,
+			userId,
+			input.action === "seed-thread-start" ? "start" : "settle",
+		);
+	}
 	if (
 		input.action === "seed-accounts" ||
 		input.action === "seed-grok-accounts" ||

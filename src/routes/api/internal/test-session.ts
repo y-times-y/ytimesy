@@ -47,6 +47,8 @@ export const Route = createFileRoute("/api/internal/test-session")({
 						body.action === "seed-setup-building" ||
 						body.action === "seed-setup-failed" ||
 						body.action === "seed-setup-ready" ||
+						body.action === "seed-thread-start" ||
+						body.action === "seed-thread-settle" ||
 						body.action === "seed-accounts" ||
 						body.action === "simulate-limit" ||
 						body.action === "seed-grok-accounts" ||
