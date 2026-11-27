@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import {
+	listQueryKeysToInvalidate,
 	RECONNECT_NOTICE_AFTER_MS,
 	reconnectingNotice,
 	refreshAfterProjectAdded,
@@ -74,5 +75,38 @@ describe("reconnectingNotice", () => {
 				online: false,
 			}),
 		).toBe("Offline. Showing the last state.");
+	});
+});
+
+describe("listQueryKeysToInvalidate", () => {
+	it("a project's chat list change reads exactly that list (sidebar and Overview share it)", () => {
+		expect(
+			listQueryKeysToInvalidate({
+				kind: "topics",
+				topics: new Set(["sessions:p1"]),
+			}),
+		).toEqual([["agent-sessions", "p1"]]);
+	});
+	it("a project change reads the project list; an unscoped chat change every chat list", () => {
+		expect(
+			listQueryKeysToInvalidate({
+				kind: "topics",
+				topics: new Set(["projects", "sessions"]),
+			}),
+		).toEqual([["projects"], ["agent-sessions"]]);
+	});
+	it("a resync (reconnect or a skipped version) reads every list", () => {
+		expect(listQueryKeysToInvalidate({ kind: "resync" })).toEqual([
+			["projects"],
+			["agent-sessions"],
+		]);
+	});
+	it("leaves other topics alone", () => {
+		expect(
+			listQueryKeysToInvalidate({
+				kind: "topics",
+				topics: new Set(["push", "chat:a"]),
+			}),
+		).toEqual([]);
 	});
 });

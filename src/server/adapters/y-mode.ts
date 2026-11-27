@@ -3,6 +3,7 @@ import { claudeRunnerFor } from "#/domain/claude-runner";
 import { Y_SQUARED_WELCOME } from "#/domain/y-default";
 import { Y_SQUARED_TITLE } from "#/domain/y-squared";
 import { database } from "./database";
+import { noteProjectsChanged, noteSessionsChanged } from "./list-change-notes";
 import { enableNeverChosenProjects } from "./y-backfill";
 
 /**
@@ -127,6 +128,7 @@ export async function setProjectYMode(
 		[projectId, userId, enabled],
 	);
 	if (!result.rowCount) throw new Error("Project is not available.");
+	noteProjectsChanged(userId);
 }
 
 /** The user-level switch (default on): false means Y² is off for their projects and new ones. */
@@ -150,6 +152,7 @@ export async function setUserYDefault(userId: string, enabled: boolean) {
 		 where user_id=$1 and archived_at is null`,
 		[userId, enabled],
 	);
+	noteProjectsChanged(userId);
 }
 
 /**
@@ -228,6 +231,8 @@ export async function ensureYSquaredChat(
 			JSON.stringify(welcome),
 		],
 	);
+	// The Super agent row of a new project appears in every open tab.
+	if (result.rows[0]) noteSessionsChanged(userId, projectId);
 	return result.rows[0]?.id ?? null;
 }
 

@@ -5,6 +5,7 @@ import { QUEUED_MESSAGES_PER_CHAT_LIMIT } from "#/domain/peer-inbox-injection";
 import type { UserMessageItem } from "#/domain/session-item";
 import { wakeConversationProgress } from "./conversation-progress-wake";
 import { database } from "./database";
+import { noteSessionsChanged } from "./list-change-notes";
 import { forgetPeerInboxObservation } from "./peer-inbox-observation";
 
 /** A composer send waiting in the chat's inbox while a turn runs. */
@@ -106,6 +107,7 @@ export async function queueUserMessageWhileRunning(
 	if (!result.rows[0]?.running) return "not-running";
 	if (result.rows[0].full) return "full";
 	forgetPeerInboxObservation(sessionId);
+	noteSessionsChanged(userId);
 	await wakeConversationProgress();
 	return "queued";
 }
@@ -173,6 +175,7 @@ export async function updateQueuedUserMessage(
 	);
 	if (!result.rowCount) return false;
 	forgetPeerInboxObservation(sessionId);
+	noteSessionsChanged(userId);
 	await wakeConversationProgress();
 	return true;
 }

@@ -5,6 +5,7 @@ import {
 } from "#/domain/archive";
 import { NOT_CANARY_CHAT } from "./canary-chat";
 import { database } from "./database";
+import { noteProjectsChanged, noteSessionsChanged } from "./list-change-notes";
 
 /** Archives (or restores) a root chat; false when it is not this user's. */
 export async function setChatArchived(
@@ -19,6 +20,7 @@ export async function setChatArchived(
 		   and chat_role is distinct from 'canary' returning id`,
 		[userId, sessionId, archived],
 	);
+	if (result.rows[0]) noteSessionsChanged(userId);
 	return Boolean(result.rows[0]);
 }
 
@@ -33,6 +35,7 @@ export async function setProjectArchived(
 		 where id=$2 and user_id=$1 returning id`,
 		[userId, projectId, archived],
 	);
+	if (result.rows[0]) noteProjectsChanged(userId);
 	return Boolean(result.rows[0]);
 }
 
