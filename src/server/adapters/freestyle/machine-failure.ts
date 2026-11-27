@@ -142,7 +142,9 @@ export function machineStartUnstartable(error: unknown): boolean {
 		// 2026-11-16: a chat stuck on "isn't responding" for hours, its VM's
 		// host full, because neither failure counted and it was never replaced.
 		HOST_CANNOT_RUN_VM.test(text) ||
-		/FreestyleApiError 5\d\d|PROVIDER_TIMEOUT/.test(detail)
+		// Any other provider-reported failure of the VM's own start (a 400/409/
+		// 410/422 body or a 5xx): a new VM may succeed. Auth and quota never.
+		/FreestyleApiError (?:4(?:00|09|10|22)|5\d\d)|PROVIDER_TIMEOUT/.test(detail)
 	);
 }
 

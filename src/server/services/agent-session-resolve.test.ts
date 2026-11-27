@@ -29,6 +29,10 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 	saveAgentSessionProviderRef: vi.fn(async () => undefined),
 	selectAgentSessionHarness: vi.fn(),
 }));
+vi.mock("../adapters/checkpoints/storage", async (importOriginal) => ({
+	...(await importOriginal<object>()),
+	checkpointStorageConfigured: () => false,
+}));
 vi.mock("#/domain/project-workspace", () => ({
 	workspaceEnvironmentIsReady: () => true,
 }));
@@ -214,4 +218,34 @@ it("starts a fresh copy's saved services to the end even if the turn stops", asy
 			"services started",
 		),
 	);
+});
+
+it("replaces a retained VM that the provider deleted instead of failing the turn", async () => {
+	const gone = Object.assign(new Error("not found"), {
+		name: "WorkspaceProvisionError",
+		detail: "FreestyleApiError 404 NOT_FOUND /v5/vms/vm-1: not found: vm vm-1",
+	});
+	const provisioned: string[] = [];
+	const machines = {
+		restoreRetainedSession: async () => "vm-1",
+		ensureRunning: async (id: string) => {
+			if (id === "vm-1") throw gone;
+		},
+		snapshotEnvironment: async () => "snap",
+		provisionSession: async (slug: string) => {
+			provisioned.push(slug);
+			return "vm-new";
+		},
+		rebindRetainedSession: async () => {},
+		exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+		writeTextFile: async () => {},
+	};
+	const bound = await bindAgentSessionMachine(machines as never, {
+		userId: "owner",
+		projectId: "project",
+		harness: "api",
+		sessionId: "chat",
+	});
+	expect(bound.providerRef).toBe("vm-new");
+	expect(provisioned).toHaveLength(1);
 });

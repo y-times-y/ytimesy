@@ -195,3 +195,40 @@ describe("replacing a VM that cannot start", () => {
 		expect(f.calls.provisioned).toEqual(["ytimesy-ag-1111111122223333"]);
 	});
 });
+
+describe("a deleted VM with no checkpoint", () => {
+	it("is replaced from the snapshot instead of failing the turn", async () => {
+		const gone = new Error("404 not found: vm gone-vm");
+		const saved: string[] = [];
+		const result = await executeSessionMachinePlan({
+			machines: {
+				snapshotEnvironment: async () => "snap-1",
+				provisionSession: async (slug: string) => WorkspaceId(`vm-for-${slug}`),
+				ensureRunning: async (id: string) => {
+					if (id === "gone-vm") throw gone;
+					return WorkspaceId(id);
+				},
+				exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+				writeTextFile: async () => {},
+				rebindRetainedSession: async () => {},
+			},
+			sessionId: SESSION,
+			sessionProviderRef: "gone-vm",
+			replaceMissingReadOnly: true,
+			restoreMissingWorkspace: async () => {
+				throw new Error(
+					"No checkpoint exists for the lost workspace; recovery stopped without discarding edits.",
+				);
+			},
+			workspaceId: "ws-1",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			saveTemplateSnapshot: async () => undefined,
+			saveSessionProviderRef: async (ref: string) => {
+				saved.push(ref);
+			},
+		} as never);
+		expect(result.planKind).toBe("recover-read-only");
+		expect(saved).toEqual([result.providerRef]);
+	});
+});

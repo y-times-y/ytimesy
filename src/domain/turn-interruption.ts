@@ -1,4 +1,8 @@
-import { MachineNotResponding, TURN_NOT_STARTED } from "./api-turn-failure";
+import {
+	MachineNotResponding,
+	machineFailureRetryable,
+	TURN_NOT_STARTED,
+} from "./api-turn-failure";
 import { CoordinationFailure } from "./conversation-turn-control";
 
 /**
@@ -57,6 +61,7 @@ const MACHINE_START_THAT_PASSES =
 	/started but is not answering|did not become running|stopped before it became running|earlier start of this machine was still finishing|another operation is updating this machine|did not finish resizing|sizing did not complete/i;
 
 export function isMachineRefusalThatPasses(cause: unknown, depth = 0): boolean {
+	if (depth === 0 && machineFailureRetryable(cause)) return true;
 	if (depth > 4 || !(cause instanceof Error)) return false;
 	const tag = (cause as { _tag?: unknown })._tag;
 	if (

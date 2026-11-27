@@ -66,3 +66,22 @@ Production, last 7 days (~2,800 turns): "could not start" 7 turns, "could not be
 Root cause of "started but did not answer yet": `waitUntilGuestAnswers` gave a started guest only ~16 s of probing, then failed the start, and that failure was not transient, so the step failed after 3 retries (red, manual Retry). Now: the probe window is ~70 s of backoff (`GUEST_PROBE_RETRY_DELAYS_MS`), "did not become running"/"started but is not answering" are `isMachineRefusalThatPasses` (step retried for 15 min, VM restarted/replaced by the existing start path), shown as "Starting your workspace…". Each retry is an `interruption_event` `machine-start-retry`; a failure after the window is `machine-start-failed` (user-visible), counted in the digest as a rate per 1,000 turns with an owner alert above 1 (`machine-failure-rate`).
 
 Not done: Durable Object fallback for turns that do not need the VM; park-and-retry after the 15-minute window (the final text is calm and says the work is saved, but the turn is still failed); a test-only knob for a slow VM.
+
+## Every provider-reported machine error is retried (2026-11-27)
+
+Trigger: chat 21ddc421 saw "The chat's machine could not start: the machine provider reported an error" after 6 s. Cause: `FreestyleApiError 404 NOT_FOUND /v5/vms/<vm>` (the provider had deleted the chat's VM; 8 more VMs hit the same 404 in the 12 hours before). The retained-session branch of `bindAgentSessionMachine` called `ensureRunning` outside the replacement logic, so the 404 was thrown raw; the fallback text was the catch-all of `machineFailureReason`. Fixed: that branch falls through to replacement from the snapshot; a gone VM with no checkpoint (or no snapshot) continues on a fresh copy instead of failing.
+
+`machineFailureRetryable` (api-turn-failure.ts) is the rule: any machine failure is waited out by the step (15 minutes, "Starting your workspace…", `machine-start-retry/<class>` rows) except terminal ones (usage allowance, rejected machine size, missing deploy setting, GitHub fetch refusal). A VM's own 400/409/410/422/5xx start failure counts toward replacement (`machineStartUnstartable`). A turn that fails after that is `machine-start-failed/ladder-exhausted/<class>` (user-visible, in the digest rate and its alert) with calm wording.
+
+Remaining user-visible machine strings and verdicts:
+
+| Text | Verdict |
+|---|---|
+| "Couldn't start / reach your workspace right now… saved" | after the ladder; calm; no Retry wording |
+| "The chat's machine could not start: this deployment is missing a machine setting" / size rejected / usage limit | terminal on purpose, red |
+| "Couldn't get this chat's code from GitHub. Retry in a moment…" | NOT covered (GitHub access may be revoked or the repo deleted) |
+| "Couldn't set up this chat's code on its machine. Retry in a moment…" | step retried 15 min first; text still says Retry |
+| "The worker disconnected…" | covered up to 10 takeovers, then red (park-and-retry open) |
+| "automatic Git handoff failed" | NOT covered by this ladder (it waits for the machine first) |
+| "Recovering the workspace machine…" | calm status, covered |
+| "…could not start, provider at capacity, retry in a few minutes" (environment build) | NOT covered (builds, not turns) |

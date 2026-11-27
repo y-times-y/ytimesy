@@ -35,6 +35,41 @@ describe("machine start trouble is absorbed", () => {
 	});
 });
 
+describe("every provider-reported machine error is absorbed except terminal ones", () => {
+	const machine = (message: string, detail = "") =>
+		Object.assign(new Error(message), {
+			name: "WorkspaceProvisionError",
+			detail,
+		});
+	it("retries whatever the provider said: 4xx, 5xx, not found, an unknown body", () => {
+		for (const detail of [
+			"FreestyleApiError 404 NOT_FOUND /v5/vms/vm-x: not found: vm vm-x",
+			"FreestyleApiError 400 BAD_REQUEST /v5/vms: invalid snapshot",
+			"FreestyleApiError 409 CONFLICT /v5/vms/x/start",
+			"FreestyleApiError 422 UNPROCESSABLE",
+			"FreestyleApiError 500 INTERNAL_SERVER_ERROR",
+			"something nobody has seen before",
+		])
+			expect(
+				isTransientInfrastructureFailure(
+					machine("Workspace provider error", detail),
+				),
+			).toBe(true);
+		const exec = Object.assign(new Error("Workspace request (unavailable)"), {
+			name: "WorkspaceCommandError",
+		});
+		expect(isTransientInfrastructureFailure(exec)).toBe(true);
+	});
+	it("does not retry what no retry can fix", () => {
+		for (const message of [
+			"This chat's machine reached its usage limit, so it cannot start.",
+			"the provider rejected the xl machine size",
+			"this deployment must be configured",
+		])
+			expect(isTransientInfrastructureFailure(machine(message))).toBe(false);
+	});
+});
+
 describe("turn interruption rules", () => {
 	it("treats coordinator, lease and start-wait trouble as transient", () => {
 		expect(
@@ -149,7 +184,20 @@ describe("machine refusals that pass with time", () => {
 	});
 	it("does not retry a refusal that will not pass", () => {
 		expect(
-			isTransientInfrastructureFailure(provision("Choose a smaller machine")),
+			isTransientInfrastructureFailure(
+				provision("the provider rejected the xl machine size"),
+			),
 		).toBe(false);
 	});
+});
+
+it("retries a local Git step that failed on the machine, never a GitHub fetch refusal", () => {
+	expect(
+		isTransientInfrastructureFailure(new Error("Workspace Git checkout failed")),
+	).toBe(true);
+	expect(
+		isTransientInfrastructureFailure(
+			new Error("Workspace Git proxy transfer failed"),
+		),
+	).toBe(false);
 });

@@ -75,6 +75,10 @@ it("names the start failures that used to read as an unknown provider error", ()
 		],
 	] as const)
 		expect(machineFailureMessage(provisionError(raw))).toBe(
-			`The chat's machine could not start: ${reason}. Retry; your work is preserved.`,
+			// Terminal (nothing to retry): the old wording. Everything else is
+			// retried for 15 minutes first and ends calm.
+			reason === "this deployment is missing a machine setting"
+				? `The chat's machine could not start: ${reason}. Retry; your work is preserved.`
+				: "Couldn't start your workspace right now. Your message and work are saved; ytimesy tries again when you send your next message.",
 		);
 });

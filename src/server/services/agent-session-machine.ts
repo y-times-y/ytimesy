@@ -354,8 +354,19 @@ export async function bindAgentSessionMachine(
 		const recovered = await turnSpan("bind:retained", async () =>
 			machines.restoreRetainedSession?.(input.userId, session.id, providerRef),
 		);
+		let running = false;
 		if (recovered) {
-			await machines.ensureRunning(WorkspaceId(recovered));
+			try {
+				await machines.ensureRunning(WorkspaceId(recovered));
+				running = true;
+			} catch (cause) {
+				// The provider deleted this VM (production 2026-11-27: a 404 here
+				// failed a turn in red). Fall through: the plan below replaces
+				// it from the snapshot like any other missing VM.
+				if (!workspaceLooksGone(failureMessage(cause))) throw cause;
+			}
+		}
+		if (recovered && running) {
 			await applyProjectNetworkPolicy(machines, policy, recovered);
 			return {
 				session: { ...selectedSession, providerRef: recovered },
@@ -758,7 +769,20 @@ export async function executeSessionMachinePlan(input: {
 					replacement,
 				);
 				await resetCopiedSessionScratch(input.machines, replacement);
-				await input.restoreMissingWorkspace(replacement);
+				try {
+					await input.restoreMissingWorkspace(replacement);
+				} catch (restoreFailure) {
+					// No checkpoint: the VM and its unpushed edits are already gone,
+					// so refusing helps nobody. A root chat continues on the fresh
+					// copy (its committed turns are on its branch).
+					if (
+						!input.replaceMissingReadOnly ||
+						!/No checkpoint exists/.test(failureMessage(restoreFailure))
+					)
+						throw restoreFailure;
+					await input.saveSessionProviderRef(replacement);
+					return { providerRef: replacement, planKind: "recover-read-only" };
+				}
 				await input.saveSessionProviderRef(replacement);
 				return { providerRef: replacement, planKind: "recover-checkpoint" };
 			}
@@ -796,6 +820,28 @@ export async function executeSessionMachinePlan(input: {
 					planKind: "replace-unstartable",
 					replacedProviderRef: plan.providerRef,
 				};
+			}
+			// A root chat whose VM is gone and whose project has no snapshot yet
+			// boots fresh (its committed turns are on its branch) instead of failing.
+			if (
+				input.replaceMissingReadOnly &&
+				gone &&
+				!snapshotId &&
+				input.freshBoot
+			) {
+				const booted = await copyAgentSessionFromTemplate(
+					input,
+					await input.freshBoot.snapshotId(),
+				);
+				await input.freshBoot.record();
+				await input.machines.rebindRetainedSession?.(
+					input.sessionId,
+					plan.providerRef,
+					booted,
+				);
+				await input.saveSessionProviderRef(booted);
+				await resetCopiedSessionScratch(input.machines, booted);
+				return { providerRef: booted, planKind: "recover-read-only" };
 			}
 			if (!input.replaceMissingReadOnly || !gone || !snapshotId) {
 				throw cause;

@@ -21,6 +21,7 @@ import {
 	isYSquaredNoWorkspace,
 	LifecycleHookRefusal,
 	MachineNotResponding,
+	machineFailureClass,
 	machineFailureMessage,
 	SafeApiModelFailure,
 	TurnNotStarted,
@@ -3819,7 +3820,7 @@ async function runApiTurnAttempt(
 						kind: "machine-start-retry",
 						turnId: turn.id,
 						sessionId: turn.session_id,
-						cause: "start-not-finished",
+						cause: machineFailureClass(platformRestart) ?? "start-not-finished",
 						recovered: true,
 						userVisible: false,
 					}).catch(() => {});
@@ -4257,7 +4258,7 @@ async function runApiTurnAttempt(
 				kind: MACHINE_START_FAILED_KIND,
 				turnId: turn.id,
 				sessionId: turn.session_id,
-				cause: "ladder-exhausted",
+				cause: `ladder-exhausted/${machineFailureClass(error) ?? "other"}`,
 				recovered: false,
 				userVisible: true,
 			}).catch(() => {});
