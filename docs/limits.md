@@ -82,7 +82,7 @@ wake.
 | Runtime per VM | a native cap set from the user's funded time (observed 2,628 s on one VM on 2026-11-25) | `usage-admission.ts` | The VM stops at the cap; the next operation buys more, or is refused when the user's window is used up |
 | Snapshots | 1,000 *(provider)* | Freestyle | Not used for idle chats (recycling is stopped) |
 | New machines per user per hour | 60, fixed window | `USER_ACTION_LIMITS["vm-create"]`, `src/domain/user-action-rate.ts` | "This account started too many new machines in the last hour. Wait a few minutes, then retry; your work is preserved." A create the provider refuses is refunded, so retries do not spend the count |
-| Machines per user | no count cap found; each chat has one workspace VM, helpers may share it | | Bounded by the account limits above |
+| Machines per user | no count cap found; each chat has one workspace VM; read-only helpers share it, each writer subagent forks its own | | Bounded by the account limits above |
 | Idle pause | 60 s without traffic; 180 s after a background command | `PRODUCT_IDLE_TIMEOUT_SECONDS`, `BACKGROUND_IDLE_TIMEOUT_SECONDS` | A paused VM resumes in about a second |
 | Auto delete | 30 days without running | `PRODUCT_AUTO_DELETE_SECONDS` | Older VMs paused before 2026-11-12 keep 90 days until they next run |
 | Command waits | 600 s per command, 300 s per exec | `COMMAND_WAIT_MAX_SECONDS`, `FREESTYLE_EXEC_TIMEOUT_MS_MAX` | The command continues in the background |
@@ -250,6 +250,26 @@ account offset Freestyle usage until they expire
 Cost-down at 100 users is about $869 a month, 13% under the target.
 With a 1 vCPU / 2 GiB default size and 30 VM-hours per user it is about
 $539.
+
+**Writer subagents (machine forks).** A writer subagent forks the parent's
+machine (`forkRunningVm`: snapshot of disk and memory, a new VM, the snapshot
+deleted); read-only helpers share the parent's machine. The numbers above leave
+writers out. A fork bills compute like any VM while it lives and counts as a
+running and a saved VM, whatever the worktree arrangement (Freestyle bills
+allocated vCPU-hours wherever they run). Estimates at 100 users, cost-down
+design, extra VM-hours per user per month on top of the 40:
+
+| Writers | Extra VM-hours | Total / month (2 vCPU / 4 GiB) | Total / month (1 vCPU / 2 GiB) | Hobby fit |
+|---|---|---|---|---|
+| None | 0 | $869 | $539 | yes |
+| 1 extra writer for 20% of executing time | 8 | about $975 | about $592 | yes |
+| 3 parallel writers for 30% of executing time | 36 | about $1,345 | about $777 | tight: peak running 10 x (1 + 3) = 40, exactly the cap; transient forks push saved VMs past 200 |
+
+To stay under $1,000: count forks against the per-user running cap of 3, allow
+about 1 writer per user by default, use read-only helpers for research and
+review (they add no machine), and consider heavy writer work on AWS spot (far
+cheaper per vCPU-hour; needs measuring, and writers rely on Freestyle's fork).
+Tree limit: 8 live agents per tree (`SUBAGENT_TREE_LIVE_LIMIT`).
 
 **Runway, cumulative cash spend December 2026 to September 2027** (flat
 monthly cost at that user count; Freestyle credits not deducted):
