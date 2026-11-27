@@ -85,7 +85,12 @@ export function hubReadsToMake(input: {
 		if (isTurnRunning(turnStatus)) {
 			if (!isTurnRunning(input.sidebarStatuses.get(id) ?? "idle"))
 				refreshList = true;
-		} else if (input.backgroundChatIds.includes(id)) reads.add(id);
+		} else {
+			// Settled: the sidebar's status (finished, needs you) changed too.
+			if (isTurnRunning(input.sidebarStatuses.get(id) ?? "idle"))
+				refreshList = true;
+			if (input.backgroundChatIds.includes(id)) reads.add(id);
+		}
 	}
 	if (message.full)
 		for (const id of input.backgroundChatIds)

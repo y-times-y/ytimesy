@@ -260,6 +260,9 @@ import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import { chatCacheFor, clearChatCache } from "../sessions/chat-cache";
 import { chatListRetry } from "../sessions/chat-list-retry";
+
+/** A visible tab re-reads the project and chat lists this often (no hub signal covers them all); hidden tabs do not poll. */
+const SIDEBAR_REVALIDATE_MS = 60_000;
 import { ChatRefreshingContext } from "../sessions/chat-refreshing";
 import { chatSideKeys } from "../sessions/chat-side-queries";
 import {
@@ -593,6 +596,10 @@ export function WorkspaceHome({
 		queryKey: ["projects"],
 		queryFn: () => requestJson<Project[]>("/api/projects"),
 		initialData: initialProjects,
+		// Catch-all: a project added elsewhere has no hub signal, so a visible
+		// tab re-reads the list now and then (and on focus).
+		refetchInterval: SIDEBAR_REVALIDATE_MS,
+		refetchOnWindowFocus: true,
 		retry: retryTransientRead,
 		retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 2000),
 	});
@@ -665,6 +672,8 @@ export function WorkspaceHome({
 		// The sidebar reads every project's list (below); switching to a
 		// project does not read its list again within that window.
 		staleTime: 30_000,
+		refetchInterval: SIDEBAR_REVALIDATE_MS,
+		refetchOnWindowFocus: true,
 		...chatListRetry,
 	});
 	// Every project's chats, for the sidebar's Recent list and project order;
@@ -675,6 +684,8 @@ export function WorkspaceHome({
 			queryFn: () =>
 				listProjectAgentSessions({ data: { projectId: project.id } }),
 			staleTime: 30_000,
+			refetchInterval: SIDEBAR_REVALIDATE_MS,
+			refetchOnWindowFocus: true,
 			...chatListRetry,
 		})),
 	});
