@@ -252,3 +252,17 @@ describe("claudeCodeBridgeToolSet", () => {
 		).toEqual(["agent", "bash", "read", "run_code", "update_plan"]);
 	});
 });
+
+describe("claudeCodeDelegation", () => {
+	it("teaches the agent tools by their mcp names only when the run is offered them", async () => {
+		const { claudeCodeDelegation } = await import("./claude-code-turn");
+		const main = claudeCodeDelegation(["bash", "agent", "agent_send"], null);
+		expect(main).toContain("mcp__ytimesy__agent");
+		expect(main).toContain("one reader per file or question");
+		expect(main).toContain("one writer per part");
+		expect(main).not.toMatch(/sparingly|one at a time/i);
+		expect(claudeCodeDelegation(["bash"], null)).toBeUndefined();
+		const reader = claudeCodeDelegation(["agent"], "researcher") ?? "";
+		expect(reader).not.toContain("one writer per part");
+	});
+});

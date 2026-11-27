@@ -539,6 +539,23 @@ describe("Claude Code runner", () => {
 		}
 	});
 
+	it("puts the delegation rules in the system prompt Claude reads, and none when there is no agent tool", async () => {
+		const withRules = new FakeVm();
+		withRules.emit(init, ...work, success);
+		withRules.status = "0";
+		await runClaudeCodeStep({
+			...input(withRules),
+			delegation: "Subagents: call mcp__ytimesy__agent. RULES-HERE",
+		});
+		const system = withRules.files.get(`${RUNS}/1/system`) ?? "";
+		expect(system).toContain("RULES-HERE");
+		const without = new FakeVm();
+		without.emit(init, ...work, success);
+		without.status = "0";
+		await runClaudeCodeStep(input(without));
+		expect(without.files.get(`${RUNS}/1/system`)).not.toContain("RULES-HERE");
+	});
+
 	it("runs the CLI with a grant, never the token, and maps its stream", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, ...work, success);
