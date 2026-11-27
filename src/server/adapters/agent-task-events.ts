@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { jsonbText } from "#/domain/jsonb";
 import { hubTopic } from "#/domain/user-hub";
 import { database } from "./database";
+import { noteSessionsChanged } from "./list-change-notes";
 import { noteUserHub } from "./user-hub-notes";
 
 export type AgentTaskEventType = "completed" | "failed" | "blocked";
@@ -90,6 +91,7 @@ export async function saveAgentTaskBlockedEvent(input: {
 	const row = result.rows[0];
 	if (!row) return null;
 	noteUserHub(row.user_id, [hubTopic.agents(row.parent_session_id)]);
+	noteSessionsChanged(row.user_id);
 	return row.id;
 }
 

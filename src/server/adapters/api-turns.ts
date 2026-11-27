@@ -70,6 +70,7 @@ import {
 import { infrastructureAdmissionEnabled } from "./freestyle/usage-admission";
 import { evaluationRunForTask } from "./harness-evaluation";
 import { assertUsageWindowsOpen } from "./infrastructure-usage";
+import { noteSessionsChanged } from "./list-change-notes";
 import { observePeerInbox } from "./peer-inbox-observation";
 import { inboxId } from "./queued-user-messages";
 import { trainingEligibleAtTurnStart } from "./training-consent";
@@ -551,6 +552,9 @@ export async function enqueueApiTurn(input: {
 		}
 	}
 	if (turnId && started) void captureTurnStarted(started, turnId, new Date());
+	// A turn started (a person, a queued message delivered, Y² or the crew
+	// waking a thread): the lists show it running at once.
+	if (turnId) noteSessionsChanged(input.userId);
 	if (turnId && executor === "node" && runsLocally) {
 		const { runQueuedLocalTurn } = await import("../jobs/local-turn");
 		// Runs for the turn's length, past this request's response.
@@ -1416,6 +1420,10 @@ const SETTLED_TURN_COLUMNS =
 
 function captureSettledTurns(rows: readonly SettledTurnRow[]) {
 	const endedAt = new Date();
+	// Every way a turn settles (box, Durable Object, lease sweep, stop) ends
+	// here: the open tabs' lists show finished, failed or needs you at once.
+	for (const userId of new Set(rows.map((row) => row.user_id)))
+		noteSessionsChanged(userId);
 	for (const row of rows)
 		void captureTurnFinished(
 			{

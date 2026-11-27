@@ -36,6 +36,7 @@ import { captureServerAnalytics } from "./analytics";
 import { NOT_CANARY_CHAT } from "./canary-chat";
 import { database } from "./database";
 import { recordPageRead } from "./database-byte-accounting";
+import { noteSessionsChanged } from "./list-change-notes";
 import { heldForSetupSql } from "./queued-user-messages";
 import {
 	boundedPageStartSql,
@@ -105,6 +106,7 @@ export async function reusableEmptyChat(
 		 returning ${SESSION_COLUMNS.replace(",items,", ",'[]'::jsonb as items,")}`,
 		[userId, projectId, harness, claimTitle ?? null],
 	);
+	if (result.rows[0]) noteSessionsChanged(userId, projectId);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
@@ -192,6 +194,7 @@ export async function titleUntitledAgentSession(
 		"/* titleUntitledAgentSession */ update agent_session set title=$3 where user_id=$1 and id=$2 and title='New session'",
 		[userId, sessionId, title],
 	);
+	if (result.rowCount) noteSessionsChanged(userId);
 	return (result.rowCount ?? 0) > 0;
 }
 
@@ -1257,6 +1260,7 @@ export async function deleteAgentSessionForOwner(
 		`/* deleteAgentSessionForOwner */ delete from agent_session where id=$1 and user_id=$2`,
 		[sessionId, userId],
 	);
+	noteSessionsChanged(userId);
 }
 
 export async function insertAgentSession(input: {
@@ -1303,6 +1307,8 @@ export async function insertAgentSession(input: {
 	const session = toSession(result.rows[0]);
 	if (session.parentSessionId)
 		noteUserHub(session.userId, [hubTopic.agents(session.parentSessionId)]);
+	// A new thread (by a person, another session, or Y²) joins every open tab's list.
+	noteSessionsChanged(session.userId, session.projectId);
 	void captureServerAnalytics(
 		session.userId,
 		"agent_created",
@@ -1360,6 +1366,7 @@ export async function claimInitialSetupChat(input: {
 	);
 	if (inserted.rows[0]) {
 		const session = toSession(inserted.rows[0]);
+		noteSessionsChanged(session.userId, session.projectId);
 		void captureServerAnalytics(
 			session.userId,
 			"agent_created",
@@ -1399,6 +1406,7 @@ export async function saveAgentTaskState(
 	const session = result.rows[0] ? toSession(result.rows[0]) : null;
 	if (session?.parentSessionId)
 		noteUserHub(session.userId, [hubTopic.agents(session.parentSessionId)]);
+	if (session) noteSessionsChanged(session.userId, session.projectId);
 	return session;
 }
 

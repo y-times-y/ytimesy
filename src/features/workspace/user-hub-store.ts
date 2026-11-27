@@ -38,6 +38,8 @@ export type HubMemory = {
 	readonly signals: Readonly<Record<string, number>>;
 	readonly turns: Readonly<Record<string, SessionTurnStatus>>;
 	readonly wholeMaps: number;
+	/** The hub's last event version (HubStateMessage.seq); none from an older hub. */
+	readonly seq?: number;
 };
 export const EMPTY_HUB_MEMORY: HubMemory = {
 	signals: {},
@@ -66,10 +68,20 @@ export function hubChangeFromMessage(
 	if (message.full) {
 		const wholeMaps = memory.wholeMaps + 1;
 		return {
-			memory: { signals: { ...(message.signals ?? {}) }, turns, wholeMaps },
+			memory: {
+				signals: { ...(message.signals ?? {}) },
+				turns,
+				wholeMaps,
+				seq: message.seq,
+			},
 			change: wholeMaps > 1 ? { kind: "resync" } : null,
 		};
 	}
+	// A version skipped: a push was lost, so anything may have changed.
+	const gap =
+		message.seq !== undefined &&
+		memory.seq !== undefined &&
+		message.seq !== memory.seq + 1;
 	const topics = new Set<string>();
 	for (const [topic, at] of Object.entries(message.signals ?? {}))
 		if (memory.signals[topic] !== at) topics.add(topic);
@@ -80,8 +92,13 @@ export function hubChangeFromMessage(
 			...memory,
 			signals: { ...memory.signals, ...(message.signals ?? {}) },
 			turns,
+			seq: message.seq ?? memory.seq,
 		},
-		change: topics.size ? { kind: "topics", topics } : null,
+		change: gap
+			? { kind: "resync" }
+			: topics.size
+				? { kind: "topics", topics }
+				: null,
 	};
 }
 

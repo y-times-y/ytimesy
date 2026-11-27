@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { HubConnection } from "./user-hub-store";
+import { hubTopic } from "#/domain/user-hub";
+import type { HubChange, HubConnection } from "./user-hub-store";
 
 /**
  * A visible tab re-reads the project and chat lists this often. No hub signal
@@ -12,6 +13,26 @@ export const SIDEBAR_REVALIDATE_MS = 60_000;
 
 /** A socket that stays down this long shows the calm notice; shorter blips stay silent. */
 export const RECONNECT_NOTICE_AFTER_MS = 4_000;
+
+/**
+ * The query keys a hub change makes stale: exactly the lists it names. A
+ * resync (reconnect or a skipped version) reads them all. The open chat
+ * reads itself over its own socket (the Overview shares the chat lists' keys) and the turn topics (chat:<id>).
+ */
+export function listQueryKeysToInvalidate(
+	change: HubChange,
+): readonly (readonly string[])[] {
+	if (change.kind === "resync") return [["projects"], ["agent-sessions"]];
+	const keys: (readonly string[])[] = [];
+	const sessionsPrefix = `${hubTopic.sessionsAny}:`;
+	for (const topic of change.topics) {
+		if (topic === hubTopic.projects) keys.push(["projects"]);
+		else if (topic === hubTopic.sessionsAny) keys.push(["agent-sessions"]);
+		else if (topic.startsWith(sessionsPrefix))
+			keys.push(["agent-sessions", topic.slice(sessionsPrefix.length)]);
+	}
+	return keys;
+}
 
 /** After a project is added, its row and its chats (the Super agent) are read again. */
 export async function refreshAfterProjectAdded(client: QueryClient) {

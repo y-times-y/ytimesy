@@ -5,6 +5,7 @@ import type {
 	RepositoryChoice,
 } from "../../domain/projects";
 import { database } from "./database";
+import { noteProjectsChanged } from "./list-change-notes";
 
 const projectColumns = `p.id,p.name,p.repository_id::float8 as "repositoryId",p.installation_id::float8 as "installationId",p.full_name as "fullName",p.branch,p.machine_size as "machineSize",p.y_enabled as "yEnabled",
   (select json_agg(json_build_object('repositoryId',r.repository_id::float8,'installationId',r.installation_id::float8,'fullName',r.full_name,'branch',r.branch) order by r.position)
@@ -75,6 +76,7 @@ export async function saveProjectGroup(
 	);
 	const project = await projectForOwner(userId, id);
 	if (!project) throw new Error("Project could not be saved.");
+	noteProjectsChanged(userId);
 	return project;
 }
 /**
@@ -165,6 +167,7 @@ export async function saveProject(
 			branch,
 		],
 	);
+	noteProjectsChanged(userId);
 	return result.rows[0];
 }
 
@@ -175,4 +178,5 @@ export async function deleteProjectForOwner(userId: string, projectId: string) {
 	);
 	if (!result.rows[0])
 		throw new Response("Project is not available.", { status: 403 });
+	noteProjectsChanged(userId);
 }

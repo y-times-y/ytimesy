@@ -141,6 +141,12 @@ export const hubTopic = {
 	fork: (sessionId: string) => `fork:${sessionId}`,
 	/** A push card of this user was answered or settled (another may now be outdated). */
 	push: "push",
+	/** One project's chat list changed: a thread created, renamed, archived, started, settled, needs you. */
+	sessions: (projectId: string) => `sessions:${projectId}`,
+	/** A chat changed and its project is not at hand: every chat list reads again. */
+	sessionsAny: "sessions",
+	/** The project list changed: added, archived, removed, its Super agent row. */
+	projects: "projects",
 	/**
 	 * A chat's turn status changed. Made by the tab from `chats`, never sent
 	 * as a signal, so turn changes and signals are watched alike.
@@ -201,12 +207,17 @@ export type HubStateMessage = {
 	readonly signals?: HubSignals;
 	/** The deploy the hub runs (the web Worker's too: one build id per deploy). */
 	readonly build?: string;
+	/**
+	 * The hub's event version: grows by one with every pushed message and is
+	 * the current one on a whole map, so a tab that skipped one resyncs.
+	 */
+	readonly seq?: number;
 };
 
 export function hubStateMessage(
 	chats: HubStatusEntries,
 	full = false,
-	extra: { signals?: HubSignals; build?: string } = {},
+	extra: { signals?: HubSignals; build?: string; seq?: number } = {},
 ) {
 	return JSON.stringify({
 		type: "state",
@@ -214,6 +225,7 @@ export function hubStateMessage(
 		chats,
 		...(extra.signals ? { signals: extra.signals } : {}),
 		...(extra.build ? { build: extra.build } : {}),
+		...(extra.seq !== undefined ? { seq: extra.seq } : {}),
 	} satisfies HubStateMessage);
 }
 
@@ -262,5 +274,8 @@ export function parseHubStateMessage(data: unknown): HubStateMessage | null {
 		chats,
 		...(signals ? { signals } : {}),
 		...(build ? { build } : {}),
+		...(typeof message.seq === "number" && Number.isSafeInteger(message.seq)
+			? { seq: message.seq }
+			: {}),
 	};
 }

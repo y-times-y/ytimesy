@@ -261,8 +261,6 @@ import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import { chatCacheFor, clearChatCache } from "../sessions/chat-cache";
 import { chatListRetry } from "../sessions/chat-list-retry";
 
-/** A visible tab re-reads the project and chat lists this often (no hub signal covers them all); hidden tabs do not poll. */
-const SIDEBAR_REVALIDATE_MS = 60_000;
 import { ChatRefreshingContext } from "../sessions/chat-refreshing";
 import { chatSideKeys } from "../sessions/chat-side-queries";
 import {
@@ -316,7 +314,10 @@ import {
 	STREAMED_CHANGES_READ_MS,
 } from "./git-changes-polling";
 import { UsageWarningBanner } from "./infrastructure-usage";
-import { SIDEBAR_REVALIDATE_MS } from "./live-freshness";
+import {
+	listQueryKeysToInvalidate,
+	SIDEBAR_REVALIDATE_MS,
+} from "./live-freshness";
 import { openLiveProgress } from "./live-progress-connection";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import {
@@ -2345,6 +2346,17 @@ export function WorkspaceHome({
 			refetchIntervalInBackground: false,
 		})),
 	});
+	// A pushed list change (thread created, renamed, archived, started,
+	// settled, needs you; a project added) reads exactly the lists it names;
+	// a reconnect or a skipped event version reads them all.
+	useEffect(
+		() =>
+			userHubStore.watch((change) => {
+				for (const queryKey of listQueryKeysToInvalidate(change))
+					void queryClient.invalidateQueries({ queryKey: [...queryKey] });
+			}),
+		[queryClient],
+	);
 	const hubSeenWholeMap = useRef(false);
 	const onHubState = useRef<(message: HubStateMessage) => void>(() => {});
 	onHubState.current = (message) => {

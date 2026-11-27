@@ -168,3 +168,47 @@ describe("coming back to a tab that was away", () => {
 		expect(tabWasAway(null, 99_999)).toBe(false);
 	});
 });
+
+describe("event versions detect a gap", () => {
+	const start = hubChangeFromMessage(EMPTY_HUB_MEMORY, {
+		type: "state",
+		full: true,
+		chats: {},
+		signals: {},
+		seq: 10,
+	});
+	it("takes the next version as a normal change", () => {
+		const next = hubChangeFromMessage(start.memory, {
+			type: "state",
+			chats: {},
+			signals: { projects: 1 },
+			seq: 11,
+		});
+		expect(next.change).toEqual({
+			kind: "topics",
+			topics: new Set(["projects"]),
+		});
+		expect(next.memory.seq).toBe(11);
+	});
+	it("asks a resync when a version was skipped, even if the message moved nothing", () => {
+		const gap = hubChangeFromMessage(start.memory, {
+			type: "state",
+			chats: {},
+			signals: { projects: 1 },
+			seq: 14,
+		});
+		expect(gap.change).toEqual({ kind: "resync" });
+		expect(gap.memory.seq).toBe(14);
+	});
+	it("ignores versions from a hub that sends none", () => {
+		const plain = hubChangeFromMessage(EMPTY_HUB_MEMORY, {
+			type: "state",
+			chats: {},
+			signals: { projects: 1 },
+		});
+		expect(plain.change).toEqual({
+			kind: "topics",
+			topics: new Set(["projects"]),
+		});
+	});
+});

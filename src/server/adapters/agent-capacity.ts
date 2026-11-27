@@ -1,5 +1,6 @@
 import { hubTopic } from "#/domain/user-hub";
 import { database } from "./database";
+import { noteSessionsChanged } from "./list-change-notes";
 import { noteUserHub } from "./user-hub-notes";
 
 export function modelConcurrencyLimits() {
@@ -40,6 +41,7 @@ export async function reserveAgentTaskStart(
 	const parent = (result.rows[0] as { parent_session_id?: string } | undefined)
 		?.parent_session_id;
 	if (parent) noteUserHub(userId, [hubTopic.agents(parent)]);
+	noteSessionsChanged(userId, projectId);
 }
 
 /**
@@ -64,5 +66,6 @@ export async function releaseAgentTaskStart(
 	const parent = (result.rows[0] as { parent_session_id?: string } | undefined)
 		?.parent_session_id;
 	if (parent) noteUserHub(userId, [hubTopic.agents(parent)]);
+	if (result.rowCount) noteSessionsChanged(userId, projectId);
 	return !!result.rowCount;
 }

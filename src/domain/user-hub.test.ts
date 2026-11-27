@@ -231,3 +231,24 @@ describe("parseHubNote", () => {
 		expect(parseHubNote(null)).toBeNull();
 	});
 });
+
+describe("list topics and the event version", () => {
+	it("names list changes as valid hub topics", () => {
+		for (const topic of [
+			hubTopic.sessions("p-1"),
+			hubTopic.sessionsAny,
+			hubTopic.projects,
+		])
+			expect(isHubTopic(topic)).toBe(true);
+		expect(hubTopic.sessions("p-1")).toBe("sessions:p-1");
+	});
+	it("carries a version in every state message and parses it back", () => {
+		const message = parseHubStateMessage(
+			hubStateMessage({}, false, { signals: { projects: 3 }, seq: 7 }),
+		);
+		expect(message?.seq).toBe(7);
+		expect(
+			parseHubStateMessage(hubStateMessage({}, true))?.seq,
+		).toBeUndefined();
+	});
+});
