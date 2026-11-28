@@ -272,12 +272,20 @@ export function withoutAgentNames(
 	return new Map([...threads].filter(([name]) => !own.has(name)));
 }
 
+export type MarkdownImage = {
+	readonly src: string;
+	readonly alt?: string;
+	readonly width?: string | number;
+	readonly height?: string | number;
+};
+
 export function AgentMarkdown({
 	text,
 	streaming = false,
 	fileChanges = [],
 	onOpenFile,
 	fileMentions = true,
+	renderImage,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -285,6 +293,8 @@ export function AgentMarkdown({
 	onOpenFile?: (path: string) => void;
 	/** Off for text that is not about this workspace, such as GitHub comments. */
 	fileMentions?: boolean;
+	/** Draws a Markdown image itself (a file preview); otherwise images are links. */
+	renderImage?: (image: MarkdownImage) => ReactNode;
 }) {
 	const mentions = useContext(AgentMentionContext);
 	const agents = mentions?.agents;
@@ -458,7 +468,9 @@ export function AgentMarkdown({
 					(typeof name === "string" && agentChip(name)) || <span {...props} />
 				);
 			},
-			img: ({ src, alt }) => {
+			img: ({ src, alt, width, height }) => {
+				if (renderImage && typeof src === "string")
+					return renderImage({ src, alt, width, height });
 				const safe = safeExternalLink(
 					typeof src === "string" ? src : undefined,
 				);
@@ -481,6 +493,7 @@ export function AgentMarkdown({
 		sharedNames,
 		allThreads,
 		streaming,
+		renderImage,
 	]);
 	return (
 		<Streamdown
