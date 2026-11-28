@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { childTaskEventQueueText } from "./child-task-activity";
 import type { SessionItem } from "./session-item";
 import {
 	latestTranscriptPage,
@@ -6,6 +7,7 @@ import {
 	progressPage,
 	SNAPSHOT_TURNS,
 	snapshotLeavesGap,
+	TRANSCRIPT_PAGE_ANCHOR_ITEMS,
 	TRANSCRIPT_PAGE_BYTES,
 	TRANSCRIPT_PAGE_ITEMS,
 	TRANSCRIPT_PAGE_TURNS,
@@ -226,5 +228,75 @@ describe("a short live snapshot onto the view the browser already has", () => {
 		expect(
 			snapshotLeavesGap(turns(5, 9), { items: [], hasOlderItems: true }),
 		).toBe(false);
+	});
+});
+
+describe("pages over a chat that wakes constantly (the Super agent)", () => {
+	const wake = (n: number): SessionItem => ({
+		kind: "userMessage",
+		id: `wake-${n}` as never,
+		text: childTaskEventQueueText(
+			`6f1c2a9e-0d4b-4c51-9a63-2f8f5b1d${String(n).padStart(4, "0")}`,
+		),
+	});
+	const person = (id: string): SessionItem => ({
+		kind: "userMessage",
+		id: id as never,
+		text: `person ${id}`,
+	});
+	const reply = (id: string): SessionItem => ({
+		kind: "agentMessage",
+		id: id as never,
+		text: `reply ${id}`,
+	});
+	const wakeTurns = (from: number, count: number) =>
+		Array.from({ length: count }, (_, index) => [
+			wake(from + index),
+			reply(`a-${from + index}`),
+		]).flat();
+
+	it("counts the person's turns, so their latest message is on the open page", () => {
+		const items = [
+			person("p1"),
+			reply("r1"),
+			...wakeTurns(0, 40),
+			person("p2"),
+			reply("r2"),
+			...wakeTurns(100, 40),
+		];
+		const page = latestTranscriptPage(items, 2);
+		expect(page.items.map((item) => item.id)).toContain("p2");
+		expect(page.items.map((item) => item.id)).toContain("p1");
+	});
+
+	it("a chat of thousands of wake items still pages by what the person sees", () => {
+		const items = [
+			...wakeTurns(0, 1_500),
+			person("p1"),
+			reply("r1"),
+			...wakeTurns(2_000, 1_500),
+			person("p2"),
+			reply("r2"),
+			...wakeTurns(4_000, 150),
+		];
+		expect(items.length).toBeGreaterThan(5_000);
+		const page = latestTranscriptPage(items, 2);
+		const ids = page.items.map((item) => item.id);
+		// Thousands of replies lie between the two messages: the page keeps the
+		// latest one (and everything after it) and the rest pages in on scroll.
+		expect(ids).toContain("p2");
+		expect(ids).toContain("r2");
+		expect(ids).not.toContain("p1");
+		expect(page.hasOlderItems).toBe(true);
+	});
+
+	it("hidden wake starts do not use up the page's item budget", () => {
+		const items = [
+			person("p1"),
+			reply("r1"),
+			...wakeTurns(0, TRANSCRIPT_PAGE_ITEMS),
+		];
+		const page = latestTranscriptPage(items, 1);
+		expect(page.items.map((item) => item.id)).toContain("p1");
 	});
 });

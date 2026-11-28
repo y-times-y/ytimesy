@@ -42,6 +42,7 @@ import {
 	boundedPageStartSql,
 	LATEST_CONTEXT_USAGE_SQL,
 	pageItemSql,
+	visibleTurnStartSql,
 } from "./transcript-page-sql";
 import { noteUserHub } from "./user-hub-notes";
 import { NOT_UNPINNED_Y_SQUARED_CHAT } from "./y-mode";
@@ -480,7 +481,7 @@ async function readPageOnce(
 		   else (select min(i.position) from agent_session_item i where i.session_id=$1 and i.item_id=$3::text) end as stop),
 		 turn_bounds as (select st.stop, (select case when count(*) < $4 then 0 else min(t.position) end
 		  from (select i.position from agent_session_item i
-		   where i.session_id=$1 and i.starts_turn and i.position < st.stop
+		   where i.session_id=$1 and ${visibleTurnStartSql("i")} and i.position < st.stop
 		   order by i.position desc limit $4) t) as first from st),
 		 b as (select stop,case when stop is null then 0 else ${boundedPageStartSql("$1", "turn_bounds.first", "turn_bounds.stop")} end as first from turn_bounds)
 		 select s.*, ${LATEST_CONTEXT_USAGE_SQL} as context_usage,

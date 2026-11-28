@@ -138,26 +138,22 @@ const ids = (items: unknown) =>
 	(items as SessionItem[]).map((item) => item.id as string);
 
 it("reads the last turns whole, then each page before the oldest item read, until none is older", async () => {
+	// Every third turn (t2, t5) is a wake-up turn: it is not a turn of a page,
+	// so three turns are the person's t6, t4 and t3 (and the wake turn t5 between).
 	const items = Array.from({ length: 7 }, (_, n) => turnItems(n)).flat();
 	const id = await chat(items);
 
 	const latest = await agentSessionPageForOwner("alice", id, { turns: 3 });
-	expect(ids(latest?.items)).toEqual(ids(items.slice(12)));
+	expect(ids(latest?.items)).toEqual(ids(items.slice(9)));
 	expect(latest).toMatchObject({ hasOlderItems: true, pageFound: true });
 
 	const second = await agentSessionPageForOwner("alice", id, {
 		turns: 3,
-		beforeId: "t4",
+		beforeId: "t3",
 	});
-	expect(ids(second?.items)).toEqual(ids(items.slice(3, 12)));
-	expect(second?.hasOlderItems).toBe(true);
-
-	const last = await agentSessionPageForOwner("alice", id, {
-		turns: 3,
-		beforeId: "t1",
-	});
-	expect(ids(last?.items)).toEqual(ids(items.slice(0, 3)));
-	expect(last?.hasOlderItems).toBe(false);
+	// t1 and t0 are the person's turns before it, with the wake-up turn t2 between.
+	expect(ids(second?.items)).toEqual(ids(items.slice(0, 9)));
+	expect(second?.hasOlderItems).toBe(false);
 });
 
 it("matches the page the browser's own code cuts, for every cursor", async () => {

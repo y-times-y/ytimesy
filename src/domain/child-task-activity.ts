@@ -326,7 +326,7 @@ export function knownHelperRevisions(
 	);
 }
 
-const INTERNAL_EVENT_PREFIX = "\u2063ytimesy-child-event:";
+export const INTERNAL_EVENT_PREFIX = "\u2063ytimesy-child-event:";
 export function childTaskEventQueueText(eventId: string) {
 	return `${INTERNAL_EVENT_PREFIX}${eventId}`;
 }
@@ -345,6 +345,22 @@ export function isInternalChildTaskMessage(text: string): boolean {
 					"Answer the child, escalate to the user if necessary, or revise the plan.",
 				)))
 	);
+}
+
+/**
+ * Where a turn the person can see starts: their own message. The hidden start
+ * of a wake-up turn (a helper's report, a crew note) is a turn too, but one a
+ * page must not count: a chat that wakes often (the Super agent) would fill
+ * its newest pages with wake turns and push the person's messages into older
+ * history, leaving only the agent's replies on screen.
+ */
+export function startsVisibleTurn(item: SessionItem): boolean {
+	return item.kind === "userMessage" && !isInternalChildTaskMessage(item.text);
+}
+
+/** A wake-up turn's hidden start message (it shows nothing). */
+export function isHiddenWakeStart(item: SessionItem): boolean {
+	return item.kind === "userMessage" && isInternalChildTaskMessage(item.text);
 }
 
 /** The person's latest request in a chat, skipping internal child-event messages. */

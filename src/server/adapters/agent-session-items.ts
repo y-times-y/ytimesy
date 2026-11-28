@@ -1,5 +1,9 @@
 import { database } from "./database";
-import { boundedPageStartSql, type PageLimits } from "./transcript-page-sql";
+import {
+	boundedPageStartSql,
+	type PageLimits,
+	visibleTurnStartSql,
+} from "./transcript-page-sql";
 
 /** One page of a chat's stored transcript: its items and where they start. */
 export type TranscriptPage = {
@@ -40,7 +44,7 @@ export async function transcriptPagesForOwner(
 		   ${stop ? `and i.position < ${stop}` : ""}) as items
 		 from agent_session s
 		 cross join lateral (select case when count(*) < ${page.turns} then 0 else min(t.position) end as first
-		  from (select i.position from agent_session_item i where i.session_id=s.id and i.starts_turn
+		  from (select i.position from agent_session_item i where i.session_id=s.id and ${visibleTurnStartSql("i")}
 		   ${stop ? `and i.position < ${stop}` : ""}
 		   order by i.position desc limit ${page.turns}) t) turn_page
 		 cross join lateral (select ${boundedPageStartSql("s.id", "turn_page.first", stop, page)} as first) page
