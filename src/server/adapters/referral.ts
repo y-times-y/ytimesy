@@ -350,6 +350,13 @@ export type ReferralSummary = {
 	readyResets: number;
 	/** This account joined through someone's code. */
 	referredByCode: boolean;
+	/** This account already received its reset as the invited person. */
+	rewardedAsReferred: boolean;
+	/** What the invitation timing needs (src/domain/referral-prompt.ts). */
+	completedTurns: number;
+	warmupShownAt: string | null;
+	lastWindowKey: string | null;
+	dismissedAt: string | null;
 };
 
 export async function referralSummary(
@@ -362,25 +369,58 @@ export async function referralSummary(
 		ensureReferralCode(userId),
 	]);
 	const since = new Date(now.getTime() - REFERRER_PERIOD_DAYS * DAY_MS);
-	const [counts, period, ready, own] = await Promise.all([
-		db.query<{ joined: string; qualified: string }>(
-			`select count(*) filter (where status<>'blocked') as joined,
+	const [counts, period, ready, own, prompt, turns, rewarded] =
+		await Promise.all([
+			db.query<{ joined: string; qualified: string }>(
+				`select count(*) filter (where status<>'blocked') as joined,
 			 count(*) filter (where status in ('pending','granted')) as qualified
 			 from referral where referrer_user_id=$1`,
-			[userId],
-		),
-		db.query<{ granted_at: Date }>(
-			"select granted_at from referral_reward where user_id=$1 and role='referrer' and granted_at>$2 order by granted_at",
-			[userId, since],
-		),
-		db.query<{ count: string }>(
-			"select count(*) from referral_reward where user_id=$1 and redeemed_at is null",
-			[userId],
-		),
-		db.query("select 1 from referral where referred_user_id=$1 limit 1", [
-			userId,
-		]),
-	]);
+				[userId],
+			),
+			db.query<{ granted_at: Date }>(
+				"select granted_at from referral_reward where user_id=$1 and role='referrer' and granted_at>$2 order by granted_at",
+				[userId, since],
+			),
+			db.query<{ count: string }>(
+				"select count(*) from referral_reward where user_id=$1 and redeemed_at is null",
+				[userId],
+			),
+			db.query("select 1 from referral where referred_user_id=$1 limit 1", [
+				userId,
+			]),
+			db
+				.query<{
+					warmup_shown_at: Date | null;
+					last_window_key: string | null;
+					dismissed_at: Date | null;
+				}>(
+					"select warmup_shown_at,last_window_key,dismissed_at from referral_prompt where user_id=$1",
+					[userId],
+				)
+				// Bookkeeping never blocks: without it the invitation stays away.
+				.catch((error) => {
+					console.error("Could not read the referral prompt state.", error);
+					const now = new Date();
+					return {
+						rows: [
+							{
+								warmup_shown_at: now,
+								last_window_key: null,
+								dismissed_at: now,
+							},
+						],
+					};
+				}),
+			db.query<{ count: string }>(
+				"select count(*) from usage_turn_counted where user_id=$1",
+				[userId],
+			),
+			db.query(
+				"select 1 from referral_reward where user_id=$1 and role='referred' limit 1",
+				[userId],
+			),
+		]);
+	const shown = prompt.rows[0];
 	const used = period.rows.length;
 	return {
 		enabled,
@@ -398,7 +438,37 @@ export async function referralSummary(
 				: null,
 		readyResets: Number(ready.rows[0].count),
 		referredByCode: own.rows.length > 0,
+		rewardedAsReferred: rewarded.rows.length > 0,
+		completedTurns: Number(turns.rows[0].count),
+		warmupShownAt: shown?.warmup_shown_at?.toISOString() ?? null,
+		lastWindowKey: shown?.last_window_key ?? null,
+		dismissedAt: shown?.dismissed_at?.toISOString() ?? null,
 	};
+}
+
+/** Remember that an invitation was shown: the warm-up, or the one for this usage window. */
+export async function recordReferralPromptShown(
+	userId: string,
+	kind: "warmup" | "near_limit",
+	windowKey: string | null,
+) {
+	await database().query(
+		`insert into referral_prompt (user_id,warmup_shown_at,last_shown_at,last_window_key)
+		 values ($1, case when $2='warmup' then now() end, now(), case when $2='near_limit' then $3 end)
+		 on conflict (user_id) do update set last_shown_at=now(),
+		  warmup_shown_at=case when $2='warmup' then coalesce(referral_prompt.warmup_shown_at, now()) else referral_prompt.warmup_shown_at end,
+		  last_window_key=case when $2='near_limit' then $3 else referral_prompt.last_window_key end`,
+		[userId, kind, windowKey],
+	);
+}
+
+/** A dismissal keeps the invitation quiet for REFERRAL_PROMPT_QUIET_DAYS. */
+export async function dismissReferralPrompt(userId: string) {
+	await database().query(
+		`insert into referral_prompt (user_id,dismissed_at) values ($1, now())
+		 on conflict (user_id) do update set dismissed_at=now()`,
+		[userId],
+	);
 }
 
 /** For the operator: referral counts by status and reason, and the last day's rewards. */
