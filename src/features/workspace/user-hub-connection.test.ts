@@ -20,6 +20,63 @@ describe("backgroundTurnPollIntervalMs", () => {
 	});
 });
 
+describe("hubReadsToMake: the open chat (a wake starts its turn with nothing open)", () => {
+	const idleOpen = {
+		sidebarStatuses: new Map<string, SessionTurnStatus | undefined>([
+			["y2", "completed"],
+		]),
+		backgroundChatIds: [] as string[],
+		openChatId: "y2",
+		openChatStatus: "completed" as SessionTurnStatus,
+	};
+	it("reads the open chat when the hub says its turn started and the page shows it idle (a crew wake)", () => {
+		expect(
+			hubReadsToMake({
+				...idleOpen,
+				message: { type: "state", chats: { y2: { turnStatus: "running" } } },
+			}),
+		).toEqual({ reads: [], refreshList: false, readOpenChat: true });
+	});
+	it("reads it when the hub says it settled and the page still shows it running (a stream that missed the end)", () => {
+		expect(
+			hubReadsToMake({
+				...idleOpen,
+				openChatStatus: "running",
+				message: { type: "state", chats: { y2: { turnStatus: "completed" } } },
+			}),
+		).toEqual({ reads: [], refreshList: false, readOpenChat: true });
+	});
+	it("reads nothing while the page and the hub agree", () => {
+		expect(
+			hubReadsToMake({
+				...idleOpen,
+				openChatStatus: "running",
+				message: { type: "state", chats: { y2: { turnStatus: "running" } } },
+			}),
+		).toMatchObject({ readOpenChat: false });
+	});
+	it("on a reconnect's whole map, catches a turn that started while no socket listened", () => {
+		expect(
+			hubReadsToMake({
+				...idleOpen,
+				message: {
+					type: "state",
+					full: true,
+					chats: { y2: { turnStatus: "running" } },
+				},
+			}),
+		).toMatchObject({ readOpenChat: true });
+	});
+	it("a hub that does not know the open chat says nothing about it", () => {
+		expect(
+			hubReadsToMake({
+				...idleOpen,
+				message: { type: "state", full: true, chats: {} },
+			}),
+		).toMatchObject({ readOpenChat: false });
+	});
+});
+
 describe("hubReadsToMake", () => {
 	const sidebar = new Map<string, SessionTurnStatus | undefined>([
 		["bg", "running"],
@@ -38,7 +95,7 @@ describe("hubReadsToMake", () => {
 				...base,
 				message: { type: "state", chats: { bg: { turnStatus: "completed" } } },
 			}),
-		).toEqual({ reads: ["bg"], refreshList: true });
+		).toEqual({ reads: ["bg"], refreshList: true, readOpenChat: false });
 	});
 	it("reads the chat list when a chat the sidebar shows running settles (finished, needs you)", () => {
 		expect(
@@ -47,7 +104,7 @@ describe("hubReadsToMake", () => {
 				backgroundChatIds: [],
 				message: { type: "state", chats: { bg2: { turnStatus: "completed" } } },
 			}),
-		).toEqual({ reads: [], refreshList: true });
+		).toEqual({ reads: [], refreshList: true, readOpenChat: false });
 	});
 	it("reads the chat list when an idle chat starts running", () => {
 		expect(
@@ -55,7 +112,7 @@ describe("hubReadsToMake", () => {
 				...base,
 				message: { type: "state", chats: { idle: { turnStatus: "running" } } },
 			}),
-		).toEqual({ reads: [], refreshList: true });
+		).toEqual({ reads: [], refreshList: true, readOpenChat: false });
 	});
 	it("leaves the open chat and chats outside the sidebar alone", () => {
 		expect(
@@ -69,7 +126,7 @@ describe("hubReadsToMake", () => {
 					},
 				},
 			}),
-		).toEqual({ reads: [], refreshList: false });
+		).toEqual({ reads: [], refreshList: false, readOpenChat: false });
 	});
 	it("on a whole map, reads background chats it does not show running", () => {
 		expect(
@@ -81,7 +138,7 @@ describe("hubReadsToMake", () => {
 					chats: { bg: { turnStatus: "running" } },
 				},
 			}),
-		).toEqual({ reads: ["bg2"], refreshList: false });
+		).toEqual({ reads: ["bg2"], refreshList: false, readOpenChat: false });
 	});
 	it("a change alone does not read chats it does not mention", () => {
 		expect(
@@ -89,7 +146,7 @@ describe("hubReadsToMake", () => {
 				...base,
 				message: { type: "state", chats: {} },
 			}),
-		).toEqual({ reads: [], refreshList: false });
+		).toEqual({ reads: [], refreshList: false, readOpenChat: false });
 	});
 });
 

@@ -949,3 +949,101 @@ describe("session timeline plan checklist", () => {
 		expect(todos).toBeLessThan(html.indexOf("Migrated."));
 	});
 });
+
+describe("the person's message is always in the Super agent's transcript", () => {
+	const stored = (items: readonly SessionItem[]) =>
+		childTaskPublicItems(
+			sessionItemsFromUnknown(JSON.parse(JSON.stringify(items))),
+		);
+	const wake = (id: string) =>
+		user(id, childTaskEventQueueText("6f1c2a9e-0d4b-4c51-9a63-2f8f5b1d7e10"));
+	const tool = (id: string) => readCall(id, "completed");
+	const reply = (id: string, text: string) => answer(id, text);
+	const person = (id: string, text: string) => user(id, text);
+
+	// The tail of a real Y² chat: hidden wake turns around the person's messages.
+	const tail = (): SessionItem[] => [
+		person("p0", "earlier question"),
+		tool("t0"),
+		reply("a0", "earlier answer"),
+		wake("w1"),
+		tool("t1"),
+		thought("r1", false),
+		reply("a1", "wake answer one"),
+		wake("w2"),
+		reply("a2", "wake answer two"),
+		person("p1", "MY NEW MESSAGE"),
+		tool("t2"),
+		thought("r2", false),
+		reply("a3", "reply to my message"),
+	];
+
+	it("shows it, before the reply, once the turn settled", () => {
+		const html = render(stored(tail()), "completed");
+		const mine = html.indexOf("MY NEW MESSAGE");
+		expect(mine).toBeGreaterThan(-1);
+		expect(html.indexOf("reply to my message")).toBeGreaterThan(mine);
+	});
+
+	it("shows it while the reply is still being worked on", () => {
+		const items = tail().slice(0, -1);
+		const html = render(stored(items), "running");
+		expect(html).toContain("MY NEW MESSAGE");
+	});
+
+	it("shows it when it reached a wake turn that was running", () => {
+		const items: SessionItem[] = [
+			person("p0", "earlier question"),
+			reply("a0", "earlier answer"),
+			wake("w1"),
+			tool("t1"),
+			person("p1", "MY NEW MESSAGE"),
+			tool("t2"),
+			reply("a1", "reply to my message"),
+		];
+		const html = render(stored(items), "completed");
+		expect(html).toContain("MY NEW MESSAGE");
+		expect(html.indexOf("reply to my message")).toBeGreaterThan(
+			html.indexOf("MY NEW MESSAGE"),
+		);
+	});
+
+	it("shows it when the quiet reply of a wake follows it", () => {
+		const items: SessionItem[] = [
+			wake("w1"),
+			reply("a1", "wake answer"),
+			person("p1", "MY NEW MESSAGE"),
+			reply("a2", "reply to my message"),
+			wake("w2"),
+			reply("a3", "Nothing to report."),
+		];
+		const html = render(stored(items), "completed");
+		expect(html).toContain("MY NEW MESSAGE");
+	});
+
+	it("shows a message sent as the very first one in the page the browser loaded", () => {
+		// A page that starts mid-turn (the latest page of a long chat).
+		const items: SessionItem[] = [
+			tool("t1"),
+			reply("a1", "tail of an earlier wake turn"),
+			person("p1", "MY NEW MESSAGE"),
+			reply("a2", "reply to my message"),
+		];
+		const html = render(stored(items), "completed");
+		expect(html).toContain("MY NEW MESSAGE");
+	});
+
+	it("shows a short message and one that mentions a thread", () => {
+		const items: SessionItem[] = [
+			wake("w1"),
+			reply("a1", "wake answer"),
+			person("p1", "ok"),
+			reply("a2", "reply to my message"),
+			person("p2", "tell @thread-2 to stop"),
+			reply("a3", "stopping it"),
+		];
+		const html = render(stored(items), "completed");
+		expect(html).toContain(">ok<");
+		expect(html).toContain("tell ");
+	});
+});

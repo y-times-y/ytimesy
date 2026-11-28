@@ -1,4 +1,6 @@
+import { INTERNAL_EVENT_PREFIX } from "#/domain/child-task-activity";
 import {
+	TRANSCRIPT_PAGE_ANCHOR_ITEMS,
 	TRANSCRIPT_PAGE_BYTES,
 	TRANSCRIPT_PAGE_ITEMS,
 } from "#/domain/transcript-page";
@@ -14,13 +16,35 @@ import {
  */
 
 /**
+ * A wake-up turn's hidden start message (isInternalChildTaskMessage in
+ * child-task-activity.ts) as a predicate on a row of agent_session_item.
+ */
+export function hiddenWakeStartSql(row = "i") {
+	const text = `${row}.item->>'text'`;
+	const prefix = INTERNAL_EVENT_PREFIX.replace(/'/g, "''");
+	return `(${row}.kind='userMessage' and (${text} like '${prefix}%'
+	 or ((${text} ~ E'^[^\\n]+ (finished|failed)\\\\. Its final summary is below:\\n\\n'
+	   or ${text} ~ E'^[^\\n]+ is blocked and needs your decision:\\n\\n')
+	  and (${text} like '%Inspect its evidence and diff before accepting or publishing the result.'
+	   or ${text} like '%Answer the child, escalate to the user if necessary, or revise the plan.'))))`;
+}
+
+/**
+ * A turn the person can see starts here: startsVisibleTurn in
+ * child-task-activity.ts. Pages count these, never wake-up starts.
+ */
+export function visibleTurnStartSql(row = "i") {
+	return `(${row}.kind='userMessage' and not ${hiddenWakeStartSql(row)})`;
+}
+
+/**
  * Joins `page.first`: the position where the last `turns` turns of the row
  * `s` begin (0 when it holds no more).
  */
 export function latestPageJoin(turns: number) {
 	if (!Number.isInteger(turns) || turns < 1) throw new Error("Invalid page.");
 	return `cross join lateral (select case when count(*) < ${turns} then 0 else min(t.position) end as first
-	 from (select i.position from agent_session_item i where i.session_id=s.id and i.starts_turn
+	 from (select i.position from agent_session_item i where i.session_id=s.id and ${visibleTurnStartSql("i")}
 	  order by i.position desc limit ${turns}) t) turn_page
 	 cross join lateral (select ${boundedPageStartSql("s.id", "turn_page.first")} as first) page`;
 }
@@ -45,13 +69,34 @@ export function boundedPageStartSql(
 		limits.items < 1
 	)
 		throw new Error("Invalid page.");
-	return `(select coalesce(min(p.position) filter (where p.used_bytes <= ${limits.bytes} or p.ordinal=1),0)
+	const before = (alias: string) =>
+		stop ? `${alias}.position < ${stop}` : "true";
+	// The start the item and byte limits give. Hidden wake-up starts are not
+	// counted against them: only what the person can see is.
+	const limited = `(select coalesce(min(p.position) filter (where p.used_bytes <= ${limits.bytes} or p.ordinal=1),0)
 	 from (select candidates.position,
 	 sum(candidates.bytes) over (order by candidates.position desc) as used_bytes,
 	 row_number() over (order by candidates.position desc) as ordinal
 	 from (select i.position,octet_length(i.item::text) as bytes from agent_session_item i
 	 where i.session_id=${session} and i.position >= ${first}${stop ? ` and i.position < ${stop}` : ""}
+	 and not ${hiddenWakeStartSql("i")}
 	 order by i.position desc limit ${limits.items}) candidates) p)`;
+	// When that page spans wake-up turns and holds none of the person's
+	// messages, back to their latest one (within TRANSCRIPT_PAGE_ANCHOR_ITEMS
+	// visible items), as transcriptPageBefore does.
+	return `(select case
+	 when not exists (select 1 from agent_session_item w where w.session_id=${session}
+	   and w.position >= b.r and ${before("w")} and ${hiddenWakeStartSql("w")}) then b.r
+	 when exists (select 1 from agent_session_item v where v.session_id=${session}
+	   and v.position >= b.r and ${before("v")} and ${visibleTurnStartSql("v")}) then b.r
+	 else coalesce((select a.position from agent_session_item a
+	   where a.session_id=${session} and a.position >= ${first} and a.position < b.r
+	    and ${visibleTurnStartSql("a")}
+	    and (select count(*) from agent_session_item c where c.session_id=${session}
+	      and c.position >= a.position and ${before("c")} and not ${hiddenWakeStartSql("c")})
+	      <= ${TRANSCRIPT_PAGE_ANCHOR_ITEMS}
+	   order by a.position desc limit 1), b.r) end
+	 from (select ${limited} as r) b)`;
 }
 
 /** A tool call's text above this many characters is cut for a page read (head and tail kept). */
@@ -99,6 +144,9 @@ export function pageItemSql(row = "i") {
 	 when ${row}.kind='canvas' and jsonb_typeof(${row}.item->'html')='string'
 	  then jsonb_set(${row}.item,'{html}','null'::jsonb)
 	   || jsonb_build_object('htmlOmitted',true,'detailSession',${row}.session_id)
+	 when ${row}.kind='userMessage' and ${row}.item->>'text' like '${INTERNAL_EVENT_PREFIX.replace(/'/g, "''")}%'
+	  and length(${row}.item->>'text') > 64
+	  then jsonb_set(${row}.item,'{text}',to_jsonb(left(${row}.item->>'text',64)))
 	 when ${row}.kind='dynamicToolCall' and ${row}.item->>'tool' not in ${WHOLE_TOOLS}
 	  and octet_length(${row}.item::text) > ${PAGE_TEXT_CAP}
 	  then (select ${row}.item

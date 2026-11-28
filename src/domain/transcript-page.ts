@@ -1,4 +1,4 @@
-import { startsTurn } from "./child-task-activity";
+import { isHiddenWakeStart, startsVisibleTurn } from "./child-task-activity";
 import type { SessionItem } from "./session-item";
 
 /**
@@ -37,6 +37,13 @@ export const SNAPSHOT_TURNS = 6;
 /** A single long turn must not make every live update load an unbounded history. */
 export const TRANSCRIPT_PAGE_ITEMS = 200;
 export const TRANSCRIPT_PAGE_BYTES = 256 * 1024;
+/**
+ * A page that the item or byte limit cut so that it holds none of the
+ * person's messages is extended back to their latest one, as long as that
+ * is no more than this many items away: the person's own message is never
+ * left in "older history" while only the agent's replies show.
+ */
+export const TRANSCRIPT_PAGE_ANCHOR_ITEMS = 600;
 const transcriptEncoder = new TextEncoder();
 
 /** Some transcript items, and whether the chat holds turns before them. */
@@ -57,18 +64,42 @@ export function transcriptPageBefore<Item extends SessionItem>(
 ): TranscriptPage<Item> {
 	let found = 0;
 	let bytes = 0;
-	const minimum = Math.max(0, end - TRANSCRIPT_PAGE_ITEMS);
-	for (let index = end - 1; index >= minimum; index--) {
-		bytes += transcriptEncoder.encode(JSON.stringify(items[index])).byteLength;
-		// Always return one item, even a single oversized user message.
-		if (bytes > TRANSCRIPT_PAGE_BYTES && index < end - 1)
-			return { items: items.slice(index + 1, end), hasOlderItems: true };
-		if (!startsTurn(items[index] as SessionItem)) continue;
+	let kept = 0;
+	let cut = -1;
+	let wakes = 0;
+	for (let index = end - 1; index >= 0; index--) {
+		const item = items[index] as SessionItem;
+		if (cut < 0 && isHiddenWakeStart(item)) wakes++;
+		// A wake-up turn's hidden start is neither a turn of the page nor part of
+		// its budget: only what the person can see is counted.
+		if (!isHiddenWakeStart(item)) {
+			bytes += transcriptEncoder.encode(JSON.stringify(item)).byteLength;
+			kept++;
+			// Always return one item, even a single oversized user message.
+			if (
+				cut < 0 &&
+				(kept > TRANSCRIPT_PAGE_ITEMS ||
+					(bytes > TRANSCRIPT_PAGE_BYTES && kept > 1))
+			) {
+				// One long turn splits at the limit, as before. Only a page that
+				// spans wake-up turns is extended back to the person's message.
+				if (wakes === 0)
+					return { items: items.slice(index + 1, end), hasOlderItems: true };
+				cut = index + 1;
+			}
+			if (cut >= 0 && kept > TRANSCRIPT_PAGE_ANCHOR_ITEMS) break;
+		}
+		if (!startsVisibleTurn(item)) continue;
+		// The page is cut here by a limit, and this is the person's latest
+		// message: it stays in (within the anchor distance).
+		if (cut >= 0)
+			return { items: items.slice(index, end), hasOlderItems: index > 0 };
 		found++;
 		if (found === turns && index > 0)
 			return { items: items.slice(index, end), hasOlderItems: true };
 	}
-	return { items: items.slice(minimum, end), hasOlderItems: minimum > 0 };
+	if (cut >= 0) return { items: items.slice(cut, end), hasOlderItems: true };
+	return { items: items.slice(0, end), hasOlderItems: false };
 }
 
 /** The open page: the chat's last turns. */

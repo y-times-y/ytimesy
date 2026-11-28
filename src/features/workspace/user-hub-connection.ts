@@ -74,20 +74,35 @@ export function backgroundTurnPollIntervalMs(hubOpen: boolean): number | false {
  * running, or, on a whole-map message (a (re)connect), that it does not
  * know as running. `refreshList`: a chat the sidebar shows idle is running
  * now, so the chat list is read again (it then joins the background chats).
- * Chats outside the sidebar and the open chat (its own live socket) are
- * left alone, as polling left them.
+ * `readOpenChat`: the hub's turn status for the open chat disagrees with the
+ * page's (see below). Chats outside the sidebar are left alone, as polling
+ * left them.
  */
 export function hubReadsToMake(input: {
 	readonly message: HubStateMessage;
 	readonly sidebarStatuses: ReadonlyMap<string, SessionTurnStatus | undefined>;
 	readonly backgroundChatIds: readonly string[];
 	readonly openChatId?: string;
-}): { reads: string[]; refreshList: boolean } {
+	/** What the page shows for the open chat's turn right now. */
+	readonly openChatStatus?: SessionTurnStatus;
+}): { reads: string[]; refreshList: boolean; readOpenChat: boolean } {
 	const { message } = input;
 	const reads = new Set<string>();
 	let refreshList = false;
+	let readOpenChat = false;
 	for (const [id, { turnStatus }] of Object.entries(message.chats)) {
-		if (id === input.openChatId || !input.sidebarStatuses.has(id)) continue;
+		if (id === input.openChatId) {
+			// An idle open chat holds no live stream, so a turn a wake started
+			// (a crew note, a helper's report, a queued message) reaches the page
+			// only this way; and a stream that missed the end is caught up.
+			if (
+				isTurnRunning(turnStatus) !==
+				isTurnRunning(input.openChatStatus ?? "idle")
+			)
+				readOpenChat = true;
+			continue;
+		}
+		if (!input.sidebarStatuses.has(id)) continue;
 		if (isTurnRunning(turnStatus)) {
 			if (!isTurnRunning(input.sidebarStatuses.get(id) ?? "idle"))
 				refreshList = true;
@@ -102,7 +117,7 @@ export function hubReadsToMake(input: {
 		for (const id of input.backgroundChatIds)
 			if (!isTurnRunning(message.chats[id]?.turnStatus ?? "idle"))
 				reads.add(id);
-	return { reads: [...reads], refreshList };
+	return { reads: [...reads], refreshList, readOpenChat };
 }
 
 type SocketLike = {

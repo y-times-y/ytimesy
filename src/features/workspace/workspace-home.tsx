@@ -108,6 +108,7 @@ import {
 	fileChangesFromSessionItems,
 	heldForSetupMessage,
 	isTurnRunning,
+	itemsKeepingFreshSend,
 	itemsKeepingMessageInFlight,
 	lastAgentMessageText,
 	lastUserMessageText,
@@ -315,7 +316,11 @@ import {
 	STREAMED_CHANGES_READ_MS,
 } from "./git-changes-polling";
 import { UsageWarningBanner } from "./infrastructure-usage";
-import { followListChanges, SIDEBAR_REVALIDATE_MS } from "./live-freshness";
+import {
+	followListChanges,
+	openChatReadOn,
+	SIDEBAR_REVALIDATE_MS,
+} from "./live-freshness";
 import { openLiveProgress } from "./live-progress-connection";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import {
@@ -1146,6 +1151,14 @@ export function WorkspaceHome({
 							),
 						],
 					};
+				// What the person just sent stays shown until a view holds it.
+				if (
+					next.agentSessionId &&
+					current.agentSessionId === next.agentSessionId
+				) {
+					const kept = itemsKeepingFreshSend(current.items, next.items);
+					if (kept !== next.items) next = { ...next, items: [...kept] };
+				}
 				if (
 					!sessionViewShouldReplaceOpenTurn({
 						currentStatus: current.turnStatus,
@@ -2362,20 +2375,32 @@ export function WorkspaceHome({
 	// settled, needs you; a project added) reads exactly the lists it names;
 	// a reconnect or a skipped event version reads them all.
 	useEffect(() => followListChanges(userHubStore, queryClient), [queryClient]);
+	// A gap in the hub's events (or a reconnect): the open chat may have missed
+	// a wake's turn too, so it reads once as well.
+	useEffect(
+		() =>
+			userHubStore.watch((change) => {
+				if (openChatReadOn(change)) refetchOpenSession.current();
+			}),
+		[],
+	);
 	const hubSeenWholeMap = useRef(false);
 	const onHubState = useRef<(message: HubStateMessage) => void>(() => {});
 	onHubState.current = (message) => {
 		userHubStore.receive(message);
-		const { reads, refreshList } = hubReadsToMake({
+		const { reads, refreshList, readOpenChat } = hubReadsToMake({
 			message,
 			sidebarStatuses: new Map(
 				sidebarChats.map((chat) => [chat.id, chat.turnStatus]),
 			),
 			backgroundChatIds: backgroundIds,
 			openChatId: activeSessionId,
+			openChatStatus: currentSessionRef.current.turnStatus,
 		});
 		for (const id of reads)
 			void backgroundReads[backgroundIds.indexOf(id)]?.refetch();
+		// A turn a wake started in the open chat: read it, and its stream opens.
+		if (readOpenChat) refetchOpenSession.current();
 		// A reconnect also reads the chat list once: a turn may have started
 		// or a chat appeared while no socket listened.
 		const reconnected = message.full === true && hubSeenWholeMap.current;

@@ -4,6 +4,7 @@ import { hubStateMessage, parseHubStateMessage } from "#/domain/user-hub";
 import {
 	followListChanges,
 	listQueryKeysToInvalidate,
+	openChatReadOn,
 	RECONNECT_NOTICE_AFTER_MS,
 	reconnectingNotice,
 	refreshAfterProjectAdded,
@@ -167,5 +168,16 @@ describe("a pushed list event reaches the lists (socket message to invalidation)
 		const { store, client } = setup();
 		receive(store, hubStateMessage({}, true, { signals: {}, seq: 9 }));
 		expect(stale(client, ["projects"])).toBe(true);
+	});
+});
+
+describe("openChatReadOn", () => {
+	it("a resync (reconnect or a skipped event version) re-reads the open chat", () => {
+		expect(openChatReadOn({ kind: "resync" })).toBe(true);
+	});
+	it("a change to other topics does not (turn status has its own check)", () => {
+		expect(
+			openChatReadOn({ kind: "topics", topics: new Set(["sessions:p1"]) }),
+		).toBe(false);
 	});
 });

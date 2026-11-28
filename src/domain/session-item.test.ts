@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { childTaskEventQueueText } from "./child-task-activity";
 import { SessionItemId } from "./ids";
 import {
 	chatHeaderTitle,
@@ -8,6 +9,7 @@ import {
 	fileChangesFromSessionItems,
 	isQueuedUserMessage,
 	isTurnRunning,
+	itemsKeepingFreshSend,
 	lastAgentMessageText,
 	lastUserMessageText,
 	markedQueuedSend,
@@ -686,4 +688,69 @@ it("keeps a released held message shown until the transcript holds it, never twi
 	expect(messageDelivered(delivered, "m")).toBe(true);
 	// A message taken back here stays gone.
 	expect(itemsKeepingMessageInFlight([], [], "m")).toEqual([]);
+});
+
+describe("itemsKeepingFreshSend (the person's message never blinks out)", () => {
+	const now = 1_800_000_000_000;
+	const sent = (id: string, ageMs: number): SessionItem => ({
+		kind: "userMessage",
+		id: SessionItemId(id),
+		text: "my message",
+		timing: { startedAt: now - ageMs },
+	});
+	const reply = (id: string): SessionItem => ({
+		kind: "agentMessage",
+		id: SessionItemId(id),
+		text: "an answer",
+	});
+
+	it("keeps a just-sent message a server view does not hold yet", () => {
+		const earlier = reply("a0");
+		const result = itemsKeepingFreshSend(
+			[earlier, sent("m1", 1_000)],
+			[earlier],
+			now,
+		);
+		expect(result.map((item) => item.id)).toEqual(["a0", "m1"]);
+	});
+
+	it("adds nothing once the server holds it, so it never shows twice", () => {
+		const held = { ...sent("m1", 1_000), text: "my message" };
+		const next = [reply("a0"), held];
+		expect(itemsKeepingFreshSend([sent("m1", 1_000)], next, now)).toBe(next);
+	});
+
+	it("does not show it twice when the server stored it under another id", () => {
+		const stored: SessionItem = {
+			kind: "userMessage",
+			id: SessionItemId("server-uuid"),
+			text: "my message",
+			timing: { startedAt: now - 900 },
+		};
+		const next = [reply("a0"), stored];
+		expect(itemsKeepingFreshSend([sent("m1", 1_000)], next, now)).toBe(next);
+	});
+
+	it("lets a message the server never took go once it is old", () => {
+		const next = [reply("a0")];
+		expect(itemsKeepingFreshSend([sent("m1", 60_000)], next, now)).toBe(next);
+	});
+
+	it("ignores internal wake messages and an empty transcript", () => {
+		const wake: SessionItem = {
+			kind: "userMessage",
+			id: SessionItemId("w1"),
+			text: childTaskEventQueueText("6f1c2a9e-0d4b-4c51-9a63-2f8f5b1d7e10"),
+			timing: { startedAt: now },
+		};
+		const next = [reply("a0")];
+		expect(itemsKeepingFreshSend([wake], next, now)).toBe(next);
+		expect(itemsKeepingFreshSend([], next, now)).toBe(next);
+	});
+
+	it("keeps the order of what the server sent and puts the message last", () => {
+		const next = [reply("a0"), reply("a1")];
+		const result = itemsKeepingFreshSend([sent("m1", 500)], next, now);
+		expect(result.map((item) => item.id)).toEqual(["a0", "a1", "m1"]);
+	});
 });
