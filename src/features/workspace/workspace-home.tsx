@@ -4095,7 +4095,9 @@ export function WorkspaceHome({
 							onClose={() => setSettingsOpen(false)}
 							initialSection={settingsSection}
 						/>
-						<UsageWarningBanner />
+						<UsageWarningBanner
+							turnRunning={session?.turnStatus === "running"}
+						/>
 						<ChatRefreshingContext.Provider value={refreshingChat}>
 							<main
 								ref={workspaceMainRef}

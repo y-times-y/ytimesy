@@ -3,6 +3,8 @@ import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { referralLink } from "#/domain/referral";
 import {
+	dismissReferralPrompt,
+	recordReferralPromptShown,
 	referralCounts,
 	referralSummary,
 	setReferralEnabled,
@@ -30,6 +32,26 @@ export const referralFn = createServerFn({ method: "GET" }).handler(
 		};
 	},
 );
+
+/** Bookkeeping about an invitation: a failure here never blocks the person. */
+export const referralPromptShownFn = createServerFn({ method: "POST" })
+	.validator(
+		z.object({
+			kind: z.enum(["warmup", "near_limit"]),
+			windowKey: z.string().max(80).nullable(),
+		}),
+	)
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		await recordReferralPromptShown(user.id, data.kind, data.windowKey);
+	});
+
+export const referralPromptDismissedFn = createServerFn({
+	method: "POST",
+}).handler(async () => {
+	const user = await requireUser(getRequest().headers);
+	await dismissReferralPrompt(user.id);
+});
 
 export const referralCountsFn = createServerFn({ method: "GET" }).handler(
 	async () => {

@@ -1,11 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { MenuSelect } from "#/components/ui/menu-select";
 import type {
 	UsageAutoReset,
 	UsageWindowState,
 } from "#/domain/infrastructure-usage";
+import {
+	decideReferralPrompt,
+	type ReferralPromptKind,
+} from "#/domain/referral-prompt";
 import { usageNotice } from "#/domain/usage-warning";
 import { InfrastructureStatements } from "./infrastructure-statements";
 import {
@@ -15,6 +19,10 @@ import {
 	infrastructureUsageFn,
 	infrastructureUsersFn,
 } from "./infrastructure-usage.fn";
+import {
+	referralPromptDismissedFn,
+	referralPromptShownFn,
+} from "./referral.fn";
 import {
 	ReferralInviteCard,
 	referralOfferText,
@@ -76,8 +84,16 @@ const DISMISSED_USAGE_WARNING = "ytimesy:dismissed-usage-warning";
  * and again when one runs out. Dismissing hides it for this browser session
  * until the next 10% step. An auto-reset account also gets a notice once
  * per reset of a window it would otherwise have been refused by.
+ *
+ * The referral invitation joins these notices rarely (decideReferralPrompt):
+ * once as a warm-up, then at most once per usage window, and never while a
+ * turn runs.
  */
-export function UsageWarningBanner() {
+export function UsageWarningBanner({
+	turnRunning = false,
+}: {
+	turnRunning?: boolean;
+}) {
 	const readUsage = useServerFn(infrastructureUsageFn);
 	const delivery = useHubDelivery();
 	const usage = useQuery({
@@ -101,8 +117,72 @@ export function UsageWarningBanner() {
 		}
 	});
 	const referral = useReferral();
+	const cache = useQueryClient();
+	const markShown = useServerFn(referralPromptShownFn);
+	const markDismissed = useServerFn(referralPromptDismissedFn);
+	const windowKey = warning
+		? (() => {
+				const window = usage.data?.windows.find((w) => w.id === warning.window);
+				return `${warning.window}:${window?.resetsAt ?? "open"}`;
+			})()
+		: null;
+	// The invitation stays up once chosen, until it is dismissed.
+	const [invite, setInvite] = useState<{
+		kind: ReferralPromptKind;
+		windowKey: string | null;
+	} | null>(null);
+	const [closed, setClosed] = useState(false);
+	const decision =
+		referral && usage.data && !invite && !closed
+			? decideReferralPrompt({
+					enabled: true,
+					capped: referral.rewardsInPeriod >= referral.rewardsCap,
+					rewardedAsReferred: referral.rewardedAsReferred,
+					completedTurns: referral.completedTurns,
+					warmupShownAt: referral.warmupShownAt,
+					lastWindowKey: referral.lastWindowKey,
+					dismissedAt: referral.dismissedAt,
+					turnRunning,
+					notice: warning?.level ?? null,
+					windowKey,
+					now: Date.now(),
+				})
+			: null;
+	useEffect(() => {
+		if (!decision) return;
+		setInvite({ kind: decision, windowKey });
+		markShown({ data: { kind: decision, windowKey } })
+			.then(() => cache.invalidateQueries({ queryKey: ["referral"] }))
+			.catch(() => undefined);
+	}, [decision, windowKey, markShown, cache]);
+	const showInvite =
+		referral &&
+		!closed &&
+		!turnRunning &&
+		invite &&
+		(invite.kind === "warmup"
+			? !warning
+			: warning && warning.level !== "reset");
+	const closeInvite = () => {
+		setClosed(true);
+		markDismissed()
+			.then(() => cache.invalidateQueries({ queryKey: ["referral"] }))
+			.catch(() => undefined);
+	};
+	if (showInvite && referral && invite.kind === "warmup")
+		return (
+			<ReferralInviteCard
+				title="Know someone who'd like ytimesy?"
+				message={referralOfferText(
+					referral.rewardsInPeriod >= referral.rewardsCap,
+				)}
+				link={referral.link}
+				onDismiss={closeInvite}
+			/>
+		);
 	if (!warning || dismissed === step) return null;
 	const dismiss = () => {
+		if (showInvite) closeInvite();
 		setDismissed(step);
 		try {
 			if (step) sessionStorage.setItem(DISMISSED_USAGE_WARNING, step);
@@ -110,9 +190,9 @@ export function UsageWarningBanner() {
 			// Dismissal is a convenience; it may not persist.
 		}
 	};
-	// An invitation takes the place of the heads-up and of the limit notice;
-	// a notice that a window was reset for the user stays as it is.
-	if (referral && warning.level !== "reset")
+	// The invitation takes the place of the heads-up or limit notice it was
+	// chosen for; a notice that a window was reset stays as it is.
+	if (showInvite && referral)
 		return (
 			<ReferralInviteCard
 				title={
