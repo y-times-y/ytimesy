@@ -595,6 +595,6 @@ describe("Y²'s scoping rubric and model policy on the API, Codex and Grok route
 		} as never);
 		expect(text).toBe(ySquaredInstructions());
 		expect(text).toContain("Size the brief to the task");
-		expect(text).toContain("- Choosing a thread's model");
+		expect(text).toContain("- Model per task");
 	});
 });

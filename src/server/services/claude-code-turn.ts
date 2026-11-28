@@ -15,7 +15,6 @@ import { CODE_MODE_TOOL } from "#/domain/code-mode";
 import type { LeanToolShape } from "#/domain/harness-model-profile";
 import type { WorkspaceId } from "#/domain/ids";
 import { isReaderRole, type SubagentRole } from "#/domain/subagent";
-import { orchestratorInstructions } from "#/domain/subagent-instructions";
 import { directTranscriptStore } from "../adapters/checkpoints/direct-transcript";
 import {
 	downloadCheckpoint,
@@ -83,13 +82,16 @@ export function claudeCodeDelegation(
 	agentRole: SubagentRole | null | undefined,
 ): string | undefined {
 	if (!toolNames.includes("agent")) return undefined;
+	const reader = isReaderRole(agentRole);
 	return [
-		"Your built-in Task/Agent tool is off; ytimesy's mcp__ytimesy__agent and mcp__ytimesy__agent_send are its replacement and do the same job. If they are listed by name only, load their schemas first (ToolSearch select:mcp__ytimesy__agent,mcp__ytimesy__agent_send); do not skip delegation because the schema is not loaded yet.",
-		orchestratorInstructions({
-			codeMode: true,
-			main: !agentRole,
-			readOnly: isReaderRole(agentRole),
-		}),
+		"Your built-in Task/Agent tool is off; ytimesy's mcp__ytimesy__agent (start) and mcp__ytimesy__agent_send (message or stop) replace it. If only their names are listed, load their schemas first (ToolSearch select:mcp__ytimesy__agent,mcp__ytimesy__agent_send); never skip delegation for that.",
+		`Helpers get only your brief (goal, paths, findings, constraints, report format; what not to touch) and report back as messages that wake you: do not poll. Readers (role researcher, reviewer; checker for pass or fail) share your VM read-only: use them freely, one reader per file or question when a request names several, started together in one step.${reader ? " You may start only readers." : " Writers edit on a fork of your VM: one writer per part when the work splits into independent edits, together, with the interfaces in the briefs; do your own part meanwhile, then integrate and run the final checks. Do dependent steps, one small lookup or one quick edit yourself."}`,
+		"Keep working while helpers run; stop them with agent_send once you have what you need. A report is a claim: verify it. A refused start means do the work yourself.",
+		...(agentRole
+			? []
+			: [
+					"When only waiting is left, give the user a status and end your turn; reports wake you.",
+				]),
 	].join("\n");
 }
 

@@ -202,12 +202,12 @@ describe("Y²'s selection policy", () => {
 		expect(Y_SQUARED_TOOLS.has("set_thread_model")).toBe(true);
 		expect(text).toContain("`set_thread_model`");
 		expect(text).toContain("`list_models`");
-		expect(text).toContain("named model wins, exactly");
+		expect(text).toContain("named model wins");
 		expect(text).toContain("infrastructure, deploys, migrations, security");
-		expect(text).toContain("research, read-only investigation, summaries");
+		expect(text).toContain("research, read-only work, summaries");
 		expect(text).toContain("nearly used");
-		expect(text).toContain("Failover stays the safety net");
-		expect(text).toContain("say it in one line");
+		expect(text).toContain("never use an unusable one");
+		expect(text).toContain("Say a non-default choice in one line");
 		expect(text).toContain("never retry another model unasked");
 	});
 
@@ -218,7 +218,7 @@ describe("Y²'s selection policy", () => {
 		expect(text).toContain("fast tier");
 		expect(text).toContain("balanced");
 		expect(text).toContain("frontier");
-		expect(text).toContain("When a thread's job changes");
+		expect(text).toContain("when the job changes");
 		expect(text).not.toContain("the default is right most of the time");
 	});
 
@@ -236,7 +236,7 @@ describe("Y²'s selection policy", () => {
 			const from = text.indexOf(start);
 			return text.slice(from, text.indexOf("\n", from));
 		};
-		expect(block("- Choosing a thread's model").length / 4).toBeLessThan(240);
+		expect(block("- Model per task").length / 4).toBeLessThan(160);
 		expect(block("- Size the brief to the task").length / 4).toBeLessThan(160);
 	});
 });
@@ -245,10 +245,7 @@ describe("the policy and the rubric reach every route", () => {
 	it("are in the one instruction text the API, Codex, Grok, box and Claude runner prompts all use", async () => {
 		const { ySquaredInstructions: build } = await import("./y-squared");
 		const text = build();
-		for (const part of [
-			"Size the brief to the task",
-			"- Choosing a thread's model",
-		])
+		for (const part of ["Size the brief to the task", "- Model per task"])
 			expect(text).toContain(part);
 	});
 });
