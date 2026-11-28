@@ -582,3 +582,19 @@ describe("secret names in every builder route's instructions", () => {
 		expect(later).toBe(first);
 	});
 });
+
+describe("Y²'s scoping rubric and model policy on the API, Codex and Grok route", () => {
+	it("agentTurnInstructions hands Y² the same text the Claude runner prompt gets", async () => {
+		const { ySquaredInstructions } = await import("#/domain/y-squared");
+		const text = agentTurnInstructions({
+			session: {},
+			tools: { stub },
+			plugins: [],
+			projectKnowledge: null,
+			ySquared: true,
+		} as never);
+		expect(text).toBe(ySquaredInstructions());
+		expect(text).toContain("Size the brief to the task");
+		expect(text).toContain("- Choosing a thread's model");
+	});
+});
