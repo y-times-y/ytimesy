@@ -2550,24 +2550,25 @@ describe("the Claude Code system prompt carries the secret names", () => {
 		const line = secretsContextLine([
 			{ name: "GITHUB_APP_ID", kind: "runtime" },
 		]);
-		expect(systemPrompt("/repo", false, undefined, undefined, line)).toContain(
-			"GITHUB_APP_ID",
-		);
+		expect(
+			systemPrompt("/repo", false, undefined, undefined, undefined, line),
+		).toContain("GITHUB_APP_ID");
 		expect(
 			systemPrompt(
 				"/repo",
 				false,
 				{ repository: "/repo", workspaceTools: [] },
 				undefined,
+				undefined,
 				line,
 			),
 		).toContain("Before saying a credential");
 		// the prompt is rebuilt every step: same text on a later (resumed) step
-		expect(systemPrompt("/repo", false, undefined, undefined, line)).toBe(
-			systemPrompt("/repo", false, undefined, undefined, line),
-		);
 		expect(
-			systemPrompt("/repo", true, undefined, undefined, line),
+			systemPrompt("/repo", false, undefined, undefined, undefined, line),
+		).toBe(systemPrompt("/repo", false, undefined, undefined, undefined, line));
+		expect(
+			systemPrompt("/repo", true, undefined, undefined, undefined, line),
 		).not.toContain("GITHUB_APP_ID");
 		expect(
 			systemPrompt(
@@ -2575,6 +2576,7 @@ describe("the Claude Code system prompt carries the secret names", () => {
 				false,
 				{ repository: "/repo", workspaceTools: [] },
 				{ instructions: "Y2" },
+				undefined,
 				line,
 			),
 		).not.toContain("GITHUB_APP_ID");
@@ -2594,13 +2596,30 @@ describe("the Claude Code system prompt keeps the secrets line and the delegatio
 			undefined,
 			{ repository: "/repo", workspaceTools: [] },
 		]) {
-			const text = systemPrompt("/repo", false, remote, undefined, line, rules);
+			const text = systemPrompt(
+				"/repo",
+				false,
+				remote,
+				undefined,
+				"PR-NOTE-MARK",
+				line,
+				rules,
+			);
 			expect(text).toContain("GITHUB_APP_ID");
 			expect(text).toContain(rules);
+			expect(text).toContain("PR-NOTE-MARK");
 		}
 		expect(
-			systemPrompt("/repo", false, undefined, undefined, line, rules).length -
-				systemPrompt("/repo", false).length,
+			systemPrompt(
+				"/repo",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				"PR-NOTE-MARK",
+				line,
+				rules,
+			).length - systemPrompt("/repo", false).length,
 		).toBeLessThan(line.length + rules.length + 4);
 	});
 });
