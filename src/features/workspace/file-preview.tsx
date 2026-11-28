@@ -5,6 +5,7 @@ import {
 	filePreviewKind,
 	type WorkspaceFilePreview,
 } from "#/domain/file-preview";
+import { markdownImageSource } from "#/domain/markdown-image";
 import { AgentMarkdown } from "../sessions/agent-markdown";
 import { readWorkspacePreviewFn } from "./explorer.fn";
 import "./file-preview.css";
@@ -43,13 +44,84 @@ function PreviewImage({ src, path }: { src: string; path: string }) {
 	);
 }
 
+type ImageScope = { projectId?: string; sessionId?: string };
+
+type MarkdownImageProps = {
+	src: string;
+	alt?: string;
+	width?: string | number;
+	height?: string | number;
+};
+
+function MarkdownImageTag({
+	url,
+	image,
+}: {
+	url: string;
+	image: MarkdownImageProps;
+}) {
+	return (
+		<img
+			src={url}
+			alt={image.alt ?? ""}
+			width={image.width}
+			height={image.height}
+			loading="lazy"
+			referrerPolicy="no-referrer"
+		/>
+	);
+}
+
+function WorkspaceMarkdownImage({
+	path,
+	scope,
+	image,
+}: {
+	path: string;
+	scope: ImageScope;
+	image: MarkdownImageProps;
+}) {
+	const read = useServerFn(readWorkspacePreviewFn);
+	const file = useQuery({
+		queryKey: ["workspace-image", scope.projectId, scope.sessionId, path],
+		queryFn: () => read({ data: { ...scope, path } }),
+		enabled: Boolean(scope.projectId && scope.sessionId),
+	});
+	return file.data?.kind === "image" ? (
+		<MarkdownImageTag url={file.data.dataUrl} image={image} />
+	) : (
+		<span>{image.alt || "Image"}</span>
+	);
+}
+
+function MarkdownImage({
+	markdownPath,
+	scope,
+	image,
+}: {
+	markdownPath: string;
+	scope: ImageScope;
+	image: MarkdownImageProps;
+}) {
+	const source = markdownImageSource(markdownPath, image.src);
+	if (source?.kind === "external")
+		return <MarkdownImageTag url={source.url} image={image} />;
+	if (source?.kind === "workspace" && scope.projectId && scope.sessionId)
+		return (
+			<WorkspaceMarkdownImage path={source.path} scope={scope} image={image} />
+		);
+	return <span>{image.alt || "Image"}</span>;
+}
+
 export function FilePreview({
 	path,
 	content,
+	projectId,
+	sessionId,
 }: {
 	path: string;
 	content: WorkspaceFilePreview;
-}) {
+} & ImageScope) {
 	if (content.kind === "unavailable")
 		return <p className="diff-preview-empty">{content.reason}</p>;
 	if (content.kind === "image")
@@ -66,7 +138,16 @@ export function FilePreview({
 		);
 	return (
 		<div className="file-markdown-preview">
-			<AgentMarkdown text={content.text} />
+			<AgentMarkdown
+				text={content.text}
+				renderImage={(image) => (
+					<MarkdownImage
+						markdownPath={path}
+						scope={{ projectId, sessionId }}
+						image={image}
+					/>
+				)}
+			/>
 		</div>
 	);
 }
@@ -132,6 +213,8 @@ export function WorkspaceDiffPreview({
 					<h4>{label}</h4>
 					<FilePreview
 						path={path}
+						projectId={projectId}
+						sessionId={sessionId}
 						content={
 							versions.data?.[index] ?? {
 								kind: "unavailable",
