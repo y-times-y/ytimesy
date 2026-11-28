@@ -492,7 +492,12 @@ function FileSourcePreview({
 			{saveFailed ? <p className="file-editor-error">{saveFailed}</p> : null}
 			<div className="file-editor-pane">
 				{mode === "preview" ? (
-					<FilePreview path={path} content={{ kind: "text", text: value }} />
+					<FilePreview
+						path={path}
+						projectId={projectId}
+						sessionId={sessionId}
+						content={{ kind: "text", text: value }}
+					/>
 				) : (
 					<ClientOnly fallback={<SourceEditorPlaceholder value={value} />}>
 						<Suspense fallback={<SourceEditorPlaceholder value={value} />}>

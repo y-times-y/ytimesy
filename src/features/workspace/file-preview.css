@@ -29,6 +29,23 @@
 	overflow-wrap: anywhere;
 	overflow: auto;
 }
+/* GitHub's reading of align=: centre the content, not shrink-wrap blocks the
+   way the browser default (text-align: -webkit-center) does. */
+.file-markdown-preview [align="center"] {
+	text-align: center;
+}
+.file-markdown-preview [align="right"] {
+	text-align: right;
+}
+.file-markdown-preview [align="left"] {
+	text-align: left;
+}
+.file-markdown-preview img {
+	display: inline-block;
+	max-width: 100%;
+	height: auto;
+	vertical-align: middle;
+}
 .file-image-preview {
 	padding: 24px;
 	display: grid;
