@@ -9,6 +9,7 @@ export type OwnerAlertKind =
 	| "interruption-digest"
 	| "canary-failed"
 	| "provider-account-limit"
+	| "provider-capacity"
 	| "storage-quota"
 	| "template-missing"
 	| "machine-failure-rate"

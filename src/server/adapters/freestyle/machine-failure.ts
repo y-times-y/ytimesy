@@ -276,6 +276,21 @@ export function rateLimitDelayMs(
 	return Math.min(Math.max(jittered, retryAfter ?? 0), RATE_LIMIT_DELAY_CAP_MS);
 }
 
+/**
+ * Wait after a provider-capacity 429: the host is full, so every chat that
+ * hit it is waiting for the same thing. At least 5 s, then up to double that
+ * again as jitter so they do not return together, or the provider's
+ * Retry-After when longer; capped at a minute.
+ */
+export function capacityDelayMs(
+	baseMs: number,
+	retryAfter: number | undefined,
+	random: () => number = Math.random,
+): number {
+	const jittered = Math.max(baseMs, 5_000) * (1 + random());
+	return Math.min(Math.max(jittered, retryAfter ?? 0), RATE_LIMIT_DELAY_CAP_MS);
+}
+
 export type MachineRateLimitHit = {
 	readonly operation: string;
 	readonly slug?: string;
@@ -290,6 +305,7 @@ export type RateLimitClass =
 	| "running-vm-cap"
 	| "storage"
 	| "compute-allowance"
+	| "provider-capacity"
 	| "unspecified";
 
 /**
@@ -298,10 +314,14 @@ export type RateLimitClass =
  * vCPU/memory time allowance. Before 2026-11-27 only the log line held it.
  */
 export function rateLimitClass(detail: string): RateLimitClass {
+	// Not an account limit: the provider's hosts are full ("server is at
+	// capacity; try again shortly", 429 TOO_MANY_REQUESTS, 2026-11-26).
+	if (/at capacity|try again shortly/i.test(detail)) return "provider-capacity";
 	if (/limit of \d+ VMs|at its VM limit|concurrent|running VMs?/i.test(detail))
 		return "running-vm-cap";
 	if (/storage/i.test(detail)) return "storage";
-	if (/allowance|vcpu_time|memory_time/i.test(detail)) return "compute-allowance";
+	if (/allowance|vcpu_time|memory_time/i.test(detail))
+		return "compute-allowance";
 	return "unspecified";
 }
 
@@ -422,7 +442,10 @@ export async function resumableMachineStart<T>(
 				} catch {
 					// Bookkeeping never blocks the start.
 				}
-				delay = rateLimitDelayMs(delay, retryAfter);
+				delay =
+					limit === "provider-capacity"
+						? capacityDelayMs(delay, retryAfter)
+						: rateLimitDelayMs(delay, retryAfter);
 			}
 			if (!willRetry) throw error;
 			await wait(delay);

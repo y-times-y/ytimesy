@@ -337,3 +337,25 @@ describe("provider limit class and start slots (2026-11-27)", () => {
 		expect(peak).toBe(2);
 	});
 });
+
+describe("provider capacity 429", () => {
+	it("is its own class, not an account limit", async () => {
+		const { rateLimitClass } = await import("./machine-failure");
+		expect(
+			rateLimitClass(
+				"FreestyleApiError 429 TOO_MANY_REQUESTS /v5/vms/vm-x: server is at capacity; try again shortly",
+			),
+		).toBe("provider-capacity");
+		expect(
+			rateLimitClass("429 LIMIT_EXCEEDED: Account resource limit exceeded"),
+		).toBe("unspecified");
+	});
+
+	it("waits at least 5 s with jitter up to double, or the Retry-After, capped at a minute", async () => {
+		const { capacityDelayMs } = await import("./machine-failure");
+		expect(capacityDelayMs(1_000, undefined, () => 0)).toBe(5_000);
+		expect(capacityDelayMs(1_000, undefined, () => 1)).toBe(10_000);
+		expect(capacityDelayMs(30_000, undefined, () => 1)).toBe(60_000);
+		expect(capacityDelayMs(1_000, 20_000, () => 0)).toBe(20_000);
+	});
+});
