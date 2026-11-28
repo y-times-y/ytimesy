@@ -108,6 +108,7 @@ import {
 	fileChangesFromSessionItems,
 	heldForSetupMessage,
 	isTurnRunning,
+	itemsKeepingFreshSend,
 	itemsKeepingMessageInFlight,
 	lastAgentMessageText,
 	lastUserMessageText,
@@ -1150,6 +1151,14 @@ export function WorkspaceHome({
 							),
 						],
 					};
+				// What the person just sent stays shown until a view holds it.
+				if (
+					next.agentSessionId &&
+					current.agentSessionId === next.agentSessionId
+				) {
+					const kept = itemsKeepingFreshSend(current.items, next.items);
+					if (kept !== next.items) next = { ...next, items: [...kept] };
+				}
 				if (
 					!sessionViewShouldReplaceOpenTurn({
 						currentStatus: current.turnStatus,

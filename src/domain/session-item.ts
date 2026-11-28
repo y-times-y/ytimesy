@@ -2,6 +2,7 @@ import { pendingPlanId } from "./agent-plan";
 import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { BackgroundCommandRecord } from "./background-command";
+import { isInternalChildTaskMessage } from "./child-task-activity";
 import type { CodexUsage } from "./codex-usage";
 import {
 	ENVIRONMENT_SETUP_TITLE,
@@ -738,6 +739,41 @@ export function itemsKeepingMessageInFlight(
 			item.kind === "userMessage" && item.id === messageId && item.queued,
 	);
 	return shown ? [...next, shown] : next;
+}
+
+/** How long the page vouches for a message it just sent that no server view holds yet. */
+export const FRESH_SEND_GRACE_MS = 30_000;
+
+/**
+ * A server view taken while a send is on its way (a read made before the
+ * message reached the stored transcript, or one built from an older copy) has
+ * the message nowhere. The page keeps what the person just sent, last, until a
+ * view holds it (by id): it never blinks out, never shows twice, and a message
+ * the server never took goes after FRESH_SEND_GRACE_MS. Internal wake messages
+ * are not the person's and are never kept.
+ */
+export function itemsKeepingFreshSend(
+	current: readonly SessionItem[],
+	next: readonly SessionItem[],
+	now: number = Date.now(),
+): readonly SessionItem[] {
+	const sent = lastUserMessage(current);
+	if (!sent || isInternalChildTaskMessage(sent.text)) return next;
+	const startedAt = sent.timing?.startedAt;
+	if (startedAt === undefined || now - startedAt > FRESH_SEND_GRACE_MS)
+		return next;
+	// Held by id, or stored under another id from the same moment (same words).
+	if (
+		next.some(
+			(item) =>
+				item.kind === "userMessage" &&
+				(item.id === sent.id ||
+					(item.text.trim() === sent.text.trim() &&
+						(item.timing?.startedAt ?? 0) >= startedAt - 5_000)),
+		)
+	)
+		return next;
+	return [...next, sent];
 }
 
 /** The browser's copy of a send made during a run, shown waiting until delivered. */
