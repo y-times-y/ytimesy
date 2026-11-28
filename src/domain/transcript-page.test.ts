@@ -300,3 +300,51 @@ describe("pages over a chat that wakes constantly (the Super agent)", () => {
 		expect(page.items.map((item) => item.id)).toContain("p1");
 	});
 });
+
+describe("the person's latest message is anchored when wakes follow it", () => {
+	const wakeStart = (n: number): SessionItem => ({
+		kind: "userMessage",
+		id: `wake-${n}` as never,
+		text: childTaskEventQueueText(
+			`6f1c2a9e-0d4b-4c51-9a63-2f8f5b1d${String(n).padStart(4, "0")}`,
+		),
+	});
+	const wakeTurns = (count: number) =>
+		Array.from({ length: count }, (_, n) => [
+			wakeStart(n),
+			reply(`wr-${n}`),
+		]).flat();
+
+	it("reaches back past the item limit, within the anchor distance", () => {
+		const items = [
+			user("p1"),
+			reply("r1"),
+			...wakeTurns(TRANSCRIPT_PAGE_ITEMS + 50),
+		];
+		const page = latestTranscriptPage(items, 1);
+		expect(page.items.map((item) => item.id)).toContain("p1");
+	});
+
+	it("stays bounded beyond the anchor distance", () => {
+		const items = [
+			user("p1"),
+			reply("r1"),
+			...wakeTurns(TRANSCRIPT_PAGE_ANCHOR_ITEMS + 50),
+		];
+		const page = latestTranscriptPage(items, 1);
+		expect(page.items.map((item) => item.id)).not.toContain("p1");
+		expect(page.hasOlderItems).toBe(true);
+	});
+
+	it("one long turn with no wakes still splits at the item limit", () => {
+		const items = [
+			user("p1"),
+			...Array.from({ length: TRANSCRIPT_PAGE_ITEMS + 50 }, (_, n) =>
+				reply(`long-${n}`),
+			),
+		];
+		const page = latestTranscriptPage(items, 1);
+		expect(page.items.length).toBe(TRANSCRIPT_PAGE_ITEMS);
+		expect(page.hasOlderItems).toBe(true);
+	});
+});
