@@ -67,6 +67,14 @@ Why Y does not execute: DeepSeek's Super-agent essay (Nov 1 2026, section 2.1): 
 - **Turn rules.** The three tools count as workspace-neutral in `turn-saving.ts` (like `threads`): Y² has no checkout, and a turn that counted them as changing one would fail on "Y² has no workspace". Y² never commits.
 - **Gating.** The tools exist only in Y²'s own turn (`ySquared` in `api-turn.ts`).
 
+## Calibration: brief size and model per task (2026-11-28, on a branch)
+
+Every thread seemed to run on the same model with an exhaustive brief. Two compact prompt blocks (no new tools; both in `ySquaredInstructions`, so every route has them: API, Codex, Grok, box, Claude runner):
+
+- **Scoping rubric.** Small (a fix, copy, one file): 2-4 line brief, one outcome, verification one unit test or the typecheck; no audits, no headed-browser runs, no canvases or screenshots unless visual or risky. Medium (feature, bug across files): goal, constraints, tests plus one live check. Large or risky (production infrastructure, migrations, security, deploys): full brief with verification, rollback and approval steps; never deploy or migrate without the person's go. Y² states the expected effort in a line.
+- **Model per task** (`ySquaredModelPolicy`, replaces "leave `model` out, the default is right"): the person's named model wins; otherwise fast tier + low reasoning for research, read-only investigation, summaries, copy, small UI fixes (Haiku-class, GPT-6 Luna); balanced for ordinary feature and bug work (Sonnet, GPT-6.1 Terra); frontier + higher reasoning for production infrastructure, deploys, migrations, security, hard debugging (Opus, GPT-6.2 Sol/Astra); `set_thread_model` when a thread's job changes; spread across routes when a plan is nearly used; never an unusable route; one line when not the default. `list_models` already prints each model's tier hint (`tierNote`: strongest; slower and costlier / strong all-rounder / fastest and cheapest), route, plan state and reasoning/speed options.
+- Cost: about +45 tokens net per Y² turn (the new blocks are about 225 and 146 tokens; the old policy was about 330).
+
 ## Choosing a thread's model (2026-11-24)
 
 Y² picks the model a thread runs on and can change it. Before, `start_thread` took only a title and brief: the thread got Y²'s own model, and only failover moved it.

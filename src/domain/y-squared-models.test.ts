@@ -185,6 +185,16 @@ describe("which runtime a model runs on", () => {
 	});
 });
 
+describe("list_models carries the one-line tier hint", () => {
+	it("says strongest, balanced or fastest and cheapest for each model", async () => {
+		const { tierNote } = await import("./y-squared-models");
+		expect(tierNote("frontier")).toBe("strongest; slower and costlier");
+		expect(tierNote("balanced")).toContain("moderate speed and cost");
+		expect(tierNote("fast")).toBe("fastest and cheapest; lighter reasoning");
+		expect(tierNote(null)).toBe("not rated");
+	});
+});
+
 describe("Y²'s selection policy", () => {
 	const text = ySquaredInstructions();
 	it("names the tools and the rules", () => {
@@ -192,13 +202,53 @@ describe("Y²'s selection policy", () => {
 		expect(Y_SQUARED_TOOLS.has("set_thread_model")).toBe(true);
 		expect(text).toContain("`set_thread_model`");
 		expect(text).toContain("`list_models`");
-		expect(text).toContain("use exactly that one");
-		expect(text).toContain("leave `model` out");
+		expect(text).toContain("named model wins, exactly");
 		expect(text).toContain("infrastructure, deploys, migrations, security");
-		expect(text).toContain("research, summaries, small UI fixes");
-		expect(text).toContain("nearly used up");
+		expect(text).toContain("research, read-only investigation, summaries");
+		expect(text).toContain("nearly used");
 		expect(text).toContain("Failover stays the safety net");
-		expect(text).toContain("say it in one short line");
-		expect(text).toContain("never retry with a different model unasked");
+		expect(text).toContain("say it in one line");
+		expect(text).toContain("never retry another model unasked");
+	});
+
+	it("picks per task by tier and class, and changes the model when the job changes", () => {
+		expect(text).toContain("Haiku-class");
+		expect(text).toContain("Sonnet");
+		expect(text).toContain("Opus");
+		expect(text).toContain("fast tier");
+		expect(text).toContain("balanced");
+		expect(text).toContain("frontier");
+		expect(text).toContain("When a thread's job changes");
+		expect(text).not.toContain("the default is right most of the time");
+	});
+
+	it("sizes the brief to the task (small, medium, large) and states the effort", () => {
+		expect(text).toContain("Size the brief to the task");
+		expect(text).toContain("Small");
+		expect(text).toContain("Medium");
+		expect(text).toContain("Large");
+		expect(text).toContain("no audits, no headed-browser runs");
+		expect(text).toContain("state the expected effort");
+	});
+
+	it("both blocks stay compact (about 150 tokens each)", () => {
+		const block = (start: string) => {
+			const from = text.indexOf(start);
+			return text.slice(from, text.indexOf("\n", from));
+		};
+		expect(block("- Choosing a thread's model").length / 4).toBeLessThan(240);
+		expect(block("- Size the brief to the task").length / 4).toBeLessThan(160);
+	});
+});
+
+describe("the policy and the rubric reach every route", () => {
+	it("are in the one instruction text the API, Codex, Grok, box and Claude runner prompts all use", async () => {
+		const { ySquaredInstructions: build } = await import("./y-squared");
+		const text = build();
+		for (const part of [
+			"Size the brief to the task",
+			"- Choosing a thread's model",
+		])
+			expect(text).toContain(part);
 	});
 });
