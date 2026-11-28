@@ -315,7 +315,11 @@ import {
 	STREAMED_CHANGES_READ_MS,
 } from "./git-changes-polling";
 import { UsageWarningBanner } from "./infrastructure-usage";
-import { followListChanges, SIDEBAR_REVALIDATE_MS } from "./live-freshness";
+import {
+	followListChanges,
+	openChatReadOn,
+	SIDEBAR_REVALIDATE_MS,
+} from "./live-freshness";
 import { openLiveProgress } from "./live-progress-connection";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import {
