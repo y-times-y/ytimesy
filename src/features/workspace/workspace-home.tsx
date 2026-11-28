@@ -2362,20 +2362,32 @@ export function WorkspaceHome({
 	// settled, needs you; a project added) reads exactly the lists it names;
 	// a reconnect or a skipped event version reads them all.
 	useEffect(() => followListChanges(userHubStore, queryClient), [queryClient]);
+	// A gap in the hub's events (or a reconnect): the open chat may have missed
+	// a wake's turn too, so it reads once as well.
+	useEffect(
+		() =>
+			userHubStore.watch((change) => {
+				if (openChatReadOn(change)) refetchOpenSession.current();
+			}),
+		[],
+	);
 	const hubSeenWholeMap = useRef(false);
 	const onHubState = useRef<(message: HubStateMessage) => void>(() => {});
 	onHubState.current = (message) => {
 		userHubStore.receive(message);
-		const { reads, refreshList } = hubReadsToMake({
+		const { reads, refreshList, readOpenChat } = hubReadsToMake({
 			message,
 			sidebarStatuses: new Map(
 				sidebarChats.map((chat) => [chat.id, chat.turnStatus]),
 			),
 			backgroundChatIds: backgroundIds,
 			openChatId: activeSessionId,
+			openChatStatus: currentSessionRef.current.turnStatus,
 		});
 		for (const id of reads)
 			void backgroundReads[backgroundIds.indexOf(id)]?.refetch();
+		// A turn a wake started in the open chat: read it, and its stream opens.
+		if (readOpenChat) refetchOpenSession.current();
 		// A reconnect also reads the chat list once: a turn may have started
 		// or a chat appeared while no socket listened.
 		const reconnected = message.full === true && hubSeenWholeMap.current;

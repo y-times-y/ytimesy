@@ -70,3 +70,8 @@ export function followListChanges(
 			void client.invalidateQueries({ queryKey: [...queryKey] });
 	});
 }
+
+/** Whether a hub change means the open chat's view may have missed something unheard. */
+export function openChatReadOn(change: HubChange) {
+	return change.kind === "resync";
+}
